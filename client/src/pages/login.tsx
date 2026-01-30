@@ -10,7 +10,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { loginSchema, type LoginInput } from "@shared/schema";
-import logoImage from "@assets/‏لقطة_الشاشة_١٤٤٧-٠٨-١١_في_٦.٣٩.١٧_م_1769787810318.png";
+import logoImage from "@assets/WhatsApp_Image_2026-01-30_at_8.35.33_PM_1769794981480.jpeg";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
