@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Scale, LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -17,6 +17,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-provider";
 import { UserRoleLabels } from "@shared/schema";
+import logoImage from "@assets/‏لقطة_الشاشة_١٤٤٧-٠٨-١١_في_٦.٣٩.١٧_م_1769787810318.png";
 
 const menuItems = [
   {
@@ -76,11 +77,15 @@ export function AppSidebar() {
     <Sidebar side="right" collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border p-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-accent flex items-center justify-center flex-shrink-0">
-            <Scale className="w-5 h-5 text-accent-foreground" />
+          <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center flex-shrink-0 overflow-hidden p-1">
+            <img 
+              src={logoImage} 
+              alt="شركة العون" 
+              className="w-full h-full object-contain"
+            />
           </div>
           <div className="overflow-hidden group-data-[collapsible=icon]:hidden">
-            <h1 className="font-bold text-sidebar-foreground truncate">شركة عون</h1>
+            <h1 className="font-bold text-sidebar-foreground truncate">شركة العون</h1>
             <p className="text-xs text-sidebar-foreground/70 truncate">للمحاماة والاستشارات القانونية</p>
           </div>
         </div>

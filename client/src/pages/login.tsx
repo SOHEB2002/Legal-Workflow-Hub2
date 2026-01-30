@@ -2,14 +2,15 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useLocation } from "wouter";
-import { Scale, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { loginSchema, type LoginInput } from "@shared/schema";
+import logoImage from "@assets/‏لقطة_الشاشة_١٤٤٧-٠٨-١١_في_٦.٣٩.١٧_م_1769787810318.png";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
@@ -55,20 +56,21 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-white via-background to-primary/5 p-4">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-accent/10 rounded-full blur-3xl transform translate-x-1/2 -translate-y-1/2" />
-        <div className="absolute bottom-0 left-0 w-96 h-96 bg-primary/10 rounded-full blur-3xl transform -translate-x-1/2 translate-y-1/2" />
+        <div className="absolute top-0 right-0 w-96 h-96 bg-accent/5 rounded-full blur-3xl transform translate-x-1/2 -translate-y-1/2" />
+        <div className="absolute bottom-0 left-0 w-96 h-96 bg-primary/5 rounded-full blur-3xl transform -translate-x-1/2 translate-y-1/2" />
       </div>
 
-      <Card className="w-full max-w-md relative z-10 border-border/50 shadow-xl">
+      <Card className="w-full max-w-md relative z-10 border-border/50 shadow-sm bg-white">
         <CardHeader className="text-center pb-2">
-          <div className="mx-auto mb-4 w-16 h-16 rounded-full bg-gradient-to-br from-accent to-accent/80 flex items-center justify-center shadow-lg">
-            <Scale className="w-8 h-8 text-accent-foreground" />
+          <div className="mx-auto mb-4">
+            <img 
+              src={logoImage} 
+              alt="شركة العون للمحاماة والاستشارات القانونية" 
+              className="h-32 w-auto object-contain mx-auto"
+            />
           </div>
-          <CardTitle className="text-2xl font-bold text-foreground">
-            شركة عون للمحاماة والاستشارات القانونية
-          </CardTitle>
           <CardDescription className="text-muted-foreground mt-2">
             قم بتسجيل الدخول للوصول إلى لوحة التحكم
           </CardDescription>
