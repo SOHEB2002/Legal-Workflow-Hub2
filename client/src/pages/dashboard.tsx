@@ -160,7 +160,7 @@ export default function DashboardPage() {
           variant="warning"
         />
         <StatCard
-          title="جاهزة للتسليم"
+          title="جاهزة للرفع"
           value={caseStats.ready}
           icon={CheckCircle}
           variant="success"
