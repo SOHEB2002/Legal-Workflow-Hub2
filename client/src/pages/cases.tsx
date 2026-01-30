@@ -558,7 +558,7 @@ export default function CasesPage() {
               <Input
                 data-testid="input-hearing-date"
                 type="date"
-                value={formData.nextHearingDate}
+                value={formData.nextHearingDate || ""}
                 onChange={(e) => setFormData({ ...formData, nextHearingDate: e.target.value })}
               />
             </div>
