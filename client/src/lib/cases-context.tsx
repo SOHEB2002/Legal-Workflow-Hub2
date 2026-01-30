@@ -1,137 +1,164 @@
 import { createContext, useContext, useState, useEffect } from "react";
-import type { LawCase, InsertCase, UpdateCase, CaseStatusValue } from "@shared/schema";
-import { CaseStatus } from "@shared/schema";
+import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue } from "@shared/schema";
+import { CaseStatus, Priority } from "@shared/schema";
 
 interface CasesContextType {
   cases: LawCase[];
-  addCase: (data: InsertCase, createdBy: string) => LawCase;
-  updateCase: (id: string, data: UpdateCase) => void;
+  addCase: (data: Partial<LawCase>, createdBy: string) => LawCase;
+  updateCase: (id: string, data: Partial<LawCase>) => void;
   deleteCase: (id: string) => void;
-  assignCase: (id: string, assignedTo: string) => void;
-  sendToReview: (id: string) => void;
-  approveCase: (id: string) => void;
-  rejectCase: (id: string, notes: string) => void;
+  assignCase: (id: string, lawyerId: string, departmentId: string) => void;
+  sendToDepartmentHead: (id: string) => void;
+  sendToReviewCommittee: (id: string) => void;
+  approveCase: (id: string, notes?: string) => void;
+  rejectCase: (id: string, notes: string, decision: ReviewDecisionType) => void;
+  markReadyToSubmit: (id: string) => void;
+  markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
   getCaseById: (id: string) => LawCase | undefined;
+  getCasesByDepartment: (departmentId: string) => LawCase[];
+  getCasesByLawyer: (lawyerId: string) => LawCase[];
   getActiveCases: () => LawCase[];
   getReviewCases: () => LawCase[];
   getReadyCases: () => LawCase[];
-  getUpcomingHearings: () => LawCase[];
 }
 
 const CasesContext = createContext<CasesContextType | undefined>(undefined);
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
+const generateCaseNumber = () => `C-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
 const initialCases: LawCase[] = [
   {
     id: "1",
-    clientName: "شركة الفلاح للتجارة",
+    caseNumber: "C-2026-0001",
+    clientId: "1",
     caseType: "تجاري",
-    status: "قيد التنفيذ",
-    whatsappLink: "https://wa.me/966501234567",
-    driveLink: "https://drive.google.com/folder/abc123",
-    nextHearingDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-    notes: "قضية تجارية تتعلق بنزاع عقد توريد",
+    status: "دراسة",
+    departmentId: "2",
+    assignedLawyers: ["5"],
+    primaryLawyerId: "5",
+    courtName: "المحكمة التجارية بالرياض",
+    courtCaseNumber: "1234/2026",
+    najizNumber: "NAJ-2026-001",
+    judgeName: "القاضي عبدالله",
+    opponentName: "شركة المنافسة",
+    opponentLawyer: "المحامي خالد",
+    opponentPhone: "0551234567",
+    opponentNotes: "",
+    whatsappGroupLink: "https://wa.me/966501234567",
+    googleDriveFolderId: "",
     reviewNotes: "",
-    assignedTo: "1",
-    createdBy: "3",
+    reviewDecision: null,
+    reviewActionTaken: null,
+    priority: "عالي",
+    createdBy: "6",
     createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
     updatedAt: new Date().toISOString(),
+    closedAt: null,
   },
   {
     id: "2",
-    clientName: "محمد أحمد العلي",
+    caseNumber: "C-2026-0002",
+    clientId: "2",
     caseType: "عمالي",
-    status: "مراجعة",
-    whatsappLink: "https://wa.me/966509876543",
-    driveLink: "https://drive.google.com/folder/def456",
-    nextHearingDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-    notes: "قضية فصل تعسفي - مطالبة بالتعويض",
+    status: "لجنة_المراجعة",
+    departmentId: "3",
+    assignedLawyers: ["7"],
+    primaryLawyerId: "7",
+    courtName: "المحكمة العمالية",
+    courtCaseNumber: "5678/2026",
+    najizNumber: "NAJ-2026-002",
+    judgeName: "",
+    opponentName: "شركة التوظيف",
+    opponentLawyer: "",
+    opponentPhone: "",
+    opponentNotes: "قضية فصل تعسفي",
+    whatsappGroupLink: "",
+    googleDriveFolderId: "",
     reviewNotes: "",
-    assignedTo: "2",
-    createdBy: "3",
+    reviewDecision: null,
+    reviewActionTaken: null,
+    priority: "متوسط",
+    createdBy: "6",
     createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
     updatedAt: new Date().toISOString(),
+    closedAt: null,
   },
   {
     id: "3",
-    clientName: "مؤسسة النور للمقاولات",
-    caseType: "إداري",
-    status: "جديد",
-    whatsappLink: "",
-    driveLink: "",
-    nextHearingDate: null,
-    notes: "استشارة بخصوص تراخيص البناء",
+    caseNumber: "C-2026-0003",
+    clientId: "3",
+    caseType: "عام",
+    status: "استلام",
+    departmentId: "1",
+    assignedLawyers: [],
+    primaryLawyerId: null,
+    courtName: "",
+    courtCaseNumber: "",
+    najizNumber: "",
+    judgeName: "",
+    opponentName: "",
+    opponentLawyer: "",
+    opponentPhone: "",
+    opponentNotes: "",
+    whatsappGroupLink: "",
+    googleDriveFolderId: "",
     reviewNotes: "",
-    assignedTo: null,
-    createdBy: "3",
+    reviewDecision: null,
+    reviewActionTaken: null,
+    priority: "منخفض",
+    createdBy: "6",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "4",
-    clientName: "فاطمة سعيد الغامدي",
-    caseType: "استشارة",
-    status: "جاهز للتسليم",
-    whatsappLink: "https://wa.me/966505551234",
-    driveLink: "https://drive.google.com/folder/ghi789",
-    nextHearingDate: null,
-    notes: "استشارة قانونية بخصوص الميراث",
-    reviewNotes: "",
-    assignedTo: "1",
-    createdBy: "3",
-    createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "5",
-    clientName: "شركة التقنية المتقدمة",
-    caseType: "عقد",
-    status: "قيد التنفيذ",
-    whatsappLink: "https://wa.me/966507778899",
-    driveLink: "https://drive.google.com/folder/jkl012",
-    nextHearingDate: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString(),
-    notes: "صياغة عقد شراكة تقنية",
-    reviewNotes: "",
-    assignedTo: "2",
-    createdBy: "3",
-    createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
+    closedAt: null,
   },
 ];
 
 export function CasesProvider({ children }: { children: React.ReactNode }) {
   const [cases, setCases] = useState<LawCase[]>(() => {
-    const stored = localStorage.getItem("lawfirm_cases");
+    const stored = localStorage.getItem("lawfirm_cases_v2");
     return stored ? JSON.parse(stored) : initialCases;
   });
 
   useEffect(() => {
-    localStorage.setItem("lawfirm_cases", JSON.stringify(cases));
+    localStorage.setItem("lawfirm_cases_v2", JSON.stringify(cases));
   }, [cases]);
 
-  const addCase = (data: InsertCase, createdBy: string): LawCase => {
+  const addCase = (data: Partial<LawCase>, createdBy: string): LawCase => {
     const newCase: LawCase = {
       id: generateId(),
-      clientName: data.clientName,
-      caseType: data.caseType,
-      status: CaseStatus.NEW,
-      whatsappLink: data.whatsappLink || "",
-      driveLink: data.driveLink || "",
-      nextHearingDate: data.nextHearingDate || null,
-      notes: data.notes || "",
+      caseNumber: generateCaseNumber(),
+      clientId: data.clientId || "",
+      caseType: data.caseType || "عام",
+      status: CaseStatus.RECEIVED,
+      departmentId: data.departmentId || "",
+      assignedLawyers: [],
+      primaryLawyerId: null,
+      courtName: data.courtName || "",
+      courtCaseNumber: data.courtCaseNumber || "",
+      najizNumber: data.najizNumber || "",
+      judgeName: data.judgeName || "",
+      opponentName: data.opponentName || "",
+      opponentLawyer: data.opponentLawyer || "",
+      opponentPhone: data.opponentPhone || "",
+      opponentNotes: data.opponentNotes || "",
+      whatsappGroupLink: data.whatsappGroupLink || "",
+      googleDriveFolderId: data.googleDriveFolderId || "",
       reviewNotes: "",
-      assignedTo: null,
+      reviewDecision: null,
+      reviewActionTaken: null,
+      priority: data.priority || Priority.MEDIUM,
       createdBy,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      closedAt: null,
     };
     setCases((prev) => [newCase, ...prev]);
     return newCase;
   };
 
-  const updateCase = (id: string, data: UpdateCase) => {
+  const updateCase = (id: string, data: Partial<LawCase>) => {
     setCases((prev) =>
       prev.map((c) =>
         c.id === id
@@ -145,14 +172,16 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     setCases((prev) => prev.filter((c) => c.id !== id));
   };
 
-  const assignCase = (id: string, assignedTo: string) => {
+  const assignCase = (id: string, lawyerId: string, departmentId: string) => {
     setCases((prev) =>
       prev.map((c) =>
         c.id === id
           ? {
               ...c,
-              assignedTo,
-              status: CaseStatus.IN_PROGRESS as CaseStatusValue,
+              assignedLawyers: [lawyerId],
+              primaryLawyerId: lawyerId,
+              departmentId,
+              status: CaseStatus.STUDY as CaseStatusValue,
               updatedAt: new Date().toISOString(),
             }
           : c
@@ -160,13 +189,13 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const sendToReview = (id: string) => {
+  const sendToDepartmentHead = (id: string) => {
     setCases((prev) =>
       prev.map((c) =>
         c.id === id
           ? {
               ...c,
-              status: CaseStatus.REVIEW as CaseStatusValue,
+              status: CaseStatus.DRAFTING as CaseStatusValue,
               updatedAt: new Date().toISOString(),
             }
           : c
@@ -174,14 +203,13 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const approveCase = (id: string) => {
+  const sendToReviewCommittee = (id: string) => {
     setCases((prev) =>
       prev.map((c) =>
         c.id === id
           ? {
               ...c,
-              status: CaseStatus.READY as CaseStatusValue,
-              reviewNotes: "",
+              status: CaseStatus.REVIEW_COMMITTEE as CaseStatusValue,
               updatedAt: new Date().toISOString(),
             }
           : c
@@ -189,14 +217,59 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const rejectCase = (id: string, notes: string) => {
+  const approveCase = (id: string, notes?: string) => {
     setCases((prev) =>
       prev.map((c) =>
         c.id === id
           ? {
               ...c,
-              status: CaseStatus.IN_PROGRESS as CaseStatusValue,
+              status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
+              reviewDecision: "approved" as ReviewDecisionType,
+              reviewNotes: notes || "",
+              updatedAt: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+  };
+
+  const rejectCase = (id: string, notes: string, decision: ReviewDecisionType) => {
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              status: CaseStatus.AMENDMENTS as CaseStatusValue,
+              reviewDecision: decision,
               reviewNotes: notes,
+              updatedAt: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+  };
+
+  const markReadyToSubmit = (id: string) => {
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
+              updatedAt: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+  };
+
+  const markSubmitted = (id: string) => {
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              status: CaseStatus.SUBMITTED as CaseStatusValue,
               updatedAt: new Date().toISOString(),
             }
           : c
@@ -211,6 +284,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
           ? {
               ...c,
               status: CaseStatus.CLOSED as CaseStatusValue,
+              closedAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             }
           : c
@@ -220,29 +294,20 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
   const getCaseById = (id: string) => cases.find((c) => c.id === id);
 
+  const getCasesByDepartment = (departmentId: string) =>
+    cases.filter((c) => c.departmentId === departmentId);
+
+  const getCasesByLawyer = (lawyerId: string) =>
+    cases.filter((c) => c.assignedLawyers.includes(lawyerId) || c.primaryLawyerId === lawyerId);
+
   const getActiveCases = () =>
-    cases.filter(
-      (c) =>
-        c.status === CaseStatus.NEW ||
-        c.status === CaseStatus.IN_PROGRESS ||
-        c.status === CaseStatus.REVIEW ||
-        c.status === CaseStatus.READY
-    );
+    cases.filter((c) => c.status !== CaseStatus.CLOSED);
 
   const getReviewCases = () =>
-    cases.filter((c) => c.status === CaseStatus.REVIEW);
+    cases.filter((c) => c.status === CaseStatus.REVIEW_COMMITTEE);
 
   const getReadyCases = () =>
-    cases.filter((c) => c.status === CaseStatus.READY);
-
-  const getUpcomingHearings = () =>
-    cases
-      .filter((c) => c.nextHearingDate && c.status !== CaseStatus.CLOSED)
-      .sort(
-        (a, b) =>
-          new Date(a.nextHearingDate!).getTime() -
-          new Date(b.nextHearingDate!).getTime()
-      );
+    cases.filter((c) => c.status === CaseStatus.READY_TO_SUBMIT);
 
   return (
     <CasesContext.Provider
@@ -252,15 +317,19 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         updateCase,
         deleteCase,
         assignCase,
-        sendToReview,
+        sendToDepartmentHead,
+        sendToReviewCommittee,
         approveCase,
         rejectCase,
+        markReadyToSubmit,
+        markSubmitted,
         closeCase,
         getCaseById,
+        getCasesByDepartment,
+        getCasesByLawyer,
         getActiveCases,
         getReviewCases,
         getReadyCases,
-        getUpcomingHearings,
       }}
     >
       {children}

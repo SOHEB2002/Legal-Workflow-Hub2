@@ -1,17 +1,41 @@
 import { z } from "zod";
 
+// ==================== الأدوار (Roles) ====================
 export const UserRole = {
-  ADMIN: "admin",
-  LAWYER: "lawyer", 
-  SECRETARY: "secretary",
+  BRANCH_MANAGER: "branch_manager",           // مدير الفرع
+  CASES_REVIEW_HEAD: "cases_review_head",     // رئيس لجنة مراجعة القضايا
+  CONSULTATIONS_REVIEW_HEAD: "consultations_review_head", // رئيس لجنة مراجعة الاستشارات
+  DEPARTMENT_HEAD: "department_head",         // رئيس القسم
+  ADMIN_SUPPORT: "admin_support",             // الدعم الإداري
+  EMPLOYEE: "employee",                       // موظف قسم
+  HR: "hr",                                   // موظف الموارد البشرية
 } as const;
 
 export type UserRoleType = typeof UserRole[keyof typeof UserRole];
 
+export const UserRoleLabels: Record<UserRoleType, string> = {
+  branch_manager: "مدير الفرع",
+  cases_review_head: "رئيس لجنة مراجعة القضايا",
+  consultations_review_head: "رئيس لجنة مراجعة الاستشارات",
+  department_head: "رئيس القسم",
+  admin_support: "الدعم الإداري",
+  employee: "موظف",
+  hr: "الموارد البشرية",
+};
+
+// ==================== الأقسام (Departments) ====================
+export const Department = {
+  GENERAL: "عام",
+  COMMERCIAL: "تجاري",
+  LABOR: "عمالي",
+  ADMINISTRATIVE: "إداري",
+} as const;
+
+export type DepartmentType = typeof Department[keyof typeof Department];
+
+// ==================== أنواع القضايا ====================
 export const CaseType = {
-  CONSULTATION: "استشارة",
-  CONTRACT: "عقد",
-  GENERAL: "قضية عامة",
+  GENERAL: "عام",
   COMMERCIAL: "تجاري",
   LABOR: "عمالي",
   ADMINISTRATIVE: "إداري",
@@ -19,93 +43,386 @@ export const CaseType = {
 
 export type CaseTypeValue = typeof CaseType[keyof typeof CaseType];
 
+// ==================== حالات القضايا ====================
 export const CaseStatus = {
-  NEW: "جديد",
-  IN_PROGRESS: "قيد التنفيذ",
-  REVIEW: "مراجعة",
-  READY: "جاهز للتسليم",
+  RECEIVED: "استلام",
+  DATA_COMPLETION: "استكمال_البيانات",
+  STUDY: "دراسة",
+  DRAFTING: "تحرير_المذكرة",
+  REVIEW_COMMITTEE: "لجنة_المراجعة",
+  AMENDMENTS: "تعديلات",
+  READY_TO_SUBMIT: "جاهز_للرفع",
+  SUBMITTED: "مرفوع",
   CLOSED: "مغلق",
 } as const;
 
 export type CaseStatusValue = typeof CaseStatus[keyof typeof CaseStatus];
+
+export const CaseStatusLabels: Record<CaseStatusValue, string> = {
+  "استلام": "استلام",
+  "استكمال_البيانات": "استكمال البيانات",
+  "دراسة": "دراسة",
+  "تحرير_المذكرة": "تحرير المذكرة",
+  "لجنة_المراجعة": "لجنة المراجعة",
+  "تعديلات": "تعديلات",
+  "جاهز_للرفع": "جاهز للرفع",
+  "مرفوع": "مرفوع",
+  "مغلق": "مغلق",
+};
+
+// ==================== الأولوية ====================
+export const Priority = {
+  URGENT: "عاجل",
+  HIGH: "عالي",
+  MEDIUM: "متوسط",
+  LOW: "منخفض",
+} as const;
+
+export type PriorityType = typeof Priority[keyof typeof Priority];
+
+// ==================== قرارات المراجعة ====================
+export const ReviewDecision = {
+  APPROVED: "approved",
+  REJECTED: "rejected",
+  PARTIAL: "partial",
+} as const;
+
+export type ReviewDecisionType = typeof ReviewDecision[keyof typeof ReviewDecision];
+
+export const ReviewDecisionLabels: Record<ReviewDecisionType, string> = {
+  approved: "معتمد",
+  rejected: "مرفوض",
+  partial: "اعتماد جزئي",
+};
+
+// ==================== أنواع العملاء ====================
+export const ClientType = {
+  INDIVIDUAL: "فرد",
+  COMPANY: "شركة",
+} as const;
+
+export type ClientTypeValue = typeof ClientType[keyof typeof ClientType];
+
+// ==================== حالات الاستشارات ====================
+export const ConsultationStatus = {
+  RECEIVED: "استلام",
+  STUDY: "دراسة",
+  PREPARING_RESPONSE: "إعداد_الرد",
+  REVIEW_COMMITTEE: "لجنة_المراجعة",
+  AMENDMENTS: "تعديلات",
+  READY: "جاهز",
+  DELIVERED: "مسلّم",
+  CLOSED: "مغلق",
+} as const;
+
+export type ConsultationStatusValue = typeof ConsultationStatus[keyof typeof ConsultationStatus];
+
+export const ConsultationStatusLabels: Record<ConsultationStatusValue, string> = {
+  "استلام": "استلام",
+  "دراسة": "دراسة",
+  "إعداد_الرد": "إعداد الرد",
+  "لجنة_المراجعة": "لجنة المراجعة",
+  "تعديلات": "تعديلات",
+  "جاهز": "جاهز",
+  "مسلّم": "مسلّم",
+  "مغلق": "مغلق",
+};
+
+// ==================== نوع تسليم الاستشارة ====================
+export const DeliveryType = {
+  WRITTEN: "مكتوبة",
+  VERBAL: "شفهية",
+} as const;
+
+export type DeliveryTypeValue = typeof DeliveryType[keyof typeof DeliveryType];
+
+// ==================== حالات الجلسات ====================
+export const HearingStatus = {
+  UPCOMING: "قادمة",
+  COMPLETED: "تمت",
+  POSTPONED: "مؤجلة",
+  CANCELLED: "ملغية",
+} as const;
+
+export type HearingStatusValue = typeof HearingStatus[keyof typeof HearingStatus];
+
+// ==================== نتائج الجلسات ====================
+export const HearingResult = {
+  POSTPONEMENT: "تأجيل",
+  JUDGMENT: "حكم",
+  SETTLEMENT: "صلح",
+  DISMISSAL: "شطب",
+  OTHER: "أخرى",
+} as const;
+
+export type HearingResultValue = typeof HearingResult[keyof typeof HearingResult];
+
+// ==================== أنواع المحاكم ====================
+export const CourtType = {
+  GENERAL: "المحكمة العامة",
+  COMMERCIAL: "المحكمة التجارية",
+  LABOR: "المحكمة العمالية",
+  ADMINISTRATIVE: "المحكمة الإدارية",
+  CRIMINAL: "المحكمة الجزائية",
+  OTHER: "أخرى",
+} as const;
+
+export type CourtTypeValue = typeof CourtType[keyof typeof CourtType];
+
+// ==================== أنواع المستندات ====================
+export const DocumentType = {
+  ID: "هوية",
+  POWER_OF_ATTORNEY: "وكالة",
+  CONTRACT: "عقد",
+  MEMO: "مذكرة",
+  JUDGMENT: "حكم",
+  OTHER: "مستند_آخر",
+} as const;
+
+export type DocumentTypeValue = typeof DocumentType[keyof typeof DocumentType];
+
+// ==================== Interfaces ====================
 
 export interface User {
   id: string;
   username: string;
   password: string;
   name: string;
+  email: string;
+  phone: string;
   role: UserRoleType;
+  departmentId: string | null;
+  isActive: boolean;
+  canBeAssignedCases: boolean;
+  canBeAssignedConsultations: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface LawCase {
+export interface Client {
   id: string;
-  clientName: string;
-  caseType: CaseTypeValue;
-  status: CaseStatusValue;
-  whatsappLink: string;
-  driveLink: string;
-  nextHearingDate: string | null;
+  clientType: ClientTypeValue;
+  individualName: string | null;
+  nationalId: string | null;
+  phone: string;
+  companyName: string | null;
+  commercialRegister: string | null;
+  representativeName: string | null;
+  representativeTitle: string | null;
+  companyPhone: string | null;
+  email: string;
+  address: string;
   notes: string;
-  reviewNotes: string;
-  assignedTo: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface LawCase {
+  id: string;
+  caseNumber: string;
+  clientId: string;
+  caseType: CaseTypeValue;
+  status: CaseStatusValue;
+  departmentId: string;
+  assignedLawyers: string[];
+  primaryLawyerId: string | null;
+  courtName: string;
+  courtCaseNumber: string;
+  najizNumber: string;
+  judgeName: string;
+  opponentName: string;
+  opponentLawyer: string;
+  opponentPhone: string;
+  opponentNotes: string;
+  whatsappGroupLink: string;
+  googleDriveFolderId: string;
+  reviewNotes: string;
+  reviewDecision: ReviewDecisionType | null;
+  reviewActionTaken: string | null;
+  priority: PriorityType;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+}
+
+export interface Consultation {
+  id: string;
+  consultationNumber: string;
+  clientId: string;
+  consultationType: CaseTypeValue;
+  deliveryType: DeliveryTypeValue;
+  status: ConsultationStatusValue;
+  departmentId: string;
+  assignedTo: string | null;
+  questionSummary: string;
+  response: string;
+  convertedToCaseId: string | null;
+  whatsappGroupLink: string;
+  googleDriveFolderId: string;
+  reviewNotes: string;
+  reviewDecision: ReviewDecisionType | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+}
+
+export interface Hearing {
+  id: string;
+  caseId: string;
+  hearingDate: string;
+  hearingTime: string;
+  courtName: CourtTypeValue;
+  courtNameOther: string | null;
+  courtRoom: string;
+  status: HearingStatusValue;
+  result: HearingResultValue | null;
+  resultDetails: string;
+  reminderSent24h: boolean;
+  reminderSent1h: boolean;
+  googleCalendarEventId: string | null;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Document {
+  id: string;
+  entityType: "case" | "consultation" | "client";
+  entityId: string;
+  documentType: DocumentTypeValue;
+  fileName: string;
+  googleDriveFileId: string;
+  googleDriveLink: string;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+export interface ActivityLog {
+  id: string;
+  entityType: string;
+  entityId: string;
+  action: "create" | "update" | "delete" | "status_change" | "assign" | "review";
+  actionBy: string;
+  oldValues: Record<string, unknown> | null;
+  newValues: Record<string, unknown> | null;
+  fieldChanged: string | null;
+  notes: string;
+  createdAt: string;
+}
+
+export interface Notification {
+  id: string;
+  userId: string;
+  type: "hearing_reminder" | "assignment" | "review_needed" | "review_result";
+  title: string;
+  message: string;
+  link: string;
+  isRead: boolean;
+  sentVia: string[];
+  createdAt: string;
+}
+
+export interface DepartmentInfo {
+  id: string;
+  name: DepartmentType;
+  headId: string | null;
+  createdAt: string;
+}
+
+// ==================== Zod Schemas ====================
+
 export const insertUserSchema = z.object({
-  username: z.string().min(3),
-  password: z.string().min(4),
-  name: z.string().min(2),
-  role: z.enum(["admin", "lawyer", "secretary"]),
+  username: z.string().min(3, "اسم المستخدم يجب أن يكون 3 أحرف على الأقل"),
+  password: z.string().min(4, "كلمة المرور يجب أن تكون 4 أحرف على الأقل"),
+  name: z.string().min(2, "الاسم مطلوب"),
+  email: z.string().email("البريد الإلكتروني غير صحيح").optional().default(""),
+  phone: z.string().optional().default(""),
+  role: z.enum([
+    "branch_manager",
+    "cases_review_head",
+    "consultations_review_head",
+    "department_head",
+    "admin_support",
+    "employee",
+    "hr",
+  ]),
+  departmentId: z.string().nullable().optional(),
+  isActive: z.boolean().default(true),
+  canBeAssignedCases: z.boolean().default(false),
+  canBeAssignedConsultations: z.boolean().default(false),
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
-export const insertCaseSchema = z.object({
-  clientName: z.string().min(2, "اسم العميل مطلوب"),
-  caseType: z.enum([
-    "استشارة",
-    "عقد",
-    "قضية عامة",
-    "تجاري",
-    "عمالي",
-    "إداري",
-  ]),
-  whatsappLink: z.string().optional().default(""),
-  driveLink: z.string().optional().default(""),
-  nextHearingDate: z.string().nullable().optional(),
+export const insertClientSchema = z.object({
+  clientType: z.enum(["فرد", "شركة"]),
+  individualName: z.string().nullable().optional(),
+  nationalId: z.string().nullable().optional(),
+  phone: z.string().min(1, "رقم الهاتف مطلوب"),
+  companyName: z.string().nullable().optional(),
+  commercialRegister: z.string().nullable().optional(),
+  representativeName: z.string().nullable().optional(),
+  representativeTitle: z.string().nullable().optional(),
+  companyPhone: z.string().nullable().optional(),
+  email: z.string().email().optional().default(""),
+  address: z.string().optional().default(""),
   notes: z.string().optional().default(""),
+});
+
+export type InsertClient = z.infer<typeof insertClientSchema>;
+
+export const insertCaseSchema = z.object({
+  clientId: z.string().min(1, "العميل مطلوب"),
+  caseType: z.enum(["عام", "تجاري", "عمالي", "إداري"]),
+  departmentId: z.string().optional(),
+  priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).default("متوسط"),
+  courtName: z.string().optional().default(""),
+  courtCaseNumber: z.string().optional().default(""),
+  najizNumber: z.string().optional().default(""),
+  judgeName: z.string().optional().default(""),
+  opponentName: z.string().optional().default(""),
+  opponentLawyer: z.string().optional().default(""),
+  opponentPhone: z.string().optional().default(""),
+  opponentNotes: z.string().optional().default(""),
+  whatsappGroupLink: z.string().optional().default(""),
+  googleDriveFolderId: z.string().optional().default(""),
 });
 
 export type InsertCase = z.infer<typeof insertCaseSchema>;
 
-export const updateCaseSchema = z.object({
-  clientName: z.string().min(2).optional(),
-  caseType: z.enum([
-    "استشارة",
-    "عقد",
-    "قضية عامة",
-    "تجاري",
-    "عمالي",
-    "إداري",
-  ]).optional(),
-  status: z.enum([
-    "جديد",
-    "قيد التنفيذ",
-    "مراجعة",
-    "جاهز للتسليم",
-    "مغلق",
-  ]).optional(),
-  whatsappLink: z.string().optional(),
-  driveLink: z.string().optional(),
-  nextHearingDate: z.string().nullable().optional(),
-  notes: z.string().optional(),
-  reviewNotes: z.string().optional(),
-  assignedTo: z.string().nullable().optional(),
+export const insertConsultationSchema = z.object({
+  clientId: z.string().min(1, "العميل مطلوب"),
+  consultationType: z.enum(["عام", "تجاري", "عمالي", "إداري"]),
+  deliveryType: z.enum(["مكتوبة", "شفهية"]),
+  departmentId: z.string().optional(),
+  questionSummary: z.string().min(1, "ملخص السؤال مطلوب"),
+  whatsappGroupLink: z.string().optional().default(""),
+  googleDriveFolderId: z.string().optional().default(""),
 });
 
-export type UpdateCase = z.infer<typeof updateCaseSchema>;
+export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
+
+export const insertHearingSchema = z.object({
+  caseId: z.string().min(1, "القضية مطلوبة"),
+  hearingDate: z.string().min(1, "تاريخ الجلسة مطلوب"),
+  hearingTime: z.string().min(1, "وقت الجلسة مطلوب"),
+  courtName: z.enum([
+    "المحكمة العامة",
+    "المحكمة التجارية",
+    "المحكمة العمالية",
+    "المحكمة الإدارية",
+    "المحكمة الجزائية",
+    "أخرى",
+  ]),
+  courtNameOther: z.string().nullable().optional(),
+  courtRoom: z.string().optional().default(""),
+  notes: z.string().optional().default(""),
+});
+
+export type InsertHearing = z.infer<typeof insertHearingSchema>;
 
 export const loginSchema = z.object({
   username: z.string().min(1, "اسم المستخدم مطلوب"),
@@ -113,3 +430,41 @@ export const loginSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+// ==================== Permission Helpers ====================
+
+export function canManageAllCases(role: UserRoleType): boolean {
+  return ["branch_manager", "cases_review_head"].includes(role);
+}
+
+export function canManageAllConsultations(role: UserRoleType): boolean {
+  return ["branch_manager", "consultations_review_head"].includes(role);
+}
+
+export function canManageDepartment(role: UserRoleType): boolean {
+  return ["branch_manager", "department_head"].includes(role);
+}
+
+export function canAddCasesAndConsultations(role: UserRoleType): boolean {
+  return ["branch_manager", "admin_support"].includes(role);
+}
+
+export function canReviewCases(role: UserRoleType): boolean {
+  return ["branch_manager", "cases_review_head"].includes(role);
+}
+
+export function canReviewConsultations(role: UserRoleType): boolean {
+  return ["branch_manager", "consultations_review_head"].includes(role);
+}
+
+export function canManageUsers(role: UserRoleType): boolean {
+  return role === "branch_manager";
+}
+
+export function canAccessHR(role: UserRoleType): boolean {
+  return ["branch_manager", "hr"].includes(role);
+}
+
+export function canCloseCases(role: UserRoleType): boolean {
+  return ["branch_manager", "admin_support"].includes(role);
+}

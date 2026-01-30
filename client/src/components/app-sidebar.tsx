@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Scale, LayoutDashboard, Briefcase, LogOut, Moon, Sun } from "lucide-react";
+import { Scale, LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-provider";
+import { UserRoleLabels } from "@shared/schema";
 
 const menuItems = [
   {
@@ -28,25 +29,35 @@ const menuItems = [
     url: "/cases",
     icon: Briefcase,
   },
+  {
+    title: "الاستشارات",
+    url: "/consultations",
+    icon: MessageSquare,
+  },
+  {
+    title: "العملاء",
+    url: "/clients",
+    icon: Users,
+  },
+  {
+    title: "الجلسات",
+    url: "/hearings",
+    icon: Calendar,
+  },
+];
+
+const adminMenuItems = [
+  {
+    title: "المستخدمين",
+    url: "/users",
+    icon: UserCog,
+  },
 ];
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout, permissions } = useAuth();
   const { theme, toggleTheme } = useTheme();
-
-  const getRoleLabel = (role: string) => {
-    switch (role) {
-      case "admin":
-        return "محامي / مسؤول";
-      case "lawyer":
-        return "محامي";
-      case "secretary":
-        return "سكرتير";
-      default:
-        return role;
-    }
-  };
 
   const getInitials = (name: string) => {
     return name
@@ -92,6 +103,30 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {permissions.canManageUsers && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-sidebar-foreground/60">الإدارة</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {adminMenuItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === item.url}
+                      tooltip={item.title}
+                    >
+                      <Link href={item.url} data-testid={`link-${item.url.slice(1)}`}>
+                        <item.icon className="w-4 h-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
@@ -104,7 +139,9 @@ export function AppSidebar() {
             </Avatar>
             <div className="min-w-0">
               <p className="font-medium text-sidebar-foreground text-sm truncate">{user?.name}</p>
-              <p className="text-xs text-sidebar-foreground/60 truncate">{getRoleLabel(user?.role || "")}</p>
+              <p className="text-xs text-sidebar-foreground/60 truncate">
+                {user?.role ? UserRoleLabels[user.role] : ""}
+              </p>
             </div>
           </div>
           <Button

@@ -8,16 +8,28 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { ThemeProvider } from "@/lib/theme-provider";
 import { CasesProvider } from "@/lib/cases-context";
+import { ClientsProvider } from "@/lib/clients-context";
+import { ConsultationsProvider } from "@/lib/consultations-context";
+import { HearingsProvider } from "@/lib/hearings-context";
+import { DepartmentsProvider } from "@/lib/departments-context";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
 import CasesPage from "@/pages/cases";
+import ClientsPage from "@/pages/clients";
+import ConsultationsPage from "@/pages/consultations";
+import HearingsPage from "@/pages/hearings";
+import UsersPage from "@/pages/users";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={DashboardPage} />
       <Route path="/cases" component={CasesPage} />
+      <Route path="/clients" component={ClientsPage} />
+      <Route path="/consultations" component={ConsultationsPage} />
+      <Route path="/hearings" component={HearingsPage} />
+      <Route path="/users" component={UsersPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -62,12 +74,20 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthProvider>
-          <CasesProvider>
-            <TooltipProvider>
-              <AppContent />
-              <Toaster />
-            </TooltipProvider>
-          </CasesProvider>
+          <DepartmentsProvider>
+            <ClientsProvider>
+              <CasesProvider>
+                <ConsultationsProvider>
+                  <HearingsProvider>
+                    <TooltipProvider>
+                      <AppContent />
+                      <Toaster />
+                    </TooltipProvider>
+                  </HearingsProvider>
+                </ConsultationsProvider>
+              </CasesProvider>
+            </ClientsProvider>
+          </DepartmentsProvider>
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

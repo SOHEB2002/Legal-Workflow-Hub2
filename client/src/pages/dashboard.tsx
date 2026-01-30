@@ -8,14 +8,16 @@ import {
   FileText,
   AlertTriangle,
   Calendar,
-  ExternalLink,
+  MessageSquare,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { useCases } from "@/lib/cases-context";
+import { useConsultations } from "@/lib/consultations-context";
+import { useHearings } from "@/lib/hearings-context";
+import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
-import { CaseStatus } from "@shared/schema";
+import { CaseStatus, CaseStatusLabels, ConsultationStatus } from "@shared/schema";
 
 function StatCard({
   title,
@@ -62,14 +64,19 @@ function StatCard({
 
 function getStatusColor(status: string) {
   switch (status) {
-    case CaseStatus.NEW:
+    case CaseStatus.RECEIVED:
       return "bg-primary/20 text-primary border-primary/30";
-    case CaseStatus.IN_PROGRESS:
+    case CaseStatus.DATA_COMPLETION:
+    case CaseStatus.STUDY:
+    case CaseStatus.DRAFTING:
       return "bg-accent/20 text-accent border-accent/30";
-    case CaseStatus.REVIEW:
+    case CaseStatus.REVIEW_COMMITTEE:
       return "bg-secondary/20 text-secondary-foreground border-secondary/30";
-    case CaseStatus.READY:
+    case CaseStatus.AMENDMENTS:
+      return "bg-destructive/20 text-destructive border-destructive/30";
+    case CaseStatus.READY_TO_SUBMIT:
       return "bg-accent/30 text-accent border-accent/40";
+    case CaseStatus.SUBMITTED:
     case CaseStatus.CLOSED:
       return "bg-muted text-muted-foreground border-muted";
     default:
@@ -78,10 +85,13 @@ function getStatusColor(status: string) {
 }
 
 export default function DashboardPage() {
-  const { cases, getActiveCases, getReviewCases, getReadyCases, getUpcomingHearings } = useCases();
+  const { cases, getActiveCases, getReviewCases, getReadyCases } = useCases();
+  const { consultations, getActiveConsultations, getReviewConsultations } = useConsultations();
+  const { getUpcomingHearings } = useHearings();
+  const { getClientName } = useClients();
   const { user } = useAuth();
 
-  const stats = useMemo(() => {
+  const caseStats = useMemo(() => {
     const activeCases = getActiveCases();
     const reviewCases = getReviewCases();
     const readyCases = getReadyCases();
@@ -94,6 +104,15 @@ export default function DashboardPage() {
       closed: closedCases.length,
     };
   }, [cases, getActiveCases, getReviewCases, getReadyCases]);
+
+  const consultationStats = useMemo(() => {
+    const active = getActiveConsultations();
+    const review = getReviewConsultations();
+    return {
+      active: active.length,
+      review: review.length,
+    };
+  }, [getActiveConsultations, getReviewConsultations]);
 
   const upcomingHearings = useMemo(() => {
     return getUpcomingHearings().slice(0, 5);
@@ -130,26 +149,26 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="القضايا الجارية"
-          value={stats.active}
+          value={caseStats.active}
           icon={Briefcase}
           variant="default"
         />
         <StatCard
           title="بانتظار المراجعة"
-          value={stats.review}
+          value={caseStats.review + consultationStats.review}
           icon={Clock}
           variant="warning"
         />
         <StatCard
           title="جاهزة للتسليم"
-          value={stats.ready}
+          value={caseStats.ready}
           icon={CheckCircle}
           variant="success"
         />
         <StatCard
-          title="القضايا المغلقة"
-          value={stats.closed}
-          icon={FileText}
+          title="الاستشارات النشطة"
+          value={consultationStats.active}
+          icon={MessageSquare}
           variant="accent"
         />
       </div>
@@ -169,35 +188,39 @@ export default function DashboardPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {upcomingHearings.map((c) => (
-                  <div
-                    key={c.id}
-                    data-testid={`hearing-item-${c.id}`}
-                    className={`flex items-center justify-between p-3 rounded-lg border ${
-                      isUrgent(c.nextHearingDate!)
-                        ? "bg-destructive/10 border-destructive/30"
-                        : "bg-muted/50 border-border"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      {isUrgent(c.nextHearingDate!) && (
-                        <AlertTriangle className="w-4 h-4 text-destructive" />
-                      )}
-                      <div>
-                        <p className="font-medium text-foreground">{c.clientName}</p>
-                        <p className="text-sm text-muted-foreground">{c.caseType}</p>
+                {upcomingHearings.map((hearing) => {
+                  const caseData = cases.find(c => c.id === hearing.caseId);
+                  const clientName = caseData ? getClientName(caseData.clientId) : "غير معروف";
+                  return (
+                    <div
+                      key={hearing.id}
+                      data-testid={`hearing-item-${hearing.id}`}
+                      className={`flex items-center justify-between p-3 rounded-lg border ${
+                        isUrgent(hearing.hearingDate)
+                          ? "bg-destructive/10 border-destructive/30"
+                          : "bg-muted/50 border-border"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        {isUrgent(hearing.hearingDate) && (
+                          <AlertTriangle className="w-4 h-4 text-destructive" />
+                        )}
+                        <div>
+                          <p className="font-medium text-foreground">{clientName}</p>
+                          <p className="text-sm text-muted-foreground">{hearing.courtName}</p>
+                        </div>
+                      </div>
+                      <div className="text-left">
+                        <p className={`text-sm font-medium ${isUrgent(hearing.hearingDate) ? "text-destructive" : "text-foreground"}`}>
+                          {format(new Date(hearing.hearingDate), "d MMMM yyyy", { locale: ar })}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {hearing.hearingTime}
+                        </p>
                       </div>
                     </div>
-                    <div className="text-left">
-                      <p className={`text-sm font-medium ${isUrgent(c.nextHearingDate!) ? "text-destructive" : "text-foreground"}`}>
-                        {format(new Date(c.nextHearingDate!), "d MMMM yyyy", { locale: ar })}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {format(new Date(c.nextHearingDate!), "EEEE", { locale: ar })}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -207,7 +230,7 @@ export default function DashboardPage() {
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-lg">
               <FileText className="w-5 h-5 text-accent" />
-              آخر التحديثات
+              آخر القضايا
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -224,25 +247,15 @@ export default function DashboardPage() {
                     className="flex items-center justify-between p-3 rounded-lg bg-muted/50 border border-border"
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-foreground truncate">{c.clientName}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-medium text-foreground">{c.caseNumber}</p>
                         <Badge variant="outline" className={`text-xs ${getStatusColor(c.status)}`}>
-                          {c.status}
+                          {CaseStatusLabels[c.status] || c.status}
                         </Badge>
                       </div>
-                      <p className="text-sm text-muted-foreground">{c.caseType}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {c.whatsappLink && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-whatsapp-${c.id}`}
-                          onClick={() => window.open(c.whatsappLink, "_blank")}
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                        </Button>
-                      )}
+                      <p className="text-sm text-muted-foreground">
+                        {getClientName(c.clientId)} - {c.caseType}
+                      </p>
                     </div>
                   </div>
                 ))}

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCaseSchema, updateCaseSchema, loginSchema } from "@shared/schema";
+import { loginSchema } from "@shared/schema";
 import { z } from "zod";
 
 export async function registerRoutes(
@@ -51,30 +51,22 @@ export async function registerRoutes(
 
   app.post("/api/cases", async (req, res) => {
     try {
-      const data = insertCaseSchema.parse(req.body);
       const createdBy = req.body.createdBy || "unknown";
-      const newCase = await storage.createCase(data, createdBy);
+      const newCase = await storage.createCase(req.body, createdBy);
       res.status(201).json(newCase);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: error.errors });
-      }
       res.status(500).json({ error: "حدث خطأ في إنشاء القضية" });
     }
   });
 
   app.patch("/api/cases/:id", async (req, res) => {
     try {
-      const data = updateCaseSchema.parse(req.body);
-      const updated = await storage.updateCase(req.params.id, data);
+      const updated = await storage.updateCase(req.params.id, req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
       res.json(updated);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: error.errors });
-      }
       res.status(500).json({ error: "حدث خطأ في تحديث القضية" });
     }
   });
@@ -93,12 +85,8 @@ export async function registerRoutes(
 
   app.get("/api/users", async (req, res) => {
     try {
-      const users = [
-        { id: "1", name: "المحامي عمر", role: "admin" },
-        { id: "2", name: "المحامي مهند", role: "admin" },
-        { id: "3", name: "السكرتير", role: "secretary" },
-      ];
-      res.json(users);
+      const users = await storage.getAllUsers();
+      res.json(users.map(u => ({ id: u.id, name: u.name, role: u.role })));
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب المستخدمين" });
     }

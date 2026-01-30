@@ -1,100 +1,66 @@
-import { type User, type InsertUser, type LawCase, type InsertCase, type UpdateCase, CaseStatus } from "@shared/schema";
+import { type User, type LawCase, CaseStatus } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  getAllUsers(): Promise<User[]>;
   getAllCases(): Promise<LawCase[]>;
   getCaseById(id: string): Promise<LawCase | undefined>;
-  createCase(data: InsertCase, createdBy: string): Promise<LawCase>;
-  updateCase(id: string, data: UpdateCase): Promise<LawCase | undefined>;
+  createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase>;
+  updateCase(id: string, data: Partial<LawCase>): Promise<LawCase | undefined>;
   deleteCase(id: string): Promise<boolean>;
 }
 
 const defaultUsers: User[] = [
-  { id: "1", username: "omar", password: "1234", name: "المحامي عمر", role: "admin" },
-  { id: "2", username: "muhannad", password: "1234", name: "المحامي مهند", role: "admin" },
-  { id: "3", username: "secretary", password: "1234", name: "السكرتير", role: "secretary" },
-];
-
-const initialCases: LawCase[] = [
-  {
-    id: "1",
-    clientName: "شركة الفلاح للتجارة",
-    caseType: "تجاري",
-    status: "قيد التنفيذ",
-    whatsappLink: "https://wa.me/966501234567",
-    driveLink: "https://drive.google.com/folder/abc123",
-    nextHearingDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-    notes: "قضية تجارية تتعلق بنزاع عقد توريد",
-    reviewNotes: "",
-    assignedTo: "1",
-    createdBy: "3",
-    createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "2",
-    clientName: "محمد أحمد العلي",
-    caseType: "عمالي",
-    status: "مراجعة",
-    whatsappLink: "https://wa.me/966509876543",
-    driveLink: "https://drive.google.com/folder/def456",
-    nextHearingDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-    notes: "قضية فصل تعسفي - مطالبة بالتعويض",
-    reviewNotes: "",
-    assignedTo: "2",
-    createdBy: "3",
-    createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "3",
-    clientName: "مؤسسة النور للمقاولات",
-    caseType: "إداري",
-    status: "جديد",
-    whatsappLink: "",
-    driveLink: "",
-    nextHearingDate: null,
-    notes: "استشارة بخصوص تراخيص البناء",
-    reviewNotes: "",
-    assignedTo: null,
-    createdBy: "3",
+  { 
+    id: "1", 
+    username: "manager", 
+    password: "1234", 
+    name: "مدير الفرع", 
+    email: "manager@lawfirm.com",
+    phone: "0501234567",
+    role: "branch_manager",
+    departmentId: null,
+    isActive: true,
+    canBeAssignedCases: true,
+    canBeAssignedConsultations: true,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
-  {
-    id: "4",
-    clientName: "فاطمة سعيد الغامدي",
-    caseType: "استشارة",
-    status: "جاهز للتسليم",
-    whatsappLink: "https://wa.me/966505551234",
-    driveLink: "https://drive.google.com/folder/ghi789",
-    nextHearingDate: null,
-    notes: "استشارة قانونية بخصوص الميراث",
-    reviewNotes: "",
-    assignedTo: "1",
-    createdBy: "3",
-    createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+  { 
+    id: "4", 
+    username: "omar", 
+    password: "1234", 
+    name: "المحامي عمر - رئيس القسم العام", 
+    email: "omar@lawfirm.com",
+    phone: "0504234567",
+    role: "department_head",
+    departmentId: "1",
+    isActive: true,
+    canBeAssignedCases: true,
+    canBeAssignedConsultations: true,
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
-  {
-    id: "5",
-    clientName: "شركة التقنية المتقدمة",
-    caseType: "عقد",
-    status: "قيد التنفيذ",
-    whatsappLink: "https://wa.me/966507778899",
-    driveLink: "https://drive.google.com/folder/jkl012",
-    nextHearingDate: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString(),
-    notes: "صياغة عقد شراكة تقنية",
-    reviewNotes: "",
-    assignedTo: "2",
-    createdBy: "3",
-    createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+  { 
+    id: "6", 
+    username: "support", 
+    password: "1234", 
+    name: "الدعم الإداري", 
+    email: "support@lawfirm.com",
+    phone: "0506234567",
+    role: "admin_support",
+    departmentId: null,
+    isActive: true,
+    canBeAssignedCases: false,
+    canBeAssignedConsultations: false,
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
 ];
+
+const initialCases: LawCase[] = [];
 
 export class MemStorage implements IStorage {
   private users: Map<string, User>;
@@ -118,11 +84,8 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+  async getAllUsers(): Promise<User[]> {
+    return Array.from(this.users.values());
   }
 
   async getAllCases(): Promise<LawCase[]> {
@@ -135,28 +98,42 @@ export class MemStorage implements IStorage {
     return this.cases.get(id);
   }
 
-  async createCase(data: InsertCase, createdBy: string): Promise<LawCase> {
+  async createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase> {
     const id = randomUUID();
+    const caseNumber = `C-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
     const newCase: LawCase = {
       id,
-      clientName: data.clientName,
-      caseType: data.caseType,
-      status: CaseStatus.NEW,
-      whatsappLink: data.whatsappLink || "",
-      driveLink: data.driveLink || "",
-      nextHearingDate: data.nextHearingDate || null,
-      notes: data.notes || "",
+      caseNumber,
+      clientId: data.clientId || "",
+      caseType: data.caseType || "عام",
+      status: CaseStatus.RECEIVED,
+      departmentId: data.departmentId || "",
+      assignedLawyers: [],
+      primaryLawyerId: null,
+      courtName: data.courtName || "",
+      courtCaseNumber: data.courtCaseNumber || "",
+      najizNumber: data.najizNumber || "",
+      judgeName: data.judgeName || "",
+      opponentName: data.opponentName || "",
+      opponentLawyer: data.opponentLawyer || "",
+      opponentPhone: data.opponentPhone || "",
+      opponentNotes: data.opponentNotes || "",
+      whatsappGroupLink: data.whatsappGroupLink || "",
+      googleDriveFolderId: data.googleDriveFolderId || "",
       reviewNotes: "",
-      assignedTo: null,
+      reviewDecision: null,
+      reviewActionTaken: null,
+      priority: data.priority || "متوسط",
       createdBy,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      closedAt: null,
     };
     this.cases.set(id, newCase);
     return newCase;
   }
 
-  async updateCase(id: string, data: UpdateCase): Promise<LawCase | undefined> {
+  async updateCase(id: string, data: Partial<LawCase>): Promise<LawCase | undefined> {
     const existing = this.cases.get(id);
     if (!existing) return undefined;
 
