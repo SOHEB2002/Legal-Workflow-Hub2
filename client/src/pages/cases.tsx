@@ -50,6 +50,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
@@ -352,78 +357,113 @@ export default function CasesPage() {
                   <TableCell>{getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        data-testid={`button-view-${c.id}`}
-                        onClick={() => openDetailsDialog(c)}
-                      >
-                        <FolderOpen className="w-4 h-4" />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            data-testid={`button-view-${c.id}`}
+                            onClick={() => openDetailsDialog(c)}
+                          >
+                            <FolderOpen className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>عرض التفاصيل</TooltipContent>
+                      </Tooltip>
                       
                       {canAssign(c) && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-assign-${c.id}`}
-                          onClick={() => openAssignDialog(c)}
-                        >
-                          <UserPlus className="w-4 h-4" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-assign-${c.id}`}
+                              onClick={() => openAssignDialog(c)}
+                            >
+                              <UserPlus className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>إسناد القضية</TooltipContent>
+                        </Tooltip>
                       )}
                       
                       {canSendToReview(c) && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-send-review-${c.id}`}
-                          onClick={() => handleSendToReview(c)}
-                        >
-                          <Send className="w-4 h-4" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-send-review-${c.id}`}
+                              onClick={() => handleSendToReview(c)}
+                            >
+                              <Send className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>إرسال للمراجعة</TooltipContent>
+                        </Tooltip>
                       )}
                       
                       {canReview(c) && (
                         <>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            data-testid={`button-approve-${c.id}`}
-                            onClick={() => handleApprove(c)}
-                          >
-                            <CheckCircle className="w-4 h-4 text-green-600" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            data-testid={`button-reject-${c.id}`}
-                            onClick={() => openRejectDialog(c)}
-                          >
-                            <XCircle className="w-4 h-4 text-destructive" />
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                data-testid={`button-approve-${c.id}`}
+                                onClick={() => handleApprove(c)}
+                              >
+                                <CheckCircle className="w-4 h-4 text-green-600" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>اعتماد القضية</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                data-testid={`button-reject-${c.id}`}
+                                onClick={() => openRejectDialog(c)}
+                              >
+                                <XCircle className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>إعادة للتعديل</TooltipContent>
+                          </Tooltip>
                         </>
                       )}
                       
                       {canClose(c) && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-close-${c.id}`}
-                          onClick={() => handleClose(c)}
-                        >
-                          <Archive className="w-4 h-4" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-close-${c.id}`}
+                              onClick={() => handleClose(c)}
+                            >
+                              <Archive className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>إغلاق القضية</TooltipContent>
+                        </Tooltip>
                       )}
                       
                       {c.whatsappGroupLink && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-whatsapp-${c.id}`}
-                          onClick={() => window.open(c.whatsappGroupLink, "_blank")}
-                        >
-                          <MessageSquare className="w-4 h-4 text-green-600" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-whatsapp-${c.id}`}
+                              onClick={() => window.open(c.whatsappGroupLink, "_blank")}
+                            >
+                              <MessageSquare className="w-4 h-4 text-green-600" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>مجموعة واتساب</TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                   </TableCell>

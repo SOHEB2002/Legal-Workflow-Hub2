@@ -27,6 +27,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText } from "lucide-react";
 import { useConsultations } from "@/lib/consultations-context";
 import { useClients } from "@/lib/clients-context";
@@ -303,54 +308,79 @@ export default function ConsultationsPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        data-testid={`button-view-consultation-${consultation.id}`}
-                        onClick={() => setSelectedConsultation(consultation)}
-                      >
-                        <MessageSquare className="w-4 h-4" />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            data-testid={`button-view-consultation-${consultation.id}`}
+                            onClick={() => setSelectedConsultation(consultation)}
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>عرض التفاصيل</TooltipContent>
+                      </Tooltip>
                       {consultation.status === ConsultationStatus.STUDY && permissions.canManageDepartment && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-send-review-${consultation.id}`}
-                          onClick={() => sendToReviewCommittee(consultation.id)}
-                        >
-                          <Send className="w-4 h-4" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-send-review-${consultation.id}`}
+                              onClick={() => sendToReviewCommittee(consultation.id)}
+                            >
+                              <Send className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>إرسال للمراجعة</TooltipContent>
+                        </Tooltip>
                       )}
                       {consultation.status === ConsultationStatus.REVIEW_COMMITTEE &&
                         permissions.canReviewConsultations && (
                           <>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-approve-${consultation.id}`}
-                              onClick={() => approveConsultation(consultation.id)}
-                            >
-                              <CheckCircle className="w-4 h-4 text-green-600" />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-reject-${consultation.id}`}
-                              onClick={() => rejectConsultation(consultation.id, "يرجى المراجعة")}
-                            >
-                              <XCircle className="w-4 h-4 text-destructive" />
-                            </Button>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  data-testid={`button-approve-${consultation.id}`}
+                                  onClick={() => approveConsultation(consultation.id)}
+                                >
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>اعتماد الاستشارة</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  data-testid={`button-reject-${consultation.id}`}
+                                  onClick={() => rejectConsultation(consultation.id, "يرجى المراجعة")}
+                                >
+                                  <XCircle className="w-4 h-4 text-destructive" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>إعادة للتعديل</TooltipContent>
+                            </Tooltip>
                           </>
                         )}
                       {consultation.status === ConsultationStatus.READY && permissions.canCloseCases && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-deliver-${consultation.id}`}
-                          onClick={() => markDelivered(consultation.id)}
-                        >
-                          <FileText className="w-4 h-4" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-deliver-${consultation.id}`}
+                              onClick={() => markDelivered(consultation.id)}
+                            >
+                              <FileText className="w-4 h-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>تسليم الاستشارة</TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                   </TableCell>

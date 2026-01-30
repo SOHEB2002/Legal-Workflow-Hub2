@@ -27,6 +27,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Plus, Search, Pencil, Trash2, Building2, User, Phone, Mail } from "lucide-react";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
@@ -352,23 +357,33 @@ export default function ClientsPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        data-testid={`button-edit-client-${client.id}`}
-                        onClick={() => openEditDialog(client)}
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            data-testid={`button-edit-client-${client.id}`}
+                            onClick={() => openEditDialog(client)}
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>تعديل بيانات العميل</TooltipContent>
+                      </Tooltip>
                       {permissions.canManageUsers && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          data-testid={`button-delete-client-${client.id}`}
-                          onClick={() => deleteClient(client.id)}
-                        >
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-delete-client-${client.id}`}
+                              onClick={() => deleteClient(client.id)}
+                            >
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>حذف العميل</TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                   </TableCell>

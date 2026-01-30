@@ -27,6 +27,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Plus, Calendar, Clock, MapPin, AlertCircle, CheckCircle, XCircle } from "lucide-react";
 import { useHearings } from "@/lib/hearings-context";
 import { useCases } from "@/lib/cases-context";
@@ -327,22 +332,32 @@ export default function HearingsPage() {
                       <TableCell>
                         {hearing.status === HearingStatus.UPCOMING && (
                           <div className="flex items-center gap-1">
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-complete-${hearing.id}`}
-                              onClick={() => setResultDialog(hearing)}
-                            >
-                              <CheckCircle className="w-4 h-4 text-green-600" />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-cancel-${hearing.id}`}
-                              onClick={() => markCancelled(hearing.id)}
-                            >
-                              <XCircle className="w-4 h-4 text-destructive" />
-                            </Button>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  data-testid={`button-complete-${hearing.id}`}
+                                  onClick={() => setResultDialog(hearing)}
+                                >
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>تسجيل نتيجة الجلسة</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  data-testid={`button-cancel-${hearing.id}`}
+                                  onClick={() => markCancelled(hearing.id)}
+                                >
+                                  <XCircle className="w-4 h-4 text-destructive" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>إلغاء الجلسة</TooltipContent>
+                            </Tooltip>
                           </div>
                         )}
                       </TableCell>
