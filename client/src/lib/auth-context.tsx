@@ -263,3 +263,7 @@ export function getUsersByDepartment(departmentId: string): User[] {
 export function getLawyers(): User[] {
   return getStoredUsers().filter(u => u.canBeAssignedCases);
 }
+
+export function getActiveUsers(): User[] {
+  return getStoredUsers().filter(u => u.isActive);
+}

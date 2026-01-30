@@ -157,6 +157,42 @@ export const HearingResult = {
 
 export type HearingResultValue = typeof HearingResult[keyof typeof HearingResult];
 
+// ==================== حالات المهام الميدانية ====================
+export const FieldTaskStatus = {
+  PENDING: "قيد_الانتظار",
+  IN_PROGRESS: "قيد_التنفيذ",
+  COMPLETED: "مكتمل",
+  CANCELLED: "ملغي",
+} as const;
+
+export type FieldTaskStatusValue = typeof FieldTaskStatus[keyof typeof FieldTaskStatus];
+
+export const FieldTaskStatusLabels: Record<FieldTaskStatusValue, string> = {
+  "قيد_الانتظار": "قيد الانتظار",
+  "قيد_التنفيذ": "قيد التنفيذ",
+  "مكتمل": "مكتمل",
+  "ملغي": "ملغي",
+};
+
+// ==================== أنواع المهام الميدانية ====================
+export const FieldTaskType = {
+  FIELD_REVIEW: "مراجعة_ميدانية",
+  DOCUMENT_DELIVERY: "تسليم_مستندات",
+  CLIENT_VISIT: "زيارة_عميل",
+  COURT_FOLLOW_UP: "متابعة_محكمة",
+  OTHER: "أخرى",
+} as const;
+
+export type FieldTaskTypeValue = typeof FieldTaskType[keyof typeof FieldTaskType];
+
+export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
+  "مراجعة_ميدانية": "مراجعة ميدانية",
+  "تسليم_مستندات": "تسليم مستندات",
+  "زيارة_عميل": "زيارة عميل",
+  "متابعة_محكمة": "متابعة محكمة",
+  "أخرى": "أخرى",
+};
+
 // ==================== أنواع المحاكم ====================
 export const CourtType = {
   GENERAL: "المحكمة العامة",
@@ -332,6 +368,26 @@ export interface DepartmentInfo {
   createdAt: string;
 }
 
+export interface FieldTask {
+  id: string;
+  title: string;
+  description: string;
+  taskType: FieldTaskTypeValue;
+  caseId: string | null;
+  consultationId: string | null;
+  assignedTo: string;
+  assignedBy: string;
+  status: FieldTaskStatusValue;
+  priority: PriorityType;
+  dueDate: string;
+  completedAt: string | null;
+  completionNotes: string;
+  proofDescription: string;
+  proofFileLink: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ==================== Zod Schemas ====================
 
 export const insertUserSchema = z.object({
@@ -424,6 +480,19 @@ export const insertHearingSchema = z.object({
 
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
 
+export const insertFieldTaskSchema = z.object({
+  title: z.string().min(1, "عنوان المهمة مطلوب"),
+  description: z.string().optional().default(""),
+  taskType: z.enum(["مراجعة_ميدانية", "تسليم_مستندات", "زيارة_عميل", "متابعة_محكمة", "أخرى"]),
+  caseId: z.string().nullable().optional(),
+  consultationId: z.string().nullable().optional(),
+  assignedTo: z.string().min(1, "الموظف المكلف مطلوب"),
+  priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).default("متوسط"),
+  dueDate: z.string().min(1, "تاريخ الاستحقاق مطلوب"),
+});
+
+export type InsertFieldTask = z.infer<typeof insertFieldTaskSchema>;
+
 export const loginSchema = z.object({
   username: z.string().min(1, "اسم المستخدم مطلوب"),
   password: z.string().min(1, "كلمة المرور مطلوبة"),
@@ -467,4 +536,8 @@ export function canAccessHR(role: UserRoleType): boolean {
 
 export function canCloseCases(role: UserRoleType): boolean {
   return ["branch_manager", "admin_support"].includes(role);
+}
+
+export function canAssignFieldTasks(role: UserRoleType): boolean {
+  return ["branch_manager", "cases_review_head", "consultations_review_head", "department_head"].includes(role);
 }
