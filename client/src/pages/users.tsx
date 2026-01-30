@@ -4,11 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -25,9 +27,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, User, Shield, Building2, Phone, Mail } from "lucide-react";
-import { useAuth, getAllUsers } from "@/lib/auth-context";
+import { Search, User, Shield, Building2, Phone, Mail, Plus } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
+import { useToast } from "@/hooks/use-toast";
 import type { User as UserType, UserRoleType } from "@shared/schema";
 import { UserRole, UserRoleLabels } from "@shared/schema";
 
@@ -52,15 +55,82 @@ function getRoleBadgeColor(role: UserRoleType) {
 }
 
 export default function UsersPage() {
-  const { user, permissions } = useAuth();
+  const { user, permissions, users, addUser } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
-  const allUsers = getAllUsers();
+  const { toast } = useToast();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
+  const [showAddDialog, setShowAddDialog] = useState(false);
 
-  const filteredUsers = allUsers.filter((u) => {
+  const [formData, setFormData] = useState({
+    name: "",
+    username: "",
+    password: "",
+    email: "",
+    phone: "",
+    role: "employee" as UserRoleType,
+    departmentId: "" as string | null,
+    isActive: true,
+    canBeAssignedCases: false,
+    canBeAssignedConsultations: false,
+  });
+
+  const resetForm = () => {
+    setFormData({
+      name: "",
+      username: "",
+      password: "",
+      email: "",
+      phone: "",
+      role: "employee",
+      departmentId: "",
+      isActive: true,
+      canBeAssignedCases: false,
+      canBeAssignedConsultations: false,
+    });
+  };
+
+  const handleAddUser = () => {
+    if (!formData.name || !formData.username || !formData.password) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "الرجاء ملء الحقول المطلوبة",
+      });
+      return;
+    }
+
+    const existingUser = users.find(u => u.username === formData.username);
+    if (existingUser) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "اسم المستخدم موجود مسبقاً",
+      });
+      return;
+    }
+
+    addUser({
+      name: formData.name,
+      username: formData.username,
+      password: formData.password,
+      email: formData.email,
+      phone: formData.phone,
+      role: formData.role,
+      departmentId: formData.departmentId || null,
+      isActive: formData.isActive,
+      canBeAssignedCases: formData.canBeAssignedCases,
+      canBeAssignedConsultations: formData.canBeAssignedConsultations,
+    });
+
+    toast({ title: "تم إضافة المستخدم بنجاح" });
+    setShowAddDialog(false);
+    resetForm();
+  };
+
+  const filteredUsers = users.filter((u) => {
     const matchesSearch =
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -90,6 +160,10 @@ export default function UsersPage() {
           <h1 className="text-2xl font-bold text-foreground">إدارة المستخدمين</h1>
           <p className="text-muted-foreground">إدارة حسابات وصلاحيات المستخدمين</p>
         </div>
+        <Button data-testid="button-add-user" onClick={() => { resetForm(); setShowAddDialog(true); }}>
+          <Plus className="w-4 h-4 ml-2" />
+          إضافة مستخدم
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -99,7 +173,7 @@ export default function UsersPage() {
             <User className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{allUsers.length}</div>
+            <div className="text-2xl font-bold">{users.length}</div>
           </CardContent>
         </Card>
         <Card>
@@ -109,7 +183,7 @@ export default function UsersPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {allUsers.filter((u) => u.role === UserRole.DEPARTMENT_HEAD).length}
+              {users.filter((u) => u.role === UserRole.DEPARTMENT_HEAD).length}
             </div>
           </CardContent>
         </Card>
@@ -120,7 +194,7 @@ export default function UsersPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {allUsers.filter((u) => u.role === UserRole.EMPLOYEE).length}
+              {users.filter((u) => u.role === UserRole.EMPLOYEE).length}
             </div>
           </CardContent>
         </Card>
@@ -131,7 +205,7 @@ export default function UsersPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {allUsers.filter((u) => u.isActive).length}
+              {users.filter((u) => u.isActive).length}
             </div>
           </CardContent>
         </Card>
@@ -227,6 +301,139 @@ export default function UsersPage() {
         </CardContent>
       </Card>
 
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>إضافة مستخدم جديد</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>الاسم الكامل *</Label>
+                <Input
+                  data-testid="input-user-name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="الاسم الكامل"
+                />
+              </div>
+              <div>
+                <Label>اسم المستخدم *</Label>
+                <Input
+                  data-testid="input-username"
+                  value={formData.username}
+                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                  placeholder="اسم الدخول"
+                />
+              </div>
+            </div>
+            <div>
+              <Label>كلمة المرور *</Label>
+              <Input
+                data-testid="input-password"
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                placeholder="كلمة المرور"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>البريد الإلكتروني</Label>
+                <Input
+                  data-testid="input-email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="email@example.com"
+                />
+              </div>
+              <div>
+                <Label>الهاتف</Label>
+                <Input
+                  data-testid="input-phone"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  placeholder="05xxxxxxxx"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>الدور الوظيفي</Label>
+                <Select
+                  value={formData.role}
+                  onValueChange={(value: UserRoleType) => setFormData({ ...formData, role: value })}
+                >
+                  <SelectTrigger data-testid="select-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(UserRoleLabels).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>القسم</Label>
+                <Select
+                  value={formData.departmentId || "none"}
+                  onValueChange={(value) => setFormData({ ...formData, departmentId: value === "none" ? null : value })}
+                >
+                  <SelectTrigger data-testid="select-department">
+                    <SelectValue placeholder="اختر القسم" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">بدون قسم</SelectItem>
+                    {departments.map((dept) => (
+                      <SelectItem key={dept.id} value={dept.id}>
+                        {dept.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>مستخدم نشط</Label>
+                <Switch
+                  checked={formData.isActive}
+                  onCheckedChange={(checked) => setFormData({ ...formData, isActive: checked })}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label>يمكن إسناد قضايا</Label>
+                <Switch
+                  checked={formData.canBeAssignedCases}
+                  onCheckedChange={(checked) => setFormData({ ...formData, canBeAssignedCases: checked })}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label>يمكن إسناد استشارات</Label>
+                <Switch
+                  checked={formData.canBeAssignedConsultations}
+                  onCheckedChange={(checked) => setFormData({ ...formData, canBeAssignedConsultations: checked })}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddDialog(false)}>إلغاء</Button>
+            <Button 
+              data-testid="button-submit-user" 
+              onClick={handleAddUser}
+              disabled={!formData.name || !formData.username || !formData.password}
+            >
+              إضافة المستخدم
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!selectedUser} onOpenChange={(open) => !open && setSelectedUser(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -267,7 +474,7 @@ export default function UsersPage() {
                   <p>{selectedUser.phone}</p>
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 {selectedUser.canBeAssignedCases && (
                   <Badge variant="outline">يمكن إسناد قضايا</Badge>
                 )}

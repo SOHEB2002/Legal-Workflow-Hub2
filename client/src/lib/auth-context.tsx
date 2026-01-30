@@ -27,6 +27,9 @@ interface AuthContextType {
     canAccessHR: boolean;
     canCloseCases: boolean;
   };
+  users: User[];
+  addUser: (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => void;
+  updateUser: (id: string, userData: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -154,11 +157,24 @@ const defaultUsers: User[] = [
   },
 ];
 
+const USERS_STORAGE_KEY = "lawfirm_users";
+
+function getStoredUsers(): User[] {
+  const stored = localStorage.getItem(USERS_STORAGE_KEY);
+  if (stored) {
+    return JSON.parse(stored);
+  }
+  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(defaultUsers));
+  return defaultUsers;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
     const stored = localStorage.getItem("lawfirm_user");
     return stored ? JSON.parse(stored) : null;
   });
+
+  const [users, setUsers] = useState<User[]>(() => getStoredUsers());
 
   useEffect(() => {
     if (user) {
@@ -168,9 +184,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user]);
 
+  useEffect(() => {
+    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+  }, [users]);
+
   const login = async (username: string, password: string): Promise<boolean> => {
-    const foundUser = defaultUsers.find(
-      (u) => u.username === username && u.password === password
+    const foundUser = users.find(
+      (u) => u.username === username && u.password === password && u.isActive
     );
     if (foundUser) {
       setUser(foundUser);
@@ -181,6 +201,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     setUser(null);
+  };
+
+  const addUser = (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => {
+    const newUser: User = {
+      ...userData,
+      id: Date.now().toString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setUsers((prev) => [...prev, newUser]);
+  };
+
+  const updateUser = (id: string, userData: Partial<User>) => {
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === id ? { ...u, ...userData, updatedAt: new Date().toISOString() } : u
+      )
+    );
   };
 
   const permissions = {
@@ -196,7 +234,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, permissions }}>
+    <AuthContext.Provider value={{ user, login, logout, permissions, users, addUser, updateUser }}>
       {children}
     </AuthContext.Provider>
   );
@@ -211,17 +249,17 @@ export function useAuth() {
 }
 
 export function getAllUsers(): User[] {
-  return defaultUsers;
+  return getStoredUsers();
 }
 
 export function getUserById(id: string): User | undefined {
-  return defaultUsers.find(u => u.id === id);
+  return getStoredUsers().find(u => u.id === id);
 }
 
 export function getUsersByDepartment(departmentId: string): User[] {
-  return defaultUsers.filter(u => u.departmentId === departmentId);
+  return getStoredUsers().filter(u => u.departmentId === departmentId);
 }
 
 export function getLawyers(): User[] {
-  return defaultUsers.filter(u => u.canBeAssignedCases);
+  return getStoredUsers().filter(u => u.canBeAssignedCases);
 }
