@@ -141,7 +141,7 @@ export default function DashboardPage() {
             مرحباً، {user?.name}
           </h1>
           <p className="text-muted-foreground mt-1">
-            هذه نظرة عامة على حالة مكتب المحاماة
+            هذه نظرة عامة على حالة شركة عون
           </p>
         </div>
       </div>

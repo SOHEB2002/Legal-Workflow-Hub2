@@ -33,7 +33,7 @@ export default function LoginPage() {
       if (success) {
         toast({
           title: "تم تسجيل الدخول بنجاح",
-          description: "مرحباً بك في نظام إدارة مكتب المحاماة",
+          description: "مرحباً بك في نظام شركة عون للمحاماة",
         });
         setLocation("/");
       } else {
@@ -67,7 +67,7 @@ export default function LoginPage() {
             <Scale className="w-8 h-8 text-accent-foreground" />
           </div>
           <CardTitle className="text-2xl font-bold text-foreground">
-            نظام إدارة مكتب المحاماة
+            شركة عون للمحاماة والاستشارات القانونية
           </CardTitle>
           <CardDescription className="text-muted-foreground mt-2">
             قم بتسجيل الدخول للوصول إلى لوحة التحكم
@@ -142,16 +142,16 @@ export default function LoginPage() {
             <p className="text-sm text-muted-foreground text-center mb-3">بيانات الدخول التجريبية:</p>
             <div className="grid grid-cols-1 gap-2 text-xs">
               <div className="flex justify-between items-center p-2 bg-muted/50 rounded-md">
-                <span className="text-muted-foreground">المحامي عمر (مسؤول)</span>
+                <span className="text-muted-foreground">مدير الفرع</span>
+                <code className="text-accent">manager / 1234</code>
+              </div>
+              <div className="flex justify-between items-center p-2 bg-muted/50 rounded-md">
+                <span className="text-muted-foreground">المحامي عمر (رئيس القسم)</span>
                 <code className="text-accent">omar / 1234</code>
               </div>
               <div className="flex justify-between items-center p-2 bg-muted/50 rounded-md">
-                <span className="text-muted-foreground">المحامي مهند (مسؤول)</span>
-                <code className="text-accent">muhannad / 1234</code>
-              </div>
-              <div className="flex justify-between items-center p-2 bg-muted/50 rounded-md">
-                <span className="text-muted-foreground">السكرتير</span>
-                <code className="text-accent">secretary / 1234</code>
+                <span className="text-muted-foreground">الدعم الإداري</span>
+                <code className="text-accent">support / 1234</code>
               </div>
             </div>
           </div>

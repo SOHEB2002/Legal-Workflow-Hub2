@@ -75,8 +75,8 @@ export function AppSidebar() {
             <Scale className="w-5 h-5 text-accent-foreground" />
           </div>
           <div className="overflow-hidden group-data-[collapsible=icon]:hidden">
-            <h1 className="font-bold text-sidebar-foreground truncate">مكتب المحاماة</h1>
-            <p className="text-xs text-sidebar-foreground/70 truncate">نظام إدارة متكامل</p>
+            <h1 className="font-bold text-sidebar-foreground truncate">شركة عون</h1>
+            <p className="text-xs text-sidebar-foreground/70 truncate">للمحاماة والاستشارات القانونية</p>
           </div>
         </div>
       </SidebarHeader>

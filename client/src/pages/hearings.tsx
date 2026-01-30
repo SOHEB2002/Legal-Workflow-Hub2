@@ -215,12 +215,12 @@ export default function HearingsPage() {
                 </Select>
               </div>
               <div>
-                <Label>رقم القاعة</Label>
+                <Label>رقم الدائرة</Label>
                 <Input
                   data-testid="input-court-room"
                   value={formData.courtRoom}
                   onChange={(e) => setFormData({ ...formData, courtRoom: e.target.value })}
-                  placeholder="مثال: قاعة 5"
+                  placeholder="مثال: الدائرة 5"
                 />
               </div>
               <div>
@@ -286,7 +286,7 @@ export default function HearingsPage() {
                 <TableHead className="text-right">التاريخ والوقت</TableHead>
                 <TableHead className="text-right">القضية</TableHead>
                 <TableHead className="text-right">المحكمة</TableHead>
-                <TableHead className="text-right">القاعة</TableHead>
+                <TableHead className="text-right">الدائرة</TableHead>
                 <TableHead className="text-right">الحالة</TableHead>
                 <TableHead className="text-right">الإجراءات</TableHead>
               </TableRow>
