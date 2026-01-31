@@ -16,8 +16,10 @@ import { FieldTasksProvider } from "@/lib/field-tasks-context";
 import { DashboardProvider } from "@/lib/dashboard-context";
 import { ContactsProvider } from "@/lib/contacts-context";
 import { StandardsProvider } from "@/lib/standards-context";
+import { NotificationsProvider } from "@/lib/notifications-context";
 import { GlobalSearch } from "@/components/global-search";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { FavoritesProvider } from "@/lib/favorites-context";
 import { FavoritesDropdown, RecentVisitsDropdown } from "@/components/favorites-dropdown";
 import { KeyboardShortcutsProvider } from "@/components/keyboard-shortcuts";
@@ -35,6 +37,9 @@ import DashboardSettingsPage from "@/pages/dashboard-settings";
 import KPIsPage from "@/pages/kpis";
 import HelpPage from "@/pages/help";
 import StandardsPage from "@/pages/standards";
+import NotificationsPage from "@/pages/notifications";
+import NotificationPreferencesPage from "@/pages/notification-preferences";
+import NotificationDashboardPage from "@/pages/notification-dashboard";
 
 function Router() {
   return (
@@ -50,6 +55,9 @@ function Router() {
       <Route path="/kpis" component={KPIsPage} />
       <Route path="/help" component={HelpPage} />
       <Route path="/standards" component={StandardsPage} />
+      <Route path="/notifications" component={NotificationsPage} />
+      <Route path="/notification-preferences" component={NotificationPreferencesPage} />
+      <Route path="/notification-dashboard" component={NotificationDashboardPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -70,6 +78,7 @@ function AuthenticatedLayout() {
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <GlobalSearch />
             <div className="flex-1" />
+            <NotificationsBell />
             <RecentVisitsDropdown />
             <FavoritesDropdown />
             <ThemeToggle />
@@ -107,6 +116,7 @@ function App() {
                       <ContactsProvider>
                         <DashboardProvider>
                           <StandardsProvider>
+                            <NotificationsProvider>
                             <FavoritesProvider>
                             <TooltipProvider>
                               <KeyboardShortcutsProvider>
@@ -117,6 +127,7 @@ function App() {
                               <Toaster />
                             </TooltipProvider>
                             </FavoritesProvider>
+                            </NotificationsProvider>
                           </StandardsProvider>
                         </DashboardProvider>
                       </ContactsProvider>

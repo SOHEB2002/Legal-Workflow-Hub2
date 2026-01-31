@@ -404,17 +404,6 @@ export interface ActivityLog {
   createdAt: string;
 }
 
-export interface Notification {
-  id: string;
-  userId: string;
-  type: "hearing_reminder" | "assignment" | "review_needed" | "review_result";
-  title: string;
-  message: string;
-  link: string;
-  isRead: boolean;
-  sentVia: string[];
-  createdAt: string;
-}
 
 export interface DepartmentInfo {
   id: string;
@@ -647,6 +636,10 @@ export function canAssignFieldTasks(role: UserRoleType): boolean {
   return ["branch_manager", "cases_review_head", "consultations_review_head", "department_head"].includes(role);
 }
 
+export function canSendNotifications(role: UserRoleType): boolean {
+  return ["branch_manager", "department_head", "cases_review_head", "consultations_review_head"].includes(role);
+}
+
 export function canMoveToPreviousStage(role: UserRoleType): boolean {
   return role === "branch_manager";
 }
@@ -718,4 +711,146 @@ export interface ReviewResult {
   status: ReviewResultStatusValue;
   createdAt: string;
   updatedAt: string;
+}
+
+// ==================== نظام الإشعارات (Notifications) ====================
+
+export const NotificationType = {
+  TASK_REMINDER: "task_reminder",
+  CASE_DELAY: "case_delay",
+  CONSULTATION_DELAY: "consultation_delay",
+  GENERAL_ALERT: "general_alert",
+  DEADLINE_WARNING: "deadline_warning",
+  ASSIGNMENT: "assignment",
+  ESCALATION: "escalation",
+  RESPONSE_REQUEST: "response_request",
+} as const;
+
+export type NotificationTypeValue = typeof NotificationType[keyof typeof NotificationType];
+
+export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
+  task_reminder: "تذكير بمهمة",
+  case_delay: "تأخر قضية",
+  consultation_delay: "تأخر استشارة",
+  general_alert: "تنبيه عام",
+  deadline_warning: "تحذير موعد نهائي",
+  assignment: "إسناد مهمة",
+  escalation: "تصعيد",
+  response_request: "طلب رد",
+};
+
+export const NotificationPriority = {
+  LOW: "low",
+  MEDIUM: "medium",
+  HIGH: "high",
+  URGENT: "urgent",
+} as const;
+
+export type NotificationPriorityValue = typeof NotificationPriority[keyof typeof NotificationPriority];
+
+export const NotificationPriorityLabels: Record<NotificationPriorityValue, string> = {
+  low: "منخفضة",
+  medium: "متوسطة",
+  high: "عالية",
+  urgent: "عاجلة",
+};
+
+export const NotificationStatus = {
+  PENDING: "pending",
+  SENT: "sent",
+  READ: "read",
+  RESPONDED: "responded",
+  ESCALATED: "escalated",
+  ARCHIVED: "archived",
+} as const;
+
+export type NotificationStatusValue = typeof NotificationStatus[keyof typeof NotificationStatus];
+
+export const NotificationStatusLabels: Record<NotificationStatusValue, string> = {
+  pending: "معلق",
+  sent: "مرسل",
+  read: "مقروء",
+  responded: "تم الرد",
+  escalated: "مصعّد",
+  archived: "مؤرشف",
+};
+
+export const ResponseType = {
+  COMPLETED: "completed",
+  IN_PROGRESS: "in_progress",
+  NEED_MORE_TIME: "need_more_time",
+  NOTED: "noted",
+} as const;
+
+export type ResponseTypeValue = typeof ResponseType[keyof typeof ResponseType];
+
+export const ResponseTypeLabels: Record<ResponseTypeValue, string> = {
+  completed: "تم الإنجاز",
+  in_progress: "جاري العمل",
+  need_more_time: "أحتاج وقت إضافي",
+  noted: "تم الاطلاع",
+};
+
+export interface NotificationResponse {
+  type: ResponseTypeValue;
+  message: string;
+  respondedAt: string;
+}
+
+export interface Notification {
+  id: string;
+  type: NotificationTypeValue;
+  priority: NotificationPriorityValue;
+  status: NotificationStatusValue;
+  title: string;
+  message: string;
+  senderId: string;
+  senderName: string;
+  recipientId: string;
+  recipientIds?: string[];
+  relatedType: "case" | "consultation" | "task" | null;
+  relatedId: string | null;
+  isRead: boolean;
+  readAt: string | null;
+  response: NotificationResponse | null;
+  requiresResponse: boolean;
+  scheduledAt: string | null;
+  escalationLevel: number;
+  escalatedTo: string | null;
+  autoEscalateAfterHours: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationTemplate {
+  id: string;
+  name: string;
+  title: string;
+  message: string;
+  type: NotificationTypeValue;
+  priority: NotificationPriorityValue;
+}
+
+export const DigestMode = {
+  INSTANT: "instant",
+  DAILY: "daily",
+  WEEKLY: "weekly",
+} as const;
+
+export type DigestModeValue = typeof DigestMode[keyof typeof DigestMode];
+
+export const DigestModeLabels: Record<DigestModeValue, string> = {
+  instant: "فوري",
+  daily: "ملخص يومي",
+  weekly: "ملخص أسبوعي",
+};
+
+export interface UserNotificationPreferences {
+  userId: string;
+  enableSound: boolean;
+  enableDesktop: boolean;
+  digestMode: DigestModeValue;
+  mutedTypes: NotificationTypeValue[];
+  quietHoursStart: string | null;
+  quietHoursEnd: string | null;
 }

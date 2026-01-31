@@ -1,0 +1,185 @@
+أنشئ نظام إشعارات وتنبيهات متكامل ومتقدم:
+
+=== 1. Schema في shared/schema.ts ===
+- enum NotificationType: task_reminder, case_delay, consultation_delay, general_alert, deadline_warning, assignment, escalation, response_request
+- enum NotificationPriority: low, medium, high, urgent
+- enum NotificationStatus: pending, sent, read, responded, escalated, archived
+- enum ResponseType: completed, in_progress, need_more_time, noted
+
+- interface Notification:
+  id, type, priority, status
+  title, message
+  senderId, senderName
+  recipientId (أو recipientIds[] للإرسال الجماعي)
+  relatedType: "case" | "consultation" | "task" | null
+  relatedId: معرف القضية/الاستشارة/المهمة
+  isRead, readAt
+  response: { type: ResponseType, message: string, respondedAt: Date } | null
+  scheduledAt: Date | null (للجدولة)
+  escalationLevel: number (0 = عادي، 1 = مصعّد مرة، 2 = مصعّد مرتين)
+  escalatedTo: userId | null
+  autoEscalateAfterHours: number (افتراضي 24)
+  createdAt, updatedAt
+
+- interface NotificationTemplate:
+  id, name, title, message, type, priority
+
+- interface UserNotificationPreferences:
+  userId
+  enableSound: boolean
+  enableDesktop: boolean
+  digestMode: "instant" | "daily" | "weekly"
+  mutedTypes: NotificationType[]
+  quietHoursStart: string | null (مثل "22:00")
+  quietHoursEnd: string | null (مثل "08:00")
+
+- أضف صلاحية canSendNotifications في permissions للأدوار: branch_manager, department_head, legal_supervisor
+
+=== 2. أنشئ client/src/lib/notifications-context.tsx ===
+قائمة الإشعارات مع localStorage والدوال:
+
+إرسال:
+- sendNotification(notification): إرسال إشعار فوري
+- sendBulkNotification(recipientIds[], notification): إرسال جماعي
+- scheduleNotification(notification, scheduledAt): جدولة إشعار
+- sendToTeam(departmentId, notification): إرسال لقسم كامل
+
+قراءة وإدارة:
+- markAsRead(id): تحديد كمقروء
+- markAllAsRead(): تحديد الكل كمقروء
+- deleteNotification(id): حذف
+- archiveOldNotifications(daysOld): أرشفة القديمة
+- getUnreadCount(): عدد غير المقروءة
+- getMyNotifications(filters): إشعاراتي مع فلترة
+
+الردود:
+- respondToNotification(id, responseType, message): رد على إشعار
+- getNotificationResponses(senderId): ردود على إشعاراتي المرسلة
+
+التصعيد:
+- checkAndEscalate(): فحص الإشعارات غير المقروءة وتصعيدها
+- escalateNotification(id, escalateToUserId): تصعيد يدوي
+- getEscalatedNotifications(): الإشعارات المصعّدة
+
+التفضيلات:
+- getUserPreferences(userId): جلب تفضيلات المستخدم
+- updateUserPreferences(userId, preferences): تحديث التفضيلات
+
+القوالب:
+- getTemplates(): جلب القوالب
+- addTemplate(template): إضافة قالب
+- deleteTemplate(id): حذف قالب
+
+=== 3. أنشئ client/src/components/notifications/notifications-bell.tsx ===
+- أيقونة Bell في Header مع animation عند وصول إشعار جديد
+- Badge يعرض عدد الإشعارات غير المقروءة (أحمر للعاجلة)
+- Dropdown عند الضغط يعرض آخر 5 إشعارات
+- تلوين حسب الأولوية:
+  - urgent = أحمر مع pulse animation
+  - high = برتقالي
+  - medium = أصفر
+  - low = رمادي
+- أزرار سريعة: تحديد كمقروء، رد سريع
+- رابط "عرض الكل"
+- صوت تنبيه (إذا مفعّل في التفضيلات)
+
+=== 4. أنشئ client/src/pages/notifications.tsx ===
+- Tabs: الكل | غير مقروءة | تحتاج رد | مصعّدة | مؤرشفة
+- جدول بجميع الإشعارات مع:
+  - أيقونة النوع والأولوية
+  - العنوان والرسالة (مختصرة)
+  - المرسل والوقت
+  - حالة الرد
+  - رابط للقضية/الاستشارة
+- فلترة حسب: النوع، الأولوية، المرسل، التاريخ
+- أزرار: تحديد كمقروء، رد، أرشفة، حذف
+- Bulk actions: تحديد عدة إشعارات وتنفيذ إجراء
+
+=== 5. أنشئ client/src/components/notifications/send-notification-dialog.tsx ===
+- Dialog لإرسال إشعار جديد
+- اختيار المستلم:
+  - موظف واحد (Combobox بالبحث)
+  - عدة موظفين (MultiSelect)
+  - قسم كامل (Select)
+- اختيار النوع والأولوية
+- كتابة العنوان والرسالة أو اختيار قالب جاهز
+- ربط بقضية/استشارة (Combobox بالبحث)
+- خيارات متقدمة:
+  - جدولة الإرسال (DateTimePicker)
+  - طلب رد (checkbox)
+  - تفعيل التصعيد التلقائي + تحديد المدة
+- قوالب جاهزة:
+  - "تنبيه تأخر: يرجى الإسراع في إنجاز [اسم القضية]"
+  - "تذكير: موعد الجلسة [التاريخ]"
+  - "مطلوب: تحديث حالة القضية رقم [الرقم]"
+  - "عاجل: مراجعة مستند قبل [الموعد]"
+
+=== 6. أنشئ client/src/components/notifications/respond-dialog.tsx ===
+- Dialog للرد على إشعار
+- أزرار سريعة:
+  - ✅ "تم الإنجاز"
+  - 🔄 "جاري العمل"
+  - ⏰ "أحتاج وقت إضافي"
+  - 👁️ "تم الاطلاع"
+- حقل رسالة إضافية (اختياري)
+- عرض تفاصيل الإشعار الأصلي
+
+=== 7. أنشئ client/src/pages/notification-preferences.tsx ===
+صفحة تفضيلات الإشعارات للمستخدم:
+- تفعيل/إيقاف الصوت
+- وضع الإشعارات: فوري / ملخص يومي / ملخص أسبوعي
+- أوقات الهدوء (من - إلى)
+- اختيار أنواع الإشعارات المهمة (checkboxes)
+- إيقاف إشعارات أنواع معينة
+
+=== 8. أنشئ client/src/pages/notification-dashboard.tsx (للمديرين) ===
+لوحة تحكم إحصائيات الإشعارات:
+- إجمالي الإشعارات المرسلة (اليوم/الأسبوع/الشهر)
+- نسبة القراءة ومتوسط وقت القراءة
+- نسبة الردود ومتوسط وقت الرد
+- الإشعارات المصعّدة
+- Chart: الإشعارات حسب النوع
+- Chart: الإشعارات حسب الأولوية
+- جدول: الموظفين الأبطأ في الاستجابة
+- جدول: القضايا/الاستشارات الأكثر تنبيهاً (المتأخرة)
+- فلترة حسب القسم والفترة الزمنية
+
+=== 9. أنشئ client/src/components/notifications/notification-templates.tsx ===
+إدارة قوالب الإشعارات:
+- جدول بالقوالب الموجودة
+- إضافة قالب جديد
+- تعديل/حذف قالب
+- متغيرات ديناميكية: {caseName}, {consultationNumber}, {deadline}, {employeeName}
+
+=== 10. التكامل مع الصفحات ===
+
+في cases.tsx و consultations.tsx و tasks.tsx:
+- زر "إرسال تنبيه" 🔔 بجانب كل عنصر (لمن لديه الصلاحية)
+- يفتح send-notification-dialog مع تعبئة تلقائية
+- أيقونة تظهر إذا كان هناك إشعار مصعّد على هذا العنصر
+
+في Header/Navbar:
+- أضف notifications-bell بجانب اسم المستخدم
+
+في sidebar.tsx:
+- رابط "الإشعارات" مع Badge للعدد
+- رابط "لوحة الإشعارات" (للمديرين فقط)
+
+في صفحة الملف الشخصي أو الإعدادات:
+- رابط لتفضيلات الإشعارات
+
+=== 11. الإشعارات التلقائية ===
+أنشئ client/src/lib/auto-notifications.ts:
+- فحص دوري (كل ساعة) للقضايا والاستشارات
+- تنبيه تلقائي قبل موعد الجلسة بـ 24 ساعة
+- تنبيه عند تجاوز المهمة للموعد المحدد
+- تنبيه أسبوعي بالقضايا المتوقفة
+- تصعيد تلقائي للإشعارات غير المقروءة بعد 24 ساعة
+- استدعاء هذه الدوال في App.tsx باستخدام useEffect
+
+=== 12. التصميم ===
+- استخدم shadcn/ui: Dialog, DropdownMenu, Select, Tabs, Badge, Card, Table, Charts
+- أيقونات من lucide-react: Bell, BellRing, Send, Clock, AlertTriangle, CheckCircle, ArrowUpCircle
+- دعم RTL بالعربي
+- ألوان الأولوية متناسقة في كل مكان
+- Animations للإشعارات الجديدة

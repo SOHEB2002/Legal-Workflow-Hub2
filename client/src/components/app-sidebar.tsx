@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -49,6 +49,11 @@ const menuItems = [
     title: "المهام الميدانية",
     url: "/field-tasks",
     icon: ClipboardList,
+  },
+  {
+    title: "الإشعارات",
+    url: "/notifications",
+    icon: Bell,
   },
 ];
 

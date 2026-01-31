@@ -9,7 +9,8 @@ import {
   canReviewConsultations,
   canManageUsers,
   canAccessHR,
-  canCloseCases
+  canCloseCases,
+  canSendNotifications
 } from "@shared/schema";
 
 interface AuthContextType {
@@ -26,6 +27,7 @@ interface AuthContextType {
     canManageUsers: boolean;
     canAccessHR: boolean;
     canCloseCases: boolean;
+    canSendNotifications: boolean;
   };
   users: User[];
   addUser: (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => void;
@@ -279,6 +281,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     canManageUsers: user ? canManageUsers(user.role) : false,
     canAccessHR: user ? canAccessHR(user.role) : false,
     canCloseCases: user ? canCloseCases(user.role) : false,
+    canSendNotifications: user ? canSendNotifications(user.role) : false,
   };
 
   return (
