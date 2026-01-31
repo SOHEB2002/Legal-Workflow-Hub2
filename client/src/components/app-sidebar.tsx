@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -62,6 +62,24 @@ const adminMenuItems = [
     title: "المستخدمين",
     url: "/users",
     icon: UserCog,
+  },
+];
+
+const workflowMenuItems = [
+  {
+    title: "لوحة سير العمل",
+    url: "/workflow-board",
+    icon: Workflow,
+  },
+  {
+    title: "أعباء العمل",
+    url: "/workload-dashboard",
+    icon: Activity,
+  },
+  {
+    title: "لوحة الأداء",
+    url: "/performance-dashboard",
+    icon: TrendingUp,
   },
 ];
 
@@ -165,6 +183,28 @@ export function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
         )}
+
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-sidebar-foreground/60">سير العمل</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {workflowMenuItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === item.url}
+                    tooltip={item.title}
+                  >
+                    <Link href={item.url} data-testid={`link-${item.url.slice(1)}`}>
+                      <item.icon className="w-4 h-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
         <SidebarGroup>
           <SidebarGroupLabel className="text-sidebar-foreground/60">الأدوات</SidebarGroupLabel>

@@ -40,6 +40,10 @@ import StandardsPage from "@/pages/standards";
 import NotificationsPage from "@/pages/notifications";
 import NotificationPreferencesPage from "@/pages/notification-preferences";
 import NotificationDashboardPage from "@/pages/notification-dashboard";
+import WorkflowBoardPage from "@/pages/workflow-board";
+import WorkloadDashboardPage from "@/pages/workload-dashboard";
+import PerformanceDashboardPage from "@/pages/performance-dashboard";
+import { WorkflowProvider } from "@/lib/workflow-context";
 
 function Router() {
   return (
@@ -58,6 +62,9 @@ function Router() {
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/notification-preferences" component={NotificationPreferencesPage} />
       <Route path="/notification-dashboard" component={NotificationDashboardPage} />
+      <Route path="/workflow-board" component={WorkflowBoardPage} />
+      <Route path="/workload-dashboard" component={WorkloadDashboardPage} />
+      <Route path="/performance-dashboard" component={PerformanceDashboardPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -117,6 +124,7 @@ function App() {
                         <DashboardProvider>
                           <StandardsProvider>
                             <NotificationsProvider>
+                            <WorkflowProvider>
                             <FavoritesProvider>
                             <TooltipProvider>
                               <KeyboardShortcutsProvider>
@@ -127,6 +135,7 @@ function App() {
                               <Toaster />
                             </TooltipProvider>
                             </FavoritesProvider>
+                            </WorkflowProvider>
                             </NotificationsProvider>
                           </StandardsProvider>
                         </DashboardProvider>
