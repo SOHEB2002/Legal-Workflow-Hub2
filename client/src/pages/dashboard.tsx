@@ -1,19 +1,14 @@
-import { useMemo, useState } from "react";
-import { format, isWithinInterval, addDays, startOfDay, endOfDay, startOfMonth, isToday } from "date-fns";
+import { useMemo } from "react";
+import { format, isWithinInterval, addDays, startOfMonth, isToday } from "date-fns";
 import { ar } from "date-fns/locale";
 import { useLocation } from "wouter";
 import {
   Briefcase,
-  Clock,
-  CheckCircle,
   FileText,
   AlertTriangle,
   Calendar,
   MessageSquare,
   Settings,
-  UserPlus,
-  Phone,
-  Plus,
   Users,
   CalendarPlus,
 } from "lucide-react";
@@ -25,12 +20,32 @@ import { useHearings } from "@/lib/hearings-context";
 import { useClients } from "@/lib/clients-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useAuth } from "@/lib/auth-context";
-import { useDashboard } from "@/lib/dashboard-context";
-import { CaseStatus, CaseStatusLabels, CaseStageLabels } from "@shared/schema";
+import { useDashboard, type WidgetSize } from "@/lib/dashboard-context";
+import { CaseStatus, CaseStageLabels } from "@shared/schema";
+
+const getSizeClass = (size: WidgetSize, type: string): string => {
+  if (type === "stat_card") {
+    switch (size) {
+      case "small": return "col-span-1";
+      case "medium": return "col-span-1 sm:col-span-2";
+      case "large": return "col-span-1 sm:col-span-2 lg:col-span-3";
+      case "full": return "col-span-1 sm:col-span-2 lg:col-span-4";
+      default: return "col-span-1";
+    }
+  } else {
+    switch (size) {
+      case "small": return "col-span-1";
+      case "medium": return "col-span-1";
+      case "large": return "col-span-1 lg:col-span-2";
+      case "full": return "col-span-1 lg:col-span-2";
+      default: return "col-span-1";
+    }
+  }
+};
 
 export default function DashboardPage() {
   const { cases, getActiveCases, getReviewCases, getReadyCases } = useCases();
-  const { consultations, getActiveConsultations, getReviewConsultations } = useConsultations();
+  const { getActiveConsultations, getReviewConsultations } = useConsultations();
   const { hearings, getUpcomingHearings } = useHearings();
   const { clients, getClientName } = useClients();
   const { fieldTasks } = useFieldTasks();
@@ -42,12 +57,10 @@ export default function DashboardPage() {
     const activeCases = getActiveCases();
     const reviewCases = getReviewCases();
     const readyCases = getReadyCases();
-    const closedCases = cases.filter((c) => c.status === CaseStatus.CLOSED);
     return {
       active: activeCases.length,
       review: reviewCases.length,
       ready: readyCases.length,
-      closed: closedCases.length,
     };
   }, [cases, getActiveCases, getReviewCases, getReadyCases]);
 
@@ -58,7 +71,6 @@ export default function DashboardPage() {
   }, [getActiveConsultations, getReviewConsultations]);
 
   const todayHearings = useMemo(() => {
-    const today = new Date();
     return hearings.filter(h => isToday(new Date(h.hearingDate)));
   }, [hearings]);
 
@@ -182,7 +194,7 @@ export default function DashboardPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
         <div>
           <h1 className="text-2xl font-bold text-foreground">
             مرحباً، {user?.name}
@@ -207,26 +219,31 @@ export default function DashboardPage() {
           const Icon = widgetIcons[widget.id] || Briefcase;
           const variant = widgetVariants[widget.id] || "default";
           const isAlert = widget.id === "today_hearings" || widget.id === "overdue_tasks";
+          const sizeClass = getSizeClass(widget.size, widget.type);
           
           return (
-            <StatCardWidget
-              key={widget.id}
-              title={widget.title}
-              value={getWidgetValue(widget.id)}
-              icon={Icon}
-              variant={variant}
-              alert={isAlert}
-            />
+            <div key={widget.id} className={sizeClass} data-testid={`widget-${widget.id}`}>
+              <StatCardWidget
+                title={widget.title}
+                value={getWidgetValue(widget.id)}
+                icon={Icon}
+                variant={variant}
+                alert={isAlert}
+              />
+            </div>
           );
         })}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {listWidgets.map(widget => (
-          <div key={widget.id} data-testid={`widget-${widget.id}`}>
-            {renderListWidget(widget.id)}
-          </div>
-        ))}
+        {listWidgets.map(widget => {
+          const sizeClass = getSizeClass(widget.size, widget.type);
+          return (
+            <div key={widget.id} className={sizeClass} data-testid={`widget-${widget.id}`}>
+              {renderListWidget(widget.id)}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
