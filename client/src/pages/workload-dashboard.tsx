@@ -53,7 +53,7 @@ export default function WorkloadDashboard() {
 
   return (
     <div className="h-full flex flex-col p-6 space-y-6" dir="rtl">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">لوحة أعباء العمل</h1>
           <p className="text-muted-foreground">مراقبة وتوزيع أعباء العمل على الموظفين</p>

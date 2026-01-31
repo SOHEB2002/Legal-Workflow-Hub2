@@ -23,28 +23,28 @@ export function PriorityBadge({
         return {
           icon: AlertCircle,
           label: CasePriorityLabels.urgent,
-          className: "bg-red-500 text-white hover:bg-red-600 animate-pulse",
+          className: "bg-red-500 text-white animate-pulse",
           iconColor: "text-white",
         };
       case "normal":
         return {
           icon: Clock,
           label: CasePriorityLabels.normal,
-          className: "bg-blue-500 text-white hover:bg-blue-600",
+          className: "bg-blue-500 text-white",
           iconColor: "text-white",
         };
       case "low":
         return {
           icon: MinusCircle,
           label: CasePriorityLabels.low,
-          className: "bg-gray-400 text-white hover:bg-gray-500",
+          className: "bg-gray-400 text-white",
           iconColor: "text-white",
         };
       default:
         return {
           icon: Clock,
           label: "عادي",
-          className: "bg-gray-400 text-white hover:bg-gray-500",
+          className: "bg-gray-400 text-white",
           iconColor: "text-white",
         };
     }
@@ -54,9 +54,9 @@ export function PriorityBadge({
   const Icon = config.icon;
 
   const sizeClasses = {
-    sm: "h-5 text-[10px] px-1.5",
-    md: "h-6 text-xs px-2",
-    lg: "h-7 text-sm px-3",
+    sm: "text-[10px]",
+    md: "text-xs",
+    lg: "text-sm",
   };
 
   const iconSizes = {

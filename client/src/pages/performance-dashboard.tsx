@@ -90,12 +90,12 @@ export default function PerformanceDashboard() {
 
   return (
     <div className="h-full flex flex-col p-6 space-y-6 overflow-auto" dir="rtl">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">لوحة الأداء</h1>
           <p className="text-muted-foreground">تحليل أداء العمل ومؤشرات الإنتاجية</p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <Select value={timePeriod} onValueChange={setTimePeriod}>
             <SelectTrigger className="w-32" data-testid="select-time-period">
               <SelectValue placeholder="الفترة" />

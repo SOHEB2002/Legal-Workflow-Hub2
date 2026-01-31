@@ -50,6 +50,14 @@ The system features a formal and luxurious design.
     - **Statuses**: Pending, Sent, Read, Replied, Escalated, Archived.
     - **Features**: Notification bell, send to specific users/departments, scheduling, automatic escalation, 4 response types (approve, reject, in progress, note), dynamic templates.
     - **User Preferences**: Sound alerts, desktop notifications, notification mode (instant, daily, weekly summary), quiet hours, muting specific types.
+- **Workflow Management System** (NEW):
+    - **Workflow Board (`/workflow-board`)**: Kanban-style board for visualizing cases/consultations across stages with drag-like stage progression.
+    - **Workload Dashboard (`/workload-dashboard`)**: Monitors employee workload distribution with overload alerts (>15 items), overdue counts, and bottleneck detection.
+    - **Performance Dashboard (`/performance-dashboard`)**: Analytics dashboard with top 5 performers ranking, return rate warnings, SLA compliance tracking.
+    - **Components**: Stage tracker (7-stage visual), priority badge (animated urgent), SLA indicator (time-remaining), review notes dialog, workload cards.
+    - **SLA Tracking**: Configurable hours per stage, priority-adjusted (urgent -50%, low +50%).
+    - **Review Committee**: Third return triggers escalation to branch manager.
+    - **State Management**: WorkflowProvider context with localStorage persistence.
 
 ## External Dependencies
 - **PostgreSQL**: Integrated database for data persistence.

@@ -160,7 +160,7 @@ export default function WorkflowBoard() {
 
   return (
     <div className="h-full flex flex-col p-6 space-y-4" dir="rtl">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">لوحة سير العمل</h1>
           <p className="text-muted-foreground">إدارة ومتابعة مراحل القضايا والاستشارات</p>
@@ -240,9 +240,9 @@ export default function WorkflowBoard() {
                   data-testid={`column-${stage}`}
                 >
                   <CardHeader className="pb-2">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <CardTitle className="text-sm font-medium">{stageLabel}</CardTitle>
-                      <Badge variant="secondary" className="text-xs">
+                      <Badge variant="secondary">
                         {items.length}
                       </Badge>
                     </div>
@@ -305,11 +305,10 @@ export default function WorkflowBoard() {
                                     </div>
                                   )}
 
-                                  <div className="flex items-center justify-between pt-2 border-t">
+                                  <div className="flex items-center justify-between gap-2 pt-2 border-t">
                                     <Button
-                                      size="icon"
+                                      size="sm"
                                       variant="ghost"
-                                      className="h-6 w-6"
                                       disabled={index === 0}
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -321,9 +320,8 @@ export default function WorkflowBoard() {
                                     </Button>
                                     <CalendarDays className="h-3 w-3 text-muted-foreground" />
                                     <Button
-                                      size="icon"
+                                      size="sm"
                                       variant="ghost"
-                                      className="h-6 w-6"
                                       disabled={index === stages.length - 1}
                                       onClick={(e) => {
                                         e.stopPropagation();
