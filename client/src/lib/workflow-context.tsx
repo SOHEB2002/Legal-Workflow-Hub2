@@ -16,10 +16,12 @@ import {
   StageSLA,
   LawCase,
   Consultation,
+  NotificationType,
 } from "@shared/schema";
 import { useCases } from "./cases-context";
 import { useConsultations } from "./consultations-context";
 import { useAuth } from "./auth-context";
+import { useNotifications } from "./notifications-context";
 
 const generateId = () => Math.random().toString(36).substring(2, 11);
 
@@ -73,6 +75,7 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
   const { cases, updateCase, addCase } = useCases();
   const { consultations, updateConsultation } = useConsultations();
   const { user } = useAuth();
+  const { triggerWorkflowNotification } = useNotifications();
   
   const [stageTransitions, setStageTransitions] = useState<StageTransition[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.TRANSITIONS);
@@ -168,6 +171,14 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
       currentStage: "استكمال_البيانات",
       status: "استكمال_البيانات",
     });
+    
+    triggerWorkflowNotification({
+      type: NotificationType.CASE_ASSIGNED,
+      entityType: "case",
+      entityId: caseId,
+      entityName: lawCase.caseNumber,
+      stage: "استكمال_البيانات",
+    }, [assignedTo]);
   };
   
   const updateCaseWorkflowStage = (caseId: string, newStage: WorkflowCaseStageValue, notes: string) => {
@@ -205,6 +216,17 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
       currentStage: stageMapping[newStage] as any,
       status: stageMapping[newStage] as any,
     });
+    
+    if (lawCase.primaryLawyerId) {
+      triggerWorkflowNotification({
+        type: NotificationType.STAGE_CHANGED,
+        entityType: "case",
+        entityId: caseId,
+        entityName: lawCase.caseNumber,
+        stage: stageMapping[newStage],
+        previousStage: fromStage as string,
+      }, [lawCase.primaryLawyerId]);
+    }
   };
   
   const sendCaseToReview = (caseId: string) => {
@@ -275,6 +297,7 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
   };
   
   const returnCase = (caseId: string, reason: string) => {
+    const lawCase = cases.find(c => c.id === caseId);
     updateCaseWorkflowStage(caseId, WorkflowCaseStage.RETURNED_FOR_REVISION, reason);
     
     const existingNotes = reviewNotes.filter(n => n.entityId === caseId);
@@ -298,6 +321,28 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     };
     
     setReviewNotes(prev => [...prev, note]);
+    
+    if (lawCase?.primaryLawyerId) {
+      triggerWorkflowNotification({
+        type: NotificationType.RETURNED_FOR_REVISION,
+        entityType: "case",
+        entityId: caseId,
+        entityName: lawCase.caseNumber,
+        returnReason: reason,
+        returnCount,
+      }, [lawCase.primaryLawyerId]);
+      
+      if (returnCount >= 3) {
+        triggerWorkflowNotification({
+          type: NotificationType.THIRD_RETURN_WARNING,
+          entityType: "case",
+          entityId: caseId,
+          entityName: lawCase.caseNumber,
+          count: returnCount,
+          employeeName: lawCase.primaryLawyerId,
+        }, [lawCase.departmentId]);
+      }
+    }
   };
   
   const submitToCourtSystem = (caseId: string) => {
@@ -319,6 +364,14 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
       assignedTo,
       status: "دراسة",
     });
+    
+    triggerWorkflowNotification({
+      type: NotificationType.CONSULTATION_ASSIGNED,
+      entityType: "consultation",
+      entityId: consultationId,
+      entityName: consultation.consultationNumber,
+      stage: "دراسة",
+    }, [assignedTo]);
   };
   
   const updateConsultationWorkflowStage = (consultationId: string, newStage: ConsultationStageValue, notes: string) => {
