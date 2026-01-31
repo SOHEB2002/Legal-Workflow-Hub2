@@ -1,13 +1,15 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment } from "@shared/schema";
 import { CaseStatus, Priority, CaseStage, CaseStagesOrder } from "@shared/schema";
+import { apiRequest } from "./queryClient";
 
 interface CasesContextType {
   cases: LawCase[];
   comments: CaseComment[];
-  addCase: (data: Partial<LawCase>, createdBy: string, createdByName: string) => LawCase;
-  updateCase: (id: string, data: Partial<LawCase>) => void;
-  deleteCase: (id: string) => void;
+  isLoading: boolean;
+  addCase: (data: Partial<LawCase>, createdBy: string, createdByName: string) => Promise<LawCase>;
+  updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
+  deleteCase: (id: string) => Promise<void>;
   assignCase: (id: string, lawyerId: string, departmentId: string) => void;
   sendToDepartmentHead: (id: string) => void;
   sendToReviewCommittee: (id: string) => void;
@@ -27,6 +29,7 @@ interface CasesContextType {
   getActiveCases: () => LawCase[];
   getReviewCases: () => LawCase[];
   getReadyCases: () => LawCase[];
+  refreshCases: () => Promise<void>;
 }
 
 const CasesContext = createContext<CasesContextType | undefined>(undefined);
@@ -165,33 +168,40 @@ const migrateCase = (c: LawCase): LawCase => {
 };
 
 export function CasesProvider({ children }: { children: React.ReactNode }) {
-  const [cases, setCases] = useState<LawCase[]>(() => {
-    const stored = localStorage.getItem("lawfirm_cases_v3");
-    if (stored) {
-      const parsed = JSON.parse(stored) as LawCase[];
-      return parsed.map(migrateCase);
-    }
-    return initialCases;
-  });
-
+  const [cases, setCases] = useState<LawCase[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [comments, setComments] = useState<CaseComment[]>(() => {
     const stored = localStorage.getItem("lawfirm_case_comments");
     return stored ? JSON.parse(stored) : initialComments;
   });
 
+  const fetchCases = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const response = await fetch("/api/cases");
+      if (response.ok) {
+        const data = await response.json();
+        setCases(data.map(migrateCase));
+      }
+    } catch (error) {
+      console.error("Error fetching cases:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    localStorage.setItem("lawfirm_cases_v3", JSON.stringify(cases));
-  }, [cases]);
+    fetchCases();
+  }, [fetchCases]);
 
   useEffect(() => {
     localStorage.setItem("lawfirm_case_comments", JSON.stringify(comments));
   }, [comments]);
 
-  const addCase = (data: Partial<LawCase>, createdBy: string, createdByName: string): LawCase => {
+  const addCase = async (data: Partial<LawCase>, createdBy: string, createdByName: string): Promise<LawCase> => {
     const now = new Date().toISOString();
     const initialStage: CaseStageValue = CaseStage.RECEIVED;
-    const newCase: LawCase = {
-      id: generateId(),
+    const caseData = {
       caseNumber: generateCaseNumber(),
       clientId: data.clientId || "",
       caseType: data.caseType || "عام",
@@ -218,15 +228,16 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       reviewActionTaken: null,
       priority: data.priority || Priority.MEDIUM,
       createdBy,
-      createdAt: now,
-      updatedAt: now,
-      closedAt: null,
     };
-    setCases((prev) => [newCase, ...prev]);
+    
+    const response = await apiRequest("POST", "/api/cases", caseData);
+    const newCase = await response.json();
+    setCases((prev) => [migrateCase(newCase), ...prev]);
     return newCase;
   };
 
-  const updateCase = (id: string, data: Partial<LawCase>) => {
+  const updateCase = async (id: string, data: Partial<LawCase>): Promise<void> => {
+    await apiRequest("PATCH", `/api/cases/${id}`, data);
     setCases((prev) =>
       prev.map((c) =>
         c.id === id
@@ -236,128 +247,57 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const deleteCase = (id: string) => {
+  const deleteCase = async (id: string): Promise<void> => {
+    await apiRequest("DELETE", `/api/cases/${id}`);
     setCases((prev) => prev.filter((c) => c.id !== id));
   };
 
   const assignCase = (id: string, lawyerId: string, departmentId: string) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              assignedLawyers: [lawyerId],
-              primaryLawyerId: lawyerId,
-              departmentId,
-              status: CaseStatus.STUDY as CaseStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, {
+      assignedLawyers: [lawyerId],
+      primaryLawyerId: lawyerId,
+      departmentId,
+      status: CaseStatus.STUDY as CaseStatusValue,
+    });
   };
 
   const sendToDepartmentHead = (id: string) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: CaseStatus.DRAFTING as CaseStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, { status: CaseStatus.DRAFTING as CaseStatusValue });
   };
 
   const sendToReviewCommittee = (id: string) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: CaseStatus.REVIEW_COMMITTEE as CaseStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, { status: CaseStatus.REVIEW_COMMITTEE as CaseStatusValue });
   };
 
   const approveCase = (id: string, notes?: string) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
-              reviewDecision: "approved" as ReviewDecisionType,
-              reviewNotes: notes || "",
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, {
+      status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
+      reviewDecision: "approved" as ReviewDecisionType,
+      reviewNotes: notes || "",
+    });
   };
 
   const rejectCase = (id: string, notes: string, decision: ReviewDecisionType) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: CaseStatus.AMENDMENTS as CaseStatusValue,
-              reviewDecision: decision,
-              reviewNotes: notes,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, {
+      status: CaseStatus.AMENDMENTS as CaseStatusValue,
+      reviewDecision: decision,
+      reviewNotes: notes,
+    });
   };
 
   const markReadyToSubmit = (id: string) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, { status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue });
   };
 
   const markSubmitted = (id: string) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: CaseStatus.SUBMITTED as CaseStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, { status: CaseStatus.SUBMITTED as CaseStatusValue });
   };
 
   const closeCase = (id: string) => {
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: CaseStatus.CLOSED as CaseStatusValue,
-              closedAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, {
+      status: CaseStatus.CLOSED as CaseStatusValue,
+      closedAt: new Date().toISOString(),
+    });
   };
 
   const getCaseById = (id: string) => cases.find((c) => c.id === id);
@@ -396,18 +336,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       notes,
     };
 
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              currentStage: nextStage,
-              stageHistory: [...c.stageHistory, newTransition],
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, {
+      currentStage: nextStage,
+      stageHistory: [...lawCase.stageHistory, newTransition],
+    });
     return true;
   };
 
@@ -427,18 +359,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       notes: notes || "إرجاع للمرحلة السابقة",
     };
 
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              currentStage: prevStage,
-              stageHistory: [...c.stageHistory, newTransition],
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateCase(id, {
+      currentStage: prevStage,
+      stageHistory: [...lawCase.stageHistory, newTransition],
+    });
     return true;
   };
 
@@ -462,6 +386,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       value={{
         cases,
         comments,
+        isLoading,
         addCase,
         updateCase,
         deleteCase,
@@ -484,6 +409,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         getActiveCases,
         getReviewCases,
         getReadyCases,
+        refreshCases: fetchCases,
       }}
     >
       {children}

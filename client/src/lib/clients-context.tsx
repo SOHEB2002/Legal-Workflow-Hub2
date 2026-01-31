@@ -1,91 +1,47 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { Client, ClientTypeValue } from "@shared/schema";
 import { ClientType } from "@shared/schema";
+import { apiRequest } from "./queryClient";
 
 interface ClientsContextType {
   clients: Client[];
-  addClient: (data: Partial<Client>, createdBy: string) => Client;
-  updateClient: (id: string, data: Partial<Client>) => void;
-  deleteClient: (id: string) => void;
+  isLoading: boolean;
+  addClient: (data: Partial<Client>, createdBy: string) => Promise<Client>;
+  updateClient: (id: string, data: Partial<Client>) => Promise<void>;
+  deleteClient: (id: string) => Promise<void>;
   getClientById: (id: string) => Client | undefined;
   getClientName: (id: string) => string;
   searchClients: (query: string) => Client[];
+  refreshClients: () => Promise<void>;
 }
 
 const ClientsContext = createContext<ClientsContextType | undefined>(undefined);
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
-
-const initialClients: Client[] = [
-  {
-    id: "1",
-    clientType: "شركة",
-    individualName: null,
-    nationalId: null,
-    phone: "0501234567",
-    companyName: "شركة الفلاح للتجارة",
-    commercialRegister: "1010123456",
-    representativeName: "أحمد الفلاح",
-    representativeTitle: "المدير العام",
-    companyPhone: "0112345678",
-    email: "info@alfalah.com",
-    address: "الرياض - حي العليا",
-    notes: "",
-    createdBy: "6",
-    createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "2",
-    clientType: "فرد",
-    individualName: "محمد أحمد العلي",
-    nationalId: "1234567890",
-    phone: "0509876543",
-    companyName: null,
-    commercialRegister: null,
-    representativeName: null,
-    representativeTitle: null,
-    companyPhone: null,
-    email: "mohammed@email.com",
-    address: "الرياض - حي النزهة",
-    notes: "عميل منذ 2023",
-    createdBy: "6",
-    createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "3",
-    clientType: "شركة",
-    individualName: null,
-    nationalId: null,
-    phone: "0505551234",
-    companyName: "مؤسسة النور للمقاولات",
-    commercialRegister: "1010789012",
-    representativeName: "سعيد النور",
-    representativeTitle: "صاحب المؤسسة",
-    companyPhone: "0112223344",
-    email: "info@alnoor.com",
-    address: "جدة - حي الصفا",
-    notes: "",
-    createdBy: "6",
-    createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
 export function ClientsProvider({ children }: { children: React.ReactNode }) {
-  const [clients, setClients] = useState<Client[]>(() => {
-    const stored = localStorage.getItem("lawfirm_clients");
-    return stored ? JSON.parse(stored) : initialClients;
-  });
+  const [clients, setClients] = useState<Client[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchClients = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const response = await fetch("/api/clients");
+      if (response.ok) {
+        const data = await response.json();
+        setClients(data);
+      }
+    } catch (error) {
+      console.error("Error fetching clients:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem("lawfirm_clients", JSON.stringify(clients));
-  }, [clients]);
+    fetchClients();
+  }, [fetchClients]);
 
-  const addClient = (data: Partial<Client>, createdBy: string): Client => {
-    const newClient: Client = {
-      id: generateId(),
+  const addClient = async (data: Partial<Client>, createdBy: string): Promise<Client> => {
+    const clientData = {
       clientType: data.clientType || "فرد",
       individualName: data.individualName || null,
       nationalId: data.nationalId || null,
@@ -99,14 +55,16 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
       address: data.address || "",
       notes: data.notes || "",
       createdBy,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
     };
+    
+    const response = await apiRequest("POST", "/api/clients", clientData);
+    const newClient = await response.json();
     setClients((prev) => [newClient, ...prev]);
     return newClient;
   };
 
-  const updateClient = (id: string, data: Partial<Client>) => {
+  const updateClient = async (id: string, data: Partial<Client>): Promise<void> => {
+    await apiRequest("PATCH", `/api/clients/${id}`, data);
     setClients((prev) =>
       prev.map((c) =>
         c.id === id
@@ -116,7 +74,8 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const deleteClient = (id: string) => {
+  const deleteClient = async (id: string): Promise<void> => {
+    await apiRequest("DELETE", `/api/clients/${id}`);
     setClients((prev) => prev.filter((c) => c.id !== id));
   };
 
@@ -147,12 +106,14 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
     <ClientsContext.Provider
       value={{
         clients,
+        isLoading,
         addClient,
         updateClient,
         deleteClient,
         getClientById,
         getClientName,
         searchClients,
+        refreshClients: fetchClients,
       }}
     >
       {children}

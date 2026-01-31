@@ -1,12 +1,14 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { Consultation, ConsultationStatusValue, ReviewDecisionType, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
 import { ConsultationStatus } from "@shared/schema";
+import { apiRequest } from "./queryClient";
 
 interface ConsultationsContextType {
   consultations: Consultation[];
-  addConsultation: (data: Partial<Consultation>, createdBy: string) => Consultation;
-  updateConsultation: (id: string, data: Partial<Consultation>) => void;
-  deleteConsultation: (id: string) => void;
+  isLoading: boolean;
+  addConsultation: (data: Partial<Consultation>, createdBy: string) => Promise<Consultation>;
+  updateConsultation: (id: string, data: Partial<Consultation>) => Promise<void>;
+  deleteConsultation: (id: string) => Promise<void>;
   assignConsultation: (id: string, assignedTo: string, departmentId: string) => void;
   sendToReviewCommittee: (id: string) => void;
   approveConsultation: (id: string, notes?: string) => void;
@@ -19,71 +21,38 @@ interface ConsultationsContextType {
   getActiveConsultations: () => Consultation[];
   getReviewConsultations: () => Consultation[];
   getReadyConsultations: () => Consultation[];
+  refreshConsultations: () => Promise<void>;
 }
 
 const ConsultationsContext = createContext<ConsultationsContextType | undefined>(undefined);
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
 const generateConsultationNumber = () => `S-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
-const initialConsultations: Consultation[] = [
-  {
-    id: "1",
-    consultationNumber: "S-2026-0001",
-    clientId: "2",
-    consultationType: "عام",
-    deliveryType: "مكتوبة",
-    status: "دراسة",
-    departmentId: "1",
-    assignedTo: "7",
-    questionSummary: "استشارة بخصوص إجراءات الميراث وتقسيم التركة",
-    response: "",
-    convertedToCaseId: null,
-    whatsappGroupLink: "",
-    googleDriveFolderId: "",
-    reviewNotes: "",
-    reviewDecision: null,
-    createdBy: "6",
-    createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-    closedAt: null,
-  },
-  {
-    id: "2",
-    consultationNumber: "S-2026-0002",
-    clientId: "1",
-    consultationType: "تجاري",
-    deliveryType: "شفهية",
-    status: "جاهز",
-    departmentId: "2",
-    assignedTo: "5",
-    questionSummary: "استشارة حول عقد توريد دولي",
-    response: "تم إعداد الرد بخصوص بنود العقد والمخاطر المحتملة",
-    convertedToCaseId: null,
-    whatsappGroupLink: "",
-    googleDriveFolderId: "",
-    reviewNotes: "",
-    reviewDecision: "approved",
-    createdBy: "6",
-    createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-    closedAt: null,
-  },
-];
-
 export function ConsultationsProvider({ children }: { children: React.ReactNode }) {
-  const [consultations, setConsultations] = useState<Consultation[]>(() => {
-    const stored = localStorage.getItem("lawfirm_consultations");
-    return stored ? JSON.parse(stored) : initialConsultations;
-  });
+  const [consultations, setConsultations] = useState<Consultation[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchConsultations = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const response = await fetch("/api/consultations");
+      if (response.ok) {
+        const data = await response.json();
+        setConsultations(data);
+      }
+    } catch (error) {
+      console.error("Error fetching consultations:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem("lawfirm_consultations", JSON.stringify(consultations));
-  }, [consultations]);
+    fetchConsultations();
+  }, [fetchConsultations]);
 
-  const addConsultation = (data: Partial<Consultation>, createdBy: string): Consultation => {
-    const newConsultation: Consultation = {
-      id: generateId(),
+  const addConsultation = async (data: Partial<Consultation>, createdBy: string): Promise<Consultation> => {
+    const consultationData = {
       consultationNumber: generateConsultationNumber(),
       clientId: data.clientId || "",
       consultationType: data.consultationType || "عام",
@@ -99,15 +68,16 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
       reviewNotes: "",
       reviewDecision: null,
       createdBy,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      closedAt: null,
     };
+    
+    const response = await apiRequest("POST", "/api/consultations", consultationData);
+    const newConsultation = await response.json();
     setConsultations((prev) => [newConsultation, ...prev]);
     return newConsultation;
   };
 
-  const updateConsultation = (id: string, data: Partial<Consultation>) => {
+  const updateConsultation = async (id: string, data: Partial<Consultation>): Promise<void> => {
+    await apiRequest("PATCH", `/api/consultations/${id}`, data);
     setConsultations((prev) =>
       prev.map((c) =>
         c.id === id
@@ -117,113 +87,53 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     );
   };
 
-  const deleteConsultation = (id: string) => {
+  const deleteConsultation = async (id: string): Promise<void> => {
+    await apiRequest("DELETE", `/api/consultations/${id}`);
     setConsultations((prev) => prev.filter((c) => c.id !== id));
   };
 
   const assignConsultation = (id: string, assignedTo: string, departmentId: string) => {
-    setConsultations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              assignedTo,
-              departmentId,
-              status: ConsultationStatus.STUDY as ConsultationStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    const data = {
+      assignedTo,
+      departmentId,
+      status: ConsultationStatus.STUDY as ConsultationStatusValue,
+    };
+    updateConsultation(id, data);
   };
 
   const sendToReviewCommittee = (id: string) => {
-    setConsultations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: ConsultationStatus.REVIEW_COMMITTEE as ConsultationStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateConsultation(id, { status: ConsultationStatus.REVIEW_COMMITTEE as ConsultationStatusValue });
   };
 
   const approveConsultation = (id: string, notes?: string) => {
-    setConsultations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: ConsultationStatus.READY as ConsultationStatusValue,
-              reviewDecision: "approved" as ReviewDecisionType,
-              reviewNotes: notes || "",
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateConsultation(id, {
+      status: ConsultationStatus.READY as ConsultationStatusValue,
+      reviewDecision: "approved" as ReviewDecisionType,
+      reviewNotes: notes || "",
+    });
   };
 
   const rejectConsultation = (id: string, notes: string) => {
-    setConsultations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: ConsultationStatus.AMENDMENTS as ConsultationStatusValue,
-              reviewDecision: "rejected" as ReviewDecisionType,
-              reviewNotes: notes,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateConsultation(id, {
+      status: ConsultationStatus.AMENDMENTS as ConsultationStatusValue,
+      reviewDecision: "rejected" as ReviewDecisionType,
+      reviewNotes: notes,
+    });
   };
 
   const markDelivered = (id: string) => {
-    setConsultations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: ConsultationStatus.DELIVERED as ConsultationStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateConsultation(id, { status: ConsultationStatus.DELIVERED as ConsultationStatusValue });
   };
 
   const closeConsultation = (id: string) => {
-    setConsultations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: ConsultationStatus.CLOSED as ConsultationStatusValue,
-              closedAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateConsultation(id, {
+      status: ConsultationStatus.CLOSED as ConsultationStatusValue,
+      closedAt: new Date().toISOString(),
+    });
   };
 
   const convertToCase = (id: string, caseId: string) => {
-    setConsultations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              convertedToCaseId: caseId,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+    updateConsultation(id, { convertedToCaseId: caseId });
   };
 
   const getConsultationById = (id: string) => consultations.find((c) => c.id === id);
@@ -244,6 +154,7 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     <ConsultationsContext.Provider
       value={{
         consultations,
+        isLoading,
         addConsultation,
         updateConsultation,
         deleteConsultation,
@@ -259,6 +170,7 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
         getActiveConsultations,
         getReviewConsultations,
         getReadyConsultations,
+        refreshConsultations: fetchConsultations,
       }}
     >
       {children}
