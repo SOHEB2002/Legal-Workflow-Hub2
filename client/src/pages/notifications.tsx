@@ -158,7 +158,7 @@ export default function NotificationsPage() {
     return sender?.name || "غير معروف";
   };
 
-  const uniqueSenders = Array.from(new Set(notifications.map(n => n.senderId)));
+  const uniqueSenders = Array.from(new Set(notifications.map(n => n.senderId).filter((id): id is string => id !== null)));
 
   return (
     <div className="p-6 space-y-6" dir="rtl">

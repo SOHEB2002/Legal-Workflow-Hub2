@@ -39,6 +39,11 @@ export default function NotificationPreferencesPage() {
   const [quietHoursStart, setQuietHoursStart] = useState(preferences.quietHoursStart || "");
   const [quietHoursEnd, setQuietHoursEnd] = useState(preferences.quietHoursEnd || "");
   const [enableQuietHours, setEnableQuietHours] = useState(!!preferences.quietHoursStart);
+  const [notifyOnAssignment, setNotifyOnAssignment] = useState(preferences.notifyOnAssignment ?? true);
+  const [notifyOnStageChange, setNotifyOnStageChange] = useState(preferences.notifyOnStageChange ?? true);
+  const [notifyOnReviewNotes, setNotifyOnReviewNotes] = useState(preferences.notifyOnReviewNotes ?? true);
+  const [notifyOnReturn, setNotifyOnReturn] = useState(preferences.notifyOnReturn ?? true);
+  const [notifyOnSlaWarning, setNotifyOnSlaWarning] = useState(preferences.notifyOnSlaWarning ?? true);
 
   useEffect(() => {
     const prefs = getUserPreferences(userId);
@@ -49,6 +54,11 @@ export default function NotificationPreferencesPage() {
     setQuietHoursStart(prefs.quietHoursStart || "");
     setQuietHoursEnd(prefs.quietHoursEnd || "");
     setEnableQuietHours(!!prefs.quietHoursStart);
+    setNotifyOnAssignment(prefs.notifyOnAssignment ?? true);
+    setNotifyOnStageChange(prefs.notifyOnStageChange ?? true);
+    setNotifyOnReviewNotes(prefs.notifyOnReviewNotes ?? true);
+    setNotifyOnReturn(prefs.notifyOnReturn ?? true);
+    setNotifyOnSlaWarning(prefs.notifyOnSlaWarning ?? true);
   }, [userId, getUserPreferences]);
 
   const handleSave = () => {
@@ -59,6 +69,11 @@ export default function NotificationPreferencesPage() {
       mutedTypes,
       quietHoursStart: enableQuietHours ? quietHoursStart : null,
       quietHoursEnd: enableQuietHours ? quietHoursEnd : null,
+      notifyOnAssignment,
+      notifyOnStageChange,
+      notifyOnReviewNotes,
+      notifyOnReturn,
+      notifyOnSlaWarning,
     });
     toast({ title: "تم حفظ التفضيلات بنجاح" });
   };
@@ -189,6 +204,72 @@ export default function NotificationPreferencesPage() {
               </div>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>إشعارات سير العمل</CardTitle>
+          <CardDescription>
+            التحكم في إشعارات إدارة القضايا والاستشارات
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>الإسناد والتعيين</Label>
+              <p className="text-sm text-muted-foreground">إشعار عند إسناد قضية أو استشارة جديدة</p>
+            </div>
+            <Switch
+              checked={notifyOnAssignment}
+              onCheckedChange={setNotifyOnAssignment}
+              data-testid="switch-notify-assignment"
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>تغيير المرحلة</Label>
+              <p className="text-sm text-muted-foreground">إشعار عند انتقال القضية لمرحلة جديدة</p>
+            </div>
+            <Switch
+              checked={notifyOnStageChange}
+              onCheckedChange={setNotifyOnStageChange}
+              data-testid="switch-notify-stage-change"
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>ملاحظات المراجعة</Label>
+              <p className="text-sm text-muted-foreground">إشعار عند استلام ملاحظات من لجنة المراجعة</p>
+            </div>
+            <Switch
+              checked={notifyOnReviewNotes}
+              onCheckedChange={setNotifyOnReviewNotes}
+              data-testid="switch-notify-review-notes"
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>الإرجاع للتعديل</Label>
+              <p className="text-sm text-muted-foreground">إشعار عند إرجاع العمل للتعديل</p>
+            </div>
+            <Switch
+              checked={notifyOnReturn}
+              onCheckedChange={setNotifyOnReturn}
+              data-testid="switch-notify-return"
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>تحذيرات SLA</Label>
+              <p className="text-sm text-muted-foreground">إشعار عند اقتراب أو تجاوز المواعيد النهائية</p>
+            </div>
+            <Switch
+              checked={notifyOnSlaWarning}
+              onCheckedChange={setNotifyOnSlaWarning}
+              data-testid="switch-notify-sla-warning"
+            />
+          </div>
         </CardContent>
       </Card>
 
