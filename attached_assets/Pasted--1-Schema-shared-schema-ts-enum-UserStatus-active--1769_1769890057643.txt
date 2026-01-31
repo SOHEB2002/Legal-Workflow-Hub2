@@ -1,0 +1,300 @@
+أنشئ نظام إدارة مستخدمين متكامل:
+
+=== 1. Schema في shared/schema.ts ===
+
+- enum UserStatus: active, inactive, on_vacation, suspended
+
+- enum DelegationType: full (كامل), partial (جزئي)
+
+- interface UserVacation:
+  id
+  userId
+  startDate
+  endDate
+  reason: string
+  delegateTo: userId | null
+  delegationType: DelegationType
+  autoReassign: boolean
+  status: "scheduled" | "active" | "completed" | "cancelled"
+  createdAt
+
+- interface Delegation:
+  id
+  fromUserId
+  toUserId
+  startDate
+  endDate
+  type: DelegationType
+  permissions: string[] (الصلاحيات المفوضة إذا جزئي)
+  reason: string
+  isActive: boolean
+  createdAt
+
+- interface Team:
+  id
+  name
+  description
+  departmentId
+  leaderId: userId
+  memberIds: userId[]
+  createdAt
+  updatedAt
+
+- interface UserCustomPermission:
+  id
+  userId
+  additionalPermissions: string[]
+  restrictedPermissions: string[]
+  reason: string
+  grantedBy: userId
+  expiresAt: Date | null
+  createdAt
+
+- interface ActivityLog:
+  id
+  userId
+  action: string
+  entityType: "case" | "consultation" | "user" | "notification" | "system"
+  entityId: string | null
+  details: object
+  ipAddress: string
+  timestamp: Date
+
+- interface UserSession:
+  id
+  userId
+  loginAt: Date
+  logoutAt: Date | null
+  duration: number | null
+  isActive: boolean
+
+- في interface User أضف:
+  status: UserStatus
+  phone: string
+  avatar: string | null
+  departmentId: string
+  teamId: string | null
+  supervisorId: userId | null
+  hireDate: Date
+  lastLoginAt: Date
+  currentVacation: UserVacation | null
+  activeDelegations: Delegation[]
+  customPermissions: UserCustomPermission | null
+  
+  // إحصائيات (محسوبة)
+  stats: {
+    activeCases: number
+    activeConsultations: number
+    completedThisMonth: number
+    avgCompletionDays: number
+    reviewAcceptanceRate: number
+    returnCount: number
+  }
+
+=== 2. أنشئ client/src/lib/users-context.tsx ===
+
+إدارة أساسية:
+- addUser(userData)
+- updateUser(id, userData)
+- deleteUser(id): مع حماية (آخر مدير، لديه قضايا نشطة)
+- resetPassword(id, newPassword)
+- toggleUserStatus(id, status)
+- getUserById(id)
+- getUsersByDepartment(departmentId)
+- getUsersByTeam(teamId)
+
+الإجازات:
+- scheduleVacation(userId, vacationData)
+- cancelVacation(vacationId)
+- getActiveVacations()
+- getUpcomingVacations()
+- checkVacationConflicts(userId, startDate, endDate)
+- autoReassignOnVacation(userId): إعادة توزيع القضايا تلقائياً
+
+التفويض:
+- createDelegation(delegationData)
+- endDelegation(delegationId)
+- getActiveDelegations(userId)
+- getDelegatedToMe(): القضايا المفوضة لي
+- canActOnBehalf(actingUserId, originalUserId): التحقق من التفويض
+
+الفرق:
+- createTeam(teamData)
+- updateTeam(id, teamData)
+- deleteTeam(id)
+- addTeamMember(teamId, userId)
+- removeTeamMember(teamId, userId)
+- changeTeamLead(teamId, newLeaderId)
+- getTeamWorkload(teamId)
+
+الصلاحيات المخصصة:
+- grantCustomPermission(userId, permissions, reason, expiresAt)
+- revokeCustomPermission(userId)
+- getEffectivePermissions(userId): الصلاحيات الفعلية (الدور + المخصصة)
+
+سجل النشاط:
+- logActivity(userId, action, entityType, entityId, details)
+- getUserActivityLog(userId, filters)
+- getRecentActivities(limit)
+- getUserSessions(userId)
+- getLoginHistory(userId, dateRange)
+
+الإحصائيات:
+- getUserStats(userId): إحصائيات الأداء
+- refreshUserStats(userId): تحديث الإحصائيات
+
+=== 3. تحديث client/src/pages/users.tsx ===
+
+جدول المستخدمين المحسّن:
+- الأعمدة: الصورة، الاسم، الدور، القسم، الفريق، الحالة، حمل العمل، آخر نشاط
+- تلوين الحالة:
+  • أخضر: نشط
+  • رمادي: غير نشط
+  • أزرق: في إجازة
+  • أحمر: موقوف
+- Badge لحمل العمل (عادي/مرتفع/حرج)
+- أيقونة إذا لديه تفويض نشط
+
+DropdownMenu لكل مستخدم:
+- عرض الملف الشخصي
+- تعديل البيانات
+- إعادة تعيين كلمة المرور
+- تغيير الحالة
+- جدولة إجازة
+- إنشاء تفويض
+- تخصيص الصلاحيات
+- عرض سجل النشاط
+- حذف (مع تأكيد)
+
+فلترة:
+- القسم، الفريق، الدور، الحالة
+
+=== 4. أنشئ client/src/pages/user-profile.tsx ===
+
+صفحة الملف الشخصي الشامل:
+
+القسم العلوي:
+- الصورة والاسم والدور
+- معلومات التواصل
+- القسم والفريق والمشرف
+- تاريخ التعيين
+- آخر دخول
+
+Tabs:
+1. الإحصائيات:
+   - Cards: القضايا النشطة، الاستشارات، المنجز هذا الشهر
+   - نسبة قبول المراجعة (دائري)
+   - متوسط وقت الإنجاز
+   - عدد الإرجاعات
+   - مقارنة بمتوسط القسم
+
+2. القضايا والاستشارات:
+   - جدول بالقضايا المسندة إليه
+   - فلترة حسب الحالة والمرحلة
+
+3. الإجازات:
+   - الإجازات السابقة والقادمة
+   - زر جدولة إجازة جديدة
+
+4. التفويضات:
+   - التفويضات الصادرة والواردة
+   - زر إنشاء تفويض
+
+5. سجل النشاط:
+   - Timeline بآخر الأنشطة
+   - فلترة حسب النوع والتاريخ
+
+6. الصلاحيات (للمديرين):
+   - صلاحيات الدور الأساسية
+   - الصلاحيات المخصصة
+   - زر تخصيص
+
+=== 5. أنشئ client/src/components/users/vacation-dialog.tsx ===
+
+Dialog جدولة إجازة:
+- تاريخ البداية والنهاية
+- السبب
+- اختيار المفوض (Combobox)
+- نوع التفويض: كامل / جزئي
+- إعادة توزيع تلقائي للقضايا (checkbox)
+- تحذير إذا فيه تعارض مع إجازات أخرى
+- عرض القضايا النشطة التي ستتأثر
+
+=== 6. أنشئ client/src/components/users/delegation-dialog.tsx ===
+
+Dialog إنشاء تفويض:
+- المفوض إليه
+- تاريخ البداية والنهاية
+- النوع: كامل / جزئي
+- إذا جزئي: اختيار الصلاحيات (checkboxes)
+- السبب
+- تحذير بالصلاحيات التي سيحصل عليها
+
+=== 7. أنشئ client/src/pages/teams.tsx ===
+
+إدارة الفرق:
+- جدول بالفرق: الاسم، القسم، القائد، عدد الأعضاء، حمل العمل
+- إضافة فريق جديد
+- تعديل/حذف فريق
+
+عند فتح فريق:
+- معلومات الفريق
+- قائمة الأعضاء مع أحمالهم
+- إضافة/إزالة أعضاء
+- تغيير القائد
+- إحصائيات الفريق الإجمالية
+
+=== 8. أنشئ client/src/pages/activity-log.tsx (للمديرين) ===
+
+سجل النشاط الشامل:
+- جدول بجميع الأنشطة
+- الأعمدة: الوقت، المستخدم، الإجراء، العنصر، التفاصيل
+- فلترة: المستخدم، نوع الإجراء، الفترة
+- تصدير للـ Excel
+- بحث
+
+أنواع الأنشطة المسجلة:
+- تسجيل دخول/خروج
+- إنشاء/تعديل/حذف قضية
+- إنشاء/تعديل/حذف استشارة
+- تغيير مرحلة
+- إرسال للمراجعة
+- إضافة ملاحظات
+- إرسال إشعار
+- تعديل مستخدم
+- تغيير صلاحيات
+
+=== 9. أنشئ client/src/components/users/custom-permissions-dialog.tsx ===
+
+Dialog تخصيص الصلاحيات:
+- عرض صلاحيات الدور الحالية
+- صلاحيات إضافية (checkboxes)
+- صلاحيات مقيدة (checkboxes)
+- السبب (إلزامي)
+- تاريخ انتهاء (اختياري)
+- تحذير بالتأثير
+
+=== 10. التكامل مع Workflow ===
+
+عند إسناد قضية:
+- التحقق من حالة المستخدم (لا يُسند لمستخدم في إجازة)
+- التحقق من حمل العمل (تحذير إذا مرتفع)
+- اقتراح المفوض إذا المستخدم في إجازة
+
+عند تغيير مرحلة:
+- تسجيل النشاط تلقائياً
+
+=== 11. في sidebar.tsx ===
+
+- المستخدمون (موجود)
+- الفرق
+- سجل النشاط (للمديرين)
+
+=== 12. الإشعارات التلقائية ===
+
+- إشعار قبل بدء إجازة بيوم
+- إشعار للمفوض ببدء التفويض
+- إشعار عند منح/سحب صلاحيات مخصصة
+- إشعار عند إضافته لفريق
+
+استخدم shadcn/ui مع دعم RTL بالعربي.

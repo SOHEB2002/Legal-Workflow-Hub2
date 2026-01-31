@@ -1334,3 +1334,297 @@ export const DefaultSLASettings: StageSLA[] = [
   { stage: "ready_to_submit", maxDurationHours: 4, warningBeforeHours: 1 },
   { stage: "ready_to_send", maxDurationHours: 4, warningBeforeHours: 1 },
 ];
+
+// ==================== User Management System ====================
+
+export const UserStatus = {
+  ACTIVE: "active",
+  INACTIVE: "inactive",
+  ON_VACATION: "on_vacation",
+  SUSPENDED: "suspended",
+} as const;
+
+export type UserStatusValue = typeof UserStatus[keyof typeof UserStatus];
+
+export const UserStatusLabels: Record<UserStatusValue, string> = {
+  active: "نشط",
+  inactive: "غير نشط",
+  on_vacation: "في إجازة",
+  suspended: "موقوف",
+};
+
+export const DelegationType = {
+  FULL: "full",
+  PARTIAL: "partial",
+} as const;
+
+export type DelegationTypeValue = typeof DelegationType[keyof typeof DelegationType];
+
+export const DelegationTypeLabels: Record<DelegationTypeValue, string> = {
+  full: "كامل",
+  partial: "جزئي",
+};
+
+export const VacationStatus = {
+  SCHEDULED: "scheduled",
+  ACTIVE: "active",
+  COMPLETED: "completed",
+  CANCELLED: "cancelled",
+} as const;
+
+export type VacationStatusValue = typeof VacationStatus[keyof typeof VacationStatus];
+
+export const VacationStatusLabels: Record<VacationStatusValue, string> = {
+  scheduled: "مجدولة",
+  active: "نشطة",
+  completed: "مكتملة",
+  cancelled: "ملغاة",
+};
+
+export interface UserVacation {
+  id: string;
+  userId: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  delegateTo: string | null;
+  delegationType: DelegationTypeValue;
+  autoReassign: boolean;
+  status: VacationStatusValue;
+  createdAt: string;
+}
+
+export interface Delegation {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  startDate: string;
+  endDate: string;
+  type: DelegationTypeValue;
+  permissions: string[];
+  reason: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  description: string;
+  departmentId: string;
+  leaderId: string;
+  memberIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserCustomPermission {
+  id: string;
+  userId: string;
+  additionalPermissions: string[];
+  restrictedPermissions: string[];
+  reason: string;
+  grantedBy: string;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export const ActivityLogEntityType = {
+  CASE: "case",
+  CONSULTATION: "consultation",
+  USER: "user",
+  NOTIFICATION: "notification",
+  SYSTEM: "system",
+  TEAM: "team",
+  DELEGATION: "delegation",
+  VACATION: "vacation",
+} as const;
+
+export type ActivityLogEntityTypeValue = typeof ActivityLogEntityType[keyof typeof ActivityLogEntityType];
+
+export interface UserActivityLog {
+  id: string;
+  userId: string;
+  action: string;
+  entityType: ActivityLogEntityTypeValue;
+  entityId: string | null;
+  details: Record<string, unknown>;
+  ipAddress: string;
+  timestamp: string;
+}
+
+export interface UserSession {
+  id: string;
+  userId: string;
+  loginAt: string;
+  logoutAt: string | null;
+  duration: number | null;
+  isActive: boolean;
+}
+
+export interface UserStats {
+  activeCases: number;
+  activeConsultations: number;
+  completedThisMonth: number;
+  avgCompletionDays: number;
+  reviewAcceptanceRate: number;
+  returnCount: number;
+}
+
+export interface ExtendedUser extends User {
+  status: UserStatusValue;
+  avatar: string | null;
+  teamId: string | null;
+  supervisorId: string | null;
+  hireDate: string;
+  lastLoginAt: string | null;
+  currentVacation: UserVacation | null;
+  activeDelegations: Delegation[];
+  customPermissions: UserCustomPermission | null;
+  stats: UserStats;
+}
+
+export const ActivityActions = {
+  LOGIN: "login",
+  LOGOUT: "logout",
+  CREATE_CASE: "create_case",
+  UPDATE_CASE: "update_case",
+  DELETE_CASE: "delete_case",
+  CHANGE_STAGE: "change_stage",
+  SEND_TO_REVIEW: "send_to_review",
+  ADD_REVIEW_NOTES: "add_review_notes",
+  CREATE_CONSULTATION: "create_consultation",
+  UPDATE_CONSULTATION: "update_consultation",
+  DELETE_CONSULTATION: "delete_consultation",
+  CREATE_USER: "create_user",
+  UPDATE_USER: "update_user",
+  DELETE_USER: "delete_user",
+  CHANGE_PERMISSIONS: "change_permissions",
+  SEND_NOTIFICATION: "send_notification",
+  SCHEDULE_VACATION: "schedule_vacation",
+  CREATE_DELEGATION: "create_delegation",
+  CREATE_TEAM: "create_team",
+  UPDATE_TEAM: "update_team",
+  RESET_PASSWORD: "reset_password",
+} as const;
+
+export type ActivityActionValue = typeof ActivityActions[keyof typeof ActivityActions];
+
+export const ActivityActionLabels: Record<ActivityActionValue, string> = {
+  login: "تسجيل دخول",
+  logout: "تسجيل خروج",
+  create_case: "إنشاء قضية",
+  update_case: "تعديل قضية",
+  delete_case: "حذف قضية",
+  change_stage: "تغيير مرحلة",
+  send_to_review: "إرسال للمراجعة",
+  add_review_notes: "إضافة ملاحظات",
+  create_consultation: "إنشاء استشارة",
+  update_consultation: "تعديل استشارة",
+  delete_consultation: "حذف استشارة",
+  create_user: "إنشاء مستخدم",
+  update_user: "تعديل مستخدم",
+  delete_user: "حذف مستخدم",
+  change_permissions: "تغيير صلاحيات",
+  send_notification: "إرسال إشعار",
+  schedule_vacation: "جدولة إجازة",
+  create_delegation: "إنشاء تفويض",
+  create_team: "إنشاء فريق",
+  update_team: "تعديل فريق",
+  reset_password: "إعادة تعيين كلمة المرور",
+};
+
+export const PermissionsList = [
+  "view_cases",
+  "create_cases",
+  "edit_cases",
+  "delete_cases",
+  "assign_cases",
+  "view_consultations",
+  "create_consultations",
+  "edit_consultations",
+  "delete_consultations",
+  "assign_consultations",
+  "view_clients",
+  "create_clients",
+  "edit_clients",
+  "delete_clients",
+  "view_users",
+  "create_users",
+  "edit_users",
+  "delete_users",
+  "manage_teams",
+  "view_activity_log",
+  "send_notifications",
+  "manage_notification_rules",
+  "approve_reviews",
+  "manage_workflow",
+  "view_reports",
+  "export_data",
+  "manage_system_settings",
+] as const;
+
+export type PermissionType = typeof PermissionsList[number];
+
+export const PermissionLabels: Record<PermissionType, string> = {
+  view_cases: "عرض القضايا",
+  create_cases: "إنشاء القضايا",
+  edit_cases: "تعديل القضايا",
+  delete_cases: "حذف القضايا",
+  assign_cases: "إسناد القضايا",
+  view_consultations: "عرض الاستشارات",
+  create_consultations: "إنشاء الاستشارات",
+  edit_consultations: "تعديل الاستشارات",
+  delete_consultations: "حذف الاستشارات",
+  assign_consultations: "إسناد الاستشارات",
+  view_clients: "عرض العملاء",
+  create_clients: "إنشاء العملاء",
+  edit_clients: "تعديل العملاء",
+  delete_clients: "حذف العملاء",
+  view_users: "عرض المستخدمين",
+  create_users: "إنشاء المستخدمين",
+  edit_users: "تعديل المستخدمين",
+  delete_users: "حذف المستخدمين",
+  manage_teams: "إدارة الفرق",
+  view_activity_log: "عرض سجل النشاط",
+  send_notifications: "إرسال الإشعارات",
+  manage_notification_rules: "إدارة قواعد الإشعارات",
+  approve_reviews: "اعتماد المراجعات",
+  manage_workflow: "إدارة سير العمل",
+  view_reports: "عرض التقارير",
+  export_data: "تصدير البيانات",
+  manage_system_settings: "إدارة إعدادات النظام",
+};
+
+export const RolePermissions: Record<UserRoleType, PermissionType[]> = {
+  branch_manager: [...PermissionsList],
+  cases_review_head: [
+    "view_cases", "edit_cases", "approve_reviews", "view_consultations",
+    "view_clients", "view_users", "send_notifications", "view_reports",
+  ],
+  consultations_review_head: [
+    "view_consultations", "edit_consultations", "approve_reviews", "view_cases",
+    "view_clients", "view_users", "send_notifications", "view_reports",
+  ],
+  department_head: [
+    "view_cases", "create_cases", "edit_cases", "assign_cases",
+    "view_consultations", "create_consultations", "edit_consultations", "assign_consultations",
+    "view_clients", "create_clients", "edit_clients",
+    "view_users", "manage_teams", "send_notifications", "view_reports",
+  ],
+  admin_support: [
+    "view_cases", "create_cases", "edit_cases",
+    "view_consultations", "create_consultations", "edit_consultations",
+    "view_clients", "create_clients", "edit_clients",
+    "send_notifications",
+  ],
+  employee: [
+    "view_cases", "edit_cases",
+    "view_consultations", "edit_consultations",
+    "view_clients",
+  ],
+  hr: [
+    "view_users", "create_users", "edit_users",
+    "view_activity_log", "view_reports",
+  ],
+};
