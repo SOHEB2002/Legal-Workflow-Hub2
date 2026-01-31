@@ -13,6 +13,7 @@ import { ConsultationsProvider } from "@/lib/consultations-context";
 import { HearingsProvider } from "@/lib/hearings-context";
 import { DepartmentsProvider } from "@/lib/departments-context";
 import { FieldTasksProvider } from "@/lib/field-tasks-context";
+import { DashboardProvider } from "@/lib/dashboard-context";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -22,6 +23,7 @@ import ConsultationsPage from "@/pages/consultations";
 import HearingsPage from "@/pages/hearings";
 import UsersPage from "@/pages/users";
 import FieldTasksPage from "@/pages/field-tasks";
+import DashboardSettingsPage from "@/pages/dashboard-settings";
 
 function Router() {
   return (
@@ -33,6 +35,7 @@ function Router() {
       <Route path="/hearings" component={HearingsPage} />
       <Route path="/field-tasks" component={FieldTasksPage} />
       <Route path="/users" component={UsersPage} />
+      <Route path="/dashboard-settings" component={DashboardSettingsPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -83,10 +86,12 @@ function App() {
                 <ConsultationsProvider>
                   <HearingsProvider>
                     <FieldTasksProvider>
-                      <TooltipProvider>
-                        <AppContent />
-                        <Toaster />
-                      </TooltipProvider>
+                      <DashboardProvider>
+                        <TooltipProvider>
+                          <AppContent />
+                          <Toaster />
+                        </TooltipProvider>
+                      </DashboardProvider>
                     </FieldTasksProvider>
                   </HearingsProvider>
                 </ConsultationsProvider>
