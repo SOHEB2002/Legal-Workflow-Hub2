@@ -1,0 +1,306 @@
+أنشئ نظام سلسلة العمل (Workflow) للقضايا والاستشارات:
+
+=== 1. Schema في shared/schema.ts ===
+
+- enum ClientRole: plaintiff (مدعي), defendant (مدعى عليه)
+
+- enum CasePriority: urgent (عاجل), normal (عادي), low (منخفض)
+
+- enum CaseStage:
+  received (استلام من العميل)
+  assigned_to_department (محالة للقسم)
+  collecting_documents (استكمال المستندات)
+  under_study (دراسة القضية)
+  drafting_lawsuit (تحرير الدعوى)
+  drafting_response (كتابة المذكرة الجوابية)
+  in_review (لدى لجنة المراجعة)
+  review_notes_received (استلام ملاحظات المراجعة)
+  processing_notes (معالجة الملاحظات)
+  returned_for_revision (مُرجعة للتعديل)
+  ready_to_submit (جاهزة للرفع)
+  submitted_to_court (مرفوعة في المحكمة)
+
+- enum ConsultationStage:
+  received (استلام من العميل)
+  assigned_to_department (محالة للقسم)
+  drafting (تحرير الاستشارة)
+  in_review (لدى لجنة المراجعة)
+  review_notes_received (استلام ملاحظات المراجعة)
+  processing_notes (معالجة الملاحظات)
+  returned_for_revision (مُرجعة للتعديل)
+  ready_to_send (جاهزة للإرسال)
+  sent_to_client (مرسلة للعميل)
+
+- enum ReviewNoteAction: 
+  fully_accepted (الأخذ بها كلياً)
+  partially_accepted (الأخذ بها جزئياً)
+  rejected (عدم الأخذ بها)
+  returned (مرفوضة - تحتاج إعادة)
+
+- interface StageSLA:
+  stage: CaseStage | ConsultationStage
+  maxDurationHours: number
+  warningBeforeHours: number
+
+- interface StageTransition:
+  id
+  entityType: "case" | "consultation"
+  entityId
+  fromStage
+  toStage
+  performedBy: userId
+  performedByRole: userRole
+  notes: string
+  duration: number (المدة بالساعات في المرحلة السابقة)
+  isOverdue: boolean (هل تجاوز المدة المحددة)
+  createdAt
+
+- interface ReviewNote:
+  id
+  entityType: "case" | "consultation"
+  entityId
+  reviewerId: userId
+  reviewerName
+  notes: string
+  action: ReviewNoteAction | null
+  actionJustification: string
+  acceptedItems: string[]
+  rejectedItems: string[]
+  returnCount: number (عدد مرات الإرجاع)
+  returnReason: string (سبب الإرجاع إذا كان returned)
+  createdAt
+  respondedAt
+
+- interface EmployeeWorkload:
+  id
+  name
+  department
+  activeCases: number
+  activeConsultations: number
+  inReviewItems: number
+  overdueItems: number
+  avgCompletionDays: number
+
+- في interface Case أضف:
+  clientRole: ClientRole
+  priority: CasePriority
+  currentStage: CaseStage
+  stageStartedAt: Date (بداية المرحلة الحالية)
+  stageDeadline: Date (موعد نهاية المرحلة)
+  stageHistory: StageTransition[]
+  reviewNotes: ReviewNote[]
+  returnCount: number (عدد مرات الإرجاع الكلي)
+  assignedDepartment: string
+  assignedTo: userId (الموظف المسؤول)
+  assignedBy: userId
+  assignedAt: Date
+  isOverdue: boolean
+
+- في interface Consultation نفس الإضافات
+
+=== 2. أنشئ client/src/lib/workflow-context.tsx ===
+
+إعدادات SLA الافتراضية:
+- استلام → إحالة للقسم: 4 ساعات
+- استكمال المستندات: 48 ساعة
+- دراسة القضية: 72 ساعة
+- تحرير الدعوى/المذكرة: 48 ساعة
+- المراجعة: 24 ساعة
+- معالجة الملاحظات: 24 ساعة
+- الرفع: 4 ساعات
+
+دوال إدارة سلسلة العمل:
+
+أساسية:
+- receiveCaseFromClient(caseData, priority): إنشاء قضية مع الأولوية
+- assignCaseToDepartment(caseId, departmentId, assignedTo): إحالة للقسم وتعيين موظف
+- updateCaseStage(caseId, newStage, notes): تغيير المرحلة مع حساب المدة
+- sendCaseToReview(caseId): إرسال للجنة المراجعة
+- submitReviewNotes(caseId, notes, action): إضافة ملاحظات اللجنة
+- respondToReviewNotes(caseId, noteId, action, justification): رد القسم
+- returnCase(caseId, reason): إرجاع القضية للتعديل
+- submitToCourtSystem(caseId): الرفع في المحكمة
+
+SLA والوقت:
+- checkOverdueItems(): فحص العناصر المتأخرة
+- getStageDeadline(stage, priority): حساب الموعد النهائي
+- getTimeRemaining(entityId): الوقت المتبقي
+- getSLAReport(dateRange): تقرير الالتزام بالمواعيد
+
+توازن العمل:
+- getEmployeeWorkload(employeeId): حمل موظف
+- getDepartmentWorkload(departmentId): حمل قسم
+- getWorkloadOverview(): نظرة عامة على الأحمال
+- suggestReassignment(caseId): اقتراح إعادة توزيع
+- reassignCase(caseId, newAssignee): إعادة تعيين
+
+مؤشرات الأداء:
+- getReviewAcceptanceRate(employeeId | departmentId): نسبة قبول الملاحظات
+- getAvgCompletionTime(entityType, stage): متوسط وقت الإنجاز
+- getReturnRate(employeeId | departmentId): نسبة الإرجاع
+- getProductivityReport(dateRange): تقرير الإنتاجية
+- getBottleneckReport(): تقرير الاختناقات
+
+=== 3. أنشئ client/src/components/workflow/stage-tracker.tsx ===
+
+شريط تتبع المراحل:
+- المرحلة الحالية مميزة
+- عرض الوقت المتبقي أو المتأخر
+- تلوين:
+  • أخضر: في الوقت
+  • أصفر: اقتراب الموعد (أقل من 20%)
+  • أحمر: متأخر
+- عند الضغط: التفاصيل ومدة كل مرحلة
+- أيقونة الأولوية (🔴 عاجل، 🟡 عادي، 🟢 منخفض)
+- عداد الإرجاعات إذا > 0
+
+=== 4. أنشئ client/src/components/workflow/priority-badge.tsx ===
+
+Badge للأولوية:
+- عاجل: أحمر مع وميض
+- عادي: أزرق
+- منخفض: رمادي
+- مع Tooltip يوضح سبب الأولوية
+
+=== 5. أنشئ client/src/components/workflow/sla-indicator.tsx ===
+
+مؤشر SLA:
+- شريط تقدم يوضح الوقت المستهلك
+- النص: "متبقي 5 ساعات" أو "متأخر بـ 3 ساعات"
+- ألوان حسب الحالة
+
+=== 6. أنشئ client/src/components/workflow/review-notes-dialog.tsx ===
+
+للجنة المراجعة:
+- حقل الملاحظات
+- خيار الإرجاع للتعديل:
+  • إرجاع مع توضيح السبب
+  • عرض عدد مرات الإرجاع السابقة
+  • تحذير إذا كان الإرجاع للمرة الثالثة+
+
+للقسم المختص:
+- عرض الملاحظات
+- إذا كان إرجاع: عرض سبب الإرجاع بوضوح
+- اختيار الإجراء
+
+=== 7. أنشئ client/src/components/workflow/workload-card.tsx ===
+
+بطاقة حمل العمل للموظف:
+- الاسم والقسم
+- عدد القضايا النشطة
+- عدد الاستشارات النشطة
+- عدد المتأخرة (باللون الأحمر)
+- شريط يوضح مستوى الحمل:
+  • أخضر: طبيعي (< 10)
+  • أصفر: مرتفع (10-15)
+  • أحمر: زائد (> 15)
+
+=== 8. أنشئ client/src/pages/workflow-board.tsx ===
+
+لوحة Kanban:
+- أعمدة حسب المراحل
+- فلترة: الأولوية، القسم، الموظف، متأخر فقط
+- ترتيب: العاجل أولاً، ثم المتأخر
+- drag & drop للنقل
+- Badge الأولوية وعدد الإرجاعات
+- مؤشر SLA مصغر على كل بطاقة
+
+=== 9. أنشئ client/src/pages/workload-dashboard.tsx ===
+
+لوحة توازن العمل (للمديرين):
+- cards لكل موظف مع workload-card
+- فلترة حسب القسم
+- ترتيب حسب الحمل (الأعلى أولاً)
+- زر "اقتراح إعادة توزيع"
+- جدول المقارنة بين الموظفين
+- Chart: توزيع العمل على الأقسام
+
+=== 10. أنشئ client/src/pages/performance-dashboard.tsx ===
+
+لوحة مؤشرات الأداء (للمديرين):
+
+الإحصائيات العامة:
+- إجمالي القضايا/الاستشارات (هذا الشهر)
+- نسبة الإنجاز في الوقت
+- نسبة التأخير
+- متوسط وقت الدورة الكاملة
+
+مؤشرات المراجعة:
+- نسبة القبول الكلي / الجزئي / الرفض / الإرجاع
+- Chart دائري للتوزيع
+- أكثر أسباب الإرجاع شيوعاً
+- الأقسام/الموظفين الأعلى في نسبة القبول
+
+مؤشرات الوقت:
+- متوسط وقت كل مرحلة
+- Chart بياني يقارن الفعلي vs المستهدف
+- المراحل الأكثر تأخيراً (الاختناقات)
+
+جدول الموظفين:
+- الاسم
+- عدد المنجز
+- نسبة قبول المراجعة
+- متوسط وقت الإنجاز
+- عدد الإرجاعات
+- تقييم عام (ممتاز/جيد/يحتاج تحسين)
+
+فلترة حسب: الفترة، القسم، نوع (قضايا/استشارات)
+
+=== 11. أنشئ client/src/pages/returns-report.tsx ===
+
+تقرير الإرجاعات:
+- جدول بالعناصر المُرجعة
+- عدد مرات الإرجاع لكل عنصر
+- سبب كل إرجاع
+- الموظف المسؤول
+- Chart: أسباب الإرجاع الشائعة
+- Chart: الموظفين الأكثر إرجاعاً لهم
+- توصيات لتقليل الإرجاع
+
+=== 12. تحديث الصفحات ===
+
+في cases.tsx و consultations.tsx:
+- عمود الأولوية مع priority-badge
+- عمود المرحلة مع sla-indicator مصغر
+- عمود الإرجاعات (إذا > 0)
+- فلتر: الأولوية، المرحلة، متأخر، مُرجع
+- ترتيب افتراضي: العاجل ثم المتأخر
+
+في sidebar.tsx:
+- لوحة سير العمل
+- توازن العمل (للمديرين)
+- مؤشرات الأداء (للمديرين)
+- Badge بعدد المتأخرة بجانب "سير العمل"
+
+=== 13. الإشعارات التلقائية ===
+
+SLA:
+- تنبيه قبل انتهاء مدة المرحلة بـ 20%
+- تنبيه فوري عند التأخر
+- تنبيه للمدير إذا تأخر أكثر من 24 ساعة إضافية
+
+الإرجاع:
+- إشعار للموظف عند إرجاع عمله
+- إشعار للمدير إذا كان الإرجاع للمرة الثالثة
+- إشعار أسبوعي بملخص الإرجاعات
+
+توازن العمل:
+- تنبيه للمدير إذا موظف تجاوز 15 قضية نشطة
+- اقتراح إعادة توزيع تلقائي
+
+=== 14. الصلاحيات ===
+
+الدعم الإداري:
+- تحديد الأولوية عند الاستلام
+- إعادة تعيين الموظف
+
+القسم المختص:
+- طلب تمديد مدة المرحلة (يحتاج موافقة)
+
+المدير:
+- تغيير الأولوية
+- إعادة التوزيع
+- الموافقة على التمديدات
+- لوحات الأداء والتوازن
+
+استخدم shadcn/ui مع recharts للـ Charts ودعم RTL بالعربي.

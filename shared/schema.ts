@@ -1055,3 +1055,200 @@ export interface UserNotificationPreferences {
   quietHoursStart: string | null;
   quietHoursEnd: string | null;
 }
+
+// ==================== Workflow System Enums ====================
+
+export const ClientRole = {
+  PLAINTIFF: "plaintiff",
+  DEFENDANT: "defendant",
+} as const;
+
+export type ClientRoleValue = typeof ClientRole[keyof typeof ClientRole];
+
+export const ClientRoleLabels: Record<ClientRoleValue, string> = {
+  plaintiff: "مدعي",
+  defendant: "مدعى عليه",
+};
+
+export const CasePriority = {
+  URGENT: "urgent",
+  NORMAL: "normal",
+  LOW: "low",
+} as const;
+
+export type CasePriorityValue = typeof CasePriority[keyof typeof CasePriority];
+
+export const CasePriorityLabels: Record<CasePriorityValue, string> = {
+  urgent: "عاجل",
+  normal: "عادي",
+  low: "منخفض",
+};
+
+export const WorkflowCaseStage = {
+  RECEIVED: "received",
+  ASSIGNED_TO_DEPARTMENT: "assigned_to_department",
+  COLLECTING_DOCUMENTS: "collecting_documents",
+  UNDER_STUDY: "under_study",
+  DRAFTING_LAWSUIT: "drafting_lawsuit",
+  DRAFTING_RESPONSE: "drafting_response",
+  IN_REVIEW: "in_review",
+  REVIEW_NOTES_RECEIVED: "review_notes_received",
+  PROCESSING_NOTES: "processing_notes",
+  RETURNED_FOR_REVISION: "returned_for_revision",
+  READY_TO_SUBMIT: "ready_to_submit",
+  SUBMITTED_TO_COURT: "submitted_to_court",
+} as const;
+
+export type WorkflowCaseStageValue = typeof WorkflowCaseStage[keyof typeof WorkflowCaseStage];
+
+export const WorkflowCaseStageLabels: Record<WorkflowCaseStageValue, string> = {
+  received: "استلام من العميل",
+  assigned_to_department: "محالة للقسم",
+  collecting_documents: "استكمال المستندات",
+  under_study: "دراسة القضية",
+  drafting_lawsuit: "تحرير الدعوى",
+  drafting_response: "كتابة المذكرة الجوابية",
+  in_review: "لدى لجنة المراجعة",
+  review_notes_received: "استلام ملاحظات المراجعة",
+  processing_notes: "معالجة الملاحظات",
+  returned_for_revision: "مُرجعة للتعديل",
+  ready_to_submit: "جاهزة للرفع",
+  submitted_to_court: "مرفوعة في المحكمة",
+};
+
+export const WorkflowCaseStagesOrder: WorkflowCaseStageValue[] = [
+  "received",
+  "assigned_to_department",
+  "collecting_documents",
+  "under_study",
+  "drafting_lawsuit",
+  "drafting_response",
+  "in_review",
+  "review_notes_received",
+  "processing_notes",
+  "returned_for_revision",
+  "ready_to_submit",
+  "submitted_to_court",
+];
+
+export const ConsultationStage = {
+  RECEIVED: "received",
+  ASSIGNED_TO_DEPARTMENT: "assigned_to_department",
+  DRAFTING: "drafting",
+  IN_REVIEW: "in_review",
+  REVIEW_NOTES_RECEIVED: "review_notes_received",
+  PROCESSING_NOTES: "processing_notes",
+  RETURNED_FOR_REVISION: "returned_for_revision",
+  READY_TO_SEND: "ready_to_send",
+  SENT_TO_CLIENT: "sent_to_client",
+} as const;
+
+export type ConsultationStageValue = typeof ConsultationStage[keyof typeof ConsultationStage];
+
+export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
+  received: "استلام من العميل",
+  assigned_to_department: "محالة للقسم",
+  drafting: "تحرير الاستشارة",
+  in_review: "لدى لجنة المراجعة",
+  review_notes_received: "استلام ملاحظات المراجعة",
+  processing_notes: "معالجة الملاحظات",
+  returned_for_revision: "مُرجعة للتعديل",
+  ready_to_send: "جاهزة للإرسال",
+  sent_to_client: "مرسلة للعميل",
+};
+
+export const ConsultationStagesOrder: ConsultationStageValue[] = [
+  "received",
+  "assigned_to_department",
+  "drafting",
+  "in_review",
+  "review_notes_received",
+  "processing_notes",
+  "returned_for_revision",
+  "ready_to_send",
+  "sent_to_client",
+];
+
+export const ReviewNoteAction = {
+  FULLY_ACCEPTED: "fully_accepted",
+  PARTIALLY_ACCEPTED: "partially_accepted",
+  REJECTED: "rejected",
+  RETURNED: "returned",
+} as const;
+
+export type ReviewNoteActionValue = typeof ReviewNoteAction[keyof typeof ReviewNoteAction];
+
+export const ReviewNoteActionLabels: Record<ReviewNoteActionValue, string> = {
+  fully_accepted: "الأخذ بها كلياً",
+  partially_accepted: "الأخذ بها جزئياً",
+  rejected: "عدم الأخذ بها",
+  returned: "مرفوضة - تحتاج إعادة",
+};
+
+// ==================== Workflow Interfaces ====================
+
+export interface StageSLA {
+  stage: WorkflowCaseStageValue | ConsultationStageValue;
+  maxDurationHours: number;
+  warningBeforeHours: number;
+}
+
+export interface StageTransition {
+  id: string;
+  entityType: "case" | "consultation";
+  entityId: string;
+  fromStage: WorkflowCaseStageValue | ConsultationStageValue | null;
+  toStage: WorkflowCaseStageValue | ConsultationStageValue;
+  performedBy: string;
+  performedByRole: string;
+  notes: string;
+  duration: number;
+  isOverdue: boolean;
+  createdAt: string;
+}
+
+export interface ReviewNote {
+  id: string;
+  entityType: "case" | "consultation";
+  entityId: string;
+  reviewerId: string;
+  reviewerName: string;
+  notes: string;
+  action: ReviewNoteActionValue | null;
+  actionJustification: string;
+  acceptedItems: string[];
+  rejectedItems: string[];
+  returnCount: number;
+  returnReason: string;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export interface EmployeeWorkload {
+  id: string;
+  name: string;
+  department: string;
+  activeCases: number;
+  activeConsultations: number;
+  inReviewItems: number;
+  overdueItems: number;
+  avgCompletionDays: number;
+}
+
+// ==================== Default SLA Settings ====================
+
+export const DefaultSLASettings: StageSLA[] = [
+  { stage: "received", maxDurationHours: 4, warningBeforeHours: 1 },
+  { stage: "assigned_to_department", maxDurationHours: 4, warningBeforeHours: 1 },
+  { stage: "collecting_documents", maxDurationHours: 48, warningBeforeHours: 8 },
+  { stage: "under_study", maxDurationHours: 72, warningBeforeHours: 12 },
+  { stage: "drafting_lawsuit", maxDurationHours: 48, warningBeforeHours: 8 },
+  { stage: "drafting_response", maxDurationHours: 48, warningBeforeHours: 8 },
+  { stage: "drafting", maxDurationHours: 48, warningBeforeHours: 8 },
+  { stage: "in_review", maxDurationHours: 24, warningBeforeHours: 4 },
+  { stage: "review_notes_received", maxDurationHours: 4, warningBeforeHours: 1 },
+  { stage: "processing_notes", maxDurationHours: 24, warningBeforeHours: 4 },
+  { stage: "returned_for_revision", maxDurationHours: 24, warningBeforeHours: 4 },
+  { stage: "ready_to_submit", maxDurationHours: 4, warningBeforeHours: 1 },
+  { stage: "ready_to_send", maxDurationHours: 4, warningBeforeHours: 1 },
+];
