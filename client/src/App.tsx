@@ -20,6 +20,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { FavoritesProvider } from "@/lib/favorites-context";
 import { FavoritesDropdown, RecentVisitsDropdown } from "@/components/favorites-dropdown";
 import { KeyboardShortcutsProvider } from "@/components/keyboard-shortcuts";
+import { OnboardingProvider } from "@/components/onboarding-tour";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -105,7 +106,9 @@ function App() {
                           <FavoritesProvider>
                             <TooltipProvider>
                               <KeyboardShortcutsProvider>
-                                <AppContent />
+                                <OnboardingProvider>
+                                  <AppContent />
+                                </OnboardingProvider>
                               </KeyboardShortcutsProvider>
                               <Toaster />
                             </TooltipProvider>

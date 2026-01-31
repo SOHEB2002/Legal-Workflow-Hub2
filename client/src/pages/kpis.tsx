@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, differenceInDays } from "date-fns";
+import { useMemo, useState } from "react";
+import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, differenceInDays, subMonths, startOfYear, endOfYear } from "date-fns";
 import { ar } from "date-fns/locale";
 import { 
   TrendingUp, 
@@ -14,10 +14,16 @@ import {
   BarChart3,
   PieChart,
   Activity,
+  Trophy,
+  Medal,
+  Award,
+  Filter,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
 import { useHearings } from "@/lib/hearings-context";
@@ -104,6 +110,15 @@ function ProgressCard({ title, value, max, description, icon }: ProgressCardProp
   );
 }
 
+type PeriodType = "this_month" | "last_month" | "this_year" | "all_time";
+
+const periodLabels: Record<PeriodType, string> = {
+  this_month: "هذا الشهر",
+  last_month: "الشهر الماضي",
+  this_year: "هذه السنة",
+  all_time: "كل الأوقات",
+};
+
 export default function KPIsPage() {
   const { cases } = useCases();
   const { consultations } = useConsultations();
@@ -112,6 +127,25 @@ export default function KPIsPage() {
   const { fieldTasks } = useFieldTasks();
   const { users } = useAuth();
   const { departments } = useDepartments();
+  
+  const [selectedPeriod, setSelectedPeriod] = useState<PeriodType>("this_month");
+
+  const periodRange = useMemo(() => {
+    const now = new Date();
+    switch (selectedPeriod) {
+      case "this_month":
+        return { start: startOfMonth(now), end: endOfMonth(now) };
+      case "last_month":
+        const lastMonth = subMonths(now, 1);
+        return { start: startOfMonth(lastMonth), end: endOfMonth(lastMonth) };
+      case "this_year":
+        return { start: startOfYear(now), end: endOfYear(now) };
+      case "all_time":
+        return { start: new Date(2000, 0, 1), end: now };
+      default:
+        return { start: startOfMonth(now), end: endOfMonth(now) };
+    }
+  }, [selectedPeriod]);
 
   const currentMonth = useMemo(() => {
     const now = new Date();
@@ -255,9 +289,73 @@ export default function KPIsPage() {
     };
   }, [users]);
 
+  const employeePerformance = useMemo(() => {
+    const lawyers = users.filter(u => 
+      u.role === "department_head" || u.role === "employee"
+    );
+
+    const performance = lawyers.map(lawyer => {
+      const lawyerCases = cases.filter(c => c.responsibleLawyerId === lawyer.id);
+      const periodCases = lawyerCases.filter(c => {
+        try {
+          const createdDate = parseISO(c.createdAt);
+          return isWithinInterval(createdDate, periodRange);
+        } catch {
+          return selectedPeriod === "all_time";
+        }
+      });
+
+      const closedCases = periodCases.filter(c => c.status === CaseStatus.CLOSED);
+      const totalCasesCount = periodCases.length;
+      const closedCount = closedCases.length;
+      
+      const avgDuration = closedCases.length > 0 
+        ? Math.round(closedCases.reduce((acc, c) => {
+            try {
+              const start = parseISO(c.createdAt);
+              const end = c.closedAt ? parseISO(c.closedAt) : new Date();
+              return acc + differenceInDays(end, start);
+            } catch {
+              return acc;
+            }
+          }, 0) / closedCases.length)
+        : 0;
+
+      const closureRate = totalCasesCount > 0 
+        ? Math.round((closedCount / totalCasesCount) * 100) 
+        : 0;
+
+      return {
+        id: lawyer.id,
+        name: lawyer.name,
+        role: lawyer.role,
+        totalCases: totalCasesCount,
+        closedCases: closedCount,
+        closureRate,
+        avgDuration,
+        score: closureRate + (avgDuration > 0 ? Math.max(0, 100 - avgDuration) : 0),
+      };
+    });
+
+    return performance.sort((a, b) => b.score - a.score);
+  }, [users, cases, periodRange, selectedPeriod]);
+
+  const getRankIcon = (index: number) => {
+    switch (index) {
+      case 0:
+        return <Trophy className="h-5 w-5 text-yellow-500" />;
+      case 1:
+        return <Medal className="h-5 w-5 text-gray-400" />;
+      case 2:
+        return <Award className="h-5 w-5 text-amber-600" />;
+      default:
+        return <span className="text-muted-foreground">{index + 1}</span>;
+    }
+  };
+
   return (
     <div className="container mx-auto p-6 space-y-6" dir="rtl">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <BarChart3 className="h-6 w-6" />
@@ -266,6 +364,21 @@ export default function KPIsPage() {
           <p className="text-muted-foreground">
             تحليل شامل لأداء مكتب المحاماة - {format(new Date(), "MMMM yyyy", { locale: ar })}
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-muted-foreground" />
+          <Select value={selectedPeriod} onValueChange={(v) => setSelectedPeriod(v as PeriodType)}>
+            <SelectTrigger className="w-40" data-testid="select-period">
+              <SelectValue placeholder="اختر الفترة" />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(periodLabels).map(([value, label]) => (
+                <SelectItem key={value} value={value} data-testid={`period-${value}`}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -411,6 +524,61 @@ export default function KPIsPage() {
               <div className="text-sm text-muted-foreground mt-1">معدل إنجاز المهام</div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5" />
+            أداء الموظفين
+          </CardTitle>
+          <CardDescription>تفاصيل أداء المحامين والموظفين - {periodLabels[selectedPeriod]}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {employeePerformance.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              لا يوجد موظفين لعرض أدائهم
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-right w-16">الترتيب</TableHead>
+                  <TableHead className="text-right">الموظف</TableHead>
+                  <TableHead className="text-center">القضايا</TableHead>
+                  <TableHead className="text-center">المغلقة</TableHead>
+                  <TableHead className="text-center">معدل الإغلاق</TableHead>
+                  <TableHead className="text-center">متوسط المدة</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {employeePerformance.map((employee, index) => (
+                  <TableRow key={employee.id} data-testid={`employee-row-${employee.id}`}>
+                    <TableCell className="text-center">
+                      {getRankIcon(index)}
+                    </TableCell>
+                    <TableCell className="font-medium">{employee.name}</TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="outline">{employee.totalCases}</Badge>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="secondary">{employee.closedCases}</Badge>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <Progress value={employee.closureRate} className="w-16 h-2" />
+                        <span className="text-sm">{employee.closureRate}%</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-center text-muted-foreground">
+                      {employee.avgDuration > 0 ? `${employee.avgDuration} يوم` : "-"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

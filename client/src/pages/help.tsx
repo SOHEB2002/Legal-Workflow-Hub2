@@ -12,11 +12,14 @@ import {
   ChevronDown,
   ChevronUp,
   Search,
+  Play,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { TourRestartButton } from "@/components/onboarding-tour";
 
 interface HelpSection {
   id: string;
@@ -305,6 +308,22 @@ export default function HelpPage() {
           </Card>
         )}
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Play className="h-5 w-5" />
+            الجولة التعريفية
+          </CardTitle>
+          <CardDescription>تعرف على أقسام النظام من خلال جولة تفاعلية</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground mb-4">
+            إذا كنت جديداً على النظام أو تريد مراجعة الأقسام الرئيسية، يمكنك إعادة الجولة التعريفية.
+          </p>
+          <TourRestartButton />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
