@@ -32,13 +32,16 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus, Search, Pencil, Trash2, Building2, User, Phone, Mail } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Plus, Search, Pencil, Trash2, Building2, User, Phone, Mail, Eye, Briefcase, MessageSquare } from "lucide-react";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
 import type { Client, ClientTypeValue } from "@shared/schema";
-import { ClientType } from "@shared/schema";
+import { ClientType, CaseStageLabels } from "@shared/schema";
+import { format } from "date-fns";
+import { ar } from "date-fns/locale";
 
 export default function ClientsPage() {
   const { clients, addClient, updateClient, deleteClient, getClientName } = useClients();
@@ -49,6 +52,8 @@ export default function ClientsPage() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [viewingClient, setViewingClient] = useState<Client | null>(null);
+  const [detailsTab, setDetailsTab] = useState("info");
 
   const [formData, setFormData] = useState<Partial<Client>>({
     clientType: "فرد",
@@ -107,6 +112,14 @@ export default function ClientsPage() {
 
   const getClientConsultationsCount = (clientId: string) => {
     return consultations.filter((c) => c.clientId === clientId).length;
+  };
+
+  const getClientCases = (clientId: string) => {
+    return cases.filter((c) => c.clientId === clientId);
+  };
+
+  const getClientConsultations = (clientId: string) => {
+    return consultations.filter((c) => c.clientId === clientId);
   };
 
   const filteredClients = clients.filter((client) => {
@@ -362,6 +375,19 @@ export default function ClientsPage() {
                           <Button
                             size="icon"
                             variant="ghost"
+                            data-testid={`button-view-client-${client.id}`}
+                            onClick={() => { setViewingClient(client); setDetailsTab("info"); }}
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>عرض التفاصيل</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
                             data-testid={`button-edit-client-${client.id}`}
                             onClick={() => openEditDialog(client)}
                           >
@@ -403,6 +429,169 @@ export default function ClientsPage() {
           <Button data-testid="button-update-client" onClick={handleEditClient} className="w-full">
             حفظ التعديلات
           </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!viewingClient} onOpenChange={(open) => !open && setViewingClient(null)}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                {viewingClient?.clientType === "فرد" ? (
+                  <User className="w-5 h-5 text-primary" />
+                ) : (
+                  <Building2 className="w-5 h-5 text-primary" />
+                )}
+              </div>
+              {viewingClient?.clientType === "فرد" ? viewingClient?.individualName : viewingClient?.companyName}
+            </DialogTitle>
+          </DialogHeader>
+          {viewingClient && (
+            <Tabs value={detailsTab} onValueChange={setDetailsTab} className="w-full">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="info" data-testid="tab-client-info">المعلومات</TabsTrigger>
+                <TabsTrigger value="cases" data-testid="tab-client-cases">
+                  <Briefcase className="w-4 h-4 ml-2" />
+                  القضايا ({getClientCasesCount(viewingClient.id)})
+                </TabsTrigger>
+                <TabsTrigger value="consultations" data-testid="tab-client-consultations">
+                  <MessageSquare className="w-4 h-4 ml-2" />
+                  الاستشارات ({getClientConsultationsCount(viewingClient.id)})
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="info" className="mt-4 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-muted-foreground">نوع العميل</Label>
+                    <p className="font-medium">{viewingClient.clientType}</p>
+                  </div>
+                  {viewingClient.clientType === "فرد" ? (
+                    <>
+                      <div>
+                        <Label className="text-muted-foreground">الاسم</Label>
+                        <p className="font-medium">{viewingClient.individualName}</p>
+                      </div>
+                      <div>
+                        <Label className="text-muted-foreground">رقم الهوية</Label>
+                        <p className="font-medium">{viewingClient.nationalId || "-"}</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <Label className="text-muted-foreground">اسم الشركة</Label>
+                        <p className="font-medium">{viewingClient.companyName}</p>
+                      </div>
+                      <div>
+                        <Label className="text-muted-foreground">السجل التجاري</Label>
+                        <p className="font-medium">{viewingClient.commercialRegister || "-"}</p>
+                      </div>
+                      <div>
+                        <Label className="text-muted-foreground">ممثل الشركة</Label>
+                        <p className="font-medium">{viewingClient.representativeName || "-"}</p>
+                      </div>
+                      <div>
+                        <Label className="text-muted-foreground">صفة الممثل</Label>
+                        <p className="font-medium">{viewingClient.representativeTitle || "-"}</p>
+                      </div>
+                    </>
+                  )}
+                  <div>
+                    <Label className="text-muted-foreground">رقم الجوال</Label>
+                    <p className="font-medium">{viewingClient.phone}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">البريد الإلكتروني</Label>
+                    <p className="font-medium">{viewingClient.email || "-"}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-muted-foreground">العنوان</Label>
+                    <p className="font-medium">{viewingClient.address || "-"}</p>
+                  </div>
+                  {viewingClient.notes && (
+                    <div className="col-span-2">
+                      <Label className="text-muted-foreground">ملاحظات</Label>
+                      <p className="text-sm bg-muted p-2 rounded">{viewingClient.notes}</p>
+                    </div>
+                  )}
+                </div>
+                <div className="border-t pt-4 text-sm text-muted-foreground">
+                  تاريخ الإضافة: {format(new Date(viewingClient.createdAt), "d MMMM yyyy", { locale: ar })}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="cases" className="mt-4">
+                {(() => {
+                  const clientCases = getClientCases(viewingClient.id);
+                  if (clientCases.length === 0) {
+                    return <p className="text-muted-foreground text-center py-8">لا توجد قضايا مسجلة لهذا العميل</p>;
+                  }
+                  return (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-right">رقم القضية</TableHead>
+                          <TableHead className="text-right">النوع</TableHead>
+                          <TableHead className="text-right">المرحلة الحالية</TableHead>
+                          <TableHead className="text-right">التاريخ</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {clientCases.map((c) => (
+                          <TableRow key={c.id}>
+                            <TableCell className="font-medium">{c.caseNumber}</TableCell>
+                            <TableCell>{c.caseType}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{CaseStageLabels[c.currentStage] || c.currentStage}</Badge>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {format(new Date(c.createdAt), "d MMMM yyyy", { locale: ar })}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  );
+                })()}
+              </TabsContent>
+
+              <TabsContent value="consultations" className="mt-4">
+                {(() => {
+                  const clientConsultations = getClientConsultations(viewingClient.id);
+                  if (clientConsultations.length === 0) {
+                    return <p className="text-muted-foreground text-center py-8">لا توجد استشارات مسجلة لهذا العميل</p>;
+                  }
+                  return (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-right">رقم الاستشارة</TableHead>
+                          <TableHead className="text-right">النوع</TableHead>
+                          <TableHead className="text-right">الحالة</TableHead>
+                          <TableHead className="text-right">التاريخ</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {clientConsultations.map((c) => (
+                          <TableRow key={c.id}>
+                            <TableCell className="font-medium">{c.consultationNumber}</TableCell>
+                            <TableCell>{c.consultationType}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{c.status}</Badge>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {format(new Date(c.createdAt), "d MMMM yyyy", { locale: ar })}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  );
+                })()}
+              </TabsContent>
+            </Tabs>
+          )}
         </DialogContent>
       </Dialog>
     </div>
