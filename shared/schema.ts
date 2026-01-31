@@ -70,6 +70,48 @@ export const CaseStatusLabels: Record<CaseStatusValue, string> = {
   "مغلق": "مغلق",
 };
 
+// ==================== مراحل القضية (7 مراحل للشريط) ====================
+export const CaseStage = {
+  RECEIVED: "استلام",
+  DATA_COMPLETION: "استكمال_البيانات",
+  STUDY: "دراسة",
+  DRAFTING: "تحرير_المذكرة",
+  REVIEW_COMMITTEE: "إحالة_للجنة_المراجعة",
+  AMENDMENTS: "الأخذ_بالملاحظات",
+  SUBMITTED: "رفع_للدائرة",
+} as const;
+
+export type CaseStageValue = typeof CaseStage[keyof typeof CaseStage];
+
+export const CaseStageLabels: Record<CaseStageValue, string> = {
+  "استلام": "استلام",
+  "استكمال_البيانات": "استكمال البيانات",
+  "دراسة": "دراسة",
+  "تحرير_المذكرة": "تحرير المذكرة",
+  "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
+  "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
+  "رفع_للدائرة": "رفع للدائرة",
+};
+
+export const CaseStagesOrder: CaseStageValue[] = [
+  "استلام",
+  "استكمال_البيانات",
+  "دراسة",
+  "تحرير_المذكرة",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "رفع_للدائرة",
+];
+
+// سجل انتقال المراحل
+export interface CaseStageTransition {
+  stage: CaseStageValue;
+  timestamp: string;
+  userId: string;
+  userName: string;
+  notes: string;
+}
+
 // ==================== الأولوية ====================
 export const Priority = {
   URGENT: "عاجل",
@@ -260,13 +302,17 @@ export interface LawCase {
   clientId: string;
   caseType: CaseTypeValue;
   status: CaseStatusValue;
+  currentStage: CaseStageValue;
+  stageHistory: CaseStageTransition[];
   departmentId: string;
   assignedLawyers: string[];
   primaryLawyerId: string | null;
+  responsibleLawyerId: string | null;
   courtName: string;
   courtCaseNumber: string;
   najizNumber: string;
   judgeName: string;
+  circuitNumber: string;
   opponentName: string;
   opponentLawyer: string;
   opponentPhone: string;
@@ -281,6 +327,15 @@ export interface LawCase {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+}
+
+export interface CaseComment {
+  id: string;
+  caseId: string;
+  userId: string;
+  userName: string;
+  content: string;
+  createdAt: string;
 }
 
 export interface Consultation {
@@ -540,4 +595,8 @@ export function canCloseCases(role: UserRoleType): boolean {
 
 export function canAssignFieldTasks(role: UserRoleType): boolean {
   return ["branch_manager", "cases_review_head", "consultations_review_head", "department_head"].includes(role);
+}
+
+export function canMoveToPreviousStage(role: UserRoleType): boolean {
+  return role === "branch_manager";
 }
