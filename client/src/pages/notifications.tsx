@@ -42,6 +42,7 @@ import {
 } from "@shared/schema";
 import type { Notification, NotificationTypeValue, NotificationPriorityValue } from "@shared/schema";
 import { cn } from "@/lib/utils";
+import { formatDateTimeArabic } from "@/lib/date-utils";
 import { Link } from "wouter";
 
 function getPriorityColor(priority: string): string {
@@ -58,13 +59,7 @@ function getPriorityColor(priority: string): string {
 }
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString("ar-SA", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDateTimeArabic(dateStr);
 }
 
 export default function NotificationsPage() {

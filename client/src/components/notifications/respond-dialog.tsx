@@ -22,6 +22,7 @@ import {
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
 import { cn } from "@/lib/utils";
+import { formatDateArabic } from "@/lib/date-utils";
 
 interface RespondDialogProps {
   open: boolean;
@@ -103,7 +104,7 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
             <h4 className="font-semibold">{notification.title}</h4>
             <p className="text-sm text-muted-foreground">{notification.message}</p>
             <p className="text-xs text-muted-foreground">
-              من: {notification.senderName} • {new Date(notification.createdAt).toLocaleDateString("ar-SA")}
+              من: {notification.senderName} • {formatDateArabic(notification.createdAt)}
             </p>
           </div>
 
