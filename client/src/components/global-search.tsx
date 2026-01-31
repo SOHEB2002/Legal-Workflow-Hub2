@@ -59,6 +59,7 @@ export function GlobalSearch() {
     { icon: Calendar, label: "الجلسات", path: "/hearings" },
     { icon: ClipboardList, label: "المهام الميدانية", path: "/field-tasks" },
     { icon: Settings, label: "إعدادات لوحة التحكم", path: "/dashboard-settings" },
+    { icon: HelpCircle, label: "المساعدة", path: "/help" },
   ];
 
   return (

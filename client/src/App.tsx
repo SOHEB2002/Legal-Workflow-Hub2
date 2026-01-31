@@ -27,6 +27,8 @@ import HearingsPage from "@/pages/hearings";
 import UsersPage from "@/pages/users";
 import FieldTasksPage from "@/pages/field-tasks";
 import DashboardSettingsPage from "@/pages/dashboard-settings";
+import KPIsPage from "@/pages/kpis";
+import HelpPage from "@/pages/help";
 
 function Router() {
   return (
@@ -39,6 +41,8 @@ function Router() {
       <Route path="/field-tasks" component={FieldTasksPage} />
       <Route path="/users" component={UsersPage} />
       <Route path="/dashboard-settings" component={DashboardSettingsPage} />
+      <Route path="/kpis" component={KPIsPage} />
+      <Route path="/help" component={HelpPage} />
       <Route component={NotFound} />
     </Switch>
   );

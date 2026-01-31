@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -57,6 +57,24 @@ const adminMenuItems = [
     title: "المستخدمين",
     url: "/users",
     icon: UserCog,
+  },
+];
+
+const toolsMenuItems = [
+  {
+    title: "مؤشرات الأداء",
+    url: "/kpis",
+    icon: BarChart3,
+  },
+  {
+    title: "إعدادات لوحة التحكم",
+    url: "/dashboard-settings",
+    icon: Settings,
+  },
+  {
+    title: "المساعدة",
+    url: "/help",
+    icon: HelpCircle,
   },
 ];
 
@@ -137,6 +155,28 @@ export function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
         )}
+
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-sidebar-foreground/60">الأدوات</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {toolsMenuItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === item.url}
+                    tooltip={item.title}
+                  >
+                    <Link href={item.url} data-testid={`link-${item.url.slice(1)}`}>
+                      <item.icon className="w-4 h-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
