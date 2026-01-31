@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -65,6 +65,11 @@ const toolsMenuItems = [
     title: "مؤشرات الأداء",
     url: "/kpis",
     icon: BarChart3,
+  },
+  {
+    title: "معايير المراجعة",
+    url: "/standards",
+    icon: ClipboardCheck,
   },
   {
     title: "إعدادات لوحة التحكم",

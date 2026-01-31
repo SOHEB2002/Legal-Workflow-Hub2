@@ -15,6 +15,7 @@ import { DepartmentsProvider } from "@/lib/departments-context";
 import { FieldTasksProvider } from "@/lib/field-tasks-context";
 import { DashboardProvider } from "@/lib/dashboard-context";
 import { ContactsProvider } from "@/lib/contacts-context";
+import { StandardsProvider } from "@/lib/standards-context";
 import { GlobalSearch } from "@/components/global-search";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { FavoritesProvider } from "@/lib/favorites-context";
@@ -33,6 +34,7 @@ import FieldTasksPage from "@/pages/field-tasks";
 import DashboardSettingsPage from "@/pages/dashboard-settings";
 import KPIsPage from "@/pages/kpis";
 import HelpPage from "@/pages/help";
+import StandardsPage from "@/pages/standards";
 
 function Router() {
   return (
@@ -47,6 +49,7 @@ function Router() {
       <Route path="/dashboard-settings" component={DashboardSettingsPage} />
       <Route path="/kpis" component={KPIsPage} />
       <Route path="/help" component={HelpPage} />
+      <Route path="/standards" component={StandardsPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -103,7 +106,8 @@ function App() {
                     <FieldTasksProvider>
                       <ContactsProvider>
                         <DashboardProvider>
-                          <FavoritesProvider>
+                          <StandardsProvider>
+                            <FavoritesProvider>
                             <TooltipProvider>
                               <KeyboardShortcutsProvider>
                                 <OnboardingProvider>
@@ -112,7 +116,8 @@ function App() {
                               </KeyboardShortcutsProvider>
                               <Toaster />
                             </TooltipProvider>
-                          </FavoritesProvider>
+                            </FavoritesProvider>
+                          </StandardsProvider>
                         </DashboardProvider>
                       </ContactsProvider>
                     </FieldTasksProvider>
