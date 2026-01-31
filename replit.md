@@ -52,7 +52,7 @@ The system features a formal and luxurious design.
     - **User Preferences**: Sound alerts, desktop notifications, notification mode (instant, daily, weekly summary), quiet hours, muting specific types, workflow notification toggles (assignment, stage change, review notes, returns, SLA warnings).
     - **Rule-Based System**: 10 default notification rules with configurable conditions (stages, priorities, departments), recipients (assigned employee, department head, branch manager, review committee), and auto-escalation settings.
     - **Workflow Integration**: Automatic notifications triggered by workflow events (case/consultation assignment, stage changes, returns, SLA warnings) via triggerWorkflowNotification function.
-- **Workflow Management System** (NEW):
+- **Workflow Management System**:
     - **Workflow Board (`/workflow-board`)**: Kanban-style board for visualizing cases/consultations across stages with drag-like stage progression.
     - **Workload Dashboard (`/workload-dashboard`)**: Monitors employee workload distribution with overload alerts (>15 items), overdue counts, and bottleneck detection.
     - **Performance Dashboard (`/performance-dashboard`)**: Analytics dashboard with top 5 performers ranking, return rate warnings, SLA compliance tracking.
@@ -60,6 +60,15 @@ The system features a formal and luxurious design.
     - **SLA Tracking**: Configurable hours per stage, priority-adjusted (urgent -50%, low +50%).
     - **Review Committee**: Third return triggers escalation to branch manager.
     - **State Management**: WorkflowProvider context with localStorage persistence.
+- **User Management System** (ENHANCED):
+    - **User Management (`/users`)**: CRUD operations with enhanced dropdown menu (7 actions: edit, password reset, toggle status, view profile, schedule vacation, create delegation, custom permissions, activity log).
+    - **Vacation System**: Schedule vacations with conflict detection, auto-reassignment of cases/consultations, and delegation during absence.
+    - **Delegation System**: Full or partial delegation of permissions to other users with date ranges and reason tracking.
+    - **Custom Permissions**: Role-based permission defaults with granular custom permission overrides, expiration dates, and restriction capabilities.
+    - **Team Management (`/teams`)**: Create and manage teams with leader assignment, member management, and workload tracking.
+    - **Activity Log (`/activity-log`)**: Track all user actions with filtering by user, action type, entity type, and date range with CSV export.
+    - **User Profile (`/user-profile/:id`)**: 6-tab comprehensive view (stats, cases, vacations, delegations, activity log, permissions).
+    - **State Management**: UsersProvider context with localStorage persistence, supports 40+ methods for managing all user-related operations.
 
 ## External Dependencies
 - **PostgreSQL**: Integrated database for data persistence.

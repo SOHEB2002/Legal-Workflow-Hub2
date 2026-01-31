@@ -43,7 +43,11 @@ import NotificationDashboardPage from "@/pages/notification-dashboard";
 import WorkflowBoardPage from "@/pages/workflow-board";
 import WorkloadDashboardPage from "@/pages/workload-dashboard";
 import PerformanceDashboardPage from "@/pages/performance-dashboard";
+import TeamsPage from "@/pages/teams";
+import ActivityLogPage from "@/pages/activity-log";
+import UserProfilePage from "@/pages/user-profile";
 import { WorkflowProvider } from "@/lib/workflow-context";
+import { UsersProvider } from "@/lib/users-context";
 
 function Router() {
   return (
@@ -65,6 +69,9 @@ function Router() {
       <Route path="/workflow-board" component={WorkflowBoardPage} />
       <Route path="/workload-dashboard" component={WorkloadDashboardPage} />
       <Route path="/performance-dashboard" component={PerformanceDashboardPage} />
+      <Route path="/teams" component={TeamsPage} />
+      <Route path="/activity-log" component={ActivityLogPage} />
+      <Route path="/user-profile/:id" component={UserProfilePage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -124,6 +131,7 @@ function App() {
                         <DashboardProvider>
                           <StandardsProvider>
                             <NotificationsProvider>
+                            <UsersProvider>
                             <WorkflowProvider>
                             <FavoritesProvider>
                             <TooltipProvider>
@@ -136,6 +144,7 @@ function App() {
                             </TooltipProvider>
                             </FavoritesProvider>
                             </WorkflowProvider>
+                            </UsersProvider>
                             </NotificationsProvider>
                           </StandardsProvider>
                         </DashboardProvider>

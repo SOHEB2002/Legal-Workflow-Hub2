@@ -45,12 +45,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power } from "lucide-react";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Calendar, Users, FileText, Eye, Briefcase, Palmtree, UserCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
+import { useUsers } from "@/lib/users-context";
 import { useToast } from "@/hooks/use-toast";
-import type { User as UserType, UserRoleType } from "@shared/schema";
-import { UserRole, UserRoleLabels } from "@shared/schema";
+import { useLocation } from "wouter";
+import type { User as UserType, UserRoleType, UserStatusValue } from "@shared/schema";
+import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels } from "@shared/schema";
+import { VacationDialog } from "@/components/users/vacation-dialog";
+import { DelegationDialog } from "@/components/users/delegation-dialog";
+import { CustomPermissionsDialog } from "@/components/users/custom-permissions-dialog";
 
 function getRoleBadgeColor(role: UserRoleType) {
   switch (role) {
@@ -72,14 +77,46 @@ function getRoleBadgeColor(role: UserRoleType) {
   }
 }
 
+function getStatusBadgeColor(status: UserStatusValue) {
+  switch (status) {
+    case UserStatus.ACTIVE:
+      return "bg-green-500/20 text-green-700 dark:text-green-400 border-green-500/30";
+    case UserStatus.INACTIVE:
+      return "bg-gray-500/20 text-gray-600 dark:text-gray-400 border-gray-500/30";
+    case UserStatus.ON_VACATION:
+      return "bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30";
+    case UserStatus.SUSPENDED:
+      return "bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function getWorkloadBadge(activeCases: number, activeConsultations: number) {
+  const total = activeCases + activeConsultations;
+  if (total > 15) {
+    return { label: "حرج", color: "bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30" };
+  } else if (total > 10) {
+    return { label: "مرتفع", color: "bg-orange-500/20 text-orange-600 dark:text-orange-400 border-orange-500/30" };
+  }
+  return { label: "عادي", color: "bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30" };
+}
+
 export default function UsersPage() {
   const { user, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
+  const { teams, getTeamById, extendedUsers, isUserOnVacation, getActiveDelegations, toggleUserStatus: toggleUserStatusExtended } = useUsers();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [departmentFilter, setDepartmentFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
+  const [showVacationDialog, setShowVacationDialog] = useState(false);
+  const [showDelegationDialog, setShowDelegationDialog] = useState(false);
+  const [showPermissionsDialog, setShowPermissionsDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -277,7 +314,12 @@ export default function UsersPage() {
       }
     }
 
+    const newIsActive = !userToToggle.isActive;
     toggleUserStatus(userToToggle.id);
+    
+    const newStatus = newIsActive ? UserStatus.ACTIVE : UserStatus.INACTIVE;
+    toggleUserStatusExtended(userToToggle.id, newStatus);
+    
     toast({
       title: userToToggle.isActive ? "تم تعطيل المستخدم" : "تم تفعيل المستخدم",
     });
@@ -289,8 +331,36 @@ export default function UsersPage() {
       u.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.email.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesRole = roleFilter === "all" || u.role === roleFilter;
-    return matchesSearch && matchesRole;
+    const matchesDepartment = departmentFilter === "all" || u.departmentId === departmentFilter;
+    
+    const extendedUser = extendedUsers.find(eu => eu.id === u.id);
+    const userStatus = extendedUser?.status || (u.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE);
+    let matchesStatus = true;
+    if (statusFilter === "active") {
+      matchesStatus = userStatus === UserStatus.ACTIVE;
+    } else if (statusFilter === "inactive") {
+      matchesStatus = userStatus === UserStatus.INACTIVE;
+    } else if (statusFilter === "on_vacation") {
+      matchesStatus = userStatus === UserStatus.ON_VACATION || isUserOnVacation(u.id);
+    } else if (statusFilter === "suspended") {
+      matchesStatus = userStatus === UserStatus.SUSPENDED;
+    }
+    
+    return matchesSearch && matchesRole && matchesDepartment && matchesStatus;
   });
+
+  const getUserExtendedInfo = (userId: string) => {
+    const extended = extendedUsers.find(eu => eu.id === userId);
+    return extended || null;
+  };
+  
+  const getUserStatus = (userId: string): UserStatusValue => {
+    const extended = extendedUsers.find(eu => eu.id === userId);
+    if (extended?.status) return extended.status;
+    if (isUserOnVacation(userId)) return UserStatus.ON_VACATION;
+    const user = users.find(u => u.id === userId);
+    return user?.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE;
+  };
 
   if (!permissions.canManageUsers) {
     return (
@@ -378,7 +448,7 @@ export default function UsersPage() {
               />
             </div>
             <Select value={roleFilter} onValueChange={setRoleFilter}>
-              <SelectTrigger className="w-[200px]" data-testid="select-role-filter">
+              <SelectTrigger className="w-[180px]" data-testid="select-role-filter">
                 <SelectValue placeholder="الدور" />
               </SelectTrigger>
               <SelectContent>
@@ -388,6 +458,31 @@ export default function UsersPage() {
                     {label}
                   </SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+            <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-department-filter">
+                <SelectValue placeholder="القسم" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">جميع الأقسام</SelectItem>
+                {departments.map((dept) => (
+                  <SelectItem key={dept.id} value={dept.id}>
+                    {dept.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[150px]" data-testid="select-status-filter">
+                <SelectValue placeholder="الحالة" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">جميع الحالات</SelectItem>
+                <SelectItem value="active">نشط</SelectItem>
+                <SelectItem value="inactive">غير نشط</SelectItem>
+                <SelectItem value="on_vacation">في إجازة</SelectItem>
+                <SelectItem value="suspended">موقوف</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -444,8 +539,8 @@ export default function UsersPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={u.isActive ? "default" : "secondary"}>
-                      {u.isActive ? "نشط" : "غير نشط"}
+                    <Badge className={getStatusBadgeColor(getUserStatus(u.id))}>
+                      {UserStatusLabels[getUserStatus(u.id)]}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-center">
@@ -487,6 +582,60 @@ export default function UsersPage() {
                         >
                           <Power className="w-4 h-4 ml-2" />
                           {u.isActive ? "تعطيل" : "تفعيل"}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          data-testid={`button-view-profile-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/user-profile/${u.id}`);
+                          }}
+                        >
+                          <Eye className="w-4 h-4 ml-2" />
+                          عرض الملف الشخصي
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-testid={`button-schedule-vacation-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserToAction(u);
+                            setShowVacationDialog(true);
+                          }}
+                        >
+                          <Palmtree className="w-4 h-4 ml-2" />
+                          جدولة إجازة
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-testid={`button-create-delegation-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserToAction(u);
+                            setShowDelegationDialog(true);
+                          }}
+                        >
+                          <UserCheck className="w-4 h-4 ml-2" />
+                          إنشاء تفويض
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-testid={`button-custom-permissions-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserToAction(u);
+                            setShowPermissionsDialog(true);
+                          }}
+                        >
+                          <Shield className="w-4 h-4 ml-2" />
+                          تخصيص الصلاحيات
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-testid={`button-activity-log-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/activity-log?userId=${u.id}`);
+                          }}
+                        >
+                          <FileText className="w-4 h-4 ml-2" />
+                          سجل النشاط
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
@@ -876,6 +1025,22 @@ export default function UsersPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <VacationDialog
+        open={showVacationDialog}
+        onOpenChange={setShowVacationDialog}
+        user={userToAction}
+      />
+      <DelegationDialog
+        open={showDelegationDialog}
+        onOpenChange={setShowDelegationDialog}
+        user={userToAction}
+      />
+      <CustomPermissionsDialog
+        open={showPermissionsDialog}
+        onOpenChange={setShowPermissionsDialog}
+        user={userToAction}
+      />
     </div>
   );
 }
