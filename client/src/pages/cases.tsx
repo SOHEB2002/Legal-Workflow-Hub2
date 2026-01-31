@@ -15,6 +15,8 @@ import {
   MessageSquare,
   FolderOpen,
 } from "lucide-react";
+import { useFavorites } from "@/lib/favorites-context";
+import { FavoriteButton } from "@/components/favorite-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -132,6 +134,7 @@ export default function CasesPage() {
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions } = useAuth();
   const { getHearingsByCase } = useHearings();
+  const { addRecentVisit } = useFavorites();
   const lawyers = getLawyers();
   
   const getLawyerName = (id: string | null): string => {
@@ -273,6 +276,7 @@ export default function CasesPage() {
   const openDetailsDialog = (caseItem: LawCase) => {
     setSelectedCase(caseItem);
     setShowDetailsDialog(true);
+    addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
   };
 
   const canAssign = (c: LawCase) => 
@@ -377,6 +381,11 @@ export default function CasesPage() {
                   <TableCell>{getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
+                      <FavoriteButton
+                        entityType="case"
+                        entityId={c.id}
+                        entityTitle={`${c.caseNumber} - ${getClientName(c.clientId)}`}
+                      />
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button

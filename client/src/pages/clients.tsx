@@ -35,6 +35,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Search, Pencil, Trash2, Building2, User, Phone as PhoneIcon, Mail, Eye, Briefcase, MessageSquare, PhoneCall, Clock, CheckCircle } from "lucide-react";
 import { useClients } from "@/lib/clients-context";
+import { useFavorites } from "@/lib/favorites-context";
+import { FavoriteButton } from "@/components/favorite-button";
 import { useAuth } from "@/lib/auth-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
@@ -50,6 +52,7 @@ export default function ClientsPage() {
   const { cases } = useCases();
   const { consultations } = useConsultations();
   const { contacts, addContact, getContactsByClientId, getLastContactByClientId, markFollowUpComplete } = useContacts();
+  const { addRecentVisit } = useFavorites();
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -465,13 +468,22 @@ export default function ClientsPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
+                      <FavoriteButton
+                        entityType="client"
+                        entityId={client.id}
+                        entityTitle={client.clientType === "فرد" ? client.individualName || "-" : client.companyName || "-"}
+                      />
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
                             size="icon"
                             variant="ghost"
                             data-testid={`button-view-client-${client.id}`}
-                            onClick={() => { setViewingClient(client); setDetailsTab("info"); }}
+                            onClick={() => { 
+                              setViewingClient(client); 
+                              setDetailsTab("info"); 
+                              addRecentVisit("client", client.id, client.clientType === "فرد" ? client.individualName || "-" : client.companyName || "-");
+                            }}
                           >
                             <Eye className="w-4 h-4" />
                           </Button>

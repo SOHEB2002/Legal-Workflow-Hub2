@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/tooltip";
 import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText } from "lucide-react";
 import { useConsultations } from "@/lib/consultations-context";
+import { useFavorites } from "@/lib/favorites-context";
+import { FavoriteButton } from "@/components/favorite-button";
 import { useClients } from "@/lib/clients-context";
 import { useAuth, getLawyers } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -76,6 +78,7 @@ export default function ConsultationsPage() {
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions } = useAuth();
+  const { addRecentVisit } = useFavorites();
   const lawyers = getLawyers();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -308,13 +311,21 @@ export default function ConsultationsPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
+                      <FavoriteButton
+                        entityType="consultation"
+                        entityId={consultation.id}
+                        entityTitle={`استشارة #${consultation.id.slice(0, 6)} - ${getClientName(consultation.clientId)}`}
+                      />
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
                             size="icon"
                             variant="ghost"
                             data-testid={`button-view-consultation-${consultation.id}`}
-                            onClick={() => setSelectedConsultation(consultation)}
+                            onClick={() => {
+                              setSelectedConsultation(consultation);
+                              addRecentVisit("consultation", consultation.id, `استشارة #${consultation.id.slice(0, 6)} - ${getClientName(consultation.clientId)}`);
+                            }}
                           >
                             <MessageSquare className="w-4 h-4" />
                           </Button>

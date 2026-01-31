@@ -17,6 +17,9 @@ import { DashboardProvider } from "@/lib/dashboard-context";
 import { ContactsProvider } from "@/lib/contacts-context";
 import { GlobalSearch } from "@/components/global-search";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { FavoritesProvider } from "@/lib/favorites-context";
+import { FavoritesDropdown, RecentVisitsDropdown } from "@/components/favorites-dropdown";
+import { KeyboardShortcutsProvider } from "@/components/keyboard-shortcuts";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -63,6 +66,8 @@ function AuthenticatedLayout() {
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <GlobalSearch />
             <div className="flex-1" />
+            <RecentVisitsDropdown />
+            <FavoritesDropdown />
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto">
@@ -97,10 +102,14 @@ function App() {
                     <FieldTasksProvider>
                       <ContactsProvider>
                         <DashboardProvider>
-                          <TooltipProvider>
-                            <AppContent />
-                            <Toaster />
-                          </TooltipProvider>
+                          <FavoritesProvider>
+                            <TooltipProvider>
+                              <KeyboardShortcutsProvider>
+                                <AppContent />
+                              </KeyboardShortcutsProvider>
+                              <Toaster />
+                            </TooltipProvider>
+                          </FavoritesProvider>
                         </DashboardProvider>
                       </ContactsProvider>
                     </FieldTasksProvider>
