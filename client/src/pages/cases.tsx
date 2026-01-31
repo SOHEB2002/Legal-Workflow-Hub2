@@ -63,11 +63,15 @@ import { useAuth, getLawyers } from "@/lib/auth-context";
 import { 
   CaseStatus, 
   CaseStatusLabels, 
+  CaseStageLabels,
   CaseType, 
   Priority,
   Department
 } from "@shared/schema";
 import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType } from "@shared/schema";
+import { CaseProgressBar } from "@/components/case-progress-bar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useHearings } from "@/lib/hearings-context";
 
 function getStatusColor(status: CaseStatusValue) {
   switch (status) {
@@ -111,18 +115,30 @@ function getPriorityColor(priority: PriorityType) {
 export default function CasesPage() {
   const { 
     cases, 
+    comments,
     addCase, 
     updateCase, 
     assignCase, 
     sendToReviewCommittee, 
     approveCase, 
     rejectCase, 
-    closeCase 
+    closeCase,
+    moveToNextStage,
+    moveToPreviousStage,
+    addComment,
+    getCommentsByCaseId,
   } = useCases();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions } = useAuth();
+  const { getHearingsByCase } = useHearings();
   const lawyers = getLawyers();
+  
+  const getLawyerName = (id: string | null): string => {
+    if (!id) return "-";
+    const lawyer = lawyers.find(l => l.id === id);
+    return lawyer?.name || "-";
+  };
   const { toast } = useToast();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -135,6 +151,8 @@ export default function CasesPage() {
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [selectedCase, setSelectedCase] = useState<LawCase | null>(null);
   const [rejectNotes, setRejectNotes] = useState("");
+  const [newComment, setNewComment] = useState("");
+  const [activeTab, setActiveTab] = useState("info");
 
   const [formData, setFormData] = useState({
     clientId: "",
@@ -183,7 +201,7 @@ export default function CasesPage() {
       opponentName: formData.opponentName,
       opponentLawyer: formData.opponentLawyer,
       whatsappGroupLink: formData.whatsappGroupLink,
-    }, user.id);
+    }, user.id, user.name);
     
     toast({ title: "تم إضافة القضية بنجاح" });
     setShowAddDialog(false);
@@ -332,7 +350,8 @@ export default function CasesPage() {
                 <TableHead className="text-right">رقم القضية</TableHead>
                 <TableHead className="text-right">العميل</TableHead>
                 <TableHead className="text-right">النوع</TableHead>
-                <TableHead className="text-right">الحالة</TableHead>
+                <TableHead className="text-right">المرحلة</TableHead>
+                <TableHead className="text-right">المحامي المسؤول</TableHead>
                 <TableHead className="text-right">الأولوية</TableHead>
                 <TableHead className="text-right">القسم</TableHead>
                 <TableHead className="text-right">الإجراءات</TableHead>
@@ -347,10 +366,11 @@ export default function CasesPage() {
                     <Badge variant="outline">{c.caseType}</Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge className={getStatusColor(c.status)}>
-                      {CaseStatusLabels[c.status] || c.status}
+                    <Badge className="bg-accent/20 text-accent border-accent/30">
+                      {c.currentStage ? CaseStageLabels[c.currentStage] || c.currentStage : CaseStatusLabels[c.status]}
                     </Badge>
                   </TableCell>
+                  <TableCell>{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
                   <TableCell>
                     <Badge className={getPriorityColor(c.priority)}>{c.priority}</Badge>
                   </TableCell>
@@ -695,71 +715,231 @@ export default function CasesPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <Dialog open={showDetailsDialog} onOpenChange={(open) => { setShowDetailsDialog(open); if (!open) setActiveTab("info"); }}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>تفاصيل القضية {selectedCase?.caseNumber}</DialogTitle>
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-muted-foreground">العميل</Label>
-                  <p className="font-medium">{getClientName(selectedCase.clientId)}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">الحالة</Label>
-                  <Badge className={getStatusColor(selectedCase.status)}>
-                    {CaseStatusLabels[selectedCase.status] || selectedCase.status}
-                  </Badge>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">النوع</Label>
-                  <p>{selectedCase.caseType}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">الأولوية</Label>
-                  <Badge className={getPriorityColor(selectedCase.priority)}>{selectedCase.priority}</Badge>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">القسم</Label>
-                  <p>{getDepartmentName(selectedCase.departmentId)}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">المحكمة</Label>
-                  <p>{selectedCase.courtName || "-"}</p>
-                </div>
+              <div className="border rounded-lg p-4 bg-muted/30">
+                <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
+                <CaseProgressBar
+                  currentStage={selectedCase.currentStage}
+                  userRole={user?.role || "employee"}
+                  onMoveToNext={(notes) => {
+                    if (user) {
+                      moveToNextStage(selectedCase.id, user.id, user.name, notes);
+                      setSelectedCase({ ...selectedCase, currentStage: selectedCase.currentStage });
+                      toast({ title: "تم نقل القضية للمرحلة التالية" });
+                    }
+                  }}
+                  onMoveToPrevious={(notes) => {
+                    if (user) {
+                      moveToPreviousStage(selectedCase.id, user.id, user.name, notes);
+                      toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
+                    }
+                  }}
+                />
               </div>
-              
-              <div className="border-t pt-4">
-                <h4 className="font-semibold mb-3">بيانات الخصم</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-muted-foreground">اسم الخصم</Label>
-                    <p>{selectedCase.opponentName || "-"}</p>
+
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                <TabsList className="grid w-full grid-cols-4">
+                  <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
+                  <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
+                  <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
+                  <TabsTrigger value="comments" data-testid="tab-comments">التعليقات</TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="info" className="space-y-4 mt-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-muted-foreground">العميل</Label>
+                      <p className="font-medium">{getClientName(selectedCase.clientId)}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">المحامي المسؤول</Label>
+                      <p className="font-medium">{getLawyerName(selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">النوع</Label>
+                      <p>{selectedCase.caseType}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">الأولوية</Label>
+                      <Badge className={getPriorityColor(selectedCase.priority)}>{selectedCase.priority}</Badge>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">القسم</Label>
+                      <p>{getDepartmentName(selectedCase.departmentId)}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">المحكمة</Label>
+                      <p>{selectedCase.courtName || "-"}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">رقم القضية بالمحكمة</Label>
+                      <p>{selectedCase.courtCaseNumber || "-"}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">رقم ناجز</Label>
+                      <p>{selectedCase.najizNumber || "-"}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">الدائرة</Label>
+                      <p>{selectedCase.circuitNumber || "-"}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">القاضي</Label>
+                      <p>{selectedCase.judgeName || "-"}</p>
+                    </div>
                   </div>
-                  <div>
-                    <Label className="text-muted-foreground">محامي الخصم</Label>
-                    <p>{selectedCase.opponentLawyer || "-"}</p>
+                  
+                  <div className="border-t pt-4">
+                    <h4 className="font-semibold mb-3">بيانات الخصم</h4>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label className="text-muted-foreground">اسم الخصم</Label>
+                        <p>{selectedCase.opponentName || "-"}</p>
+                      </div>
+                      <div>
+                        <Label className="text-muted-foreground">محامي الخصم</Label>
+                        <p>{selectedCase.opponentLawyer || "-"}</p>
+                      </div>
+                      <div>
+                        <Label className="text-muted-foreground">هاتف الخصم</Label>
+                        <p>{selectedCase.opponentPhone || "-"}</p>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-              
-              {selectedCase.reviewNotes && (
-                <div className="border-t pt-4">
-                  <h4 className="font-semibold mb-3 text-destructive">ملاحظات المراجعة</h4>
-                  <p className="p-3 bg-destructive/10 rounded-md text-destructive">
-                    {selectedCase.reviewNotes}
-                  </p>
-                </div>
-              )}
-              
-              <div className="border-t pt-4">
-                <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>تاريخ الإنشاء: {format(new Date(selectedCase.createdAt), "d MMMM yyyy", { locale: ar })}</span>
-                  <span>آخر تحديث: {format(new Date(selectedCase.updatedAt), "d MMMM yyyy", { locale: ar })}</span>
-                </div>
-              </div>
+                  
+                  {selectedCase.reviewNotes && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3 text-destructive">ملاحظات المراجعة</h4>
+                      <p className="p-3 bg-destructive/10 rounded-md text-destructive">
+                        {selectedCase.reviewNotes}
+                      </p>
+                    </div>
+                  )}
+                  
+                  <div className="border-t pt-4">
+                    <div className="flex justify-between text-sm text-muted-foreground">
+                      <span>تاريخ الإنشاء: {format(new Date(selectedCase.createdAt), "d MMMM yyyy", { locale: ar })}</span>
+                      <span>آخر تحديث: {format(new Date(selectedCase.updatedAt), "d MMMM yyyy", { locale: ar })}</span>
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="hearings" className="mt-4">
+                  {(() => {
+                    const caseHearings = getHearingsByCase(selectedCase.id);
+                    if (caseHearings.length === 0) {
+                      return <p className="text-muted-foreground text-center py-8">لا توجد جلسات مسجلة لهذه القضية</p>;
+                    }
+                    return (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-right">التاريخ</TableHead>
+                            <TableHead className="text-right">الوقت</TableHead>
+                            <TableHead className="text-right">المحكمة</TableHead>
+                            <TableHead className="text-right">الحالة</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {caseHearings.map((hearing) => (
+                            <TableRow key={hearing.id}>
+                              <TableCell>{format(new Date(hearing.hearingDate), "d MMMM yyyy", { locale: ar })}</TableCell>
+                              <TableCell>{hearing.hearingTime}</TableCell>
+                              <TableCell>{hearing.courtName}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{hearing.status}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    );
+                  })()}
+                </TabsContent>
+
+                <TabsContent value="history" className="mt-4">
+                  {selectedCase.stageHistory && selectedCase.stageHistory.length > 0 ? (
+                    <div className="space-y-3">
+                      {[...selectedCase.stageHistory].reverse().map((transition, index) => (
+                        <div key={index} className="flex items-start gap-4 p-3 border rounded-lg">
+                          <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
+                            {selectedCase.stageHistory.length - index}
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-medium">{CaseStageLabels[transition.stage] || transition.stage}</p>
+                            <div className="text-sm text-muted-foreground">
+                              <span>{transition.userName}</span>
+                              <span className="mx-2">•</span>
+                              <span>{format(new Date(transition.timestamp), "d MMMM yyyy - HH:mm", { locale: ar })}</span>
+                            </div>
+                            {transition.notes && (
+                              <p className="mt-1 text-sm bg-muted p-2 rounded">{transition.notes}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-center py-8">لا يوجد سجل للمراحل</p>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="comments" className="mt-4">
+                  <div className="space-y-4">
+                    <div className="flex gap-2">
+                      <Textarea
+                        data-testid="input-new-comment"
+                        placeholder="اكتب تعليقك هنا..."
+                        value={newComment}
+                        onChange={(e) => setNewComment(e.target.value)}
+                        rows={2}
+                        className="flex-1"
+                      />
+                      <Button
+                        data-testid="button-add-comment"
+                        onClick={() => {
+                          if (user && newComment.trim()) {
+                            addComment(selectedCase.id, user.id, user.name, newComment.trim());
+                            setNewComment("");
+                            toast({ title: "تم إضافة التعليق" });
+                          }
+                        }}
+                        disabled={!newComment.trim()}
+                      >
+                        إضافة
+                      </Button>
+                    </div>
+                    
+                    {(() => {
+                      const caseComments = getCommentsByCaseId(selectedCase.id);
+                      if (caseComments.length === 0) {
+                        return <p className="text-muted-foreground text-center py-4">لا توجد تعليقات</p>;
+                      }
+                      return (
+                        <div className="space-y-3">
+                          {caseComments.map((comment) => (
+                            <div key={comment.id} className="p-3 border rounded-lg">
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className="font-medium">{comment.userName}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {format(new Date(comment.createdAt), "d MMMM yyyy - HH:mm", { locale: ar })}
+                                </span>
+                              </div>
+                              <p className="text-sm">{comment.content}</p>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </TabsContent>
+              </Tabs>
             </div>
           )}
         </DialogContent>
