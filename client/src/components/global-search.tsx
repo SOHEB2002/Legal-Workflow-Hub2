@@ -23,6 +23,7 @@ import {
   ClipboardList,
   Settings,
   HelpCircle,
+  BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -59,6 +60,7 @@ export function GlobalSearch() {
     { icon: Calendar, label: "الجلسات", path: "/hearings" },
     { icon: ClipboardList, label: "المهام الميدانية", path: "/field-tasks" },
     { icon: Settings, label: "إعدادات لوحة التحكم", path: "/dashboard-settings" },
+    { icon: BarChart3, label: "مؤشرات الأداء", path: "/kpis" },
     { icon: HelpCircle, label: "المساعدة", path: "/help" },
   ];
 
