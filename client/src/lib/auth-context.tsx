@@ -30,6 +30,9 @@ interface AuthContextType {
   users: User[];
   addUser: (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => void;
   updateUser: (id: string, userData: Partial<User>) => void;
+  deleteUser: (id: string) => { success: boolean; message: string };
+  resetPassword: (id: string, newPassword: string) => void;
+  toggleUserStatus: (id: string) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -221,6 +224,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
+  const deleteUser = (id: string): { success: boolean; message: string } => {
+    const userToDelete = users.find(u => u.id === id);
+    if (!userToDelete) {
+      return { success: false, message: "المستخدم غير موجود" };
+    }
+
+    if (userToDelete.role === "branch_manager") {
+      const branchManagers = users.filter(u => u.role === "branch_manager" && u.id !== id);
+      if (branchManagers.length === 0) {
+        return { success: false, message: "لا يمكن حذف آخر مدير فرع في النظام" };
+      }
+    }
+
+    if (user?.id === id) {
+      return { success: false, message: "لا يمكنك حذف حسابك الحالي" };
+    }
+
+    setUsers((prev) => prev.filter((u) => u.id !== id));
+    return { success: true, message: "تم حذف المستخدم بنجاح" };
+  };
+
+  const resetPassword = (id: string, newPassword: string) => {
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === id ? { ...u, password: newPassword, updatedAt: new Date().toISOString() } : u
+      )
+    );
+  };
+
+  const toggleUserStatus = (id: string) => {
+    const targetUser = users.find(u => u.id === id);
+    if (targetUser?.role === "branch_manager") {
+      const activeBranchManagers = users.filter(u => u.role === "branch_manager" && u.isActive && u.id !== id);
+      if (activeBranchManagers.length === 0 && targetUser.isActive) {
+        return;
+      }
+    }
+    
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.id === id ? { ...u, isActive: !u.isActive, updatedAt: new Date().toISOString() } : u
+      )
+    );
+  };
+
   const permissions = {
     canManageAllCases: user ? canManageAllCases(user.role) : false,
     canManageAllConsultations: user ? canManageAllConsultations(user.role) : false,
@@ -234,7 +282,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, permissions, users, addUser, updateUser }}>
+    <AuthContext.Provider value={{ user, login, logout, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
       {children}
     </AuthContext.Provider>
   );

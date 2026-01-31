@@ -650,3 +650,72 @@ export function canAssignFieldTasks(role: UserRoleType): boolean {
 export function canMoveToPreviousStage(role: UserRoleType): boolean {
   return role === "branch_manager";
 }
+
+// ==================== معايير المراجعة ====================
+export const ReviewStandardType = {
+  CONTRACT_REVIEW: "contract_review",
+  LEGAL_CONSULTATION: "legal_consultation",
+  SESSION_REPORT: "session_report",
+  LEGAL_LETTER: "legal_letter",
+} as const;
+
+export type ReviewStandardTypeValue = typeof ReviewStandardType[keyof typeof ReviewStandardType];
+
+export const ReviewStandardTypeLabels: Record<ReviewStandardTypeValue, string> = {
+  contract_review: "مراجعة العقود",
+  legal_consultation: "الاستشارات القانونية",
+  session_report: "تقارير الجلسات",
+  legal_letter: "الخطابات القانونية",
+};
+
+export interface ReviewCheckpoint {
+  id: string;
+  text: string;
+  isRequired: boolean;
+}
+
+export interface ReviewCategory {
+  id: string;
+  name: string;
+  checkpoints: ReviewCheckpoint[];
+}
+
+export interface ReviewStandard {
+  id: string;
+  title: string;
+  type: ReviewStandardTypeValue;
+  description: string;
+  categories: ReviewCategory[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const ReviewResultStatus = {
+  DRAFT: "draft",
+  SUBMITTED: "submitted",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+} as const;
+
+export type ReviewResultStatusValue = typeof ReviewResultStatus[keyof typeof ReviewResultStatus];
+
+export const ReviewResultStatusLabels: Record<ReviewResultStatusValue, string> = {
+  draft: "مسودة",
+  submitted: "مرسل",
+  approved: "معتمد",
+  rejected: "مرفوض",
+};
+
+export interface ReviewResult {
+  id: string;
+  standardId: string;
+  caseId: string | null;
+  consultationId: string | null;
+  checkedItems: string[];
+  categoryNotes: Record<string, string>;
+  overallNotes: string;
+  reviewerId: string;
+  status: ReviewResultStatusValue;
+  createdAt: string;
+  updatedAt: string;
+}

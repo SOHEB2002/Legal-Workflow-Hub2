@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -27,7 +28,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, User, Shield, Building2, Phone, Mail, Plus } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useToast } from "@/hooks/use-toast";
@@ -55,7 +73,7 @@ function getRoleBadgeColor(role: UserRoleType) {
 }
 
 export default function UsersPage() {
-  const { user, permissions, users, addUser } = useAuth();
+  const { user, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { toast } = useToast();
 
@@ -63,11 +81,28 @@ export default function UsersPage() {
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showResetPasswordDialog, setShowResetPasswordDialog] = useState(false);
+  const [userToAction, setUserToAction] = useState<UserType | null>(null);
+  const [newPassword, setNewPassword] = useState("");
 
   const [formData, setFormData] = useState({
     name: "",
     username: "",
     password: "",
+    email: "",
+    phone: "",
+    role: "employee" as UserRoleType,
+    departmentId: "" as string | null,
+    isActive: true,
+    canBeAssignedCases: false,
+    canBeAssignedConsultations: false,
+  });
+
+  const [editFormData, setEditFormData] = useState({
+    name: "",
+    username: "",
     email: "",
     phone: "",
     role: "employee" as UserRoleType,
@@ -130,6 +165,124 @@ export default function UsersPage() {
     resetForm();
   };
 
+  const handleOpenEdit = (userToEdit: UserType) => {
+    setUserToAction(userToEdit);
+    setEditFormData({
+      name: userToEdit.name,
+      username: userToEdit.username,
+      email: userToEdit.email,
+      phone: userToEdit.phone,
+      role: userToEdit.role,
+      departmentId: userToEdit.departmentId,
+      isActive: userToEdit.isActive,
+      canBeAssignedCases: userToEdit.canBeAssignedCases,
+      canBeAssignedConsultations: userToEdit.canBeAssignedConsultations,
+    });
+    setShowEditDialog(true);
+  };
+
+  const handleUpdateUser = () => {
+    if (!userToAction) return;
+
+    if (!editFormData.name || !editFormData.username) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "الرجاء ملء الحقول المطلوبة",
+      });
+      return;
+    }
+
+    const existingUser = users.find(u => u.username === editFormData.username && u.id !== userToAction.id);
+    if (existingUser) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "اسم المستخدم موجود مسبقاً",
+      });
+      return;
+    }
+
+    updateUser(userToAction.id, {
+      name: editFormData.name,
+      username: editFormData.username,
+      email: editFormData.email,
+      phone: editFormData.phone,
+      role: editFormData.role,
+      departmentId: editFormData.departmentId || null,
+      isActive: editFormData.isActive,
+      canBeAssignedCases: editFormData.canBeAssignedCases,
+      canBeAssignedConsultations: editFormData.canBeAssignedConsultations,
+    });
+
+    toast({ title: "تم تحديث بيانات المستخدم بنجاح" });
+    setShowEditDialog(false);
+    setUserToAction(null);
+  };
+
+  const handleDeleteUser = () => {
+    if (!userToAction) return;
+
+    const result = deleteUser(userToAction.id);
+    if (result.success) {
+      toast({ title: result.message });
+    } else {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: result.message,
+      });
+    }
+
+    setShowDeleteDialog(false);
+    setUserToAction(null);
+  };
+
+  const handleResetPassword = () => {
+    if (!userToAction || !newPassword) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "الرجاء إدخال كلمة المرور الجديدة",
+      });
+      return;
+    }
+
+    if (newPassword.length < 4) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "كلمة المرور يجب أن تكون 4 أحرف على الأقل",
+      });
+      return;
+    }
+
+    resetPassword(userToAction.id, newPassword);
+    toast({ title: "تم إعادة تعيين كلمة المرور بنجاح" });
+    setShowResetPasswordDialog(false);
+    setNewPassword("");
+    setUserToAction(null);
+  };
+
+  const handleToggleStatus = (userToToggle: UserType) => {
+    if (userToToggle.role === "branch_manager") {
+      const activeBranchManagers = users.filter(u => u.role === "branch_manager" && u.isActive && u.id !== userToToggle.id);
+      if (activeBranchManagers.length === 0 && userToToggle.isActive) {
+        toast({
+          variant: "destructive",
+          title: "خطأ",
+          description: "لا يمكن تعطيل آخر مدير فرع نشط في النظام",
+        });
+        return;
+      }
+    }
+
+    toggleUserStatus(userToToggle.id);
+    toast({
+      title: userToToggle.isActive ? "تم تعطيل المستخدم" : "تم تفعيل المستخدم",
+    });
+  };
+
   const filteredUsers = users.filter((u) => {
     const matchesSearch =
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -168,7 +321,7 @@ export default function UsersPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">إجمالي المستخدمين</CardTitle>
             <User className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
@@ -177,7 +330,7 @@ export default function UsersPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">رؤساء الأقسام</CardTitle>
             <Building2 className="h-4 w-4 text-accent" />
           </CardHeader>
@@ -188,7 +341,7 @@ export default function UsersPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">الموظفين</CardTitle>
             <User className="h-4 w-4 text-primary" />
           </CardHeader>
@@ -199,7 +352,7 @@ export default function UsersPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">المستخدمين النشطين</CardTitle>
             <Shield className="h-4 w-4 text-green-600" />
           </CardHeader>
@@ -248,6 +401,7 @@ export default function UsersPage() {
                 <TableHead className="text-right">القسم</TableHead>
                 <TableHead className="text-right">التواصل</TableHead>
                 <TableHead className="text-right">الحالة</TableHead>
+                <TableHead className="text-center w-16">إجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -293,6 +447,62 @@ export default function UsersPage() {
                     <Badge variant={u.isActive ? "default" : "secondary"}>
                       {u.isActive ? "نشط" : "غير نشط"}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                        <Button variant="ghost" size="icon" data-testid={`button-actions-${u.id}`}>
+                          <MoreHorizontal className="w-4 h-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          data-testid={`button-edit-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenEdit(u);
+                          }}
+                        >
+                          <Pencil className="w-4 h-4 ml-2" />
+                          تعديل
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-testid={`button-reset-password-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserToAction(u);
+                            setNewPassword("");
+                            setShowResetPasswordDialog(true);
+                          }}
+                        >
+                          <Key className="w-4 h-4 ml-2" />
+                          إعادة تعيين كلمة المرور
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          data-testid={`button-toggle-status-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleStatus(u);
+                          }}
+                        >
+                          <Power className="w-4 h-4 ml-2" />
+                          {u.isActive ? "تعطيل" : "تفعيل"}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          data-testid={`button-delete-${u.id}`}
+                          className="text-destructive focus:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserToAction(u);
+                            setShowDeleteDialog(true);
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4 ml-2" />
+                          حذف
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               ))}
@@ -429,6 +639,186 @@ export default function UsersPage() {
               disabled={!formData.name || !formData.username || !formData.password}
             >
               إضافة المستخدم
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>تعديل بيانات المستخدم</DialogTitle>
+            <DialogDescription>
+              تعديل بيانات: {userToAction?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>الاسم الكامل *</Label>
+                <Input
+                  data-testid="input-edit-name"
+                  value={editFormData.name}
+                  onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                  placeholder="الاسم الكامل"
+                />
+              </div>
+              <div>
+                <Label>اسم المستخدم *</Label>
+                <Input
+                  data-testid="input-edit-username"
+                  value={editFormData.username}
+                  onChange={(e) => setEditFormData({ ...editFormData, username: e.target.value })}
+                  placeholder="اسم الدخول"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>البريد الإلكتروني</Label>
+                <Input
+                  data-testid="input-edit-email"
+                  type="email"
+                  value={editFormData.email}
+                  onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                  placeholder="email@example.com"
+                />
+              </div>
+              <div>
+                <Label>الهاتف</Label>
+                <Input
+                  data-testid="input-edit-phone"
+                  value={editFormData.phone}
+                  onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                  placeholder="05xxxxxxxx"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>الدور الوظيفي</Label>
+                <Select
+                  value={editFormData.role}
+                  onValueChange={(value: UserRoleType) => setEditFormData({ ...editFormData, role: value })}
+                >
+                  <SelectTrigger data-testid="select-edit-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(UserRoleLabels).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>القسم</Label>
+                <Select
+                  value={editFormData.departmentId || "none"}
+                  onValueChange={(value) => setEditFormData({ ...editFormData, departmentId: value === "none" ? null : value })}
+                >
+                  <SelectTrigger data-testid="select-edit-department">
+                    <SelectValue placeholder="اختر القسم" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">بدون قسم</SelectItem>
+                    {departments.map((dept) => (
+                      <SelectItem key={dept.id} value={dept.id}>
+                        {dept.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>مستخدم نشط</Label>
+                <Switch
+                  checked={editFormData.isActive}
+                  onCheckedChange={(checked) => setEditFormData({ ...editFormData, isActive: checked })}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label>يمكن إسناد قضايا</Label>
+                <Switch
+                  checked={editFormData.canBeAssignedCases}
+                  onCheckedChange={(checked) => setEditFormData({ ...editFormData, canBeAssignedCases: checked })}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label>يمكن إسناد استشارات</Label>
+                <Switch
+                  checked={editFormData.canBeAssignedConsultations}
+                  onCheckedChange={(checked) => setEditFormData({ ...editFormData, canBeAssignedConsultations: checked })}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditDialog(false)}>إلغاء</Button>
+            <Button 
+              data-testid="button-update-user" 
+              onClick={handleUpdateUser}
+              disabled={!editFormData.name || !editFormData.username}
+            >
+              حفظ التغييرات
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>هل أنت متأكد من حذف هذا المستخدم؟</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم حذف المستخدم "{userToAction?.name}" بشكل نهائي. هذا الإجراء لا يمكن التراجع عنه.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-delete"
+              onClick={handleDeleteUser}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              حذف
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={showResetPasswordDialog} onOpenChange={setShowResetPasswordDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>إعادة تعيين كلمة المرور</DialogTitle>
+            <DialogDescription>
+              إعادة تعيين كلمة مرور المستخدم: {userToAction?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>كلمة المرور الجديدة *</Label>
+              <Input
+                data-testid="input-new-password"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="كلمة المرور الجديدة (4 أحرف على الأقل)"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowResetPasswordDialog(false)}>إلغاء</Button>
+            <Button 
+              data-testid="button-confirm-reset-password" 
+              onClick={handleResetPassword}
+              disabled={!newPassword || newPassword.length < 4}
+            >
+              إعادة تعيين
             </Button>
           </DialogFooter>
         </DialogContent>
