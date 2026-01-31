@@ -1,4 +1,205 @@
 import { z } from "zod";
+import { pgTable, text, varchar, boolean, timestamp, jsonb, integer } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+
+// ==================== Drizzle Tables ====================
+
+export const users = pgTable("users", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  username: varchar("username", { length: 255 }).notNull().unique(),
+  password: varchar("password", { length: 255 }).notNull(),
+  name: varchar("name", { length: 255 }).notNull(),
+  email: varchar("email", { length: 255 }).default(""),
+  phone: varchar("phone", { length: 50 }).default(""),
+  role: varchar("role", { length: 50 }).notNull(),
+  departmentId: varchar("department_id", { length: 255 }),
+  isActive: boolean("is_active").default(true),
+  canBeAssignedCases: boolean("can_be_assigned_cases").default(false),
+  canBeAssignedConsultations: boolean("can_be_assigned_consultations").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const clients = pgTable("clients", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  clientType: varchar("client_type", { length: 50 }).notNull(),
+  individualName: varchar("individual_name", { length: 255 }),
+  nationalId: varchar("national_id", { length: 50 }),
+  phone: varchar("phone", { length: 50 }).notNull(),
+  companyName: varchar("company_name", { length: 255 }),
+  commercialRegister: varchar("commercial_register", { length: 50 }),
+  representativeName: varchar("representative_name", { length: 255 }),
+  representativeTitle: varchar("representative_title", { length: 255 }),
+  companyPhone: varchar("company_phone", { length: 50 }),
+  email: varchar("email", { length: 255 }).default(""),
+  address: text("address").default(""),
+  notes: text("notes").default(""),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const lawCases = pgTable("law_cases", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  caseNumber: varchar("case_number", { length: 50 }).notNull().unique(),
+  clientId: varchar("client_id", { length: 255 }).notNull(),
+  caseType: varchar("case_type", { length: 50 }).notNull(),
+  status: varchar("status", { length: 50 }).notNull(),
+  currentStage: varchar("current_stage", { length: 50 }).notNull(),
+  stageHistory: jsonb("stage_history").default([]),
+  departmentId: varchar("department_id", { length: 255 }).notNull(),
+  assignedLawyers: jsonb("assigned_lawyers").default([]),
+  primaryLawyerId: varchar("primary_lawyer_id", { length: 255 }),
+  responsibleLawyerId: varchar("responsible_lawyer_id", { length: 255 }),
+  courtName: varchar("court_name", { length: 255 }).default(""),
+  courtCaseNumber: varchar("court_case_number", { length: 100 }).default(""),
+  najizNumber: varchar("najiz_number", { length: 100 }).default(""),
+  judgeName: varchar("judge_name", { length: 255 }).default(""),
+  circuitNumber: varchar("circuit_number", { length: 100 }).default(""),
+  opponentName: varchar("opponent_name", { length: 255 }).default(""),
+  opponentLawyer: varchar("opponent_lawyer", { length: 255 }).default(""),
+  opponentPhone: varchar("opponent_phone", { length: 50 }).default(""),
+  opponentNotes: text("opponent_notes").default(""),
+  whatsappGroupLink: varchar("whatsapp_group_link", { length: 500 }).default(""),
+  googleDriveFolderId: varchar("google_drive_folder_id", { length: 255 }).default(""),
+  reviewNotes: text("review_notes").default(""),
+  reviewDecision: varchar("review_decision", { length: 50 }),
+  reviewActionTaken: text("review_action_taken"),
+  priority: varchar("priority", { length: 50 }).notNull().default("متوسط"),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  closedAt: timestamp("closed_at"),
+});
+
+export const consultations = pgTable("consultations", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationNumber: varchar("consultation_number", { length: 50 }).notNull().unique(),
+  clientId: varchar("client_id", { length: 255 }).notNull(),
+  consultationType: varchar("consultation_type", { length: 50 }).notNull(),
+  deliveryType: varchar("delivery_type", { length: 50 }).notNull(),
+  status: varchar("status", { length: 50 }).notNull(),
+  departmentId: varchar("department_id", { length: 255 }).notNull(),
+  assignedTo: varchar("assigned_to", { length: 255 }),
+  questionSummary: text("question_summary").notNull(),
+  response: text("response").default(""),
+  convertedToCaseId: varchar("converted_to_case_id", { length: 255 }),
+  whatsappGroupLink: varchar("whatsapp_group_link", { length: 500 }).default(""),
+  googleDriveFolderId: varchar("google_drive_folder_id", { length: 255 }).default(""),
+  reviewNotes: text("review_notes").default(""),
+  reviewDecision: varchar("review_decision", { length: 50 }),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  closedAt: timestamp("closed_at"),
+});
+
+export const hearings = pgTable("hearings", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  caseId: varchar("case_id", { length: 255 }).notNull(),
+  hearingDate: varchar("hearing_date", { length: 50 }).notNull(),
+  hearingTime: varchar("hearing_time", { length: 50 }).notNull(),
+  courtName: varchar("court_name", { length: 100 }).notNull(),
+  courtNameOther: varchar("court_name_other", { length: 255 }),
+  courtRoom: varchar("court_room", { length: 100 }).default(""),
+  status: varchar("status", { length: 50 }).notNull(),
+  result: varchar("result", { length: 50 }),
+  resultDetails: text("result_details").default(""),
+  reminderSent24h: boolean("reminder_sent_24h").default(false),
+  reminderSent1h: boolean("reminder_sent_1h").default(false),
+  googleCalendarEventId: varchar("google_calendar_event_id", { length: 255 }),
+  notes: text("notes").default(""),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const fieldTasks = pgTable("field_tasks", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description").default(""),
+  taskType: varchar("task_type", { length: 50 }).notNull(),
+  caseId: varchar("case_id", { length: 255 }),
+  consultationId: varchar("consultation_id", { length: 255 }),
+  assignedTo: varchar("assigned_to", { length: 255 }).notNull(),
+  assignedBy: varchar("assigned_by", { length: 255 }).notNull(),
+  status: varchar("status", { length: 50 }).notNull(),
+  priority: varchar("priority", { length: 50 }).notNull().default("متوسط"),
+  dueDate: varchar("due_date", { length: 50 }).notNull(),
+  completedAt: timestamp("completed_at"),
+  completionNotes: text("completion_notes").default(""),
+  proofDescription: text("proof_description").default(""),
+  proofFileLink: varchar("proof_file_link", { length: 500 }).default(""),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const contactLogs = pgTable("contact_logs", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  clientId: varchar("client_id", { length: 255 }).notNull(),
+  contactType: varchar("contact_type", { length: 50 }).notNull(),
+  contactDate: varchar("contact_date", { length: 50 }).notNull(),
+  nextFollowUpDate: varchar("next_follow_up_date", { length: 50 }),
+  followUpStatus: varchar("follow_up_status", { length: 50 }).notNull(),
+  notes: text("notes").default(""),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const notifications = pgTable("notifications", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  type: varchar("type", { length: 50 }).notNull(),
+  priority: varchar("priority", { length: 50 }).notNull(),
+  status: varchar("status", { length: 50 }).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  message: text("message").notNull(),
+  senderId: varchar("sender_id", { length: 255 }).notNull(),
+  senderName: varchar("sender_name", { length: 255 }).notNull(),
+  recipientId: varchar("recipient_id", { length: 255 }).notNull(),
+  recipientIds: jsonb("recipient_ids"),
+  relatedType: varchar("related_type", { length: 50 }),
+  relatedId: varchar("related_id", { length: 255 }),
+  isRead: boolean("is_read").default(false),
+  readAt: timestamp("read_at"),
+  response: jsonb("response"),
+  requiresResponse: boolean("requires_response").default(false),
+  scheduledAt: timestamp("scheduled_at"),
+  escalationLevel: integer("escalation_level").default(0),
+  escalatedTo: varchar("escalated_to", { length: 255 }),
+  autoEscalateAfterHours: integer("auto_escalate_after_hours").default(24),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const departments = pgTable("departments", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  headId: varchar("head_id", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ==================== Drizzle Insert Schemas ====================
+
+export const insertUserDbSchema = createInsertSchema(users).omit({ createdAt: true, updatedAt: true });
+export const insertClientDbSchema = createInsertSchema(clients).omit({ createdAt: true, updatedAt: true });
+export const insertCaseDbSchema = createInsertSchema(lawCases).omit({ createdAt: true, updatedAt: true });
+export const insertConsultationDbSchema = createInsertSchema(consultations).omit({ createdAt: true, updatedAt: true });
+export const insertHearingDbSchema = createInsertSchema(hearings).omit({ createdAt: true, updatedAt: true });
+export const insertFieldTaskDbSchema = createInsertSchema(fieldTasks).omit({ createdAt: true, updatedAt: true });
+export const insertContactLogDbSchema = createInsertSchema(contactLogs).omit({ createdAt: true, updatedAt: true });
+export const insertNotificationDbSchema = createInsertSchema(notifications).omit({ createdAt: true, updatedAt: true });
+
+// ==================== Select Types ====================
+
+export type DbUser = typeof users.$inferSelect;
+export type DbClient = typeof clients.$inferSelect;
+export type DbLawCase = typeof lawCases.$inferSelect;
+export type DbConsultation = typeof consultations.$inferSelect;
+export type DbHearing = typeof hearings.$inferSelect;
+export type DbFieldTask = typeof fieldTasks.$inferSelect;
+export type DbContactLog = typeof contactLogs.$inferSelect;
+export type DbNotification = typeof notifications.$inferSelect;
+export type DbDepartment = typeof departments.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
 export const UserRole = {

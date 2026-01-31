@@ -1,119 +1,380 @@
-import { type User, type LawCase, CaseStatus } from "@shared/schema";
+import { 
+  type User, type LawCase, type Client, type Consultation, type Hearing, 
+  type FieldTask, type ContactLog, type Notification, type DepartmentInfo,
+  CaseStatus, CaseStage,
+  users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments
+} from "@shared/schema";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
+  // Users
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getAllUsers(): Promise<User[]>;
+  createUser(data: Partial<User>): Promise<User>;
+  updateUser(id: string, data: Partial<User>): Promise<User | undefined>;
+  deleteUser(id: string): Promise<boolean>;
+
+  // Cases
   getAllCases(): Promise<LawCase[]>;
   getCaseById(id: string): Promise<LawCase | undefined>;
   createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase>;
   updateCase(id: string, data: Partial<LawCase>): Promise<LawCase | undefined>;
   deleteCase(id: string): Promise<boolean>;
+
+  // Clients
+  getAllClients(): Promise<Client[]>;
+  getClientById(id: string): Promise<Client | undefined>;
+  createClient(data: Partial<Client>, createdBy: string): Promise<Client>;
+  updateClient(id: string, data: Partial<Client>): Promise<Client | undefined>;
+  deleteClient(id: string): Promise<boolean>;
+
+  // Consultations
+  getAllConsultations(): Promise<Consultation[]>;
+  getConsultationById(id: string): Promise<Consultation | undefined>;
+  createConsultation(data: Partial<Consultation>, createdBy: string): Promise<Consultation>;
+  updateConsultation(id: string, data: Partial<Consultation>): Promise<Consultation | undefined>;
+  deleteConsultation(id: string): Promise<boolean>;
+
+  // Hearings
+  getAllHearings(): Promise<Hearing[]>;
+  getHearingById(id: string): Promise<Hearing | undefined>;
+  createHearing(data: Partial<Hearing>): Promise<Hearing>;
+  updateHearing(id: string, data: Partial<Hearing>): Promise<Hearing | undefined>;
+  deleteHearing(id: string): Promise<boolean>;
+
+  // Field Tasks
+  getAllFieldTasks(): Promise<FieldTask[]>;
+  getFieldTaskById(id: string): Promise<FieldTask | undefined>;
+  createFieldTask(data: Partial<FieldTask>, assignedBy: string): Promise<FieldTask>;
+  updateFieldTask(id: string, data: Partial<FieldTask>): Promise<FieldTask | undefined>;
+  deleteFieldTask(id: string): Promise<boolean>;
+
+  // Contact Logs
+  getAllContactLogs(): Promise<ContactLog[]>;
+  getContactLogsByClient(clientId: string): Promise<ContactLog[]>;
+  createContactLog(data: Partial<ContactLog>, createdBy: string): Promise<ContactLog>;
+  updateContactLog(id: string, data: Partial<ContactLog>): Promise<ContactLog | undefined>;
+  deleteContactLog(id: string): Promise<boolean>;
+
+  // Notifications
+  getAllNotifications(): Promise<Notification[]>;
+  getNotificationsByRecipient(recipientId: string): Promise<Notification[]>;
+  createNotification(data: Partial<Notification>): Promise<Notification>;
+  updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
+  deleteNotification(id: string): Promise<boolean>;
+
+  // Departments
+  getAllDepartments(): Promise<DepartmentInfo[]>;
+  getDepartmentById(id: string): Promise<DepartmentInfo | undefined>;
+
+  // Initialization
+  initializeDefaultData(): Promise<void>;
 }
 
-const defaultUsers: User[] = [
-  { 
-    id: "1", 
-    username: "manager", 
-    password: "1234", 
-    name: "مدير الفرع", 
-    email: "manager@lawfirm.com",
-    phone: "0501234567",
-    role: "branch_manager",
-    departmentId: null,
-    isActive: true,
-    canBeAssignedCases: true,
-    canBeAssignedConsultations: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "4", 
-    username: "omar", 
-    password: "1234", 
-    name: "المحامي عمر - رئيس القسم العام", 
-    email: "omar@lawfirm.com",
-    phone: "0504234567",
-    role: "department_head",
-    departmentId: "1",
-    isActive: true,
-    canBeAssignedCases: true,
-    canBeAssignedConsultations: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "6", 
-    username: "support", 
-    password: "1234", 
-    name: "الدعم الإداري", 
-    email: "support@lawfirm.com",
-    phone: "0506234567",
-    role: "admin_support",
-    departmentId: null,
-    isActive: true,
-    canBeAssignedCases: false,
-    canBeAssignedConsultations: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
+// Helper to convert DB timestamps to ISO strings
+function toISOString(date: Date | null | undefined): string {
+  return date ? date.toISOString() : new Date().toISOString();
+}
 
-const initialCases: LawCase[] = [];
+// Map DB user to interface User
+function mapDbUser(dbUser: any): User {
+  return {
+    id: dbUser.id,
+    username: dbUser.username,
+    password: dbUser.password,
+    name: dbUser.name,
+    email: dbUser.email || "",
+    phone: dbUser.phone || "",
+    role: dbUser.role,
+    departmentId: dbUser.departmentId,
+    isActive: dbUser.isActive ?? true,
+    canBeAssignedCases: dbUser.canBeAssignedCases ?? false,
+    canBeAssignedConsultations: dbUser.canBeAssignedConsultations ?? false,
+    createdAt: toISOString(dbUser.createdAt),
+    updatedAt: toISOString(dbUser.updatedAt),
+  };
+}
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-  private cases: Map<string, LawCase>;
+// Map DB case to interface LawCase
+function mapDbCase(dbCase: any): LawCase {
+  return {
+    id: dbCase.id,
+    caseNumber: dbCase.caseNumber,
+    clientId: dbCase.clientId,
+    caseType: dbCase.caseType,
+    status: dbCase.status,
+    currentStage: dbCase.currentStage,
+    stageHistory: dbCase.stageHistory || [],
+    departmentId: dbCase.departmentId,
+    assignedLawyers: dbCase.assignedLawyers || [],
+    primaryLawyerId: dbCase.primaryLawyerId,
+    responsibleLawyerId: dbCase.responsibleLawyerId,
+    courtName: dbCase.courtName || "",
+    courtCaseNumber: dbCase.courtCaseNumber || "",
+    najizNumber: dbCase.najizNumber || "",
+    judgeName: dbCase.judgeName || "",
+    circuitNumber: dbCase.circuitNumber || "",
+    opponentName: dbCase.opponentName || "",
+    opponentLawyer: dbCase.opponentLawyer || "",
+    opponentPhone: dbCase.opponentPhone || "",
+    opponentNotes: dbCase.opponentNotes || "",
+    whatsappGroupLink: dbCase.whatsappGroupLink || "",
+    googleDriveFolderId: dbCase.googleDriveFolderId || "",
+    reviewNotes: dbCase.reviewNotes || "",
+    reviewDecision: dbCase.reviewDecision,
+    reviewActionTaken: dbCase.reviewActionTaken,
+    priority: dbCase.priority || "متوسط",
+    createdBy: dbCase.createdBy,
+    createdAt: toISOString(dbCase.createdAt),
+    updatedAt: toISOString(dbCase.updatedAt),
+    closedAt: dbCase.closedAt ? toISOString(dbCase.closedAt) : null,
+  };
+}
 
-  constructor() {
-    this.users = new Map();
-    this.cases = new Map();
-    
-    defaultUsers.forEach((u) => this.users.set(u.id, u));
-    initialCases.forEach((c) => this.cases.set(c.id, c));
-  }
+// Map DB client to interface Client
+function mapDbClient(dbClient: any): Client {
+  return {
+    id: dbClient.id,
+    clientType: dbClient.clientType,
+    individualName: dbClient.individualName,
+    nationalId: dbClient.nationalId,
+    phone: dbClient.phone,
+    companyName: dbClient.companyName,
+    commercialRegister: dbClient.commercialRegister,
+    representativeName: dbClient.representativeName,
+    representativeTitle: dbClient.representativeTitle,
+    companyPhone: dbClient.companyPhone,
+    email: dbClient.email || "",
+    address: dbClient.address || "",
+    notes: dbClient.notes || "",
+    createdBy: dbClient.createdBy,
+    createdAt: toISOString(dbClient.createdAt),
+    updatedAt: toISOString(dbClient.updatedAt),
+  };
+}
 
+// Map DB consultation to interface Consultation
+function mapDbConsultation(dbCon: any): Consultation {
+  return {
+    id: dbCon.id,
+    consultationNumber: dbCon.consultationNumber,
+    clientId: dbCon.clientId,
+    consultationType: dbCon.consultationType,
+    deliveryType: dbCon.deliveryType,
+    status: dbCon.status,
+    departmentId: dbCon.departmentId,
+    assignedTo: dbCon.assignedTo,
+    questionSummary: dbCon.questionSummary,
+    response: dbCon.response || "",
+    convertedToCaseId: dbCon.convertedToCaseId,
+    whatsappGroupLink: dbCon.whatsappGroupLink || "",
+    googleDriveFolderId: dbCon.googleDriveFolderId || "",
+    reviewNotes: dbCon.reviewNotes || "",
+    reviewDecision: dbCon.reviewDecision,
+    createdBy: dbCon.createdBy,
+    createdAt: toISOString(dbCon.createdAt),
+    updatedAt: toISOString(dbCon.updatedAt),
+    closedAt: dbCon.closedAt ? toISOString(dbCon.closedAt) : null,
+  };
+}
+
+// Map DB hearing to interface Hearing
+function mapDbHearing(dbHearing: any): Hearing {
+  return {
+    id: dbHearing.id,
+    caseId: dbHearing.caseId,
+    hearingDate: dbHearing.hearingDate,
+    hearingTime: dbHearing.hearingTime,
+    courtName: dbHearing.courtName,
+    courtNameOther: dbHearing.courtNameOther,
+    courtRoom: dbHearing.courtRoom || "",
+    status: dbHearing.status,
+    result: dbHearing.result,
+    resultDetails: dbHearing.resultDetails || "",
+    reminderSent24h: dbHearing.reminderSent24h ?? false,
+    reminderSent1h: dbHearing.reminderSent1h ?? false,
+    googleCalendarEventId: dbHearing.googleCalendarEventId,
+    notes: dbHearing.notes || "",
+    createdAt: toISOString(dbHearing.createdAt),
+    updatedAt: toISOString(dbHearing.updatedAt),
+  };
+}
+
+// Map DB field task to interface FieldTask
+function mapDbFieldTask(dbTask: any): FieldTask {
+  return {
+    id: dbTask.id,
+    title: dbTask.title,
+    description: dbTask.description || "",
+    taskType: dbTask.taskType,
+    caseId: dbTask.caseId,
+    consultationId: dbTask.consultationId,
+    assignedTo: dbTask.assignedTo,
+    assignedBy: dbTask.assignedBy,
+    status: dbTask.status,
+    priority: dbTask.priority || "متوسط",
+    dueDate: dbTask.dueDate,
+    completedAt: dbTask.completedAt ? toISOString(dbTask.completedAt) : null,
+    completionNotes: dbTask.completionNotes || "",
+    proofDescription: dbTask.proofDescription || "",
+    proofFileLink: dbTask.proofFileLink || "",
+    createdAt: toISOString(dbTask.createdAt),
+    updatedAt: toISOString(dbTask.updatedAt),
+  };
+}
+
+// Map DB contact log to interface ContactLog
+function mapDbContactLog(dbLog: any): ContactLog {
+  return {
+    id: dbLog.id,
+    clientId: dbLog.clientId,
+    contactType: dbLog.contactType,
+    contactDate: dbLog.contactDate,
+    nextFollowUpDate: dbLog.nextFollowUpDate,
+    followUpStatus: dbLog.followUpStatus,
+    notes: dbLog.notes || "",
+    createdBy: dbLog.createdBy,
+    createdAt: toISOString(dbLog.createdAt),
+    updatedAt: toISOString(dbLog.updatedAt),
+  };
+}
+
+// Map DB notification to interface Notification
+function mapDbNotification(dbNotif: any): Notification {
+  return {
+    id: dbNotif.id,
+    type: dbNotif.type,
+    priority: dbNotif.priority,
+    status: dbNotif.status,
+    title: dbNotif.title,
+    message: dbNotif.message,
+    senderId: dbNotif.senderId,
+    senderName: dbNotif.senderName,
+    recipientId: dbNotif.recipientId,
+    recipientIds: dbNotif.recipientIds,
+    relatedType: dbNotif.relatedType,
+    relatedId: dbNotif.relatedId,
+    isRead: dbNotif.isRead ?? false,
+    readAt: dbNotif.readAt ? toISOString(dbNotif.readAt) : null,
+    response: dbNotif.response,
+    requiresResponse: dbNotif.requiresResponse ?? false,
+    scheduledAt: dbNotif.scheduledAt ? toISOString(dbNotif.scheduledAt) : null,
+    escalationLevel: dbNotif.escalationLevel ?? 0,
+    escalatedTo: dbNotif.escalatedTo,
+    autoEscalateAfterHours: dbNotif.autoEscalateAfterHours ?? 24,
+    createdAt: toISOString(dbNotif.createdAt),
+    updatedAt: toISOString(dbNotif.updatedAt),
+  };
+}
+
+// Map DB department to interface DepartmentInfo
+function mapDbDepartment(dbDept: any): DepartmentInfo {
+  return {
+    id: dbDept.id,
+    name: dbDept.name,
+    headId: dbDept.headId,
+    createdAt: toISOString(dbDept.createdAt),
+  };
+}
+
+export class DatabaseStorage implements IStorage {
+
+  // ==================== Users ====================
+  
   async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+    const result = await db.select().from(users).where(eq(users.id, id));
+    return result[0] ? mapDbUser(result[0]) : undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const result = await db.select().from(users).where(eq(users.username, username));
+    return result[0] ? mapDbUser(result[0]) : undefined;
   }
 
   async getAllUsers(): Promise<User[]> {
-    return Array.from(this.users.values());
+    const result = await db.select().from(users);
+    return result.map(mapDbUser);
   }
 
+  async createUser(data: Partial<User>): Promise<User> {
+    const id = data.id || randomUUID();
+    const now = new Date();
+    const newUser = {
+      id,
+      username: data.username || "",
+      password: data.password || "",
+      name: data.name || "",
+      email: data.email || "",
+      phone: data.phone || "",
+      role: data.role || "employee",
+      departmentId: data.departmentId || null,
+      isActive: data.isActive ?? true,
+      canBeAssignedCases: data.canBeAssignedCases ?? false,
+      canBeAssignedConsultations: data.canBeAssignedConsultations ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.insert(users).values(newUser);
+    return mapDbUser(newUser);
+  }
+
+  async updateUser(id: string, data: Partial<User>): Promise<User | undefined> {
+    const existing = await this.getUser(id);
+    if (!existing) return undefined;
+    
+    const { createdAt, updatedAt, ...updateFields } = data;
+    await db.update(users).set({
+      ...updateFields,
+      updatedAt: new Date(),
+    }).where(eq(users.id, id));
+    
+    return this.getUser(id);
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const result = await db.delete(users).where(eq(users.id, id));
+    return true;
+  }
+
+  // ==================== Cases ====================
+
   async getAllCases(): Promise<LawCase[]> {
-    return Array.from(this.cases.values()).sort(
+    const result = await db.select().from(lawCases);
+    return result.map(mapDbCase).sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     );
   }
 
   async getCaseById(id: string): Promise<LawCase | undefined> {
-    return this.cases.get(id);
+    const result = await db.select().from(lawCases).where(eq(lawCases.id, id));
+    return result[0] ? mapDbCase(result[0]) : undefined;
   }
 
   async createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase> {
     const id = randomUUID();
     const caseNumber = `C-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
-    const newCase: LawCase = {
+    const now = new Date();
+    
+    const newCase = {
       id,
       caseNumber,
       clientId: data.clientId || "",
       caseType: data.caseType || "عام",
       status: CaseStatus.RECEIVED,
+      currentStage: CaseStage.RECEIVED,
+      stageHistory: [],
       departmentId: data.departmentId || "",
       assignedLawyers: [],
-      primaryLawyerId: null,
+      primaryLawyerId: data.primaryLawyerId || null,
+      responsibleLawyerId: data.responsibleLawyerId || null,
       courtName: data.courtName || "",
       courtCaseNumber: data.courtCaseNumber || "",
       najizNumber: data.najizNumber || "",
       judgeName: data.judgeName || "",
+      circuitNumber: data.circuitNumber || "",
       opponentName: data.opponentName || "",
       opponentLawyer: data.opponentLawyer || "",
       opponentPhone: data.opponentPhone || "",
@@ -125,30 +386,474 @@ export class MemStorage implements IStorage {
       reviewActionTaken: null,
       priority: data.priority || "متوسط",
       createdBy,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       closedAt: null,
     };
-    this.cases.set(id, newCase);
-    return newCase;
+    
+    await db.insert(lawCases).values(newCase);
+    return mapDbCase(newCase);
   }
 
   async updateCase(id: string, data: Partial<LawCase>): Promise<LawCase | undefined> {
-    const existing = this.cases.get(id);
+    const existing = await this.getCaseById(id);
     if (!existing) return undefined;
-
-    const updated: LawCase = {
-      ...existing,
-      ...data,
-      updatedAt: new Date().toISOString(),
-    };
-    this.cases.set(id, updated);
-    return updated;
+    
+    const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+    const updateData: any = { ...updateFields, updatedAt: new Date() };
+    if (closedAt) {
+      updateData.closedAt = new Date(closedAt);
+    }
+    
+    await db.update(lawCases).set(updateData).where(eq(lawCases.id, id));
+    return this.getCaseById(id);
   }
 
   async deleteCase(id: string): Promise<boolean> {
-    return this.cases.delete(id);
+    await db.delete(lawCases).where(eq(lawCases.id, id));
+    return true;
+  }
+
+  // ==================== Clients ====================
+
+  async getAllClients(): Promise<Client[]> {
+    const result = await db.select().from(clients);
+    return result.map(mapDbClient);
+  }
+
+  async getClientById(id: string): Promise<Client | undefined> {
+    const result = await db.select().from(clients).where(eq(clients.id, id));
+    return result[0] ? mapDbClient(result[0]) : undefined;
+  }
+
+  async createClient(data: Partial<Client>, createdBy: string): Promise<Client> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const newClient = {
+      id,
+      clientType: data.clientType || "فرد",
+      individualName: data.individualName || null,
+      nationalId: data.nationalId || null,
+      phone: data.phone || "",
+      companyName: data.companyName || null,
+      commercialRegister: data.commercialRegister || null,
+      representativeName: data.representativeName || null,
+      representativeTitle: data.representativeTitle || null,
+      companyPhone: data.companyPhone || null,
+      email: data.email || "",
+      address: data.address || "",
+      notes: data.notes || "",
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+    };
+    
+    await db.insert(clients).values(newClient);
+    return mapDbClient(newClient);
+  }
+
+  async updateClient(id: string, data: Partial<Client>): Promise<Client | undefined> {
+    const existing = await this.getClientById(id);
+    if (!existing) return undefined;
+    
+    const { createdAt, updatedAt, ...updateFields } = data;
+    await db.update(clients).set({
+      ...updateFields,
+      updatedAt: new Date(),
+    }).where(eq(clients.id, id));
+    
+    return this.getClientById(id);
+  }
+
+  async deleteClient(id: string): Promise<boolean> {
+    await db.delete(clients).where(eq(clients.id, id));
+    return true;
+  }
+
+  // ==================== Consultations ====================
+
+  async getAllConsultations(): Promise<Consultation[]> {
+    const result = await db.select().from(consultations);
+    return result.map(mapDbConsultation);
+  }
+
+  async getConsultationById(id: string): Promise<Consultation | undefined> {
+    const result = await db.select().from(consultations).where(eq(consultations.id, id));
+    return result[0] ? mapDbConsultation(result[0]) : undefined;
+  }
+
+  async createConsultation(data: Partial<Consultation>, createdBy: string): Promise<Consultation> {
+    const id = randomUUID();
+    const consultationNumber = `CON-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+    const now = new Date();
+    
+    const newConsultation = {
+      id,
+      consultationNumber,
+      clientId: data.clientId || "",
+      consultationType: data.consultationType || "عام",
+      deliveryType: data.deliveryType || "مكتوبة",
+      status: "استلام",
+      departmentId: data.departmentId || "",
+      assignedTo: data.assignedTo || null,
+      questionSummary: data.questionSummary || "",
+      response: data.response || "",
+      convertedToCaseId: null,
+      whatsappGroupLink: data.whatsappGroupLink || "",
+      googleDriveFolderId: data.googleDriveFolderId || "",
+      reviewNotes: "",
+      reviewDecision: null,
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+      closedAt: null,
+    };
+    
+    await db.insert(consultations).values(newConsultation);
+    return mapDbConsultation(newConsultation);
+  }
+
+  async updateConsultation(id: string, data: Partial<Consultation>): Promise<Consultation | undefined> {
+    const existing = await this.getConsultationById(id);
+    if (!existing) return undefined;
+    
+    const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+    const updateData: any = { ...updateFields, updatedAt: new Date() };
+    if (closedAt) {
+      updateData.closedAt = new Date(closedAt);
+    }
+    await db.update(consultations).set(updateData).where(eq(consultations.id, id));
+    
+    return this.getConsultationById(id);
+  }
+
+  async deleteConsultation(id: string): Promise<boolean> {
+    await db.delete(consultations).where(eq(consultations.id, id));
+    return true;
+  }
+
+  // ==================== Hearings ====================
+
+  async getAllHearings(): Promise<Hearing[]> {
+    const result = await db.select().from(hearings);
+    return result.map(mapDbHearing);
+  }
+
+  async getHearingById(id: string): Promise<Hearing | undefined> {
+    const result = await db.select().from(hearings).where(eq(hearings.id, id));
+    return result[0] ? mapDbHearing(result[0]) : undefined;
+  }
+
+  async createHearing(data: Partial<Hearing>): Promise<Hearing> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const newHearing = {
+      id,
+      caseId: data.caseId || "",
+      hearingDate: data.hearingDate || "",
+      hearingTime: data.hearingTime || "",
+      courtName: data.courtName || "المحكمة العامة",
+      courtNameOther: data.courtNameOther || null,
+      courtRoom: data.courtRoom || "",
+      status: data.status || "قادمة",
+      result: data.result || null,
+      resultDetails: data.resultDetails || "",
+      reminderSent24h: false,
+      reminderSent1h: false,
+      googleCalendarEventId: null,
+      notes: data.notes || "",
+      createdAt: now,
+      updatedAt: now,
+    };
+    
+    await db.insert(hearings).values(newHearing);
+    return mapDbHearing(newHearing);
+  }
+
+  async updateHearing(id: string, data: Partial<Hearing>): Promise<Hearing | undefined> {
+    const existing = await this.getHearingById(id);
+    if (!existing) return undefined;
+    
+    const { createdAt, updatedAt, ...updateFields } = data;
+    await db.update(hearings).set({
+      ...updateFields,
+      updatedAt: new Date(),
+    }).where(eq(hearings.id, id));
+    
+    return this.getHearingById(id);
+  }
+
+  async deleteHearing(id: string): Promise<boolean> {
+    await db.delete(hearings).where(eq(hearings.id, id));
+    return true;
+  }
+
+  // ==================== Field Tasks ====================
+
+  async getAllFieldTasks(): Promise<FieldTask[]> {
+    const result = await db.select().from(fieldTasks);
+    return result.map(mapDbFieldTask);
+  }
+
+  async getFieldTaskById(id: string): Promise<FieldTask | undefined> {
+    const result = await db.select().from(fieldTasks).where(eq(fieldTasks.id, id));
+    return result[0] ? mapDbFieldTask(result[0]) : undefined;
+  }
+
+  async createFieldTask(data: Partial<FieldTask>, assignedBy: string): Promise<FieldTask> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const newTask = {
+      id,
+      title: data.title || "",
+      description: data.description || "",
+      taskType: data.taskType || "أخرى",
+      caseId: data.caseId || null,
+      consultationId: data.consultationId || null,
+      assignedTo: data.assignedTo || "",
+      assignedBy,
+      status: "قيد_الانتظار",
+      priority: data.priority || "متوسط",
+      dueDate: data.dueDate || "",
+      completedAt: null,
+      completionNotes: "",
+      proofDescription: "",
+      proofFileLink: "",
+      createdAt: now,
+      updatedAt: now,
+    };
+    
+    await db.insert(fieldTasks).values(newTask);
+    return mapDbFieldTask(newTask);
+  }
+
+  async updateFieldTask(id: string, data: Partial<FieldTask>): Promise<FieldTask | undefined> {
+    const existing = await this.getFieldTaskById(id);
+    if (!existing) return undefined;
+    
+    const { createdAt, updatedAt, completedAt, ...updateFields } = data;
+    const updateData: any = { ...updateFields, updatedAt: new Date() };
+    if (completedAt) {
+      updateData.completedAt = new Date(completedAt);
+    }
+    await db.update(fieldTasks).set(updateData).where(eq(fieldTasks.id, id));
+    
+    return this.getFieldTaskById(id);
+  }
+
+  async deleteFieldTask(id: string): Promise<boolean> {
+    await db.delete(fieldTasks).where(eq(fieldTasks.id, id));
+    return true;
+  }
+
+  // ==================== Contact Logs ====================
+
+  async getAllContactLogs(): Promise<ContactLog[]> {
+    const result = await db.select().from(contactLogs);
+    return result.map(mapDbContactLog);
+  }
+
+  async getContactLogsByClient(clientId: string): Promise<ContactLog[]> {
+    const result = await db.select().from(contactLogs).where(eq(contactLogs.clientId, clientId));
+    return result.map(mapDbContactLog);
+  }
+
+  async createContactLog(data: Partial<ContactLog>, createdBy: string): Promise<ContactLog> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const newLog = {
+      id,
+      clientId: data.clientId || "",
+      contactType: data.contactType || "اتصال_هاتفي",
+      contactDate: data.contactDate || new Date().toISOString().split('T')[0],
+      nextFollowUpDate: data.nextFollowUpDate || null,
+      followUpStatus: data.followUpStatus || "بانتظار_المتابعة",
+      notes: data.notes || "",
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+    };
+    
+    await db.insert(contactLogs).values(newLog);
+    return mapDbContactLog(newLog);
+  }
+
+  async updateContactLog(id: string, data: Partial<ContactLog>): Promise<ContactLog | undefined> {
+    const existing = await db.select().from(contactLogs).where(eq(contactLogs.id, id));
+    if (!existing[0]) return undefined;
+    
+    const { createdAt, updatedAt, ...updateFields } = data;
+    await db.update(contactLogs).set({
+      ...updateFields,
+      updatedAt: new Date(),
+    }).where(eq(contactLogs.id, id));
+    
+    const updated = await db.select().from(contactLogs).where(eq(contactLogs.id, id));
+    return updated[0] ? mapDbContactLog(updated[0]) : undefined;
+  }
+
+  async deleteContactLog(id: string): Promise<boolean> {
+    await db.delete(contactLogs).where(eq(contactLogs.id, id));
+    return true;
+  }
+
+  // ==================== Notifications ====================
+
+  async getAllNotifications(): Promise<Notification[]> {
+    const result = await db.select().from(notifications);
+    return result.map(mapDbNotification);
+  }
+
+  async getNotificationsByRecipient(recipientId: string): Promise<Notification[]> {
+    const result = await db.select().from(notifications).where(eq(notifications.recipientId, recipientId));
+    return result.map(mapDbNotification);
+  }
+
+  async createNotification(data: Partial<Notification>): Promise<Notification> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const newNotification = {
+      id,
+      type: data.type || "general_alert",
+      priority: data.priority || "medium",
+      status: data.status || "pending",
+      title: data.title || "",
+      message: data.message || "",
+      senderId: data.senderId || "",
+      senderName: data.senderName || "",
+      recipientId: data.recipientId || "",
+      recipientIds: data.recipientIds || null,
+      relatedType: data.relatedType || null,
+      relatedId: data.relatedId || null,
+      isRead: false,
+      readAt: null,
+      response: data.response || null,
+      requiresResponse: data.requiresResponse ?? false,
+      scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
+      escalationLevel: 0,
+      escalatedTo: null,
+      autoEscalateAfterHours: data.autoEscalateAfterHours ?? 24,
+      createdAt: now,
+      updatedAt: now,
+    };
+    
+    await db.insert(notifications).values(newNotification);
+    return mapDbNotification(newNotification);
+  }
+
+  async updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined> {
+    const existing = await db.select().from(notifications).where(eq(notifications.id, id));
+    if (!existing[0]) return undefined;
+    
+    const updateData: any = { ...data, updatedAt: new Date() };
+    if (data.readAt) {
+      updateData.readAt = new Date(data.readAt);
+    }
+    
+    await db.update(notifications).set(updateData).where(eq(notifications.id, id));
+    
+    const updated = await db.select().from(notifications).where(eq(notifications.id, id));
+    return updated[0] ? mapDbNotification(updated[0]) : undefined;
+  }
+
+  async deleteNotification(id: string): Promise<boolean> {
+    await db.delete(notifications).where(eq(notifications.id, id));
+    return true;
+  }
+
+  // ==================== Departments ====================
+
+  async getAllDepartments(): Promise<DepartmentInfo[]> {
+    const result = await db.select().from(departments);
+    return result.map(mapDbDepartment);
+  }
+
+  async getDepartmentById(id: string): Promise<DepartmentInfo | undefined> {
+    const result = await db.select().from(departments).where(eq(departments.id, id));
+    return result[0] ? mapDbDepartment(result[0]) : undefined;
+  }
+
+  // ==================== Initialize Default Data ====================
+
+  async initializeDefaultData(): Promise<void> {
+    // Check if users exist
+    const existingUsers = await db.select().from(users);
+    if (existingUsers.length === 0) {
+      // Add default users
+      const defaultUsers = [
+        { 
+          id: "1", 
+          username: "manager", 
+          password: "1234", 
+          name: "مدير الفرع", 
+          email: "manager@lawfirm.com",
+          phone: "0501234567",
+          role: "branch_manager",
+          departmentId: null,
+          isActive: true,
+          canBeAssignedCases: true,
+          canBeAssignedConsultations: true,
+        },
+        { 
+          id: "4", 
+          username: "omar", 
+          password: "1234", 
+          name: "المحامي عمر - رئيس القسم العام", 
+          email: "omar@lawfirm.com",
+          phone: "0504234567",
+          role: "department_head",
+          departmentId: "1",
+          isActive: true,
+          canBeAssignedCases: true,
+          canBeAssignedConsultations: true,
+        },
+        { 
+          id: "6", 
+          username: "support", 
+          password: "1234", 
+          name: "الدعم الإداري", 
+          email: "support@lawfirm.com",
+          phone: "0506234567",
+          role: "admin_support",
+          departmentId: null,
+          isActive: true,
+          canBeAssignedCases: false,
+          canBeAssignedConsultations: false,
+        },
+      ];
+      
+      for (const user of defaultUsers) {
+        await db.insert(users).values({
+          ...user,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+    }
+
+    // Check if departments exist
+    const existingDepartments = await db.select().from(departments);
+    if (existingDepartments.length === 0) {
+      const defaultDepartments = [
+        { id: "1", name: "عام", headId: "4" },
+        { id: "2", name: "تجاري", headId: null },
+        { id: "3", name: "عمالي", headId: null },
+        { id: "4", name: "إداري", headId: null },
+      ];
+      
+      for (const dept of defaultDepartments) {
+        await db.insert(departments).values({
+          ...dept,
+          createdAt: new Date(),
+        });
+      }
+    }
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();

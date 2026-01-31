@@ -1,253 +1,61 @@
 # نظام إدارة مكتب المحاماة - Law Firm Management System
 
-## نظرة عامة
-نظام إدارة متكامل لمكتب المحاماة مع واجهة عربية تدعم RTL. يتميز بتصميم رسمي فاخر بألوان الكحلي الداكن والذهبي. يدعم 10 أدوار وظيفية و4 أقسام مختلفة.
+## Overview
+This is an integrated law firm management system with an Arabic RTL interface. It features a luxurious, formal design using dark navy and gold colors, supporting 10 functional roles and 4 different departments. The system streamlines case management, consultations, client interactions, field tasks, and internal communications, aiming to enhance efficiency and decision-making within law firms. Key capabilities include comprehensive case lifecycle tracking, client relationship management, and performance analytics.
 
-## التقنيات المستخدمة
-- **Frontend**: React, TypeScript, Tailwind CSS
-- **Backend**: Express.js, Node.js
-- **UI Components**: Shadcn/UI
-- **State Management**: React Context with localStorage persistence
-- **Routing**: Wouter
+## User Preferences
+I prefer clear and concise communication. For any proposed changes, please provide a high-level overview first. I value iterative development and prefer to review major architectural decisions before implementation. Ensure all output is in Arabic.
 
-## بيانات الدخول التجريبية
-| المستخدم | اسم الدخول | كلمة المرور | الصلاحية |
-|----------|------------|-------------|----------|
-| مدير الفرع | manager | 1234 | branch_manager |
-| المحامي عمر | omar | 1234 | department_head |
-| الدعم الإداري | support | 1234 | admin_support |
+## System Architecture
 
-## الأدوار والصلاحيات (10 أدوار)
-1. **مدير الفرع (branch_manager)** - صلاحيات كاملة
-2. **رئيس مراجعة القضايا (cases_review_head)** - مراجعة واعتماد القضايا
-3. **رئيس مراجعة الاستشارات (consultations_review_head)** - مراجعة واعتماد الاستشارات
-4. **رئيس القسم (department_head)** - إدارة قسم معين
-5. **الدعم الإداري (admin_support)** - إضافة وتوزيع الملفات
-6. **موظف (employee)** - العمل على الملفات المسندة
-7. **الموارد البشرية (hr)** - إدارة الموظفين
+### UI/UX Decisions
+The system features a formal and luxurious design.
+- **Logo**: Al-Awn Company logo.
+- **Primary Color**: Petrol Blue (#345774) for sidebars and headers.
+- **Accent Color**: Gold (#D4AF37) for active buttons and icons.
+- **Backgrounds**: Pure white (#FFFFFF) for cards, light gray (#F9FAFB) for the general background.
+- **Fonts**: Tajawal, Cairo.
+- **Theme**: Supports both dark and light modes.
+- **Borders**: `rounded-lg` for buttons and cards.
+- **Shadows**: `shadow-sm` for element separation.
+- **Responsiveness**: The design is responsive and supports all devices.
 
-## الأقسام (4 أقسام)
-1. القسم العام
-2. القسم التجاري
-3. القسم العمالي
-4. القسم الإداري
+### Technical Implementations
+- **Frontend**: React, TypeScript, Tailwind CSS, Shadcn/UI (components), React Context with API + localStorage (state management), Wouter (routing).
+- **Backend**: Express.js, Node.js.
+- **Database**: PostgreSQL with Drizzle ORM.
+- **Authentication**: Custom authentication system with 10 distinct roles and permissions.
+- **Data Storage**: Client-side data is temporarily saved in `localStorage`.
+- **API Endpoints**: Ready for future expansion.
 
-## دورة عمل القضايا (9 مراحل)
-1. **استلام** - استلام القضية الجديدة
-2. **استكمال البيانات** - جمع المعلومات المطلوبة
-3. **دراسة** - دراسة وتحليل القضية
-4. **تحرير المذكرة** - كتابة المذكرة القانونية
-5. **لجنة المراجعة** - مراجعة من قبل اللجنة
-6. **تعديلات** - إجراء التعديلات المطلوبة
-7. **جاهز للرفع** - القضية جاهزة للتقديم
-8. **مرفوع** - تم رفع القضية للمحكمة
-9. **مغلق** - القضية مغلقة
+### Feature Specifications
+- **Dashboard**: Overview with statistics.
+- **Case Management (`/cases`)**: Tracks cases through 9 stages: Receive, Data Completion, Study, Memorandum Editing, Review Committee, Adjustments, Ready for Submission, Submitted, Closed.
+- **Consultation Management (`/consultations`)**: Manages legal consultations.
+- **Hearings Schedule (`/hearings`)**: Manages court hearing schedules.
+- **Client Management (`/clients`)**: Comprehensive client profiles with contact logs.
+- **Field Tasks (`/field-tasks`)**: Manages external tasks (e.g., field review, document delivery, client visit) with statuses (pending, in progress, completed, canceled) and evidence upload.
+- **User Management (`/users`)**: For administrators, including advanced features like password reset, status change, and restrictions on deleting/disabling the last branch manager.
+- **Contact Log (`/clients`)**: Records and tracks client communications (phone, WhatsApp, email, meeting) with follow-up statuses.
+- **Quick Search (Command Palette)**: `Ctrl+K` (or `Cmd+K`) for searching cases, clients, consultations, and hearings.
+- **KPIs (`/kpis`)**: Advanced analytical page for case statistics, completion rates, employee performance, and time-period filtering.
+- **Help Center (`/help`)**: FAQ, system section explanations, role guidelines, and onboarding tour restart.
+- **Onboarding Tour**: 7-step guided tour for new users, savable state in `localStorage`.
+- **Keyboard Shortcuts**: Defined shortcuts for navigation and common actions.
+- **Favorites & Recent Items**: Users can favorite items and view their last 10 visited items, saved in `localStorage`.
+- **Review Standards (`/standards`)**: Quality review system for contracts, consultations, reports, and legal letters, with checklists and review statuses.
+- **Notifications & Alerts**:
+    - **Types**: 8 types including task reminders, case delays, deadlines, new assignments, escalations.
+    - **Priority Levels**: Low, Medium, High, Urgent.
+    - **Statuses**: Pending, Sent, Read, Replied, Escalated, Archived.
+    - **Features**: Notification bell, send to specific users/departments, scheduling, automatic escalation, 4 response types (approve, reject, in progress, note), dynamic templates.
+    - **User Preferences**: Sound alerts, desktop notifications, notification mode (instant, daily, weekly summary), quiet hours, muting specific types.
 
-## الصفحات الرئيسية
-- `/` - لوحة التحكم مع الإحصائيات
-- `/cases` - إدارة القضايا
-- `/consultations` - إدارة الاستشارات
-- `/hearings` - جدول الجلسات
-- `/clients` - إدارة العملاء (مع سجل التواصل)
-- `/field-tasks` - المهام الميدانية والمراجعات
-- `/users` - إدارة المستخدمين (للمسؤولين)
-- `/standards` - معايير المراجعة
-- `/dashboard-settings` - إعدادات لوحة التحكم
-- `/kpis` - مؤشرات الأداء الرئيسية
-- `/help` - مركز المساعدة
-
-## هيكل المشروع
-```
-client/
-  src/
-    pages/
-      login.tsx         - صفحة تسجيل الدخول
-      dashboard.tsx     - لوحة التحكم
-      cases.tsx         - إدارة القضايا
-      consultations.tsx - إدارة الاستشارات
-      hearings.tsx      - جدول الجلسات
-      clients.tsx       - إدارة العملاء
-      field-tasks.tsx   - المهام الميدانية والمراجعات
-      users.tsx         - إدارة المستخدمين
-    components/
-      app-sidebar.tsx   - الشريط الجانبي
-    lib/
-      auth-context.tsx         - إدارة المصادقة والصلاحيات
-      cases-context.tsx        - إدارة القضايا
-      clients-context.tsx      - إدارة العملاء
-      consultations-context.tsx - إدارة الاستشارات
-      hearings-context.tsx     - إدارة الجلسات
-      departments-context.tsx  - إدارة الأقسام
-      field-tasks-context.tsx  - إدارة المهام الميدانية
-      contacts-context.tsx     - إدارة سجل التواصل مع العملاء
-      dashboard-context.tsx    - إدارة إعدادات لوحة التحكم
-      theme-provider.tsx       - إدارة الوضع الداكن/الفاتح
-server/
-  routes.ts   - API endpoints
-  storage.ts  - تخزين البيانات
-shared/
-  schema.ts   - تعريفات البيانات
-```
-
-## الثيم والهوية البصرية
-- **الشعار**: شعار شركة العون (يظهر في صفحة الدخول والقائمة الجانبية)
-- **اللون الأساسي (Primary)**: أزرق بترولي (#345774) - للقائمة الجانبية والعناوين
-- **اللون الثانوي (Accent)**: ذهبي (#D4AF37) - للأزرار والأيقونات النشطة
-- **الخلفيات**: أبيض نقي (#FFFFFF) للكروت، رمادي فاتح (#F9FAFB) للخلفية العامة
-- **الخط**: Tajawal, Cairo
-- **الوضع**: يدعم الوضع الداكن والفاتح
-- **الحواف**: rounded-lg للأزرار والبطاقات
-- **الظلال**: shadow-sm للفصل بين العناصر
-
-## تشغيل المشروع
-```bash
-npm run dev
-```
-يعمل على المنفذ 5000
-
-## ملاحظات التطوير
-- البيانات محفوظة في localStorage للعميل (مؤقتاً)
-- يوجد API endpoints جاهزة للتوسع المستقبلي
-- التصميم responsive يدعم جميع الأجهزة
-- نظام صلاحيات متكامل يتحكم في عرض الإجراءات المتاحة
-
-## المهام الميدانية والمراجعات
-نظام لإدارة المهام الخارجية والمراجعات الميدانية:
-- **أنواع المهام**: مراجعة ميدانية، تسليم مستندات، زيارة عميل، متابعة محكمة، أخرى
-- **حالات المهام**: قيد الانتظار، قيد التنفيذ، مكتمل، ملغي
-- **الصلاحيات**: 
-  - مدير الفرع ورؤساء لجان المراجعة ورؤساء الأقسام يمكنهم إسناد المهام
-  - الموظف المكلف يمكنه بدء التنفيذ وتأكيد الإنجاز مع رفع الإثباتات
-- **الربط**: يمكن ربط المهمة بقضية أو استشارة معينة
-
-## سجل التواصل مع العملاء
-نظام لتسجيل ومتابعة التواصل مع العملاء:
-- **أنواع التواصل**: اتصال هاتفي، واتساب، بريد إلكتروني، اجتماع شخصي، مكالمة فيديو، أخرى
-- **حالات المتابعة**: بانتظار المتابعة، تمت المتابعة، ملغية
-- **الميزات**: تسجيل ملخص التواصل، جدولة متابعات، ربط بقضية أو استشارة
-
-## البحث السريع (Command Palette)
-- اختصار: Ctrl+K (أو Cmd+K في Mac)
-- يبحث في: القضايا، العملاء، الاستشارات، الجلسات
-- روابط سريعة للصفحات الرئيسية
-
-## مؤشرات الأداء (KPIs)
-صفحة تحليلية متقدمة تعرض:
-- إحصائيات القضايا والاستشارات
-- توزيع القضايا حسب المرحلة والقسم
-- معدلات الإنجاز والإغلاق
-- متابعة المهام الميدانية
-- **جدول أداء الموظفين**: ترتيب المحامين حسب الأداء مع عدد القضايا ومعدل الإغلاق ومتوسط المدة
-- **فلتر الفترة الزمنية**: هذا الشهر، الشهر الماضي، هذه السنة، كل الأوقات
-
-## مركز المساعدة
-صفحة مرجعية تحتوي على:
-- أسئلة شائعة حول استخدام النظام
-- شرح لكل قسم من أقسام النظام
-- إرشادات للأدوار والصلاحيات
-- زر إعادة الجولة التعريفية
-
-## الجولة التعريفية (Onboarding Tour)
-نظام تعريفي للمستخدمين الجدد:
-- تظهر تلقائياً عند أول تسجيل دخول
-- 7 خطوات تشرح أهم أقسام النظام
-- إمكانية التخطي والعودة لها من مركز المساعدة
-- حفظ حالة المشاهدة في localStorage
-
-## اختصارات لوحة المفاتيح
-- `Ctrl+K` - فتح البحث السريع
-- `Ctrl+/` - عرض الاختصارات
-- `Ctrl+N` - قضية جديدة
-- `Ctrl+Shift+N` - استشارة جديدة
-- `Alt+1` - لوحة التحكم
-- `Alt+2` - القضايا
-- `Alt+3` - الاستشارات
-- `Alt+4` - العملاء
-- `Alt+5` - الجلسات
-- `Escape` - إغلاق النوافذ المنبثقة
-
-## نظام المفضلة وآخر الزيارات
-- أيقونة ⭐ بجانب كل قضية/عميل/استشارة للإضافة للمفضلة
-- قائمة منسدلة في الهيدر للوصول السريع للمفضلة
-- تتبع آخر 10 عناصر تمت زيارتها
-- حفظ تلقائي في localStorage
-
-## معايير المراجعة
-نظام متكامل لمعايير مراجعة الجودة:
-- **أنواع المعايير**: مراجعة العقود، الاستشارات القانونية، تقارير الجلسات، الخطابات القانونية
-- **قوائم التحقق**: نقاط مراجعة إلزامية واختيارية منظمة في فئات
-- **حالات المراجعة**: مسودة، مرسل، معتمد، مرفوض
-- **تكامل**: زر المراجعة متوفر في صفحات القضايا والاستشارات
-
-## إدارة المستخدمين المتقدمة
-- **حذف المستخدم**: يمنع حذف آخر مدير فرع والحساب الحالي
-- **إعادة تعيين كلمة المرور**: تحقق من الحد الأدنى 4 أحرف
-- **تغيير حالة المستخدم**: يمنع تعطيل آخر مدير فرع نشط
-- **قائمة إجراءات**: تعديل، حذف، إعادة تعيين كلمة المرور، تفعيل/تعطيل
-
-## نظام الإشعارات والتنبيهات
-نظام شامل للإشعارات والتنبيهات مع التصعيد التلقائي:
-
-### أنواع الإشعارات (8 أنواع):
-- تذكير بمهمة
-- تأخر قضية
-- تأخر استشارة
-- تنبيه موعد نهائي
-- إسناد جديد
-- تصعيد
-- طلب استجابة
-- تنبيه عام
-
-### مستويات الأولوية (4 مستويات):
-- منخفض، متوسط، عالي، عاجل
-
-### حالات الإشعار (6 حالات):
-- قيد الانتظار، مُرسل، مقروء، تم الرد، مُصعّد، مؤرشف
-
-### الميزات الرئيسية:
-- **جرس الإشعارات**: في الهيدر مع عداد الإشعارات غير المقروءة وتنبيه صوتي
-- **إرسال الإشعارات**: لمستخدم محدد، عدة مستخدمين، أو قسم بالكامل
-- **الجدولة**: إرسال الإشعارات في وقت محدد
-- **التصعيد التلقائي**: تصعيد الإشعارات غير المستجاب لها تلقائياً
-- **الردود**: 4 أنواع رد (موافقة، رفض، قيد التنفيذ، ملاحظة)
-- **القوالب**: قوالب جاهزة للإشعارات مع متغيرات ديناميكية
-- **لوحة الإحصائيات**: تحليل شامل للإشعارات (للمديرين)
-
-### تفضيلات المستخدم:
-- التنبيه الصوتي وإشعارات سطح المكتب
-- وضع الإشعارات (فوري، ملخص يومي، ملخص أسبوعي)
-- أوقات الهدوء (إيقاف الإشعارات خلال فترة محددة)
-- كتم أنواع معينة من الإشعارات
-
-### الصفحات:
-- `/notifications` - صفحة الإشعارات الرئيسية
-- `/notification-preferences` - تفضيلات الإشعارات
-- `/notification-dashboard` - لوحة إحصائيات الإشعارات (للمديرين)
-
-### الملفات:
-```
-client/src/lib/notifications-context.tsx  - إدارة الإشعارات
-client/src/lib/auto-notifications.ts      - الإشعارات التلقائية
-client/src/components/notifications/
-  notifications-bell.tsx       - جرس الإشعارات
-  send-notification-dialog.tsx - نافذة إرسال الإشعار
-  respond-dialog.tsx           - نافذة الرد
-  notification-templates.tsx   - إدارة القوالب
-```
-
-## آخر التحديثات
-- تاريخ التحديث: يناير 2026
-- **المرحلة و**: إضافة نظام الإشعارات والتنبيهات الشامل مع التصعيد التلقائي
-- **المرحلة هـ**: إضافة نظام معايير المراجعة وتحسين إدارة المستخدمين
-- **المرحلة د**: تحسين صفحة مؤشرات الأداء (جدول أداء الموظفين + فلتر الفترة) وإضافة الجولة التعريفية
-- **المرحلة ج**: إضافة اختصارات لوحة المفاتيح ونظام المفضلة وآخر الزيارات
-- إضافة سجل التواصل مع العملاء
-- إضافة البحث السريع (Command Palette)
-- إضافة تبديل الوضع الداكن/الفاتح
-- إضافة صفحة مؤشرات الأداء (KPIs)
-- إضافة مركز المساعدة
-- تحديث الهوية البصرية (شعار شركة العون + ألوان البترولي والذهبي)
-- إضافة نظام المهام الميدانية والمراجعات
-- إضافة نظام الأدوار العشرة
-- إضافة دورة العمل التسع مراحل للقضايا
-- إضافة إدارة الاستشارات والجلسات والعملاء
+## External Dependencies
+- **PostgreSQL**: Integrated database for data persistence.
+- **Drizzle ORM**: Used for database interactions.
+- **React**: Frontend library.
+- **Node.js/Express.js**: Backend runtime and framework.
+- **Tailwind CSS**: Utility-first CSS framework.
+- **Shadcn/UI**: UI component library.
+- **Wouter**: Routing library.
