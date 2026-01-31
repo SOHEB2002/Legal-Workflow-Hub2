@@ -15,6 +15,8 @@ import { DepartmentsProvider } from "@/lib/departments-context";
 import { FieldTasksProvider } from "@/lib/field-tasks-context";
 import { DashboardProvider } from "@/lib/dashboard-context";
 import { ContactsProvider } from "@/lib/contacts-context";
+import { GlobalSearch } from "@/components/global-search";
+import { ThemeToggle } from "@/components/theme-toggle";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -53,9 +55,11 @@ function AuthenticatedLayout() {
       <div className="flex min-h-screen w-full">
         <AppSidebar />
         <SidebarInset className="flex-1 flex flex-col">
-          <header className="sticky top-0 z-50 flex items-center gap-2 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-3">
+          <header className="sticky top-0 z-50 flex items-center gap-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-3">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
+            <GlobalSearch />
             <div className="flex-1" />
+            <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto">
             <Router />
