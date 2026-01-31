@@ -230,7 +230,18 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
   };
   
   const sendCaseToReview = (caseId: string) => {
+    const lawCase = cases.find(c => c.id === caseId);
     updateCaseWorkflowStage(caseId, WorkflowCaseStage.IN_REVIEW, "تم إرسال القضية للجنة المراجعة");
+    
+    if (lawCase) {
+      triggerWorkflowNotification({
+        type: NotificationType.SENT_TO_REVIEW,
+        entityType: "case",
+        entityId: caseId,
+        entityName: lawCase.caseNumber,
+        stage: "لجنة_المراجعة",
+      }, [lawCase.departmentId]);
+    }
   };
   
   const submitReviewNotes = (

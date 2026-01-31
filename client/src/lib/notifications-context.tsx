@@ -82,7 +82,7 @@ const defaultNotificationRules: NotificationRule[] = [
     conditions: {},
     recipients: { assignedEmployee: true, departmentHead: true, branchManager: true, reviewCommittee: false, customUserIds: [] },
     notificationPriority: NotificationPriority.URGENT,
-    template: { title: "🚨 تأخر!", message: "تأخرت القضية {entityName} عن الموعد بـ {overdueTime}" },
+    template: { title: "تأخر عن الموعد النهائي", message: "تأخرت القضية {entityName} عن الموعد بـ {overdueTime}" },
     isActive: true,
     autoEscalate: true,
     escalateAfterHours: 2,
@@ -106,7 +106,7 @@ const defaultNotificationRules: NotificationRule[] = [
     conditions: { returnCountMin: 3 },
     recipients: { assignedEmployee: true, departmentHead: true, branchManager: true, reviewCommittee: false, customUserIds: [] },
     notificationPriority: NotificationPriority.URGENT,
-    template: { title: "⚠️ إرجاع للمرة الثالثة", message: "تم إرجاع {entityName} للمرة الثالثة. يرجى المراجعة." },
+    template: { title: "إرجاع للمرة الثالثة - تحذير", message: "تم إرجاع {entityName} للمرة الثالثة. يرجى المراجعة." },
     isActive: true,
     autoEscalate: true,
     escalateAfterHours: 1,
@@ -130,7 +130,7 @@ const defaultNotificationRules: NotificationRule[] = [
     conditions: {},
     recipients: { assignedEmployee: false, departmentHead: true, branchManager: true, reviewCommittee: false, customUserIds: [] },
     notificationPriority: NotificationPriority.URGENT,
-    template: { title: "🚨 حمل عمل حرج", message: "الموظف {employeeName} لديه {count} قضية نشطة - يجب إعادة التوزيع" },
+    template: { title: "حمل عمل حرج - يتطلب تدخل فوري", message: "الموظف {employeeName} لديه {count} قضية نشطة - يجب إعادة التوزيع" },
     isActive: true,
     autoEscalate: true,
     escalateAfterHours: 2,
@@ -534,6 +534,29 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     setTemplates(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  const shouldNotifyUser = useCallback((userId: string, eventType: NotificationTypeValue): boolean => {
+    const userPrefs = preferences[userId] || defaultPreferences;
+    
+    switch (eventType) {
+      case NotificationType.CASE_ASSIGNED:
+      case NotificationType.CONSULTATION_ASSIGNED:
+        return userPrefs.notifyOnAssignment !== false;
+      case NotificationType.STAGE_CHANGED:
+        return userPrefs.notifyOnStageChange !== false;
+      case NotificationType.SENT_TO_REVIEW:
+      case NotificationType.REVIEW_NOTES:
+        return userPrefs.notifyOnReviewNotes !== false;
+      case NotificationType.RETURNED_FOR_REVISION:
+      case NotificationType.THIRD_RETURN_WARNING:
+        return userPrefs.notifyOnReturn !== false;
+      case NotificationType.SLA_WARNING:
+      case NotificationType.SLA_OVERDUE:
+        return userPrefs.notifyOnSlaWarning !== false;
+      default:
+        return true;
+    }
+  }, [preferences]);
+
   const triggerWorkflowNotification = useCallback((
     event: WorkflowNotificationEvent,
     recipientIds: string[]
@@ -561,8 +584,12 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         message = message.replace(key, value);
       });
       
+      const filteredRecipients = recipientIds.filter(id => shouldNotifyUser(id, event.type));
+      
+      if (filteredRecipients.length === 0) return;
+      
       const now = new Date().toISOString();
-      const newNotifications: Notification[] = recipientIds.map(recipientId => ({
+      const newNotifications: Notification[] = filteredRecipients.map(recipientId => ({
         id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         type: event.type,
         priority: rule.notificationPriority,
@@ -592,7 +619,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       setNotifications(prev => [...newNotifications, ...prev]);
       setHasNewNotifications(true);
     });
-  }, [rules]);
+  }, [rules, shouldNotifyUser]);
 
   const getNotificationRules = useCallback((): NotificationRule[] => {
     return rules;

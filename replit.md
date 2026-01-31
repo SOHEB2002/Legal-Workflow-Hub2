@@ -45,11 +45,13 @@ The system features a formal and luxurious design.
 - **Favorites & Recent Items**: Users can favorite items and view their last 10 visited items, saved in `localStorage`.
 - **Review Standards (`/standards`)**: Quality review system for contracts, consultations, reports, and legal letters, with checklists and review statuses.
 - **Notifications & Alerts**:
-    - **Types**: 8 types including task reminders, case delays, deadlines, new assignments, escalations.
+    - **Types**: 19+ types including task reminders, case delays, deadlines, new assignments, escalations, workflow events (STAGE_CHANGED, SLA_WARNING, SLA_OVERDUE, RETURNED_FOR_REVISION, THIRD_RETURN_WARNING, WORKLOAD_HIGH, WORKLOAD_CRITICAL, CASE_ASSIGNED, CONSULTATION_ASSIGNED, SENT_TO_REVIEW).
     - **Priority Levels**: Low, Medium, High, Urgent.
     - **Statuses**: Pending, Sent, Read, Replied, Escalated, Archived.
     - **Features**: Notification bell, send to specific users/departments, scheduling, automatic escalation, 4 response types (approve, reject, in progress, note), dynamic templates.
-    - **User Preferences**: Sound alerts, desktop notifications, notification mode (instant, daily, weekly summary), quiet hours, muting specific types.
+    - **User Preferences**: Sound alerts, desktop notifications, notification mode (instant, daily, weekly summary), quiet hours, muting specific types, workflow notification toggles (assignment, stage change, review notes, returns, SLA warnings).
+    - **Rule-Based System**: 10 default notification rules with configurable conditions (stages, priorities, departments), recipients (assigned employee, department head, branch manager, review committee), and auto-escalation settings.
+    - **Workflow Integration**: Automatic notifications triggered by workflow events (case/consultation assignment, stage changes, returns, SLA warnings) via triggerWorkflowNotification function.
 - **Workflow Management System** (NEW):
     - **Workflow Board (`/workflow-board`)**: Kanban-style board for visualizing cases/consultations across stages with drag-like stage progression.
     - **Workload Dashboard (`/workload-dashboard`)**: Monitors employee workload distribution with overload alerts (>15 items), overdue counts, and bottleneck detection.
