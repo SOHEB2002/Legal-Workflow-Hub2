@@ -1,10 +1,16 @@
 import { useState, useEffect } from "react";
-import { Send, Calendar, AlertTriangle, Users } from "lucide-react";
+import { Send, Calendar as CalendarIcon, AlertTriangle, Users, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -19,6 +25,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatDateArabic } from "@/lib/date-utils";
+import { cn } from "@/lib/utils";
 import { useNotifications } from "@/lib/notifications-context";
 import { useAuth, getAllUsers } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -74,7 +82,8 @@ export function SendNotificationDialog({
   const [relatedId, setRelatedId] = useState(prefilledRelatedId || "");
   const [requiresResponse, setRequiresResponse] = useState(false);
   const [enableSchedule, setEnableSchedule] = useState(false);
-  const [scheduledAt, setScheduledAt] = useState("");
+  const [scheduledDate, setScheduledDate] = useState<Date | undefined>(undefined);
+  const [scheduledTime, setScheduledTime] = useState("12:00");
   const [enableAutoEscalate, setEnableAutoEscalate] = useState(false);
   const [autoEscalateHours, setAutoEscalateHours] = useState("24");
   const [selectedTemplate, setSelectedTemplate] = useState("");
@@ -111,7 +120,8 @@ export function SendNotificationDialog({
     setRelatedId("");
     setRequiresResponse(false);
     setEnableSchedule(false);
-    setScheduledAt("");
+    setScheduledDate(undefined);
+    setScheduledTime("12:00");
     setEnableAutoEscalate(false);
     setAutoEscalateHours("24");
     setSelectedTemplate("");
@@ -130,7 +140,7 @@ export function SendNotificationDialog({
       relatedType: relatedType || null,
       relatedId: relatedId || null,
       requiresResponse,
-      scheduledAt: enableSchedule ? scheduledAt : null,
+      scheduledAt: enableSchedule && scheduledDate ? `${scheduledDate.toISOString().split('T')[0]}T${scheduledTime}` : null,
       autoEscalateAfterHours: enableAutoEscalate ? parseInt(autoEscalateHours) : 0,
     };
 
@@ -140,8 +150,9 @@ export function SendNotificationDialog({
           toast({ title: "يرجى اختيار المستلم", variant: "destructive" });
           return;
         }
-        if (enableSchedule && scheduledAt) {
-          scheduleNotification({ ...baseNotification, recipientId, status: "pending" }, scheduledAt);
+        if (enableSchedule && scheduledDate) {
+          const scheduledAtStr = `${scheduledDate.toISOString().split('T')[0]}T${scheduledTime}`;
+          scheduleNotification({ ...baseNotification, recipientId, status: "pending" }, scheduledAtStr);
         } else {
           sendNotification({ ...baseNotification, recipientId });
         }
@@ -380,17 +391,43 @@ export function SendNotificationDialog({
                 onCheckedChange={(c) => setEnableSchedule(!!c)}
               />
               <label htmlFor="enable-schedule" className="text-sm cursor-pointer flex items-center gap-1">
-                <Calendar className="w-4 h-4" />
+                <CalendarIcon className="w-4 h-4" />
                 جدولة الإرسال
               </label>
             </div>
             {enableSchedule && (
-              <Input
-                type="datetime-local"
-                value={scheduledAt}
-                onChange={(e) => setScheduledAt(e.target.value)}
-                className="mt-2"
-              />
+              <div className="mt-2 flex gap-2 items-center">
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "justify-start text-right font-normal flex-1",
+                        !scheduledDate && "text-muted-foreground"
+                      )}
+                    >
+                      <CalendarDays className="ml-2 h-4 w-4" />
+                      {scheduledDate ? formatDateArabic(scheduledDate) : "اختر التاريخ"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={scheduledDate}
+                      onSelect={setScheduledDate}
+                      disabled={(date) => date < new Date()}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+                <Input
+                  type="time"
+                  value={scheduledTime}
+                  onChange={(e) => setScheduledTime(e.target.value)}
+                  className="w-28"
+                  dir="ltr"
+                />
+              </div>
             )}
 
             <div className="flex items-center gap-2">
