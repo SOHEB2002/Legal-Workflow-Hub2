@@ -443,6 +443,56 @@ export interface FieldTask {
   updatedAt: string;
 }
 
+// ==================== أنواع التواصل مع العملاء ====================
+export const ContactType = {
+  PHONE_CALL: "اتصال_هاتفي",
+  WHATSAPP: "واتساب",
+  EMAIL: "بريد_إلكتروني",
+  IN_PERSON: "زيارة_شخصية",
+  VIDEO_CALL: "اجتماع_مرئي",
+  OTHER: "أخرى",
+} as const;
+
+export type ContactTypeValue = typeof ContactType[keyof typeof ContactType];
+
+export const ContactTypeLabels: Record<ContactTypeValue, string> = {
+  "اتصال_هاتفي": "اتصال هاتفي",
+  "واتساب": "واتساب",
+  "بريد_إلكتروني": "بريد إلكتروني",
+  "زيارة_شخصية": "زيارة شخصية",
+  "اجتماع_مرئي": "اجتماع مرئي",
+  "أخرى": "أخرى",
+};
+
+// ==================== حالات المتابعة ====================
+export const FollowUpStatus = {
+  PENDING: "بانتظار_المتابعة",
+  COMPLETED: "تمت_المتابعة",
+  CANCELLED: "ملغية",
+} as const;
+
+export type FollowUpStatusValue = typeof FollowUpStatus[keyof typeof FollowUpStatus];
+
+export const FollowUpStatusLabels: Record<FollowUpStatusValue, string> = {
+  "بانتظار_المتابعة": "بانتظار المتابعة",
+  "تمت_المتابعة": "تمت المتابعة",
+  "ملغية": "ملغية",
+};
+
+// ==================== سجل التواصل ====================
+export interface ContactLog {
+  id: string;
+  clientId: string;
+  contactType: ContactTypeValue;
+  contactDate: string;
+  nextFollowUpDate: string | null;
+  followUpStatus: FollowUpStatusValue;
+  notes: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ==================== Zod Schemas ====================
 
 export const insertUserSchema = z.object({

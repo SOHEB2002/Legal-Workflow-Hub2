@@ -33,13 +33,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Search, Pencil, Trash2, Building2, User, Phone, Mail, Eye, Briefcase, MessageSquare } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Building2, User, Phone as PhoneIcon, Mail, Eye, Briefcase, MessageSquare, PhoneCall, Clock, CheckCircle } from "lucide-react";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
-import type { Client, ClientTypeValue } from "@shared/schema";
-import { ClientType, CaseStageLabels } from "@shared/schema";
+import { useContacts } from "@/lib/contacts-context";
+import type { Client, ClientTypeValue, ContactTypeValue, FollowUpStatusValue } from "@shared/schema";
+import { ClientType, CaseStageLabels, ContactType, ContactTypeLabels, FollowUpStatus, FollowUpStatusLabels } from "@shared/schema";
 import { format } from "date-fns";
 import { ar } from "date-fns/locale";
 
@@ -48,12 +49,20 @@ export default function ClientsPage() {
   const { user, permissions } = useAuth();
   const { cases } = useCases();
   const { consultations } = useConsultations();
+  const { contacts, addContact, getContactsByClientId, getLastContactByClientId, markFollowUpComplete } = useContacts();
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [detailsTab, setDetailsTab] = useState("info");
+  const [isAddContactOpen, setIsAddContactOpen] = useState(false);
+  const [contactFormData, setContactFormData] = useState({
+    contactType: ContactType.PHONE_CALL as ContactTypeValue,
+    contactDate: new Date().toISOString().split('T')[0],
+    nextFollowUpDate: "",
+    notes: "",
+  });
 
   const [formData, setFormData] = useState<Partial<Client>>({
     clientType: "فرد",
@@ -121,6 +130,92 @@ export default function ClientsPage() {
   const getClientConsultations = (clientId: string) => {
     return consultations.filter((c) => c.clientId === clientId);
   };
+
+  const getClientContactsCount = (clientId: string) => {
+    return getContactsByClientId(clientId).length;
+  };
+
+  const handleAddContact = () => {
+    if (!viewingClient || !user) return;
+    addContact({
+      clientId: viewingClient.id,
+      contactType: contactFormData.contactType,
+      contactDate: contactFormData.contactDate,
+      nextFollowUpDate: contactFormData.nextFollowUpDate || null,
+      followUpStatus: contactFormData.nextFollowUpDate ? FollowUpStatus.PENDING : FollowUpStatus.COMPLETED,
+      notes: contactFormData.notes,
+      createdBy: user.id,
+    });
+    setContactFormData({
+      contactType: ContactType.PHONE_CALL,
+      contactDate: new Date().toISOString().split('T')[0],
+      nextFollowUpDate: "",
+      notes: "",
+    });
+    setIsAddContactOpen(false);
+  };
+
+  const renderContactForm = () => (
+    <div className="space-y-4 p-4 border rounded-lg bg-muted/30">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <Label>نوع التواصل</Label>
+          <Select
+            value={contactFormData.contactType}
+            onValueChange={(value: ContactTypeValue) =>
+              setContactFormData({ ...contactFormData, contactType: value })
+            }
+          >
+            <SelectTrigger data-testid="select-contact-type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(ContactType).map(([key, value]) => (
+                <SelectItem key={key} value={value}>
+                  {ContactTypeLabels[value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>تاريخ التواصل</Label>
+          <Input
+            type="date"
+            value={contactFormData.contactDate}
+            onChange={(e) => setContactFormData({ ...contactFormData, contactDate: e.target.value })}
+            data-testid="input-contact-date"
+          />
+        </div>
+      </div>
+      <div>
+        <Label>تاريخ المتابعة القادمة (اختياري)</Label>
+        <Input
+          type="date"
+          value={contactFormData.nextFollowUpDate}
+          onChange={(e) => setContactFormData({ ...contactFormData, nextFollowUpDate: e.target.value })}
+          data-testid="input-followup-date"
+        />
+      </div>
+      <div>
+        <Label>ملاحظات</Label>
+        <Textarea
+          value={contactFormData.notes}
+          onChange={(e) => setContactFormData({ ...contactFormData, notes: e.target.value })}
+          placeholder="أضف ملاحظات حول هذا التواصل..."
+          data-testid="input-contact-notes"
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button onClick={handleAddContact} data-testid="button-save-contact">
+          حفظ التواصل
+        </Button>
+        <Button variant="outline" onClick={() => setIsAddContactOpen(false)}>
+          إلغاء
+        </Button>
+      </div>
+    </div>
+  );
 
   const filteredClients = clients.filter((client) => {
     const name = client.clientType === "فرد" ? client.individualName : client.companyName;
@@ -351,7 +446,7 @@ export default function ClientsPage() {
                   <TableCell>
                     <div className="space-y-1">
                       <div className="flex items-center gap-1 text-sm">
-                        <Phone className="w-3 h-3" />
+                        <PhoneIcon className="w-3 h-3" />
                         {client.phone}
                       </div>
                       {client.email && (
@@ -448,8 +543,12 @@ export default function ClientsPage() {
           </DialogHeader>
           {viewingClient && (
             <Tabs value={detailsTab} onValueChange={setDetailsTab} className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="info" data-testid="tab-client-info">المعلومات</TabsTrigger>
+                <TabsTrigger value="contacts" data-testid="tab-client-contacts">
+                  <PhoneCall className="w-4 h-4 ml-2" />
+                  سجل التواصل ({getClientContactsCount(viewingClient.id)})
+                </TabsTrigger>
                 <TabsTrigger value="cases" data-testid="tab-client-cases">
                   <Briefcase className="w-4 h-4 ml-2" />
                   القضايا ({getClientCasesCount(viewingClient.id)})
@@ -519,6 +618,83 @@ export default function ClientsPage() {
                 <div className="border-t pt-4 text-sm text-muted-foreground">
                   تاريخ الإضافة: {format(new Date(viewingClient.createdAt), "d MMMM yyyy", { locale: ar })}
                 </div>
+              </TabsContent>
+
+              <TabsContent value="contacts" className="mt-4 space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-semibold">سجل التواصل</h3>
+                  {!isAddContactOpen && (
+                    <Button size="sm" onClick={() => setIsAddContactOpen(true)} data-testid="button-add-contact">
+                      <Plus className="w-4 h-4 ml-2" />
+                      تواصل جديد
+                    </Button>
+                  )}
+                </div>
+                
+                {isAddContactOpen && renderContactForm()}
+                
+                {(() => {
+                  const clientContacts = getContactsByClientId(viewingClient.id);
+                  if (clientContacts.length === 0 && !isAddContactOpen) {
+                    return <p className="text-muted-foreground text-center py-8">لا يوجد سجل تواصل لهذا العميل</p>;
+                  }
+                  if (clientContacts.length === 0) return null;
+                  return (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-right">نوع التواصل</TableHead>
+                          <TableHead className="text-right">التاريخ</TableHead>
+                          <TableHead className="text-right">المتابعة القادمة</TableHead>
+                          <TableHead className="text-right">الحالة</TableHead>
+                          <TableHead className="text-right">الملاحظات</TableHead>
+                          <TableHead className="text-right">إجراءات</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {clientContacts.map((contact) => (
+                          <TableRow key={contact.id}>
+                            <TableCell>
+                              <Badge variant="outline">{ContactTypeLabels[contact.contactType]}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              {format(new Date(contact.contactDate), "d MMMM yyyy", { locale: ar })}
+                            </TableCell>
+                            <TableCell>
+                              {contact.nextFollowUpDate ? (
+                                <span className={new Date(contact.nextFollowUpDate) < new Date() && contact.followUpStatus === FollowUpStatus.PENDING ? "text-destructive font-medium" : ""}>
+                                  {format(new Date(contact.nextFollowUpDate), "d MMMM yyyy", { locale: ar })}
+                                </span>
+                              ) : "-"}
+                            </TableCell>
+                            <TableCell>
+                              <Badge 
+                                variant={contact.followUpStatus === FollowUpStatus.COMPLETED ? "default" : "secondary"}
+                              >
+                                {FollowUpStatusLabels[contact.followUpStatus]}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="max-w-[200px] truncate">
+                              {contact.notes || "-"}
+                            </TableCell>
+                            <TableCell>
+                              {contact.followUpStatus === FollowUpStatus.PENDING && (
+                                <Button 
+                                  size="sm" 
+                                  variant="ghost"
+                                  onClick={() => markFollowUpComplete(contact.id)}
+                                  data-testid={`button-complete-followup-${contact.id}`}
+                                >
+                                  <CheckCircle className="w-4 h-4 text-green-600" />
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  );
+                })()}
               </TabsContent>
 
               <TabsContent value="cases" className="mt-4">

@@ -14,6 +14,7 @@ import { HearingsProvider } from "@/lib/hearings-context";
 import { DepartmentsProvider } from "@/lib/departments-context";
 import { FieldTasksProvider } from "@/lib/field-tasks-context";
 import { DashboardProvider } from "@/lib/dashboard-context";
+import { ContactsProvider } from "@/lib/contacts-context";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -86,12 +87,14 @@ function App() {
                 <ConsultationsProvider>
                   <HearingsProvider>
                     <FieldTasksProvider>
-                      <DashboardProvider>
-                        <TooltipProvider>
-                          <AppContent />
-                          <Toaster />
-                        </TooltipProvider>
-                      </DashboardProvider>
+                      <ContactsProvider>
+                        <DashboardProvider>
+                          <TooltipProvider>
+                            <AppContent />
+                            <Toaster />
+                          </TooltipProvider>
+                        </DashboardProvider>
+                      </ContactsProvider>
                     </FieldTasksProvider>
                   </HearingsProvider>
                 </ConsultationsProvider>

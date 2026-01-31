@@ -19,6 +19,7 @@ import { useConsultations } from "@/lib/consultations-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useClients } from "@/lib/clients-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
+import { useContacts } from "@/lib/contacts-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDashboard, type WidgetSize } from "@/lib/dashboard-context";
 import { CaseStatus, CaseStageLabels } from "@shared/schema";
@@ -49,6 +50,7 @@ export default function DashboardPage() {
   const { hearings, getUpcomingHearings } = useHearings();
   const { clients, getClientName } = useClients();
   const { fieldTasks } = useFieldTasks();
+  const { getPendingFollowUps } = useContacts();
   const { user } = useAuth();
   const { widgets } = useDashboard();
   const [, setLocation] = useLocation();
@@ -116,7 +118,7 @@ export default function DashboardPage() {
       case "overdue_tasks": return overdueTasks.length;
       case "active_consultations": return consultationStats.active;
       case "new_clients_month": return newClientsThisMonth;
-      case "pending_client_contact": return 0;
+      case "pending_client_contact": return getPendingFollowUps().length;
       case "ready_cases": return caseStats.ready;
       default: return 0;
     }
