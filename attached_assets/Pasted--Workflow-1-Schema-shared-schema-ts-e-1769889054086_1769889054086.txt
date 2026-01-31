@@ -1,0 +1,366 @@
+أنشئ نظام إشعارات متكامل مع نظام سلسلة العمل (Workflow):
+
+=== 1. Schema في shared/schema.ts ===
+
+- enum NotificationType:
+  // إشعارات سلسلة العمل
+  stage_changed (تغيرت المرحلة)
+  case_assigned (تم تعيين قضية)
+  consultation_assigned (تم تعيين استشارة)
+  sent_to_review (أُرسل للمراجعة)
+  review_notes_added (أُضيفت ملاحظات المراجعة)
+  returned_for_revision (أُرجع للتعديل)
+  submitted_to_court (رُفع للمحكمة)
+  sent_to_client (أُرسل للعميل)
+  
+  // إشعارات SLA
+  sla_warning (تحذير اقتراب الموعد)
+  sla_overdue (تأخر عن الموعد)
+  sla_critical (تأخر حرج - أكثر من 24 ساعة)
+  
+  // إشعارات الإرجاع
+  first_return (إرجاع أول)
+  second_return (إرجاع ثاني)
+  third_return_warning (تحذير - إرجاع ثالث)
+  
+  // إشعارات توازن العمل
+  workload_high (حمل عمل مرتفع)
+  workload_critical (حمل عمل حرج)
+  reassignment_suggestion (اقتراح إعادة توزيع)
+  
+  // إشعارات عامة
+  general_alert (تنبيه عام)
+  task_reminder (تذكير بمهمة)
+  deadline_warning (تحذير موعد)
+  manual_notification (إشعار يدوي)
+
+- enum NotificationPriority: low, medium, high, urgent
+- enum NotificationStatus: pending, sent, read, responded, escalated, archived
+- enum ResponseType: completed, in_progress, need_more_time, noted
+
+- interface Notification:
+  id, type, priority, status
+  title, message
+  senderId, senderName (null للإشعارات التلقائية)
+  isAutomatic: boolean (تلقائي أم يدوي)
+  recipientId, recipientIds[]
+  
+  // ربط بسلسلة العمل
+  relatedType: "case" | "consultation" | null
+  relatedId: string | null
+  relatedStage: CaseStage | ConsultationStage | null
+  workflowTriggerId: string | null (معرف الحدث الذي أطلق الإشعار)
+  
+  isRead, readAt
+  response: { type, message, respondedAt } | null
+  scheduledAt: Date | null
+  escalationLevel: number
+  escalatedTo: userId | null
+  autoEscalateAfterHours: number
+  createdAt, updatedAt
+
+- interface NotificationRule:
+  id
+  name
+  triggerEvent: NotificationType
+  conditions: {
+    stages?: (CaseStage | ConsultationStage)[]
+    priorities?: CasePriority[]
+    departments?: string[]
+    returnCountMin?: number
+    slaPercentage?: number
+  }
+  recipients: {
+    assignedEmployee: boolean
+    departmentHead: boolean
+    branchManager: boolean
+    reviewCommittee: boolean
+    customUserIds: string[]
+  }
+  notificationPriority: NotificationPriority
+  template: { title: string, message: string }
+  isActive: boolean
+  autoEscalate: boolean
+  escalateAfterHours: number
+
+- interface UserNotificationPreferences:
+  userId
+  enableSound: boolean
+  digestMode: "instant" | "daily" | "weekly"
+  mutedTypes: NotificationType[]
+  quietHoursStart: string | null
+  quietHoursEnd: string | null
+  // تفضيلات سلسلة العمل
+  notifyOnAssignment: boolean
+  notifyOnStageChange: boolean
+  notifyOnReviewNotes: boolean
+  notifyOnReturn: boolean
+  notifyOnSlaWarning: boolean
+
+=== 2. أنشئ client/src/lib/notifications-context.tsx ===
+
+// ربط مع Workflow Context
+import { useWorkflow } from './workflow-context'
+
+قواعد الإشعارات الافتراضية:
+const defaultNotificationRules: NotificationRule[] = [
+  {
+    name: "إشعار تعيين قضية",
+    triggerEvent: "case_assigned",
+    recipients: { assignedEmployee: true },
+    notificationPriority: "medium",
+    template: { title: "تم تعيين قضية جديدة", message: "تم تعيينك على القضية: {caseName}" }
+  },
+  {
+    name: "تحذير SLA",
+    triggerEvent: "sla_warning",
+    conditions: { slaPercentage: 80 },
+    recipients: { assignedEmployee: true, departmentHead: true },
+    notificationPriority: "high",
+    template: { title: "تحذير: اقتراب الموعد", message: "متبقي {timeRemaining} على انتهاء مدة المرحلة للقضية: {caseName}" }
+  },
+  {
+    name: "تأخر SLA",
+    triggerEvent: "sla_overdue",
+    recipients: { assignedEmployee: true, departmentHead: true, branchManager: true },
+    notificationPriority: "urgent",
+    template: { title: "🚨 تأخر!", message: "تأخرت القضية {caseName} عن الموعد بـ {overdueTime}" }
+  },
+  {
+    name: "إرجاع للتعديل",
+    triggerEvent: "returned_for_revision",
+    recipients: { assignedEmployee: true },
+    notificationPriority: "high",
+    template: { title: "تم إرجاع العمل للتعديل", message: "تم إرجاع {entityType}: {entityName}. السبب: {returnReason}" }
+  },
+  {
+    name: "إرجاع ثالث - تحذير",
+    triggerEvent: "third_return_warning",
+    conditions: { returnCountMin: 3 },
+    recipients: { assignedEmployee: true, departmentHead: true, branchManager: true },
+    notificationPriority: "urgent",
+    template: { title: "⚠️ إرجاع للمرة الثالثة", message: "تم إرجاع {entityName} للمرة الثالثة. يرجى المراجعة." }
+  },
+  {
+    name: "حمل عمل مرتفع",
+    triggerEvent: "workload_high",
+    conditions: { /* activeCases > 12 */ },
+    recipients: { departmentHead: true },
+    notificationPriority: "medium",
+    template: { title: "حمل عمل مرتفع", message: "الموظف {employeeName} لديه {count} قضية نشطة" }
+  },
+  // ... المزيد من القواعد
+]
+
+دوال الإشعارات:
+
+// إرسال تلقائي (يُستدعى من workflow-context)
+- triggerWorkflowNotification(event: {
+    type: NotificationType,
+    entityType: "case" | "consultation",
+    entityId: string,
+    stage?: Stage,
+    additionalData?: object
+  }): يطبق القواعد ويرسل الإشعارات المناسبة
+
+// إرسال يدوي
+- sendManualNotification(notification): إرسال من مدير/مشرف
+- sendBulkNotification(recipientIds[], notification)
+- scheduleNotification(notification, scheduledAt)
+- sendToTeam(departmentId, notification)
+
+// إدارة
+- markAsRead(id)
+- markAllAsRead()
+- respondToNotification(id, responseType, message)
+- archiveOldNotifications(daysOld)
+- getUnreadCount()
+- getMyNotifications(filters)
+
+// التصعيد
+- checkAndEscalate()
+- escalateNotification(id, escalateToUserId)
+
+// القواعد
+- getNotificationRules()
+- updateNotificationRule(id, rule)
+- toggleRuleActive(id)
+
+// التفضيلات
+- getUserPreferences(userId)
+- updateUserPreferences(userId, preferences)
+
+=== 3. تحديث client/src/lib/workflow-context.tsx ===
+
+// استيراد نظام الإشعارات
+import { useNotifications } from './notifications-context'
+
+// في كل دالة تغيير مرحلة، أضف:
+
+const updateCaseStage = (caseId, newStage, notes) => {
+  // ... الكود الحالي ...
+  
+  // إطلاق إشعار تلقائي
+  triggerWorkflowNotification({
+    type: 'stage_changed',
+    entityType: 'case',
+    entityId: caseId,
+    stage: newStage,
+    additionalData: { notes, previousStage }
+  })
+}
+
+const assignCaseToDepartment = (caseId, departmentId, assignedTo) => {
+  // ... الكود الحالي ...
+  
+  triggerWorkflowNotification({
+    type: 'case_assigned',
+    entityType: 'case',
+    entityId: caseId,
+    additionalData: { assignedTo, departmentId }
+  })
+}
+
+const sendCaseToReview = (caseId) => {
+  // ... الكود الحالي ...
+  
+  triggerWorkflowNotification({
+    type: 'sent_to_review',
+    entityType: 'case',
+    entityId: caseId
+  })
+}
+
+const submitReviewNotes = (caseId, notes, action) => {
+  // ... الكود الحالي ...
+  
+  triggerWorkflowNotification({
+    type: action === 'returned' ? 'returned_for_revision' : 'review_notes_added',
+    entityType: 'case',
+    entityId: caseId,
+    additionalData: { notes, action, returnCount }
+  })
+  
+  // إذا كان الإرجاع للمرة الثالثة
+  if (action === 'returned' && returnCount >= 3) {
+    triggerWorkflowNotification({
+      type: 'third_return_warning',
+      entityType: 'case',
+      entityId: caseId
+    })
+  }
+}
+
+// فحص SLA دوري
+const checkSLAStatus = () => {
+  cases.forEach(case => {
+    const slaPercentage = calculateSLAPercentage(case)
+    
+    if (slaPercentage >= 80 && slaPercentage < 100) {
+      triggerWorkflowNotification({
+        type: 'sla_warning',
+        entityType: 'case',
+        entityId: case.id,
+        additionalData: { slaPercentage, timeRemaining }
+      })
+    } else if (slaPercentage >= 100) {
+      triggerWorkflowNotification({
+        type: 'sla_overdue',
+        entityType: 'case',
+        entityId: case.id,
+        additionalData: { overdueHours }
+      })
+    }
+  })
+}
+
+// فحص توازن العمل دوري
+const checkWorkloadStatus = () => {
+  employees.forEach(emp => {
+    const workload = getEmployeeWorkload(emp.id)
+    
+    if (workload.activeCases > 15) {
+      triggerWorkflowNotification({
+        type: 'workload_critical',
+        additionalData: { employeeId: emp.id, count: workload.activeCases }
+      })
+    } else if (workload.activeCases > 12) {
+      triggerWorkflowNotification({
+        type: 'workload_high',
+        additionalData: { employeeId: emp.id, count: workload.activeCases }
+      })
+    }
+  })
+}
+
+// استدعاء الفحص الدوري في App.tsx
+useEffect(() => {
+  const interval = setInterval(() => {
+    checkSLAStatus()
+    checkWorkloadStatus()
+    checkAndEscalate()
+  }, 60 * 60 * 1000) // كل ساعة
+  
+  return () => clearInterval(interval)
+}, [])
+
+=== 4. أنشئ client/src/components/notifications/notifications-bell.tsx ===
+- أيقونة Bell مع animation عند إشعار جديد
+- Badge بالعدد (أحمر إذا فيه urgent)
+- Dropdown بآخر 5:
+  - أيقونة حسب النوع (🔔 عام، ⚠️ SLA، 🔄 إرجاع، 📋 تعيين)
+  - تلوين حسب الأولوية
+  - رابط مباشر للقضية/الاستشارة
+- صوت للإشعارات العاجلة
+
+=== 5. أنشئ client/src/pages/notifications.tsx ===
+- Tabs: الكل | سلسلة العمل | SLA | الإرجاعات | يدوية
+- فلترة: النوع، الأولوية، مقروء، القضية/الاستشارة
+- جدول مع رابط مباشر للعنصر المرتبط
+- أزرار الإجراءات
+
+=== 6. أنشئ client/src/pages/notification-rules.tsx (للمديرين) ===
+- جدول بقواعد الإشعارات
+- تفعيل/تعطيل كل قاعدة
+- تعديل: المستلمين، الأولوية، القالب، شروط التصعيد
+- إضافة قواعد جديدة
+- اختبار قاعدة (إرسال تجريبي)
+
+=== 7. أنشئ client/src/pages/notification-dashboard.tsx ===
+- إحصائيات حسب النوع (سلسلة العمل، SLA، إرجاع، يدوي)
+- Chart: الإشعارات المرسلة هذا الأسبوع
+- Chart: نسبة القراءة والاستجابة
+- جدول: أكثر القضايا إشعاراً (المشكلة)
+- جدول: الموظفين الأبطأ استجابة
+
+=== 8. التكامل في الواجهات ===
+
+في stage-tracker.tsx:
+- عند تغيير المرحلة، يظهر toast "تم إرسال إشعار للمعنيين"
+
+في case-workflow-panel.tsx:
+- قسم "الإشعارات المرتبطة" يعرض آخر إشعارات هذه القضية
+- زر "إرسال تنبيه" لإرسال إشعار يدوي
+
+في workload-card.tsx:
+- أيقونة تنبيه إذا كان الموظف أُرسل له إشعار حمل عمل
+
+في sidebar.tsx:
+- "الإشعارات" مع Badge
+- "قواعد الإشعارات" (للمديرين)
+- "لوحة الإشعارات" (للمديرين)
+
+في Header:
+- notifications-bell
+
+=== 9. القوالب الافتراضية ===
+- تعيين قضية: "تم تعيينك على القضية: {caseName} - الأولوية: {priority}"
+- تعيين استشارة: "تم تعيينك على الاستشارة: {consultationNumber}"
+- إرسال للمراجعة: "تم استلام {entityType}: {entityName} للمراجعة"
+- ملاحظات المراجعة: "تمت إضافة ملاحظات على {entityName}. يرجى المراجعة."
+- إرجاع: "تم إرجاع {entityName} للتعديل. السبب: {returnReason}"
+- تحذير SLA: "⏰ متبقي {timeRemaining} لإنهاء {entityName}"
+- تأخر SLA: "🚨 تأخرت {entityName} بـ {overdueTime}"
+- حمل عمل: "📊 لديك {count} قضية نشطة حالياً"
+
+استخدم shadcn/ui مع دعم RTL بالعربي.

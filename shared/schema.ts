@@ -917,6 +917,32 @@ export interface ReviewResult {
 // ==================== نظام الإشعارات (Notifications) ====================
 
 export const NotificationType = {
+  // إشعارات سلسلة العمل
+  STAGE_CHANGED: "stage_changed",
+  CASE_ASSIGNED: "case_assigned",
+  CONSULTATION_ASSIGNED: "consultation_assigned",
+  SENT_TO_REVIEW: "sent_to_review",
+  REVIEW_NOTES_ADDED: "review_notes_added",
+  RETURNED_FOR_REVISION: "returned_for_revision",
+  SUBMITTED_TO_COURT: "submitted_to_court",
+  SENT_TO_CLIENT: "sent_to_client",
+  
+  // إشعارات SLA
+  SLA_WARNING: "sla_warning",
+  SLA_OVERDUE: "sla_overdue",
+  SLA_CRITICAL: "sla_critical",
+  
+  // إشعارات الإرجاع
+  FIRST_RETURN: "first_return",
+  SECOND_RETURN: "second_return",
+  THIRD_RETURN_WARNING: "third_return_warning",
+  
+  // إشعارات توازن العمل
+  WORKLOAD_HIGH: "workload_high",
+  WORKLOAD_CRITICAL: "workload_critical",
+  REASSIGNMENT_SUGGESTION: "reassignment_suggestion",
+  
+  // إشعارات عامة
   TASK_REMINDER: "task_reminder",
   CASE_DELAY: "case_delay",
   CONSULTATION_DELAY: "consultation_delay",
@@ -925,11 +951,29 @@ export const NotificationType = {
   ASSIGNMENT: "assignment",
   ESCALATION: "escalation",
   RESPONSE_REQUEST: "response_request",
+  MANUAL_NOTIFICATION: "manual_notification",
 } as const;
 
 export type NotificationTypeValue = typeof NotificationType[keyof typeof NotificationType];
 
 export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
+  stage_changed: "تغيرت المرحلة",
+  case_assigned: "تم تعيين قضية",
+  consultation_assigned: "تم تعيين استشارة",
+  sent_to_review: "أُرسل للمراجعة",
+  review_notes_added: "أُضيفت ملاحظات المراجعة",
+  returned_for_revision: "أُرجع للتعديل",
+  submitted_to_court: "رُفع للمحكمة",
+  sent_to_client: "أُرسل للعميل",
+  sla_warning: "تحذير اقتراب الموعد",
+  sla_overdue: "تأخر عن الموعد",
+  sla_critical: "تأخر حرج",
+  first_return: "إرجاع أول",
+  second_return: "إرجاع ثاني",
+  third_return_warning: "تحذير - إرجاع ثالث",
+  workload_high: "حمل عمل مرتفع",
+  workload_critical: "حمل عمل حرج",
+  reassignment_suggestion: "اقتراح إعادة توزيع",
   task_reminder: "تذكير بمهمة",
   case_delay: "تأخر قضية",
   consultation_delay: "تأخر استشارة",
@@ -938,6 +982,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   assignment: "إسناد مهمة",
   escalation: "تصعيد",
   response_request: "طلب رد",
+  manual_notification: "إشعار يدوي",
 };
 
 export const NotificationPriority = {
@@ -1005,12 +1050,15 @@ export interface Notification {
   status: NotificationStatusValue;
   title: string;
   message: string;
-  senderId: string;
-  senderName: string;
+  senderId: string | null;
+  senderName: string | null;
+  isAutomatic: boolean;
   recipientId: string;
   recipientIds?: string[];
   relatedType: "case" | "consultation" | "task" | null;
   relatedId: string | null;
+  relatedStage: string | null;
+  workflowTriggerId: string | null;
   isRead: boolean;
   readAt: string | null;
   response: NotificationResponse | null;
@@ -1054,6 +1102,40 @@ export interface UserNotificationPreferences {
   mutedTypes: NotificationTypeValue[];
   quietHoursStart: string | null;
   quietHoursEnd: string | null;
+  notifyOnAssignment: boolean;
+  notifyOnStageChange: boolean;
+  notifyOnReviewNotes: boolean;
+  notifyOnReturn: boolean;
+  notifyOnSlaWarning: boolean;
+}
+
+export interface NotificationRuleConditions {
+  stages?: string[];
+  priorities?: string[];
+  departments?: string[];
+  returnCountMin?: number;
+  slaPercentage?: number;
+}
+
+export interface NotificationRuleRecipients {
+  assignedEmployee: boolean;
+  departmentHead: boolean;
+  branchManager: boolean;
+  reviewCommittee: boolean;
+  customUserIds: string[];
+}
+
+export interface NotificationRule {
+  id: string;
+  name: string;
+  triggerEvent: NotificationTypeValue;
+  conditions: NotificationRuleConditions;
+  recipients: NotificationRuleRecipients;
+  notificationPriority: NotificationPriorityValue;
+  template: { title: string; message: string };
+  isActive: boolean;
+  autoEscalate: boolean;
+  escalateAfterHours: number;
 }
 
 // ==================== Workflow System Enums ====================
