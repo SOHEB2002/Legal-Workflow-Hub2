@@ -32,7 +32,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText } from "lucide-react";
+import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
 import { FavoriteButton } from "@/components/favorite-button";
@@ -41,6 +42,9 @@ import { useAuth, getLawyers } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Consultation, ConsultationStatusValue, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
 import { ConsultationStatus, ConsultationStatusLabels, CaseType, DeliveryType, Department } from "@shared/schema";
+import { useStandards } from "@/lib/standards-context";
+import { ReviewChecklist } from "@/components/review-checklist";
+import { DialogFooter } from "@/components/ui/dialog";
 
 function getStatusColor(status: ConsultationStatusValue) {
   switch (status) {
@@ -79,12 +83,17 @@ export default function ConsultationsPage() {
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions } = useAuth();
   const { addRecentVisit } = useFavorites();
+  const { getStandardsByType } = useStandards();
+  const { toast } = useToast();
   const lawyers = getLawyers();
+  const consultationReviewStandards = getStandardsByType("legal_consultation");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
+  const [consultationToReview, setConsultationToReview] = useState<Consultation | null>(null);
 
   const [formData, setFormData] = useState({
     clientId: "",
@@ -355,6 +364,22 @@ export default function ConsultationsPage() {
                                 <Button
                                   size="icon"
                                   variant="ghost"
+                                  data-testid={`button-review-checklist-${consultation.id}`}
+                                  onClick={() => {
+                                    setConsultationToReview(consultation);
+                                    setShowReviewDialog(true);
+                                  }}
+                                >
+                                  <ClipboardCheck className="w-4 h-4 text-accent" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>قائمة المراجعة</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
                                   data-testid={`button-approve-${consultation.id}`}
                                   onClick={() => approveConsultation(consultation.id)}
                                 >
@@ -447,6 +472,38 @@ export default function ConsultationsPage() {
                   </p>
                 </div>
               )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5" />
+              مراجعة الاستشارة: {consultationToReview?.consultationNumber}
+            </DialogTitle>
+          </DialogHeader>
+          {consultationToReview && consultationReviewStandards.length > 0 && (
+            <ReviewChecklist
+              standardId={consultationReviewStandards[0].id}
+              targetId={consultationToReview.id}
+              targetType="consultation"
+              onSave={() => {
+                setShowReviewDialog(false);
+                setConsultationToReview(null);
+                toast({ title: "تم حفظ نتيجة المراجعة" });
+              }}
+              onClose={() => {
+                setShowReviewDialog(false);
+                setConsultationToReview(null);
+              }}
+            />
+          )}
+          {consultationReviewStandards.length === 0 && (
+            <div className="text-center py-8 text-muted-foreground">
+              لا توجد معايير مراجعة متاحة. يرجى إضافة معايير من صفحة معايير المراجعة.
             </div>
           )}
         </DialogContent>

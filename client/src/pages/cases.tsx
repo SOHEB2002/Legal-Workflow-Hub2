@@ -14,6 +14,7 @@ import {
   UserPlus,
   MessageSquare,
   FolderOpen,
+  ClipboardCheck,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { FavoriteButton } from "@/components/favorite-button";
@@ -74,6 +75,8 @@ import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType } from "@sha
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
+import { useStandards } from "@/lib/standards-context";
+import { ReviewChecklist } from "@/components/review-checklist";
 
 function getStatusColor(status: CaseStatusValue) {
   switch (status) {
@@ -135,7 +138,9 @@ export default function CasesPage() {
   const { user, permissions } = useAuth();
   const { getHearingsByCase } = useHearings();
   const { addRecentVisit } = useFavorites();
+  const { getStandardsByType } = useStandards();
   const lawyers = getLawyers();
+  const contractReviewStandards = getStandardsByType("contract_review");
   
   const getLawyerName = (id: string | null): string => {
     if (!id) return "-";
@@ -152,6 +157,7 @@ export default function CasesPage() {
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [selectedCase, setSelectedCase] = useState<LawCase | null>(null);
   const [rejectNotes, setRejectNotes] = useState("");
   const [newComment, setNewComment] = useState("");
@@ -277,6 +283,11 @@ export default function CasesPage() {
     setSelectedCase(caseItem);
     setShowDetailsDialog(true);
     addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
+  };
+
+  const openReviewDialog = (caseItem: LawCase) => {
+    setSelectedCase(caseItem);
+    setShowReviewDialog(true);
   };
 
   const canAssign = (c: LawCase) => 
@@ -434,6 +445,19 @@ export default function CasesPage() {
                       
                       {canReview(c) && (
                         <>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                data-testid={`button-review-checklist-${c.id}`}
+                                onClick={() => openReviewDialog(c)}
+                              >
+                                <ClipboardCheck className="w-4 h-4 text-accent" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>قائمة المراجعة</TooltipContent>
+                          </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
@@ -949,6 +973,34 @@ export default function CasesPage() {
                   </div>
                 </TabsContent>
               </Tabs>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5" />
+              مراجعة القضية: {selectedCase?.caseNumber}
+            </DialogTitle>
+          </DialogHeader>
+          {selectedCase && contractReviewStandards.length > 0 && (
+            <ReviewChecklist
+              standardId={contractReviewStandards[0].id}
+              targetId={selectedCase.id}
+              targetType="case"
+              onSave={() => {
+                setShowReviewDialog(false);
+                toast({ title: "تم حفظ نتيجة المراجعة" });
+              }}
+              onClose={() => setShowReviewDialog(false)}
+            />
+          )}
+          {contractReviewStandards.length === 0 && (
+            <div className="text-center py-8 text-muted-foreground">
+              لا توجد معايير مراجعة متاحة. يرجى إضافة معايير من صفحة معايير المراجعة.
             </div>
           )}
         </DialogContent>
