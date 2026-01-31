@@ -1,0 +1,871 @@
+# أمر تطوير نظام شركة العون - المرحلة الثانية
+
+---
+
+## 1. لوحة التحكم الذكية (Smart Dashboard)
+
+### المطلوب:
+إعادة تصميم لوحة التحكم لتكون قابلة للتخصيص مع widgets متعددة.
+
+### الـ Widgets المطلوبة:
+
+```javascript
+const availableWidgets = [
+  {
+    id: 'active_cases',
+    title: 'القضايا النشطة',
+    type: 'stat_card',
+    icon: 'briefcase',
+    color: '#1a365d'
+  },
+  {
+    id: 'pending_review',
+    title: 'بانتظار المراجعة',
+    type: 'stat_card',
+    icon: 'clock',
+    color: '#d4af37'
+  },
+  {
+    id: 'today_hearings',
+    title: 'جلسات اليوم',
+    type: 'stat_card',
+    icon: 'calendar',
+    color: '#e53e3e',
+    alert: true // تنبيه أحمر إذا كان هناك جلسات
+  },
+  {
+    id: 'upcoming_hearings',
+    title: 'جلسات الأسبوع',
+    type: 'stat_card',
+    icon: 'calendar-week',
+    color: '#38a169'
+  },
+  {
+    id: 'overdue_tasks',
+    title: 'مهام متأخرة',
+    type: 'stat_card',
+    icon: 'exclamation-triangle',
+    color: '#e53e3e',
+    alert: true
+  },
+  {
+    id: 'pending_client_contact',
+    title: 'بانتظار التواصل مع العميل',
+    type: 'stat_card',
+    icon: 'phone-missed',
+    color: '#ed8936'
+  },
+  {
+    id: 'active_consultations',
+    title: 'الاستشارات النشطة',
+    type: 'stat_card',
+    icon: 'comments',
+    color: '#3182ce'
+  },
+  {
+    id: 'new_clients_month',
+    title: 'عملاء جدد هذا الشهر',
+    type: 'stat_card',
+    icon: 'user-plus',
+    color: '#805ad5'
+  },
+  {
+    id: 'recent_cases',
+    title: 'آخر القضايا',
+    type: 'list',
+    maxItems: 5
+  },
+  {
+    id: 'upcoming_hearings_list',
+    title: 'الجلسات القادمة',
+    type: 'list',
+    maxItems: 5
+  },
+  {
+    id: 'overdue_cases',
+    title: 'قضايا متأخرة',
+    type: 'list',
+    description: 'قضايا لم يتم تحديثها منذ 30 يوم',
+    maxItems: 5
+  },
+  {
+    id: 'pending_field_tasks',
+    title: 'المهام الميدانية المعلقة',
+    type: 'list',
+    maxItems: 5
+  },
+  {
+    id: 'cases_by_status_chart',
+    title: 'القضايا حسب الحالة',
+    type: 'pie_chart'
+  },
+  {
+    id: 'cases_by_department_chart',
+    title: 'القضايا حسب القسم',
+    type: 'bar_chart'
+  },
+  {
+    id: 'monthly_performance_chart',
+    title: 'الأداء الشهري',
+    type: 'line_chart',
+    description: 'عدد القضايا المفتوحة والمغلقة'
+  },
+  {
+    id: 'employee_workload',
+    title: 'توزيع العمل على الموظفين',
+    type: 'bar_chart'
+  },
+  {
+    id: 'win_rate',
+    title: 'نسبة القضايا المكسوبة',
+    type: 'gauge',
+    color: '#38a169'
+  },
+  {
+    id: 'avg_case_duration',
+    title: 'متوسط مدة القضية',
+    type: 'stat_card',
+    suffix: 'يوم'
+  },
+  {
+    id: 'quick_actions',
+    title: 'إجراءات سريعة',
+    type: 'actions',
+    actions: ['قضية جديدة', 'استشارة جديدة', 'إضافة عميل', 'إضافة جلسة']
+  },
+  {
+    id: 'notifications_widget',
+    title: 'آخر الإشعارات',
+    type: 'notifications',
+    maxItems: 5
+  },
+  {
+    id: 'calendar_mini',
+    title: 'التقويم',
+    type: 'mini_calendar'
+  }
+];
+```
+
+### جدول إعدادات لوحة التحكم:
+
+```sql
+CREATE TABLE dashboard_settings (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  widget_id VARCHAR(50) NOT NULL,
+  is_visible BOOLEAN DEFAULT true,
+  position INTEGER, -- ترتيب الظهور
+  size VARCHAR(20) DEFAULT 'medium', -- small, medium, large, full
+  custom_settings JSONB, -- إعدادات خاصة بكل widget
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_id, widget_id)
+);
+
+-- إعدادات افتراضية للنظام
+CREATE TABLE dashboard_defaults (
+  id SERIAL PRIMARY KEY,
+  role_id INTEGER REFERENCES roles(id),
+  widget_id VARCHAR(50) NOT NULL,
+  is_visible BOOLEAN DEFAULT true,
+  position INTEGER,
+  size VARCHAR(20) DEFAULT 'medium'
+);
+```
+
+### صفحة إعدادات لوحة التحكم:
+
+**الموقع:** الإعدادات > تخصيص لوحة التحكم
+
+**الواجهة:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  تخصيص لوحة التحكم                                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ☐ إظهار    الـ Widget                    الحجم    ⋮ سحب   │
+│  ─────────────────────────────────────────────────────────  │
+│  ☑          القضايا النشطة                [صغير ▼]   ≡      │
+│  ☑          جلسات اليوم                   [صغير ▼]   ≡      │
+│  ☑          بانتظار المراجعة              [صغير ▼]   ≡      │
+│  ☑          مهام متأخرة                   [صغير ▼]   ≡      │
+│  ☑          آخر القضايا                   [متوسط ▼]  ≡      │
+│  ☑          الجلسات القادمة               [متوسط ▼]  ≡      │
+│  ☐          القضايا حسب الحالة (رسم)      [كبير ▼]   ≡      │
+│  ☐          الأداء الشهري (رسم)           [كبير ▼]   ≡      │
+│  ☑          إجراءات سريعة                 [صغير ▼]   ≡      │
+│  ...                                                        │
+│                                                             │
+│  [استعادة الافتراضي]                      [حفظ التغييرات]   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**المتطلبات:**
+- Drag & Drop لإعادة ترتيب الـ widgets
+- Checkbox لإظهار/إخفاء
+- Dropdown لاختيار الحجم (صغير، متوسط، كبير، عرض كامل)
+- زر استعادة الإعدادات الافتراضية
+- حفظ تلقائي أو زر حفظ
+- كل مستخدم له إعداداته الخاصة
+- المدير يمكنه تحديد الإعدادات الافتراضية لكل دور
+
+### تصميم لوحة التحكم:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  مرحباً، [اسم المستخدم]                              ⚙️ تخصيص      │
+│  هذه نظرة عامة على حالة شركة عون                                   │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐              │
+│  │ 🏛️  12   │ │ ⏰  3    │ │ 📅  2    │ │ ⚠️  5    │              │
+│  │ قضايا    │ │ بانتظار  │ │ جلسات   │ │ مهام     │              │
+│  │ نشطة    │ │ المراجعة │ │ اليوم   │ │ متأخرة   │              │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘              │
+│                                                                    │
+│  ┌──────────────────────────┐ ┌──────────────────────────┐        │
+│  │ 📋 آخر القضايا          │ │ 📅 الجلسات القادمة       │        │
+│  │ ─────────────────────── │ │ ─────────────────────── │        │
+│  │ • C-2026-0001 - دراسة   │ │ • 31 يناير - 10:00      │        │
+│  │ • C-2026-0002 - مراجعة  │ │   المحكمة العمالية      │        │
+│  │ • C-2026-0003 - استلام  │ │ • 1 فبراير - 09:00      │        │
+│  │                         │ │   المحكمة التجارية      │        │
+│  └──────────────────────────┘ └──────────────────────────┘        │
+│                                                                    │
+│  ┌──────────────────────────┐ ┌──────────────────────────┐        │
+│  │ 📊 القضايا حسب الحالة   │ │ ⚡ إجراءات سريعة        │        │
+│  │      [Pie Chart]        │ │ [+ قضية] [+ استشارة]    │        │
+│  │                         │ │ [+ عميل] [+ جلسة]       │        │
+│  └──────────────────────────┘ └──────────────────────────┘        │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. نظام التواصل مع العميل بعد الجلسة
+
+### الموقع: صفحة الجلسات (الأنسب)
+
+**السبب:**
+- التواصل يتم بعد كل جلسة وليس بعد القضية كاملة
+- يضمن متابعة كل جلسة على حدة
+- يسهل تتبع الجلسات التي لم يتم التواصل بعدها
+
+### تحديث جدول الجلسات:
+
+```sql
+ALTER TABLE hearings ADD COLUMN client_contacted BOOLEAN DEFAULT false;
+ALTER TABLE hearings ADD COLUMN client_contacted_at TIMESTAMP;
+ALTER TABLE hearings ADD COLUMN client_contacted_by INTEGER REFERENCES users(id);
+ALTER TABLE hearings ADD COLUMN contact_method VARCHAR(50); -- هاتف، واتساب، إيميل، حضوري
+ALTER TABLE hearings ADD COLUMN contact_notes TEXT;
+ALTER TABLE hearings ADD COLUMN contact_reminder_sent BOOLEAN DEFAULT false;
+```
+
+### جدول سجل التواصل (للتفاصيل):
+
+```sql
+CREATE TABLE client_contacts (
+  id SERIAL PRIMARY KEY,
+  hearing_id INTEGER REFERENCES hearings(id),
+  case_id INTEGER REFERENCES cases(id),
+  client_id INTEGER REFERENCES clients(id) NOT NULL,
+  contact_type VARCHAR(50) NOT NULL, -- بعد_جلسة، متابعة، استفسار، تحديث
+  contact_method VARCHAR(50) NOT NULL, -- هاتف، واتساب، إيميل، حضوري، اجتماع
+  contact_date TIMESTAMP DEFAULT NOW(),
+  contacted_by INTEGER REFERENCES users(id),
+  summary TEXT, -- ملخص المحادثة
+  client_satisfied BOOLEAN, -- هل العميل راضي؟
+  follow_up_required BOOLEAN DEFAULT false,
+  follow_up_date DATE,
+  follow_up_notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### الواجهة في صفحة الجلسات:
+
+**في جدول الجلسات - إضافة عمود:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ التاريخ    │ القضية      │ المحكمة    │ الحالة  │ التواصل │ الإجراءات       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 31 يناير  │ C-2026-0002 │ العمالية  │ قادمة  │   --    │ 👁️ ✏️ 🗑️        │
+│ 30 يناير  │ C-2026-0001 │ التجارية  │ منتهية │ ✅ تم   │ 👁️ ✏️ 🗑️ 📞    │
+│ 25 يناير  │ C-2026-0003 │ العامة    │ منتهية │ ❌ لم يتم│ 👁️ ✏️ 🗑️ 📞    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+الأيقونات:
+✅ تم التواصل (أخضر)
+❌ لم يتم التواصل (أحمر) - مع تنبيه إذا مر أكثر من 24 ساعة
+⏳ جلسة لم تنتهِ بعد (رمادي)
+📞 زر تسجيل التواصل
+```
+
+### نافذة تسجيل التواصل:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  📞 تسجيل التواصل مع العميل                           ✕    │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  الجلسة: C-2026-0001 - 30 يناير 2026                       │
+│  العميل: شركة الفلاح للتجارة                                │
+│                                                             │
+│  ─────────────────────────────────────────────────────────  │
+│                                                             │
+│  طريقة التواصل: *                                           │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ ○ هاتف   ○ واتساب   ○ إيميل   ○ حضوري   ○ اجتماع  │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  تاريخ ووقت التواصل: *                                      │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ 31/01/2026                      10:30 ص             │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ملخص المحادثة:                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ تم إبلاغ العميل بنتيجة الجلسة وتأجيلها لـ...       │   │
+│  │                                                     │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  هل العميل راضٍ؟    ○ نعم   ○ لا   ○ محايد              │
+│                                                             │
+│  ☐ يتطلب متابعة لاحقة                                      │
+│     تاريخ المتابعة: [________]                              │
+│     ملاحظات: [________________________]                     │
+│                                                             │
+│  ─────────────────────────────────────────────────────────  │
+│                                                             │
+│            [إلغاء]                    [حفظ التواصل]         │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### التنبيهات التلقائية:
+
+```javascript
+// إشعار بعد 24 ساعة من انتهاء الجلسة إذا لم يتم التواصل
+const contactReminders = {
+  trigger: 'hearing_completed',
+  delay: '24 hours',
+  condition: 'client_contacted = false',
+  notification: {
+    title: 'تذكير: التواصل مع العميل',
+    message: 'لم يتم التواصل مع العميل بخصوص جلسة {case_number} بتاريخ {hearing_date}',
+    type: 'warning',
+    link: '/hearings/{hearing_id}'
+  }
+};
+```
+
+### Widget في لوحة التحكم:
+
+```
+┌──────────────────────────────────┐
+│ 📞 بانتظار التواصل مع العميل     │
+│ ────────────────────────────────│
+│                                  │
+│  ⚠️  3  جلسات لم يتم التواصل    │
+│                                  │
+│  • C-2026-0001 - منذ يومين       │
+│  • C-2026-0003 - منذ 5 أيام ❗    │
+│  • C-2026-0004 - منذ أمس         │
+│                                  │
+│         [عرض الكل]               │
+└──────────────────────────────────┘
+```
+
+---
+
+## 3. تحسينات تجربة المستخدم (UX)
+
+### أ. اختصارات لوحة المفاتيح:
+
+```javascript
+const keyboardShortcuts = {
+  'Ctrl+N': 'فتح نافذة قضية جديدة',
+  'Ctrl+Shift+N': 'فتح نافذة استشارة جديدة',
+  'Ctrl+K': 'فتح البحث الشامل',
+  'Ctrl+S': 'حفظ النموذج الحالي',
+  'Escape': 'إغلاق النافذة المنبثقة',
+  'Ctrl+H': 'الذهاب للرئيسية',
+  'Ctrl+/': 'عرض الاختصارات',
+  'Alt+1': 'الذهاب للوحة التحكم',
+  'Alt+2': 'الذهاب للقضايا',
+  'Alt+3': 'الذهاب للجلسات'
+};
+
+// إضافة component لعرض الاختصارات
+const ShortcutsModal = () => (
+  <Modal title="اختصارات لوحة المفاتيح">
+    {Object.entries(keyboardShortcuts).map(([key, action]) => (
+      <div className="shortcut-item">
+        <kbd>{key}</kbd>
+        <span>{action}</span>
+      </div>
+    ))}
+  </Modal>
+);
+```
+
+### ب. البحث الشامل (Global Search):
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🔍  ابحث في كل شيء...                              Ctrl+K │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  النتائج:                                                   │
+│                                                             │
+│  📁 القضايا                                                 │
+│     • C-2026-0001 - شركة الفلاح للتجارة                     │
+│     • C-2026-0005 - شركة الفلاح للمقاولات                   │
+│                                                             │
+│  👥 العملاء                                                 │
+│     • شركة الفلاح للتجارة                                   │
+│                                                             │
+│  📅 الجلسات                                                 │
+│     • جلسة 1 فبراير - شركة الفلاح                           │
+│                                                             │
+│  [Enter للفتح]  [↑↓ للتنقل]  [Esc للإغلاق]                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**المتطلبات:**
+- بحث فوري أثناء الكتابة (debounced)
+- البحث في: القضايا، العملاء، الجلسات، الاستشارات، المستخدمين
+- عرض النتائج مجمعة حسب النوع
+- التنقل بالأسهم
+- Enter للفتح
+- حفظ آخر 5 عمليات بحث
+
+### ج. المفضلة وآخر الزيارات:
+
+```sql
+-- جدول المفضلة
+CREATE TABLE favorites (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  entity_type VARCHAR(50), -- case, client, consultation
+  entity_id INTEGER,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_id, entity_type, entity_id)
+);
+
+-- جدول آخر الزيارات
+CREATE TABLE recent_visits (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  entity_type VARCHAR(50),
+  entity_id INTEGER,
+  entity_title VARCHAR(255),
+  visited_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**الواجهة:**
+- أيقونة ⭐ بجانب كل قضية/عميل للإضافة للمفضلة
+- قائمة منسدلة في الـ Header للوصول السريع للمفضلة
+- قائمة "آخر الزيارات" (آخر 10 عناصر)
+
+### د. الوضع الداكن (Dark Mode):
+
+```javascript
+const themes = {
+  light: {
+    primary: '#1a365d',
+    secondary: '#d4af37',
+    background: '#f7fafc',
+    surface: '#ffffff',
+    text: '#1a202c',
+    textSecondary: '#718096'
+  },
+  dark: {
+    primary: '#63b3ed',
+    secondary: '#d4af37',
+    background: '#1a202c',
+    surface: '#2d3748',
+    text: '#f7fafc',
+    textSecondary: '#a0aec0'
+  }
+};
+
+// حفظ التفضيل في localStorage و في قاعدة البيانات
+```
+
+**الواجهة:**
+- زر تبديل 🌙/☀️ في الـ Header
+- حفظ التفضيل للمستخدم
+
+---
+
+## 4. مؤشرات الأداء (KPIs Dashboard)
+
+### صفحة جديدة: التقارير > مؤشرات الأداء
+
+### المؤشرات المطلوبة:
+
+```javascript
+const kpis = [
+  {
+    id: 'total_cases',
+    title: 'إجمالي القضايا',
+    query: 'SELECT COUNT(*) FROM cases',
+    comparison: 'vs_last_month', // مقارنة بالشهر الماضي
+    icon: 'briefcase'
+  },
+  {
+    id: 'win_rate',
+    title: 'نسبة القضايا المكسوبة',
+    query: `SELECT
+              ROUND(
+                COUNT(CASE WHEN result = 'won' THEN 1 END) * 100.0 /
+                NULLIF(COUNT(CASE WHEN result IN ('won', 'lost') THEN 1 END), 0)
+              , 1) as rate
+            FROM cases`,
+    type: 'percentage',
+    target: 70, // الهدف 70%
+    icon: 'trophy'
+  },
+  {
+    id: 'avg_case_duration',
+    title: 'متوسط مدة القضية',
+    query: `SELECT AVG(EXTRACT(DAY FROM (closed_at - created_at)))
+            FROM cases WHERE closed_at IS NOT NULL`,
+    suffix: 'يوم',
+    target: 90, // الهدف أقل من 90 يوم
+    icon: 'clock'
+  },
+  {
+    id: 'cases_per_lawyer',
+    title: 'متوسط القضايا لكل محامي',
+    query: `SELECT AVG(case_count) FROM (
+              SELECT assigned_to, COUNT(*) as case_count
+              FROM cases GROUP BY assigned_to
+            ) t`,
+    icon: 'users'
+  },
+  {
+    id: 'client_satisfaction',
+    title: 'رضا العملاء',
+    query: `SELECT
+              ROUND(COUNT(CASE WHEN client_satisfied = true THEN 1 END) * 100.0 /
+              NULLIF(COUNT(*), 0), 1)
+            FROM client_contacts`,
+    type: 'percentage',
+    target: 85,
+    icon: 'smile'
+  },
+  {
+    id: 'response_time',
+    title: 'متوسط وقت الاستجابة',
+    description: 'الوقت من استلام القضية لأول إجراء',
+    suffix: 'ساعة',
+    target: 24,
+    icon: 'bolt'
+  },
+  {
+    id: 'hearings_attendance',
+    title: 'نسبة حضور الجلسات',
+    type: 'percentage',
+    target: 100,
+    icon: 'calendar-check'
+  },
+  {
+    id: 'tasks_completion_rate',
+    title: 'نسبة إنجاز المهام',
+    type: 'percentage',
+    target: 90,
+    icon: 'check-circle'
+  },
+  {
+    id: 'overdue_cases_percentage',
+    title: 'نسبة القضايا المتأخرة',
+    type: 'percentage',
+    target: 5, // الهدف أقل من 5%
+    inverseColor: true, // أخضر إذا أقل، أحمر إذا أكثر
+    icon: 'exclamation-circle'
+  },
+  {
+    id: 'new_clients_trend',
+    title: 'العملاء الجدد',
+    comparison: 'vs_last_month',
+    icon: 'user-plus'
+  }
+];
+```
+
+### واجهة مؤشرات الأداء:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  📊 مؤشرات الأداء                    الفترة: [هذا الشهر ▼]   [تصدير PDF]   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │   🏆 72%    │ │   ⏱️ 45     │ │   😊 88%    │ │   📈 +15%   │           │
+│  │  نسبة      │ │  متوسط     │ │   رضا      │ │  نمو       │           │
+│  │  الكسب     │ │  المدة     │ │  العملاء   │ │  العملاء   │           │
+│  │  ▲ +5%     │ │  يوم       │ │  ▲ +3%     │ │  هذا الشهر │           │
+│  │  [═══════] │ │  الهدف: 90 │ │  [════════]│ │            │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘           │
+│                                                                             │
+│  ┌─────────────────────────────────┐ ┌─────────────────────────────────┐   │
+│  │ 📈 الأداء الشهري               │ │ 👥 أداء الموظفين               │   │
+│  │                                 │ │                                 │   │
+│  │     [Line Chart]                │ │     [Bar Chart]                 │   │
+│  │     - قضايا مفتوحة              │ │     - عدد القضايا               │   │
+│  │     - قضايا مغلقة               │ │     - نسبة الإنجاز              │   │
+│  │                                 │ │                                 │   │
+│  └─────────────────────────────────┘ └─────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 📋 تفاصيل الأداء حسب الموظف                                        │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ الموظف          │ القضايا │ المكسوبة │ المدة │ رضا العملاء │ الترتيب│   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ المحامي عمر     │   8     │   75%    │ 42 يوم │    90%     │  🥇    │   │
+│  │ المحامي مهند    │   6     │   67%    │ 55 يوم │    85%     │  🥈    │   │
+│  │ المحامي أحمد    │   5     │   80%    │ 38 يوم │    92%     │  🥉    │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. نظام التوثيق والتدريب (Help System)
+
+### أ. مركز المساعدة (Help Center):
+
+```sql
+CREATE TABLE help_articles (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) UNIQUE,
+  category VARCHAR(100), -- البداية، القضايا، الجلسات، التقارير، إلخ
+  content TEXT NOT NULL, -- Markdown content
+  video_url VARCHAR(500), -- رابط فيديو تعليمي
+  order_index INTEGER,
+  is_published BOOLEAN DEFAULT true,
+  views_count INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE help_categories (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  icon VARCHAR(50),
+  order_index INTEGER
+);
+```
+
+### صفحة مركز المساعدة:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ❓ مركز المساعدة                                    🔍 ابحث في المساعدة   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  📚 التصنيفات                                                              │
+│                                                                             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │ 🚀 البداية │ │ 📁 القضايا │ │ 📅 الجلسات │ │ 👥 العملاء │           │
+│  │  5 مقالات  │ │  8 مقالات  │ │  4 مقالات  │ │  3 مقالات  │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘           │
+│                                                                             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │ 📊 التقارير│ │ ⚙️ الإعدادات│ │ 🎥 فيديوهات│ │ ❓ الأسئلة │           │
+│  │  4 مقالات  │ │  6 مقالات  │ │  10 فيديو  │ │  الشائعة   │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘           │
+│                                                                             │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                             │
+│  📌 الأكثر قراءة:                                                          │
+│  • كيفية إضافة قضية جديدة                                                  │
+│  • شرح مراحل القضية                                                        │
+│  • إعداد الإشعارات                                                         │
+│  • تصدير التقارير                                                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### ب. التلميحات داخل النظام (Tooltips & Hints):
+
+```javascript
+const contextualHelp = {
+  // تلميحات تظهر عند التمرير
+  tooltips: {
+    'case_status': 'حالة القضية الحالية في سير العمل',
+    'case_priority': 'أولوية القضية: عاجل، عالي، متوسط، منخفض',
+    'najiz_number': 'رقم القضية في منصة ناجز الإلكترونية'
+  },
+
+  // تلميحات تظهر لأول مرة
+  firstTimeHints: [
+    {
+      target: '.add-case-button',
+      title: 'إضافة قضية جديدة',
+      content: 'اضغط هنا لإضافة قضية جديدة للنظام',
+      order: 1
+    },
+    {
+      target: '.case-stages',
+      title: 'مراحل القضية',
+      content: 'يمكنك تتبع تقدم القضية من خلال هذا الشريط',
+      order: 2
+    }
+  ]
+};
+```
+
+### ج. جولة تعريفية للمستخدم الجديد (Onboarding Tour):
+
+```javascript
+const onboardingTour = {
+  steps: [
+    {
+      target: '.sidebar',
+      title: 'القائمة الرئيسية',
+      content: 'من هنا يمكنك الوصول لجميع أقسام النظام',
+      position: 'left'
+    },
+    {
+      target: '.dashboard',
+      title: 'لوحة التحكم',
+      content: 'نظرة سريعة على حالة العمل والمهام',
+      position: 'bottom'
+    },
+    {
+      target: '.quick-actions',
+      title: 'إجراءات سريعة',
+      content: 'أضف قضايا واستشارات وعملاء بسرعة من هنا',
+      position: 'bottom'
+    },
+    {
+      target: '.notifications-bell',
+      title: 'الإشعارات',
+      content: 'ستصلك تنبيهات الجلسات والمهام هنا',
+      position: 'bottom'
+    },
+    {
+      target: '.user-menu',
+      title: 'حسابك',
+      content: 'إعدادات الحساب وتسجيل الخروج',
+      position: 'bottom'
+    }
+  ],
+  showOnFirstLogin: true,
+  canSkip: true,
+  canRestart: true // زر "إعادة الجولة" في الإعدادات
+};
+```
+
+### د. الأسئلة الشائعة (FAQ):
+
+```sql
+CREATE TABLE faqs (
+  id SERIAL PRIMARY KEY,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  category VARCHAR(100),
+  order_index INTEGER,
+  helpful_count INTEGER DEFAULT 0,
+  not_helpful_count INTEGER DEFAULT 0,
+  is_published BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**واجهة FAQ:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ❓ الأسئلة الشائعة                                         │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ▼ كيف أضيف قضية جديدة؟                                    │
+│    اذهب إلى إدارة القضايا > اضغط على "قضية جديدة" >        │
+│    املأ البيانات المطلوبة > اضغط حفظ                        │
+│    [👍 مفيد 25]  [👎 غير مفيد 2]                            │
+│                                                             │
+│  ▶ كيف أغير حالة القضية؟                                   │
+│                                                             │
+│  ▶ كيف أضيف جلسة لقضية؟                                    │
+│                                                             │
+│  ▶ كيف أرفق مستندات؟                                       │
+│                                                             │
+│  ▶ كيف أصدر تقرير؟                                         │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### هـ. زر المساعدة السياقية:
+
+في كل صفحة، أضف زر ❓ يفتح المساعدة المتعلقة بهذه الصفحة:
+
+```javascript
+const PageHelp = ({ page }) => (
+  <FloatingButton
+    icon="question-circle"
+    position="bottom-left"
+    onClick={() => openHelp(page)}
+  />
+);
+```
+
+---
+
+## ملخص الملفات المطلوب إنشاؤها:
+
+```
+/src
+├── components/
+│   ├── Dashboard/
+│   │   ├── DashboardWidget.jsx
+│   │   ├── WidgetSettings.jsx
+│   │   ├── StatCard.jsx
+│   │   ├── ChartWidget.jsx
+│   │   └── QuickActions.jsx
+│   ├── ClientContact/
+│   │   ├── ContactButton.jsx
+│   │   ├── ContactModal.jsx
+│   │   └── ContactHistory.jsx
+│   ├── Search/
+│   │   ├── GlobalSearch.jsx
+│   │   └── SearchResults.jsx
+│   ├── Help/
+│   │   ├── HelpCenter.jsx
+│   │   ├── OnboardingTour.jsx
+│   │   ├── Tooltip.jsx
+│   │   └── FAQ.jsx
+│   └── KPIs/
+│       ├── KPIDashboard.jsx
+│       ├── KPICard.jsx
+│       └── PerformanceChart.jsx
+├── pages/
+│   ├── Settings/
+│   │   └── DashboardSettings.jsx
+│   ├── Reports/
+│   │   └── KPIs.jsx
+│   └── Help/
+│       └── HelpCenter.jsx
+└── hooks/
+    ├── useKeyboardShortcuts.js
+    ├── useDarkMode.js
+    └── useFavorites.js
+```
+
+---
+
+## ترتيب التنفيذ المقترح:
+
+1. **الأسبوع الأول:** لوحة التحكم الذكية + إعداداتها
+2. **الأسبوع الثاني:** نظام التواصل مع العميل
+3. **الأسبوع الثالث:** تحسينات UX (البحث، الاختصارات، المفضلة)
+4. **الأسبوع الرابع:** مؤشرات الأداء + نظام المساعدة
