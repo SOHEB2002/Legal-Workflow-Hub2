@@ -1,0 +1,83 @@
+أصلح المشاكل التالية (النظام يستخدم PostgreSQL + Drizzle ORM):
+
+=== 1. جعل العميل اختياري عند إضافة قضية ===
+
+في shared/schema.ts:
+- في insertCaseSchema غيّر:
+  clientId: z.string().min(1, "العميل مطلوب")
+  إلى:
+  clientId: z.string().optional().nullable().default("")
+
+- في lawCases table:
+  clientId: varchar("client_id", { length: 255 }).notNull()
+  غيّره إلى:
+  clientId: varchar("client_id", { length: 255 }).default("")
+
+في server/storage.ts - createCase function:
+  clientId: data.clientId || ""  // بدلاً من required
+
+في صفحة القضايا (client/src/pages/cases.tsx):
+- أزل required من حقل العميل
+- أزل علامة النجمة (*)
+
+=== 2. إزالة حقل رقم ناجز ===
+
+في shared/schema.ts:
+- احذف من lawCases table:
+  najizNumber: varchar("najiz_number", { length: 100 }).default("")
+  
+- احذف من interface LawCase:
+  najizNumber: string;
+
+- احذف من insertCaseSchema:
+  najizNumber: z.string().optional().default("")
+
+في server/storage.ts:
+- احذف najizNumber من mapDbCase
+- احذف najizNumber من createCase
+
+في client/src/lib/cases-context.tsx:
+- احذف najizNumber من أي مكان
+
+في client/src/pages/cases.tsx:
+- احذف حقل "رقم ناجز" من النموذج
+
+ملاحظة: اترك العمود في قاعدة البيانات موجود، فقط احذفه من الكود
+
+=== 3. إضافة خيار "أخرى" حر للمحكمة والقسم ===
+
+في shared/schema.ts أضف في lawCases table:
+  caseTypeOther: varchar("case_type_other", { length: 255 }).default("")
+  departmentOther: varchar("department_other", { length: 255 }).default("")
+
+في interface LawCase أضف:
+  caseTypeOther: string;
+  departmentOther: string;
+
+في server/storage.ts:
+- أضف في mapDbCase:
+  caseTypeOther: dbCase.caseTypeOther || ""
+  departmentOther: dbCase.departmentOther || ""
+
+- أضف في createCase:
+  caseTypeOther: data.caseTypeOther || ""
+  departmentOther: data.departmentOther || ""
+
+في صفحة القضايا (client/src/pages/cases.tsx):
+- عند اختيار "نوع القضية" = "أخرى"، اعرض Input للكتابة الحرة
+- عند اختيار "القسم" = "أخرى"، اعرض Input للكتابة الحرة
+
+مثال:
+{caseType === "أخرى" && (
+  <Input placeholder="اكتب نوع القضية..." value={caseTypeOther} onChange={...} />
+)}
+
+=== 4. تشغيل Migration ===
+
+بعد التعديلات، شغّل:
+npm run db:push
+
+أو إذا فيه أمر migration آخر استخدمه
+
+=== ملاحظة مهمة ===
+إذا كان فيه خطأ في الحفظ، افتح Console في المتصفح وأرسلي الخطأ

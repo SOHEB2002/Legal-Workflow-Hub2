@@ -42,8 +42,10 @@ export const clients = pgTable("clients", {
 export const lawCases = pgTable("law_cases", {
   id: varchar("id", { length: 255 }).primaryKey(),
   caseNumber: varchar("case_number", { length: 50 }).notNull().unique(),
-  clientId: varchar("client_id", { length: 255 }).notNull(),
+  clientId: varchar("client_id", { length: 255 }).default(""),
   caseType: varchar("case_type", { length: 50 }).notNull(),
+  caseTypeOther: varchar("case_type_other", { length: 255 }).default(""),
+  departmentOther: varchar("department_other", { length: 255 }).default(""),
   status: varchar("status", { length: 50 }).notNull(),
   currentStage: varchar("current_stage", { length: 50 }).notNull(),
   stageHistory: jsonb("stage_history").default([]),
@@ -240,6 +242,7 @@ export const CaseType = {
   COMMERCIAL: "تجاري",
   LABOR: "عمالي",
   ADMINISTRATIVE: "إداري",
+  OTHER: "أخرى",
 } as const;
 
 export type CaseTypeValue = typeof CaseType[keyof typeof CaseType];
@@ -502,6 +505,8 @@ export interface LawCase {
   caseNumber: string;
   clientId: string;
   caseType: CaseTypeValue;
+  caseTypeOther: string;
+  departmentOther: string;
   status: CaseStatusValue;
   currentStage: CaseStageValue;
   stageHistory: CaseStageTransition[];
@@ -511,7 +516,6 @@ export interface LawCase {
   responsibleLawyerId: string | null;
   courtName: string;
   courtCaseNumber: string;
-  najizNumber: string;
   judgeName: string;
   circuitNumber: string;
   opponentName: string;
@@ -726,13 +730,14 @@ export const insertClientSchema = z.object({
 export type InsertClient = z.infer<typeof insertClientSchema>;
 
 export const insertCaseSchema = z.object({
-  clientId: z.string().min(1, "العميل مطلوب"),
-  caseType: z.enum(["عام", "تجاري", "عمالي", "إداري"]),
+  clientId: z.string().optional().nullable().default(""),
+  caseType: z.enum(["عام", "تجاري", "عمالي", "إداري", "أخرى"]),
+  caseTypeOther: z.string().optional().default(""),
   departmentId: z.string().optional(),
+  departmentOther: z.string().optional().default(""),
   priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).default("متوسط"),
   courtName: z.string().optional().default(""),
   courtCaseNumber: z.string().optional().default(""),
-  najizNumber: z.string().optional().default(""),
   judgeName: z.string().optional().default(""),
   opponentName: z.string().optional().default(""),
   opponentLawyer: z.string().optional().default(""),

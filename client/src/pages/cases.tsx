@@ -166,11 +166,12 @@ export default function CasesPage() {
   const [formData, setFormData] = useState({
     clientId: "",
     caseType: "عام" as CaseTypeValue,
+    caseTypeOther: "",
     departmentId: "",
+    departmentOther: "",
     priority: "متوسط" as PriorityType,
     courtName: "",
     courtCaseNumber: "",
-    najizNumber: "",
     opponentName: "",
     opponentLawyer: "",
     whatsappGroupLink: "",
@@ -185,11 +186,12 @@ export default function CasesPage() {
     setFormData({
       clientId: "",
       caseType: "عام",
+      caseTypeOther: "",
       departmentId: "",
+      departmentOther: "",
       priority: "متوسط",
       courtName: "",
       courtCaseNumber: "",
-      najizNumber: "",
       opponentName: "",
       opponentLawyer: "",
       whatsappGroupLink: "",
@@ -197,16 +199,17 @@ export default function CasesPage() {
   };
 
   const handleAddCase = () => {
-    if (!user || !formData.clientId) return;
+    if (!user) return;
     
     addCase({
-      clientId: formData.clientId,
+      clientId: formData.clientId || "",
       caseType: formData.caseType,
+      caseTypeOther: formData.caseTypeOther,
       departmentId: formData.departmentId,
+      departmentOther: formData.departmentOther,
       priority: formData.priority,
       courtName: formData.courtName,
       courtCaseNumber: formData.courtCaseNumber,
-      najizNumber: formData.najizNumber,
       opponentName: formData.opponentName,
       opponentLawyer: formData.opponentLawyer,
       whatsappGroupLink: formData.whatsappGroupLink,
@@ -256,8 +259,7 @@ export default function CasesPage() {
       const clientName = getClientName(c.clientId);
       const matchesSearch =
         c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        clientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.najizNumber.toLowerCase().includes(searchQuery.toLowerCase());
+        clientName.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesStatus = statusFilter === "all" || c.status === statusFilter;
       const matchesType = typeFilter === "all" || c.caseType === typeFilter;
       return matchesSearch && matchesStatus && matchesType;
@@ -556,7 +558,7 @@ export default function CasesPage() {
                 <Label>نوع القضية</Label>
                 <Select
                   value={formData.caseType}
-                  onValueChange={(value: CaseTypeValue) => setFormData({ ...formData, caseType: value })}
+                  onValueChange={(value: CaseTypeValue) => setFormData({ ...formData, caseType: value, caseTypeOther: "" })}
                 >
                   <SelectTrigger data-testid="select-case-type">
                     <SelectValue />
@@ -567,6 +569,15 @@ export default function CasesPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {formData.caseType === "أخرى" && (
+                  <Input
+                    data-testid="input-case-type-other"
+                    value={formData.caseTypeOther}
+                    onChange={(e) => setFormData({ ...formData, caseTypeOther: e.target.value })}
+                    placeholder="اكتب نوع القضية..."
+                    className="mt-2"
+                  />
+                )}
               </div>
               <div>
                 <Label>الأولوية</Label>
@@ -589,7 +600,7 @@ export default function CasesPage() {
               <Label>القسم</Label>
               <Select
                 value={formData.departmentId}
-                onValueChange={(value) => setFormData({ ...formData, departmentId: value })}
+                onValueChange={(value) => setFormData({ ...formData, departmentId: value, departmentOther: "" })}
               >
                 <SelectTrigger data-testid="select-department">
                   <SelectValue placeholder="اختر القسم" />
@@ -598,8 +609,18 @@ export default function CasesPage() {
                   {departments.map((dept) => (
                     <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
                   ))}
+                  <SelectItem value="أخرى">أخرى</SelectItem>
                 </SelectContent>
               </Select>
+              {formData.departmentId === "أخرى" && (
+                <Input
+                  data-testid="input-department-other"
+                  value={formData.departmentOther}
+                  onChange={(e) => setFormData({ ...formData, departmentOther: e.target.value })}
+                  placeholder="اكتب اسم القسم..."
+                  className="mt-2"
+                />
+              )}
             </div>
             <div>
               <Label>اسم المحكمة</Label>
@@ -610,23 +631,13 @@ export default function CasesPage() {
                 placeholder="مثال: المحكمة التجارية بالرياض"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>رقم القضية بالمحكمة</Label>
-                <Input
-                  data-testid="input-court-case-number"
-                  value={formData.courtCaseNumber}
-                  onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label>رقم ناجز</Label>
-                <Input
-                  data-testid="input-najiz-number"
-                  value={formData.najizNumber}
-                  onChange={(e) => setFormData({ ...formData, najizNumber: e.target.value })}
-                />
-              </div>
+            <div>
+              <Label>رقم القضية بالمحكمة</Label>
+              <Input
+                data-testid="input-court-case-number"
+                value={formData.courtCaseNumber}
+                onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
+              />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -658,7 +669,7 @@ export default function CasesPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddDialog(false)}>إلغاء</Button>
-            <Button data-testid="button-submit-case" onClick={handleAddCase} disabled={!formData.clientId}>
+            <Button data-testid="button-submit-case" onClick={handleAddCase}>
               إضافة القضية
             </Button>
           </DialogFooter>
@@ -813,10 +824,6 @@ export default function CasesPage() {
                     <div>
                       <Label className="text-muted-foreground">رقم القضية بالمحكمة</Label>
                       <p>{selectedCase.courtCaseNumber || "-"}</p>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground">رقم ناجز</Label>
-                      <p>{selectedCase.najizNumber || "-"}</p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">الدائرة</Label>
