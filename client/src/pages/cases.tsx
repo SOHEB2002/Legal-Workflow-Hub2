@@ -256,10 +256,10 @@ export default function CasesPage() {
 
   const filteredCases = useMemo(() => {
     return cases.filter((c) => {
-      const clientName = getClientName(c.clientId);
+      const clientName = c.clientId ? getClientName(c.clientId) : "";
       const matchesSearch =
         c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        clientName.toLowerCase().includes(searchQuery.toLowerCase());
+        (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesStatus = statusFilter === "all" || c.status === statusFilter;
       const matchesType = typeFilter === "all" || c.caseType === typeFilter;
       return matchesSearch && matchesStatus && matchesType;
@@ -380,7 +380,7 @@ export default function CasesPage() {
                   <TableCell className="font-medium">{c.caseNumber}</TableCell>
                   <TableCell>{getClientName(c.clientId)}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">{c.caseType}</Badge>
+                    <Badge variant="outline">{c.caseType === "أخرى" ? (c.caseTypeOther || "أخرى") : c.caseType}</Badge>
                   </TableCell>
                   <TableCell>
                     <Badge className="bg-accent/20 text-accent border-accent/30">
@@ -391,7 +391,7 @@ export default function CasesPage() {
                   <TableCell>
                     <Badge className={getPriorityColor(c.priority)}>{c.priority}</Badge>
                   </TableCell>
-                  <TableCell>{getDepartmentName(c.departmentId)}</TableCell>
+                  <TableCell>{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
                       <FavoriteButton
@@ -807,7 +807,7 @@ export default function CasesPage() {
                     </div>
                     <div>
                       <Label className="text-muted-foreground">النوع</Label>
-                      <p>{selectedCase.caseType}</p>
+                      <p>{selectedCase.caseType === "أخرى" ? (selectedCase.caseTypeOther || "أخرى") : selectedCase.caseType}</p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">الأولوية</Label>
@@ -815,7 +815,7 @@ export default function CasesPage() {
                     </div>
                     <div>
                       <Label className="text-muted-foreground">القسم</Label>
-                      <p>{getDepartmentName(selectedCase.departmentId)}</p>
+                      <p>{selectedCase.departmentId === "أخرى" ? (selectedCase.departmentOther || "أخرى") : getDepartmentName(selectedCase.departmentId)}</p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">المحكمة</Label>
