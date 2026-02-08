@@ -15,7 +15,7 @@ import {
   HearingResult,
 } from "@shared/schema";
 import { z } from "zod";
-import { comparePassword, hashPassword } from "./auth";
+import { comparePassword, hashPassword, generateToken } from "./auth";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -41,8 +41,9 @@ export async function registerRoutes(
         return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       }
 
+      const token = generateToken(user.id, user.role);
       const { password, ...userWithoutPassword } = user;
-      res.json({ user: userWithoutPassword });
+      res.json({ user: userWithoutPassword, token });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });

@@ -194,18 +194,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [users]);
 
   const login = async (username: string, password: string): Promise<boolean> => {
-    const foundUser = users.find(
-      (u) => u.username === username && u.password === password && u.isActive
-    );
-    if (foundUser) {
-      setUser(foundUser);
-      return true;
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data.user) {
+        setUser(data.user);
+        if (data.token) {
+          localStorage.setItem("lawfirm_token", data.token);
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
     }
-    return false;
   };
 
   const logout = () => {
     setUser(null);
+    localStorage.removeItem("lawfirm_token");
   };
 
   const addUser = (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => {
