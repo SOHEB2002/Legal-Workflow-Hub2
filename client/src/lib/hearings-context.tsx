@@ -1,174 +1,94 @@
-import { createContext, useContext, useState, useEffect } from "react";
-import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
+import { createContext, useContext } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import type { Hearing, HearingResultValue } from "@shared/schema";
 import { HearingStatus } from "@shared/schema";
+
+interface HearingResultData {
+  result: HearingResultValue;
+  resultDetails?: string;
+  judgmentSide?: string;
+  judgmentFinal?: boolean;
+  objectionFeasible?: boolean;
+  objectionDeadline?: string;
+  nextHearingDate?: string;
+  nextHearingTime?: string;
+  responseRequired?: boolean;
+  userId?: string;
+}
+
+interface HearingReportData {
+  hearingReport: string;
+  recommendations?: string;
+  nextSteps?: string;
+  contactCompleted: boolean;
+}
 
 interface HearingsContextType {
   hearings: Hearing[];
-  addHearing: (data: Partial<Hearing>) => Hearing;
-  updateHearing: (id: string, data: Partial<Hearing>) => void;
-  deleteHearing: (id: string) => void;
-  markCompleted: (id: string, result: HearingResultValue, details: string) => void;
-  markPostponed: (id: string, newDate: string, newTime: string) => void;
-  markCancelled: (id: string) => void;
+  isLoading: boolean;
+  addHearing: (data: Partial<Hearing>) => Promise<Hearing>;
+  updateHearing: (id: string, data: Partial<Hearing>) => Promise<void>;
+  deleteHearing: (id: string) => Promise<void>;
+  submitResult: (id: string, data: HearingResultData) => Promise<any>;
+  submitReport: (id: string, data: HearingReportData) => Promise<void>;
+  closeHearing: (id: string) => Promise<void>;
+  cancelHearing: (id: string) => Promise<void>;
   getHearingById: (id: string) => Hearing | undefined;
   getHearingsByCase: (caseId: string) => Hearing[];
   getUpcomingHearings: () => Hearing[];
   getTodayHearings: () => Hearing[];
-  getHearingsInRange: (startDate: string, endDate: string) => Hearing[];
 }
 
 const HearingsContext = createContext<HearingsContextType | undefined>(undefined);
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
-
-const initialHearings: Hearing[] = [
-  {
-    id: "1",
-    caseId: "1",
-    hearingDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    hearingTime: "09:00",
-    courtName: "المحكمة التجارية",
-    courtNameOther: null,
-    courtRoom: "قاعة 5",
-    status: "قادمة",
-    result: null,
-    resultDetails: "",
-    reminderSent24h: false,
-    reminderSent1h: false,
-    googleCalendarEventId: null,
-    notes: "جلسة استماع للشهود",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "2",
-    caseId: "1",
-    hearingDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    hearingTime: "11:00",
-    courtName: "المحكمة التجارية",
-    courtNameOther: null,
-    courtRoom: "قاعة 3",
-    status: "قادمة",
-    result: null,
-    resultDetails: "",
-    reminderSent24h: false,
-    reminderSent1h: false,
-    googleCalendarEventId: null,
-    notes: "جلسة المرافعة",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "3",
-    caseId: "2",
-    hearingDate: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    hearingTime: "10:00",
-    courtName: "المحكمة العمالية",
-    courtNameOther: null,
-    courtRoom: "قاعة 2",
-    status: "قادمة",
-    result: null,
-    resultDetails: "",
-    reminderSent24h: false,
-    reminderSent1h: false,
-    googleCalendarEventId: null,
-    notes: "",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
 export function HearingsProvider({ children }: { children: React.ReactNode }) {
-  const [hearings, setHearings] = useState<Hearing[]>(() => {
-    const stored = localStorage.getItem("lawfirm_hearings");
-    return stored ? JSON.parse(stored) : initialHearings;
+  const { data: hearings = [], isLoading } = useQuery<Hearing[]>({
+    queryKey: ["/api/hearings"],
   });
 
-  useEffect(() => {
-    localStorage.setItem("lawfirm_hearings", JSON.stringify(hearings));
-  }, [hearings]);
-
-  const addHearing = (data: Partial<Hearing>): Hearing => {
-    const newHearing: Hearing = {
-      id: generateId(),
-      caseId: data.caseId || "",
-      hearingDate: data.hearingDate || "",
-      hearingTime: data.hearingTime || "",
-      courtName: data.courtName || "المحكمة العامة",
-      courtNameOther: data.courtNameOther || null,
-      courtRoom: data.courtRoom || "",
-      status: HearingStatus.UPCOMING,
-      result: null,
-      resultDetails: "",
-      reminderSent24h: false,
-      reminderSent1h: false,
-      googleCalendarEventId: null,
-      notes: data.notes || "",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    setHearings((prev) => [newHearing, ...prev]);
-    return newHearing;
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/field-tasks"] });
   };
 
-  const updateHearing = (id: string, data: Partial<Hearing>) => {
-    setHearings((prev) =>
-      prev.map((h) =>
-        h.id === id
-          ? { ...h, ...data, updatedAt: new Date().toISOString() }
-          : h
-      )
-    );
+  const addHearing = async (data: Partial<Hearing>): Promise<Hearing> => {
+    const res = await apiRequest("POST", "/api/hearings", data);
+    const hearing = await res.json();
+    invalidate();
+    return hearing;
   };
 
-  const deleteHearing = (id: string) => {
-    setHearings((prev) => prev.filter((h) => h.id !== id));
+  const updateHearing = async (id: string, data: Partial<Hearing>): Promise<void> => {
+    await apiRequest("PATCH", `/api/hearings/${id}`, data);
+    invalidate();
   };
 
-  const markCompleted = (id: string, result: HearingResultValue, details: string) => {
-    setHearings((prev) =>
-      prev.map((h) =>
-        h.id === id
-          ? {
-              ...h,
-              status: HearingStatus.COMPLETED as HearingStatusValue,
-              result,
-              resultDetails: details,
-              updatedAt: new Date().toISOString(),
-            }
-          : h
-      )
-    );
+  const deleteHearing = async (id: string): Promise<void> => {
+    await apiRequest("DELETE", `/api/hearings/${id}`);
+    invalidate();
   };
 
-  const markPostponed = (id: string, newDate: string, newTime: string) => {
-    setHearings((prev) =>
-      prev.map((h) =>
-        h.id === id
-          ? {
-              ...h,
-              status: HearingStatus.POSTPONED as HearingStatusValue,
-              hearingDate: newDate,
-              hearingTime: newTime,
-              updatedAt: new Date().toISOString(),
-            }
-          : h
-      )
-    );
+  const submitResult = async (id: string, data: HearingResultData): Promise<any> => {
+    const res = await apiRequest("POST", `/api/hearings/${id}/result`, data);
+    const result = await res.json();
+    invalidate();
+    return result;
   };
 
-  const markCancelled = (id: string) => {
-    setHearings((prev) =>
-      prev.map((h) =>
-        h.id === id
-          ? {
-              ...h,
-              status: HearingStatus.CANCELLED as HearingStatusValue,
-              updatedAt: new Date().toISOString(),
-            }
-          : h
-      )
-    );
+  const submitReport = async (id: string, data: HearingReportData): Promise<void> => {
+    await apiRequest("POST", `/api/hearings/${id}/report`, data);
+    invalidate();
+  };
+
+  const closeHearing = async (id: string): Promise<void> => {
+    await apiRequest("POST", `/api/hearings/${id}/close`);
+    invalidate();
+  };
+
+  const cancelHearing = async (id: string): Promise<void> => {
+    await apiRequest("PATCH", `/api/hearings/${id}`, { status: HearingStatus.CANCELLED });
+    invalidate();
   };
 
   const getHearingById = (id: string) => hearings.find((h) => h.id === id);
@@ -178,6 +98,7 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
 
   const getUpcomingHearings = () => {
     const now = new Date();
+    now.setHours(0, 0, 0, 0);
     return hearings
       .filter((h) => {
         const hearingDate = new Date(h.hearingDate);
@@ -187,34 +108,26 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
   };
 
   const getTodayHearings = () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split("T")[0];
     return hearings.filter((h) => h.hearingDate === today && h.status === HearingStatus.UPCOMING);
-  };
-
-  const getHearingsInRange = (startDate: string, endDate: string) => {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    return hearings.filter((h) => {
-      const date = new Date(h.hearingDate);
-      return date >= start && date <= end;
-    });
   };
 
   return (
     <HearingsContext.Provider
       value={{
         hearings,
+        isLoading,
         addHearing,
         updateHearing,
         deleteHearing,
-        markCompleted,
-        markPostponed,
-        markCancelled,
+        submitResult,
+        submitReport,
+        closeHearing,
+        cancelHearing,
         getHearingById,
         getHearingsByCase,
         getUpcomingHearings,
         getTodayHearings,
-        getHearingsInRange,
       }}
     >
       {children}

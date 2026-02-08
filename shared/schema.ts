@@ -825,7 +825,7 @@ export const insertConsultationSchema = z.object({
 export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
 
 export const insertHearingSchema = z.object({
-  caseId: z.string().min(1, "القضية مطلوبة"),
+  caseId: z.string().optional().default(""),
   hearingDate: z.string().min(1, "تاريخ الجلسة مطلوب"),
   hearingTime: z.string().min(1, "وقت الجلسة مطلوب"),
   courtName: z.enum([
