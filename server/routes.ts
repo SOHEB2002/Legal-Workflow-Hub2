@@ -8,9 +8,14 @@ import {
   insertCaseSchema, 
   insertConsultationSchema, 
   insertHearingSchema, 
-  insertFieldTaskSchema 
+  insertFieldTaskSchema,
+  hearingResultSchema,
+  hearingReportSchema,
+  HearingStatus,
+  HearingResult,
 } from "@shared/schema";
 import { z } from "zod";
+import { comparePassword, hashPassword } from "./auth";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -27,7 +32,12 @@ export async function registerRoutes(
       const data = loginSchema.parse(req.body);
       const user = await storage.getUserByUsername(data.username);
       
-      if (!user || user.password !== data.password) {
+      if (!user) {
+        return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
+      }
+
+      const isValid = await comparePassword(data.password, user.password);
+      if (!isValid) {
         return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       }
 
@@ -71,7 +81,8 @@ export async function registerRoutes(
   app.post("/api/users", async (req, res) => {
     try {
       const validatedData = insertUserSchema.parse(req.body);
-      const newUser = await storage.createUser(validatedData);
+      const hashedPassword = await hashPassword(validatedData.password);
+      const newUser = await storage.createUser({ ...validatedData, password: hashedPassword });
       const { password, ...userWithoutPassword } = newUser;
       res.status(201).json(userWithoutPassword);
     } catch (error) {
@@ -335,6 +346,171 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الجلسة" });
+    }
+  });
+
+  // ==================== Hearing Workflow ====================
+
+  app.post("/api/hearings/:id/result", async (req, res) => {
+    try {
+      const hearingId = req.params.id;
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (hearing.status !== HearingStatus.UPCOMING) {
+        return res.status(400).json({ error: "لا يمكن تسجيل نتيجة لجلسة غير قادمة" });
+      }
+
+      const data = hearingResultSchema.parse(req.body);
+      
+      const updateData: any = {
+        result: data.result,
+        resultDetails: data.resultDetails || "",
+        status: data.result === HearingResult.POSTPONEMENT ? HearingStatus.POSTPONED : HearingStatus.COMPLETED,
+      };
+
+      if (data.result === HearingResult.JUDGMENT) {
+        updateData.judgmentSide = data.judgmentSide || null;
+        updateData.judgmentFinal = data.judgmentFinal ?? null;
+        updateData.objectionFeasible = data.objectionFeasible ?? null;
+        updateData.objectionDeadline = data.objectionDeadline || null;
+        if (!data.judgmentFinal && data.judgmentSide === "ضدنا" && data.objectionFeasible) {
+          updateData.objectionStatus = "بانتظار_القرار";
+        }
+      }
+
+      if (data.result === HearingResult.POSTPONEMENT) {
+        updateData.nextHearingDate = data.nextHearingDate || null;
+        updateData.nextHearingTime = data.nextHearingTime || null;
+        updateData.responseRequired = data.responseRequired ?? false;
+      }
+
+      const updatedHearing = await storage.updateHearing(hearingId, updateData);
+
+      const createdTasks: any[] = [];
+
+      if (data.result === HearingResult.POSTPONEMENT && data.nextHearingDate) {
+        const newHearing = await storage.createHearing({
+          caseId: hearing.caseId,
+          hearingDate: data.nextHearingDate,
+          hearingTime: data.nextHearingTime || hearing.hearingTime,
+          courtName: hearing.courtName,
+          courtNameOther: hearing.courtNameOther,
+          courtRoom: hearing.courtRoom,
+          status: HearingStatus.UPCOMING,
+          notes: `جلسة مؤجلة من ${hearing.hearingDate}`,
+        } as any);
+        createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
+
+        if (data.responseRequired) {
+          const dueDate = data.nextHearingDate;
+          const task = await storage.createFieldTask({
+            title: `إعداد رد للجلسة القادمة - ${hearing.caseId}`,
+            description: `مطلوب إعداد رد قبل الجلسة القادمة بتاريخ ${data.nextHearingDate}`,
+            taskType: "متابعة_محكمة",
+            caseId: hearing.caseId,
+            assignedTo: data.userId || "admin",
+            priority: "عالي",
+            dueDate,
+          } as any, "system");
+          createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
+        }
+      }
+
+      if (data.result === HearingResult.JUDGMENT) {
+        const contactTask = await storage.createFieldTask({
+          title: `إبلاغ العميل بنتيجة الحكم - ${hearing.caseId}`,
+          description: `صدر حكم ${data.judgmentSide || ""} - يرجى إبلاغ العميل بالتفاصيل`,
+          taskType: "زيارة_عميل",
+          caseId: hearing.caseId,
+          assignedTo: data.userId || "admin",
+          priority: "عاجل",
+          dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        } as any, "system");
+        createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
+
+        if (!data.judgmentFinal && data.judgmentSide === "ضدنا" && data.objectionFeasible) {
+          const objectionTask = await storage.createFieldTask({
+            title: `تقديم اعتراض على الحكم - ${hearing.caseId}`,
+            description: `مهلة الاعتراض: ${data.objectionDeadline || "غير محددة"}`,
+            taskType: "متابعة_محكمة",
+            caseId: hearing.caseId,
+            assignedTo: data.userId || "admin",
+            priority: "عاجل",
+            dueDate: data.objectionDeadline || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          } as any, "system");
+          createdTasks.push({ type: "file_objection", id: objectionTask.id, description: "مهمة تقديم اعتراض" });
+        }
+      }
+
+      if (createdTasks.length > 0) {
+        await storage.updateHearing(hearingId, { adminTasksCreated: true } as any);
+      }
+
+      res.json({ hearing: updatedHearing, createdTasks });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      console.error("Error submitting hearing result:", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل نتيجة الجلسة" });
+    }
+  });
+
+  app.post("/api/hearings/:id/report", async (req, res) => {
+    try {
+      const hearingId = req.params.id;
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!hearing.result) {
+        return res.status(400).json({ error: "يجب تسجيل نتيجة الجلسة أولاً" });
+      }
+
+      const data = hearingReportSchema.parse(req.body);
+      
+      const updated = await storage.updateHearing(hearingId, {
+        hearingReport: data.hearingReport,
+        recommendations: data.recommendations || "",
+        nextSteps: data.nextSteps || "",
+        contactCompleted: data.contactCompleted,
+        reportCompleted: true,
+      } as any);
+
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      console.error("Error submitting hearing report:", error);
+      res.status(500).json({ error: "حدث خطأ في حفظ تقرير الجلسة" });
+    }
+  });
+
+  app.post("/api/hearings/:id/close", async (req, res) => {
+    try {
+      const hearingId = req.params.id;
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!hearing.reportCompleted) {
+        return res.status(400).json({ error: "يجب كتابة التقرير أولاً قبل إغلاق الجلسة" });
+      }
+      if (!hearing.contactCompleted) {
+        return res.status(400).json({ error: "يجب تأكيد الاتصال بالعميل قبل إغلاق الجلسة" });
+      }
+
+      const updated = await storage.updateHearing(hearingId, {
+        status: HearingStatus.COMPLETED,
+      } as any);
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error closing hearing:", error);
+      res.status(500).json({ error: "حدث خطأ في إغلاق الجلسة" });
     }
   });
 

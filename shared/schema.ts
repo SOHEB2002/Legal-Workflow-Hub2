@@ -107,6 +107,22 @@ export const hearings = pgTable("hearings", {
   status: varchar("status", { length: 50 }).notNull(),
   result: varchar("result", { length: 50 }),
   resultDetails: text("result_details").default(""),
+  judgmentSide: varchar("judgment_side", { length: 50 }),
+  judgmentFinal: boolean("judgment_final"),
+  objectionFeasible: boolean("objection_feasible"),
+  objectionDeadline: varchar("objection_deadline", { length: 50 }),
+  objectionStatus: varchar("objection_status", { length: 50 }),
+  nextHearingDate: varchar("next_hearing_date", { length: 50 }),
+  nextHearingTime: varchar("next_hearing_time", { length: 50 }),
+  responseRequired: boolean("response_required").default(false),
+  hearingReport: text("hearing_report").default(""),
+  recommendations: text("recommendations").default(""),
+  nextSteps: text("next_steps").default(""),
+  contactCompleted: boolean("contact_completed").default(false),
+  reportCompleted: boolean("report_completed").default(false),
+  adminTasksCreated: boolean("admin_tasks_created").default(false),
+  opponentMemos: text("opponent_memos").default(""),
+  hearingMinutes: text("hearing_minutes").default(""),
   reminderSent24h: boolean("reminder_sent_24h").default(false),
   reminderSent1h: boolean("reminder_sent_1h").default(false),
   googleCalendarEventId: varchar("google_calendar_event_id", { length: 255 }),
@@ -403,6 +419,37 @@ export const HearingResult = {
 
 export type HearingResultValue = typeof HearingResult[keyof typeof HearingResult];
 
+// ==================== جانب الحكم ====================
+export const JudgmentSide = {
+  FOR_US: "لصالحنا",
+  AGAINST_US: "ضدنا",
+} as const;
+
+export type JudgmentSideValue = typeof JudgmentSide[keyof typeof JudgmentSide];
+
+// ==================== حالة الاعتراض ====================
+export const ObjectionStatus = {
+  PENDING: "بانتظار_القرار",
+  FILED: "تم_تقديم_الاعتراض",
+  NOT_FILED: "لم_يتم_الاعتراض",
+  ACCEPTED: "مقبول",
+  REJECTED: "مرفوض",
+} as const;
+
+export type ObjectionStatusValue = typeof ObjectionStatus[keyof typeof ObjectionStatus];
+
+// ==================== أنواع المهام التلقائية للجلسات ====================
+export const HearingAutoTaskType = {
+  PREPARE_NEXT_HEARING: "تحضير_الجلسة_القادمة",
+  PREPARE_RESPONSE: "إعداد_الرد",
+  FILE_OBJECTION: "تقديم_اعتراض",
+  EXECUTE_JUDGMENT: "تنفيذ_الحكم",
+  CONTACT_CLIENT: "التواصل_مع_العميل",
+  REVIEW_JUDGMENT: "مراجعة_الحكم",
+} as const;
+
+export type HearingAutoTaskTypeValue = typeof HearingAutoTaskType[keyof typeof HearingAutoTaskType];
+
 // ==================== حالات المهام الميدانية ====================
 export const FieldTaskStatus = {
   PENDING: "قيد_الانتظار",
@@ -576,6 +623,22 @@ export interface Hearing {
   status: HearingStatusValue;
   result: HearingResultValue | null;
   resultDetails: string;
+  judgmentSide: string | null;
+  judgmentFinal: boolean | null;
+  objectionFeasible: boolean | null;
+  objectionDeadline: string | null;
+  objectionStatus: string | null;
+  nextHearingDate: string | null;
+  nextHearingTime: string | null;
+  responseRequired: boolean;
+  hearingReport: string;
+  recommendations: string;
+  nextSteps: string;
+  contactCompleted: boolean;
+  reportCompleted: boolean;
+  adminTasksCreated: boolean;
+  opponentMemos: string;
+  hearingMinutes: string;
   reminderSent24h: boolean;
   reminderSent1h: boolean;
   googleCalendarEventId: string | null;
@@ -779,6 +842,30 @@ export const insertHearingSchema = z.object({
 });
 
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
+
+export const hearingResultSchema = z.object({
+  result: z.enum(["تأجيل", "حكم", "صلح", "شطب", "أخرى"]),
+  resultDetails: z.string().optional().default(""),
+  judgmentSide: z.enum(["لصالحنا", "ضدنا"]).nullable().optional(),
+  judgmentFinal: z.boolean().nullable().optional(),
+  objectionFeasible: z.boolean().nullable().optional(),
+  objectionDeadline: z.string().nullable().optional(),
+  nextHearingDate: z.string().nullable().optional(),
+  nextHearingTime: z.string().nullable().optional(),
+  responseRequired: z.boolean().optional().default(false),
+  userId: z.string().optional(),
+});
+
+export type HearingResultInput = z.infer<typeof hearingResultSchema>;
+
+export const hearingReportSchema = z.object({
+  hearingReport: z.string().min(1, "تقرير الجلسة مطلوب"),
+  recommendations: z.string().optional().default(""),
+  nextSteps: z.string().optional().default(""),
+  contactCompleted: z.boolean().default(false),
+});
+
+export type HearingReportInput = z.infer<typeof hearingReportSchema>;
 
 export const insertFieldTaskSchema = z.object({
   title: z.string().min(1, "عنوان المهمة مطلوب"),
