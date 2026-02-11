@@ -132,6 +132,7 @@ export default function CasesPage() {
     moveToPreviousStage,
     addComment,
     getCommentsByCaseId,
+    getCaseById,
   } = useCases();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
@@ -158,7 +159,8 @@ export default function CasesPage() {
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
-  const [selectedCase, setSelectedCase] = useState<LawCase | null>(null);
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const selectedCase = selectedCaseId ? getCaseById(selectedCaseId) || null : null;
   const [rejectNotes, setRejectNotes] = useState("");
   const [newComment, setNewComment] = useState("");
   const [activeTab, setActiveTab] = useState("info");
@@ -226,7 +228,7 @@ export default function CasesPage() {
     assignCase(selectedCase.id, assignData.lawyerId, assignData.departmentId);
     toast({ title: "تم إسناد القضية بنجاح" });
     setShowAssignDialog(false);
-    setSelectedCase(null);
+    setSelectedCaseId(null);
     setAssignData({ lawyerId: "", departmentId: "" });
   };
 
@@ -245,7 +247,7 @@ export default function CasesPage() {
     rejectCase(selectedCase.id, rejectNotes, "rejected");
     toast({ title: "تم إعادة القضية للتعديل" });
     setShowRejectDialog(false);
-    setSelectedCase(null);
+    setSelectedCaseId(null);
     setRejectNotes("");
   };
 
@@ -267,7 +269,7 @@ export default function CasesPage() {
   }, [cases, searchQuery, statusFilter, typeFilter, getClientName]);
 
   const openAssignDialog = (caseItem: LawCase) => {
-    setSelectedCase(caseItem);
+    setSelectedCaseId(caseItem.id);
     setAssignData({ 
       lawyerId: caseItem.primaryLawyerId || "", 
       departmentId: caseItem.departmentId || "" 
@@ -276,19 +278,19 @@ export default function CasesPage() {
   };
 
   const openRejectDialog = (caseItem: LawCase) => {
-    setSelectedCase(caseItem);
+    setSelectedCaseId(caseItem.id);
     setRejectNotes("");
     setShowRejectDialog(true);
   };
 
   const openDetailsDialog = (caseItem: LawCase) => {
-    setSelectedCase(caseItem);
+    setSelectedCaseId(caseItem.id);
     setShowDetailsDialog(true);
     addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
   };
 
   const openReviewDialog = (caseItem: LawCase) => {
-    setSelectedCase(caseItem);
+    setSelectedCaseId(caseItem.id);
     setShowReviewDialog(true);
   };
 
@@ -771,16 +773,15 @@ export default function CasesPage() {
                 <CaseProgressBar
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
-                  onMoveToNext={(notes) => {
+                  onMoveToNext={async (notes) => {
                     if (user) {
-                      moveToNextStage(selectedCase.id, user.id, user.name, notes);
-                      setSelectedCase({ ...selectedCase, currentStage: selectedCase.currentStage });
+                      await moveToNextStage(selectedCase.id, user.id, user.name, notes);
                       toast({ title: "تم نقل القضية للمرحلة التالية" });
                     }
                   }}
-                  onMoveToPrevious={(notes) => {
+                  onMoveToPrevious={async (notes) => {
                     if (user) {
-                      moveToPreviousStage(selectedCase.id, user.id, user.name, notes);
+                      await moveToPreviousStage(selectedCase.id, user.id, user.name, notes);
                       toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
                     }
                   }}

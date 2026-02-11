@@ -18,8 +18,8 @@ interface CasesContextType {
   markReadyToSubmit: (id: string) => void;
   markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
-  moveToNextStage: (id: string, userId: string, userName: string, notes?: string) => boolean;
-  moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string) => boolean;
+  moveToNextStage: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
+  moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
   addComment: (caseId: string, userId: string, userName: string, content: string) => void;
   getCommentsByCaseId: (caseId: string) => CaseComment[];
   getCaseById: (id: string) => LawCase | undefined;
@@ -324,7 +324,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const getCasesByClient = (clientId: string) =>
     cases.filter((c) => c.clientId === clientId);
 
-  const moveToNextStage = (id: string, userId: string, userName: string, notes: string = ""): boolean => {
+  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
@@ -340,14 +340,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       notes,
     };
 
-    updateCase(id, {
+    await updateCase(id, {
       currentStage: nextStage,
       stageHistory: [...lawCase.stageHistory, newTransition],
     });
     return true;
   };
 
-  const moveToPreviousStage = (id: string, userId: string, userName: string, notes: string = ""): boolean => {
+  const moveToPreviousStage = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
@@ -363,7 +363,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       notes: notes || "إرجاع للمرحلة السابقة",
     };
 
-    updateCase(id, {
+    await updateCase(id, {
       currentStage: prevStage,
       stageHistory: [...lawCase.stageHistory, newTransition],
     });
