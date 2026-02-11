@@ -38,7 +38,7 @@ import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
 import { FavoriteButton } from "@/components/favorite-button";
 import { useClients } from "@/lib/clients-context";
-import { useAuth, getLawyers } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Consultation, ConsultationStatusValue, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
 import { ConsultationStatus, ConsultationStatusLabels, CaseType, DeliveryType, Department } from "@shared/schema";
@@ -81,11 +81,11 @@ export default function ConsultationsPage() {
   } = useConsultations();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, permissions } = useAuth();
+  const { user, permissions, users } = useAuth();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
   const { toast } = useToast();
-  const lawyers = getLawyers();
+  const lawyers = users.filter(u => u.canBeAssignedCases);
   const consultationReviewStandards = getStandardsByType("legal_consultation");
 
   const [searchQuery, setSearchQuery] = useState("");

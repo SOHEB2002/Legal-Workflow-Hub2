@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { User, UserRoleType } from "@shared/schema";
 import { 
   canManageAllCases, 
@@ -12,6 +12,7 @@ import {
   canCloseCases,
   canSendNotifications
 } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
 
 interface AuthContextType {
   user: User | null;
@@ -30,6 +31,7 @@ interface AuthContextType {
     canSendNotifications: boolean;
   };
   users: User[];
+  refetchUsers: () => Promise<void>;
   addUser: (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => void;
   updateUser: (id: string, userData: Partial<User>) => void;
   deleteUser: (id: string) => { success: boolean; message: string };
@@ -39,138 +41,26 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const defaultUsers: User[] = [
-  { 
-    id: "1", 
-    username: "manager", 
-    password: "1234", 
-    name: "مدير الفرع", 
-    email: "manager@lawfirm.com",
-    phone: "0501234567",
-    role: "branch_manager",
-    departmentId: null,
-    isActive: true,
-    canBeAssignedCases: true,
-    canBeAssignedConsultations: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "2", 
-    username: "cases_head", 
-    password: "1234", 
-    name: "رئيس لجنة مراجعة القضايا", 
-    email: "cases@lawfirm.com",
-    phone: "0502234567",
-    role: "cases_review_head",
-    departmentId: null,
-    isActive: true,
-    canBeAssignedCases: false,
-    canBeAssignedConsultations: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "3", 
-    username: "consult_head", 
-    password: "1234", 
-    name: "رئيس لجنة مراجعة الاستشارات", 
-    email: "consult@lawfirm.com",
-    phone: "0503234567",
-    role: "consultations_review_head",
-    departmentId: null,
-    isActive: true,
-    canBeAssignedCases: false,
-    canBeAssignedConsultations: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "4", 
-    username: "omar", 
-    password: "1234", 
-    name: "المحامي عمر - رئيس القسم العام", 
-    email: "omar@lawfirm.com",
-    phone: "0504234567",
-    role: "department_head",
-    departmentId: "1",
-    isActive: true,
-    canBeAssignedCases: true,
-    canBeAssignedConsultations: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "5", 
-    username: "muhannad", 
-    password: "1234", 
-    name: "المحامي مهند - رئيس القسم التجاري", 
-    email: "muhannad@lawfirm.com",
-    phone: "0505234567",
-    role: "department_head",
-    departmentId: "2",
-    isActive: true,
-    canBeAssignedCases: true,
-    canBeAssignedConsultations: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "6", 
-    username: "support", 
-    password: "1234", 
-    name: "الدعم الإداري", 
-    email: "support@lawfirm.com",
-    phone: "0506234567",
-    role: "admin_support",
-    departmentId: null,
-    isActive: true,
-    canBeAssignedCases: false,
-    canBeAssignedConsultations: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "7", 
-    username: "lawyer1", 
-    password: "1234", 
-    name: "أحمد محمد - محامي", 
-    email: "ahmed@lawfirm.com",
-    phone: "0507234567",
-    role: "employee",
-    departmentId: "1",
-    isActive: true,
-    canBeAssignedCases: true,
-    canBeAssignedConsultations: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  { 
-    id: "8", 
-    username: "hr", 
-    password: "1234", 
-    name: "الموارد البشرية", 
-    email: "hr@lawfirm.com",
-    phone: "0508234567",
-    role: "hr",
-    departmentId: null,
-    isActive: true,
-    canBeAssignedCases: false,
-    canBeAssignedConsultations: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
-const USERS_STORAGE_KEY = "lawfirm_users";
-
-function getStoredUsers(): User[] {
-  const stored = localStorage.getItem(USERS_STORAGE_KEY);
-  if (stored) {
-    return JSON.parse(stored);
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = localStorage.getItem("lawfirm_token");
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
-  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(defaultUsers));
-  return defaultUsers;
+  return headers;
+}
+
+async function fetchUsersFromAPI(): Promise<User[]> {
+  try {
+    const res = await fetch("/api/users", {
+      headers: getAuthHeaders(),
+      credentials: "include",
+    });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -179,7 +69,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return stored ? JSON.parse(stored) : null;
   });
 
-  const [users, setUsers] = useState<User[]>(() => getStoredUsers());
+  const [users, setUsers] = useState<User[]>([]);
+
+  const refetchUsers = useCallback(async () => {
+    const fetched = await fetchUsersFromAPI();
+    setUsers(fetched);
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -190,8 +85,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   useEffect(() => {
-    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-  }, [users]);
+    if (user) {
+      refetchUsers();
+    }
+  }, [user, refetchUsers]);
 
   const login = async (username: string, password: string): Promise<boolean> => {
     try {
@@ -220,22 +117,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem("lawfirm_token");
   };
 
-  const addUser = (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => {
-    const newUser: User = {
-      ...userData,
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    setUsers((prev) => [...prev, newUser]);
+  const addUser = async (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => {
+    try {
+      await apiRequest("POST", "/api/users", userData);
+      await refetchUsers();
+    } catch {
+    }
   };
 
-  const updateUser = (id: string, userData: Partial<User>) => {
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === id ? { ...u, ...userData, updatedAt: new Date().toISOString() } : u
-      )
-    );
+  const updateUser = async (id: string, userData: Partial<User>) => {
+    try {
+      await apiRequest("PATCH", `/api/users/${id}`, userData);
+      await refetchUsers();
+    } catch {
+    }
   };
 
   const deleteUser = (id: string): { success: boolean; message: string } => {
@@ -255,32 +150,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { success: false, message: "لا يمكنك حذف حسابك الحالي" };
     }
 
-    setUsers((prev) => prev.filter((u) => u.id !== id));
+    apiRequest("DELETE", `/api/users/${id}`).then(() => refetchUsers()).catch(() => {});
     return { success: true, message: "تم حذف المستخدم بنجاح" };
   };
 
-  const resetPassword = (id: string, newPassword: string) => {
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === id ? { ...u, password: newPassword, updatedAt: new Date().toISOString() } : u
-      )
-    );
+  const resetPassword = async (id: string, newPassword: string) => {
+    try {
+      await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword });
+      await refetchUsers();
+    } catch {
+    }
   };
 
-  const toggleUserStatus = (id: string) => {
+  const toggleUserStatus = async (id: string) => {
     const targetUser = users.find(u => u.id === id);
-    if (targetUser?.role === "branch_manager") {
+    if (!targetUser) return;
+
+    if (targetUser.role === "branch_manager") {
       const activeBranchManagers = users.filter(u => u.role === "branch_manager" && u.isActive && u.id !== id);
       if (activeBranchManagers.length === 0 && targetUser.isActive) {
         return;
       }
     }
-    
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === id ? { ...u, isActive: !u.isActive, updatedAt: new Date().toISOString() } : u
-      )
-    );
+
+    try {
+      await apiRequest("PATCH", `/api/users/${id}`, { isActive: !targetUser.isActive });
+      await refetchUsers();
+    } catch {
+    }
   };
 
   const permissions = {
@@ -297,7 +194,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
+    <AuthContext.Provider value={{ user, login, logout, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
       {children}
     </AuthContext.Provider>
   );
@@ -311,22 +208,26 @@ export function useAuth() {
   return context;
 }
 
-export function getAllUsers(): User[] {
-  return getStoredUsers();
+export async function getAllUsers(): Promise<User[]> {
+  return fetchUsersFromAPI();
 }
 
-export function getUserById(id: string): User | undefined {
-  return getStoredUsers().find(u => u.id === id);
+export async function getUserById(id: string): Promise<User | undefined> {
+  const users = await fetchUsersFromAPI();
+  return users.find(u => u.id === id);
 }
 
-export function getUsersByDepartment(departmentId: string): User[] {
-  return getStoredUsers().filter(u => u.departmentId === departmentId);
+export async function getUsersByDepartment(departmentId: string): Promise<User[]> {
+  const users = await fetchUsersFromAPI();
+  return users.filter(u => u.departmentId === departmentId);
 }
 
-export function getLawyers(): User[] {
-  return getStoredUsers().filter(u => u.canBeAssignedCases);
+export async function getLawyers(): Promise<User[]> {
+  const users = await fetchUsersFromAPI();
+  return users.filter(u => u.canBeAssignedCases);
 }
 
-export function getActiveUsers(): User[] {
-  return getStoredUsers().filter(u => u.isActive);
+export async function getActiveUsers(): Promise<User[]> {
+  const users = await fetchUsersFromAPI();
+  return users.filter(u => u.isActive);
 }

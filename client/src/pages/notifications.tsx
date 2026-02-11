@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useNotifications } from "@/lib/notifications-context";
-import { useAuth, getAllUsers } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import { SendNotificationDialog } from "@/components/notifications/send-notification-dialog";
 import { RespondDialog } from "@/components/notifications/respond-dialog";
@@ -63,7 +63,7 @@ function formatDate(dateStr: string): string {
 }
 
 export default function NotificationsPage() {
-  const { user, permissions } = useAuth();
+  const { user, permissions, users } = useAuth();
   const {
     getMyNotifications,
     markAsRead,
@@ -84,7 +84,7 @@ export default function NotificationsPage() {
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
 
   const userId = user?.id || "";
-  const allUsers = getAllUsers();
+  const allUsers = users;
 
   const getFilteredNotifications = (): Notification[] => {
     let notifications = getMyNotifications(userId);

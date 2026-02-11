@@ -13,11 +13,16 @@ import type {
   NotificationRuleRecipients,
 } from "@shared/schema";
 import { NotificationType, NotificationPriority, NotificationStatus, DigestMode } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
 
-const NOTIFICATIONS_STORAGE_KEY = "lawfirm_notifications";
 const TEMPLATES_STORAGE_KEY = "lawfirm_notification_templates";
 const PREFERENCES_STORAGE_KEY = "lawfirm_notification_preferences";
 const RULES_STORAGE_KEY = "lawfirm_notification_rules";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("lawfirm_token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
 
 export interface WorkflowNotificationEvent {
   type: NotificationTypeValue;
@@ -177,20 +182,22 @@ interface NotificationsContextType {
   templates: NotificationTemplate[];
   preferences: Record<string, UserNotificationPreferences>;
   rules: NotificationRule[];
-  sendNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo">) => Notification;
-  sendBulkNotification: (recipientIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">) => Notification[];
-  scheduleNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "escalationLevel" | "escalatedTo">, scheduledAt: string) => Notification;
-  sendToTeam: (departmentId: string, userIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">) => Notification[];
-  markAsRead: (id: string) => void;
-  markAllAsRead: (userId: string) => void;
-  deleteNotification: (id: string) => void;
+  isLoading: boolean;
+  refetchNotifications: () => Promise<void>;
+  sendNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo">) => Promise<Notification>;
+  sendBulkNotification: (recipientIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">) => Promise<Notification[]>;
+  scheduleNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "escalationLevel" | "escalatedTo">, scheduledAt: string) => Promise<Notification>;
+  sendToTeam: (departmentId: string, userIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">) => Promise<Notification[]>;
+  markAsRead: (id: string) => Promise<void>;
+  markAllAsRead: (userId: string) => Promise<void>;
+  deleteNotification: (id: string) => Promise<void>;
   archiveOldNotifications: (daysOld: number) => void;
   getUnreadCount: (userId: string) => number;
   getMyNotifications: (userId: string, filters?: NotificationFilters) => Notification[];
-  respondToNotification: (id: string, responseType: ResponseTypeValue, message: string) => void;
+  respondToNotification: (id: string, responseType: ResponseTypeValue, message: string) => Promise<void>;
   getNotificationResponses: (senderId: string) => Notification[];
   checkAndEscalate: () => void;
-  escalateNotification: (id: string, escalateToUserId: string) => void;
+  escalateNotification: (id: string, escalateToUserId: string) => Promise<void>;
   getEscalatedNotifications: (userId: string) => Notification[];
   getUserPreferences: (userId: string) => UserNotificationPreferences;
   updateUserPreferences: (userId: string, prefs: Partial<UserNotificationPreferences>) => void;
@@ -256,11 +263,6 @@ const defaultTemplates: NotificationTemplate[] = [
   },
 ];
 
-function getStoredNotifications(): Notification[] {
-  const stored = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
-  return stored ? JSON.parse(stored) : [];
-}
-
 function getStoredTemplates(): NotificationTemplate[] {
   const stored = localStorage.getItem(TEMPLATES_STORAGE_KEY);
   return stored ? JSON.parse(stored) : defaultTemplates;
@@ -292,15 +294,37 @@ const defaultPreferences: UserNotificationPreferences = {
 };
 
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
-  const [notifications, setNotifications] = useState<Notification[]>(() => getStoredNotifications());
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [templates, setTemplates] = useState<NotificationTemplate[]>(() => getStoredTemplates());
   const [preferences, setPreferences] = useState<Record<string, UserNotificationPreferences>>(() => getStoredPreferences());
   const [rules, setRules] = useState<NotificationRule[]>(() => getStoredRules());
   const [hasNewNotifications, setHasNewNotifications] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications", {
+        credentials: "include",
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNotifications(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch notifications:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const refetchNotifications = useCallback(async () => {
+    await fetchNotifications();
+  }, [fetchNotifications]);
 
   useEffect(() => {
-    localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications));
-  }, [notifications]);
+    fetchNotifications();
+  }, [fetchNotifications]);
 
   useEffect(() => {
     localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
@@ -314,58 +338,58 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(rules));
   }, [rules]);
 
-  const sendNotification = useCallback((
+  const sendNotification = useCallback(async (
     notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo">
-  ): Notification => {
-    const now = new Date().toISOString();
-    const newNotification: Notification = {
+  ): Promise<Notification> => {
+    const res = await apiRequest("POST", "/api/notifications", {
       ...notificationData,
-      id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       status: notificationData.scheduledAt ? NotificationStatus.PENDING : NotificationStatus.SENT,
       isRead: false,
       readAt: null,
       response: null,
       escalationLevel: 0,
       escalatedTo: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    setNotifications(prev => [newNotification, ...prev]);
+    });
+    const newNotification = await res.json();
+    await refetchNotifications();
     setHasNewNotifications(true);
     return newNotification;
-  }, []);
+  }, [refetchNotifications]);
 
-  const sendBulkNotification = useCallback((
+  const sendBulkNotification = useCallback(async (
     recipientIds: string[],
     notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">
-  ): Notification[] => {
-    const now = new Date().toISOString();
-    const newNotifications: Notification[] = recipientIds.map(recipientId => ({
-      ...notificationData,
-      recipientId,
-      id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      status: NotificationStatus.SENT as NotificationStatusValue,
-      isRead: false,
-      readAt: null,
-      response: null,
-      escalationLevel: 0,
-      escalatedTo: null,
-      createdAt: now,
-      updatedAt: now,
-    }));
-    setNotifications(prev => [...newNotifications, ...prev]);
+  ): Promise<Notification[]> => {
+    const results: Notification[] = [];
+    for (const recipientId of recipientIds) {
+      try {
+        const res = await apiRequest("POST", "/api/notifications", {
+          ...notificationData,
+          recipientId,
+          status: NotificationStatus.SENT,
+          isRead: false,
+          readAt: null,
+          response: null,
+          escalationLevel: 0,
+          escalatedTo: null,
+        });
+        const created = await res.json();
+        results.push(created);
+      } catch (err) {
+        console.error("Failed to send notification to", recipientId, err);
+      }
+    }
+    await refetchNotifications();
     setHasNewNotifications(true);
-    return newNotifications;
-  }, []);
+    return results;
+  }, [refetchNotifications]);
 
-  const scheduleNotification = useCallback((
+  const scheduleNotification = useCallback(async (
     notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "escalationLevel" | "escalatedTo">,
     scheduledAt: string
-  ): Notification => {
-    const now = new Date().toISOString();
-    const newNotification: Notification = {
+  ): Promise<Notification> => {
+    const res = await apiRequest("POST", "/api/notifications", {
       ...notificationData,
-      id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       status: NotificationStatus.PENDING,
       scheduledAt,
       isRead: false,
@@ -373,51 +397,72 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       response: null,
       escalationLevel: 0,
       escalatedTo: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    setNotifications(prev => [newNotification, ...prev]);
+    });
+    const newNotification = await res.json();
+    await refetchNotifications();
     return newNotification;
-  }, []);
+  }, [refetchNotifications]);
 
-  const sendToTeam = useCallback((
+  const sendToTeam = useCallback(async (
     _departmentId: string,
     userIds: string[],
     notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">
-  ): Notification[] => {
+  ): Promise<Notification[]> => {
     return sendBulkNotification(userIds, notificationData);
   }, [sendBulkNotification]);
 
-  const markAsRead = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => 
-      n.id === id ? { ...n, isRead: true, readAt: new Date().toISOString(), status: NotificationStatus.READ as NotificationStatusValue, updatedAt: new Date().toISOString() } : n
-    ));
-  }, []);
-
-  const markAllAsRead = useCallback((userId: string) => {
+  const markAsRead = useCallback(async (id: string) => {
     const now = new Date().toISOString();
-    setNotifications(prev => prev.map(n => 
-      n.recipientId === userId && !n.isRead 
-        ? { ...n, isRead: true, readAt: now, status: NotificationStatus.READ as NotificationStatusValue, updatedAt: now } 
-        : n
-    ));
-  }, []);
+    try {
+      await apiRequest("PATCH", `/api/notifications/${id}`, {
+        isRead: true,
+        readAt: now,
+        status: NotificationStatus.READ,
+      });
+      await refetchNotifications();
+    } catch (err) {
+      console.error("Failed to mark notification as read:", err);
+    }
+  }, [refetchNotifications]);
 
-  const deleteNotification = useCallback((id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  }, []);
+  const markAllAsRead = useCallback(async (userId: string) => {
+    const now = new Date().toISOString();
+    const unread = notifications.filter(n => n.recipientId === userId && !n.isRead);
+    const promises = unread.map(n =>
+      apiRequest("PATCH", `/api/notifications/${n.id}`, {
+        isRead: true,
+        readAt: now,
+        status: NotificationStatus.READ,
+      }).catch(err => console.error("Failed to mark notification as read:", err))
+    );
+    await Promise.all(promises);
+    await refetchNotifications();
+  }, [notifications, refetchNotifications]);
+
+  const deleteNotification = useCallback(async (id: string) => {
+    try {
+      await apiRequest("DELETE", `/api/notifications/${id}`);
+      await refetchNotifications();
+    } catch (err) {
+      console.error("Failed to delete notification:", err);
+    }
+  }, [refetchNotifications]);
 
   const archiveOldNotifications = useCallback((daysOld: number) => {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysOld);
     const cutoffStr = cutoffDate.toISOString();
     
-    setNotifications(prev => prev.map(n => 
-      n.createdAt < cutoffStr && n.status !== NotificationStatus.ARCHIVED
-        ? { ...n, status: NotificationStatus.ARCHIVED as NotificationStatusValue, updatedAt: new Date().toISOString() }
-        : n
-    ));
-  }, []);
+    const toArchive = notifications.filter(
+      n => n.createdAt < cutoffStr && n.status !== NotificationStatus.ARCHIVED
+    );
+    toArchive.forEach(n => {
+      apiRequest("PATCH", `/api/notifications/${n.id}`, {
+        status: NotificationStatus.ARCHIVED,
+      }).catch(err => console.error("Failed to archive notification:", err));
+    });
+    refetchNotifications();
+  }, [notifications, refetchNotifications]);
 
   const getUnreadCount = useCallback((userId: string): number => {
     return notifications.filter(n => n.recipientId === userId && !n.isRead && n.status !== NotificationStatus.ARCHIVED).length;
@@ -449,16 +494,17 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [notifications]);
 
-  const respondToNotification = useCallback((id: string, responseType: ResponseTypeValue, message: string) => {
-    setNotifications(prev => prev.map(n => 
-      n.id === id ? {
-        ...n,
+  const respondToNotification = useCallback(async (id: string, responseType: ResponseTypeValue, message: string) => {
+    try {
+      await apiRequest("PATCH", `/api/notifications/${id}`, {
         response: { type: responseType, message, respondedAt: new Date().toISOString() },
-        status: NotificationStatus.RESPONDED as NotificationStatusValue,
-        updatedAt: new Date().toISOString()
-      } : n
-    ));
-  }, []);
+        status: NotificationStatus.RESPONDED,
+      });
+      await refetchNotifications();
+    } catch (err) {
+      console.error("Failed to respond to notification:", err);
+    }
+  }, [refetchNotifications]);
 
   const getNotificationResponses = useCallback((senderId: string): Notification[] => {
     return notifications.filter(n => n.senderId === senderId && n.response !== null);
@@ -466,34 +512,38 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const checkAndEscalate = useCallback(() => {
     const now = new Date();
-    setNotifications(prev => prev.map(n => {
+    const toEscalate = notifications.filter(n => {
       if (n.status === NotificationStatus.SENT && !n.isRead && n.autoEscalateAfterHours > 0) {
         const createdAt = new Date(n.createdAt);
         const hoursDiff = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60);
-        if (hoursDiff >= n.autoEscalateAfterHours) {
-          return {
-            ...n,
-            status: NotificationStatus.ESCALATED as NotificationStatusValue,
-            escalationLevel: n.escalationLevel + 1,
-            updatedAt: now.toISOString()
-          };
-        }
+        return hoursDiff >= n.autoEscalateAfterHours;
       }
-      return n;
-    }));
-  }, []);
-
-  const escalateNotification = useCallback((id: string, escalateToUserId: string) => {
-    setNotifications(prev => prev.map(n => 
-      n.id === id ? {
-        ...n,
-        status: NotificationStatus.ESCALATED as NotificationStatusValue,
-        escalatedTo: escalateToUserId,
+      return false;
+    });
+    toEscalate.forEach(n => {
+      apiRequest("PATCH", `/api/notifications/${n.id}`, {
+        status: NotificationStatus.ESCALATED,
         escalationLevel: n.escalationLevel + 1,
-        updatedAt: new Date().toISOString()
-      } : n
-    ));
-  }, []);
+      }).catch(err => console.error("Failed to escalate notification:", err));
+    });
+    if (toEscalate.length > 0) {
+      refetchNotifications();
+    }
+  }, [notifications, refetchNotifications]);
+
+  const escalateNotification = useCallback(async (id: string, escalateToUserId: string) => {
+    const notification = notifications.find(n => n.id === id);
+    try {
+      await apiRequest("PATCH", `/api/notifications/${id}`, {
+        status: NotificationStatus.ESCALATED,
+        escalatedTo: escalateToUserId,
+        escalationLevel: (notification?.escalationLevel || 0) + 1,
+      });
+      await refetchNotifications();
+    } catch (err) {
+      console.error("Failed to escalate notification:", err);
+    }
+  }, [notifications, refetchNotifications]);
 
   const getEscalatedNotifications = useCallback((userId: string): Notification[] => {
     return notifications.filter(n => 
@@ -588,38 +638,38 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       
       if (filteredRecipients.length === 0) return;
       
-      const now = new Date().toISOString();
-      const newNotifications: Notification[] = filteredRecipients.map(recipientId => ({
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        type: event.type,
-        priority: rule.notificationPriority,
-        status: NotificationStatus.SENT as NotificationStatusValue,
-        title,
-        message,
-        senderId: null,
-        senderName: null,
-        isAutomatic: true,
-        recipientId,
-        relatedType: event.entityType,
-        relatedId: event.entityId,
-        relatedStage: event.stage || null,
-        workflowTriggerId: `trigger_${Date.now()}`,
-        isRead: false,
-        readAt: null,
-        response: null,
-        requiresResponse: false,
-        scheduledAt: null,
-        escalationLevel: 0,
-        escalatedTo: null,
-        autoEscalateAfterHours: rule.autoEscalate ? rule.escalateAfterHours : 0,
-        createdAt: now,
-        updatedAt: now,
-      }));
+      const postPromises = filteredRecipients.map(recipientId =>
+        apiRequest("POST", "/api/notifications", {
+          type: event.type,
+          priority: rule.notificationPriority,
+          status: NotificationStatus.SENT,
+          title,
+          message,
+          senderId: null,
+          senderName: null,
+          isAutomatic: true,
+          recipientId,
+          relatedType: event.entityType,
+          relatedId: event.entityId,
+          relatedStage: event.stage || null,
+          workflowTriggerId: `trigger_${Date.now()}`,
+          isRead: false,
+          readAt: null,
+          response: null,
+          requiresResponse: false,
+          scheduledAt: null,
+          escalationLevel: 0,
+          escalatedTo: null,
+          autoEscalateAfterHours: rule.autoEscalate ? rule.escalateAfterHours : 0,
+        }).catch(err => console.error("Failed to send workflow notification:", err))
+      );
       
-      setNotifications(prev => [...newNotifications, ...prev]);
-      setHasNewNotifications(true);
+      Promise.all(postPromises).then(() => {
+        refetchNotifications();
+        setHasNewNotifications(true);
+      });
     });
-  }, [rules, shouldNotifyUser]);
+  }, [rules, shouldNotifyUser, refetchNotifications]);
 
   const getNotificationRules = useCallback((): NotificationRule[] => {
     return rules;
@@ -667,6 +717,8 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       templates,
       preferences,
       rules,
+      isLoading,
+      refetchNotifications,
       sendNotification,
       sendBulkNotification,
       scheduleNotification,

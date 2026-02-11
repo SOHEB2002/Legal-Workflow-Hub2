@@ -18,7 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useNotifications } from "@/lib/notifications-context";
-import { useAuth, getAllUsers } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
@@ -46,12 +46,12 @@ function getPriorityColor(priority: string): string {
 }
 
 export default function NotificationDashboardPage() {
-  const { user, permissions } = useAuth();
+  const { user, permissions, users } = useAuth();
   const { notifications } = useNotifications();
   const { departments } = useDepartments();
   const { cases } = useCases();
   const { consultations } = useConsultations();
-  const allUsers = getAllUsers();
+  const allUsers = users;
 
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("month");
   const [departmentFilter, setDepartmentFilter] = useState<string>("all");

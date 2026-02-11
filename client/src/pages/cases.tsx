@@ -62,7 +62,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
-import { useAuth, getLawyers } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { 
   CaseStatus, 
   CaseStatusLabels, 
@@ -136,11 +136,11 @@ export default function CasesPage() {
   } = useCases();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, permissions } = useAuth();
+  const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
-  const lawyers = getLawyers();
+  const lawyers = users.filter(u => u.canBeAssignedCases);
   const contractReviewStandards = getStandardsByType("contract_review");
   
   const getLawyerName = (id: string | null): string => {

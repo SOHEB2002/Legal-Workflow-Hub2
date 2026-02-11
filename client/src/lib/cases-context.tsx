@@ -37,122 +37,6 @@ const CasesContext = createContext<CasesContextType | undefined>(undefined);
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const generateCaseNumber = () => `C-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
-const initialCases: LawCase[] = [
-  {
-    id: "1",
-    caseNumber: "C-2026-0001",
-    clientId: "1",
-    caseType: "تجاري",
-    status: "دراسة",
-    currentStage: "دراسة",
-    stageHistory: [
-      { stage: "استلام", timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), userId: "6", userName: "الدعم الإداري", notes: "استلام القضية" },
-      { stage: "استكمال_البيانات", timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), userId: "6", userName: "الدعم الإداري", notes: "" },
-      { stage: "دراسة", timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), userId: "5", userName: "المحامي عمر", notes: "" },
-    ],
-    departmentId: "2",
-    assignedLawyers: ["5"],
-    primaryLawyerId: "5",
-    responsibleLawyerId: "5",
-    caseTypeOther: "",
-    departmentOther: "",
-    courtName: "المحكمة التجارية بالرياض",
-    courtCaseNumber: "1234/2026",
-    judgeName: "القاضي عبدالله",
-    circuitNumber: "الدائرة الثالثة",
-    opponentName: "شركة المنافسة",
-    opponentLawyer: "المحامي خالد",
-    opponentPhone: "0551234567",
-    opponentNotes: "",
-    whatsappGroupLink: "https://wa.me/966501234567",
-    googleDriveFolderId: "",
-    reviewNotes: "",
-    reviewDecision: null,
-    reviewActionTaken: null,
-    priority: "عالي",
-    createdBy: "6",
-    createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-    closedAt: null,
-  },
-  {
-    id: "2",
-    caseNumber: "C-2026-0002",
-    clientId: "2",
-    caseType: "عمالي",
-    status: "لجنة_المراجعة",
-    currentStage: "إحالة_للجنة_المراجعة",
-    stageHistory: [
-      { stage: "استلام", timestamp: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(), userId: "6", userName: "الدعم الإداري", notes: "" },
-      { stage: "استكمال_البيانات", timestamp: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString(), userId: "6", userName: "الدعم الإداري", notes: "" },
-      { stage: "دراسة", timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), userId: "7", userName: "موظف", notes: "" },
-      { stage: "تحرير_المذكرة", timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), userId: "7", userName: "موظف", notes: "" },
-      { stage: "إحالة_للجنة_المراجعة", timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), userId: "7", userName: "موظف", notes: "" },
-    ],
-    departmentId: "3",
-    assignedLawyers: ["7"],
-    primaryLawyerId: "7",
-    responsibleLawyerId: "7",
-    caseTypeOther: "",
-    departmentOther: "",
-    courtName: "المحكمة العمالية",
-    courtCaseNumber: "5678/2026",
-    judgeName: "",
-    circuitNumber: "الدائرة الأولى",
-    opponentName: "شركة التوظيف",
-    opponentLawyer: "",
-    opponentPhone: "",
-    opponentNotes: "قضية فصل تعسفي",
-    whatsappGroupLink: "",
-    googleDriveFolderId: "",
-    reviewNotes: "",
-    reviewDecision: null,
-    reviewActionTaken: null,
-    priority: "متوسط",
-    createdBy: "6",
-    createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-    updatedAt: new Date().toISOString(),
-    closedAt: null,
-  },
-  {
-    id: "3",
-    caseNumber: "C-2026-0003",
-    clientId: "3",
-    caseType: "عام",
-    status: "استلام",
-    currentStage: "استلام",
-    stageHistory: [
-      { stage: "استلام", timestamp: new Date().toISOString(), userId: "6", userName: "الدعم الإداري", notes: "قضية جديدة" },
-    ],
-    departmentId: "1",
-    assignedLawyers: [],
-    primaryLawyerId: null,
-    responsibleLawyerId: null,
-    caseTypeOther: "",
-    departmentOther: "",
-    courtName: "",
-    courtCaseNumber: "",
-    judgeName: "",
-    circuitNumber: "",
-    opponentName: "",
-    opponentLawyer: "",
-    opponentPhone: "",
-    opponentNotes: "",
-    whatsappGroupLink: "",
-    googleDriveFolderId: "",
-    reviewNotes: "",
-    reviewDecision: null,
-    reviewActionTaken: null,
-    priority: "منخفض",
-    createdBy: "6",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    closedAt: null,
-  },
-];
-
-const initialComments: CaseComment[] = [];
-
 // Helper to migrate old cases without new fields
 const migrateCase = (c: LawCase): LawCase => {
   if (!c.currentStage) {
@@ -173,15 +57,15 @@ const migrateCase = (c: LawCase): LawCase => {
 export function CasesProvider({ children }: { children: React.ReactNode }) {
   const [cases, setCases] = useState<LawCase[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [comments, setComments] = useState<CaseComment[]>(() => {
-    const stored = localStorage.getItem("lawfirm_case_comments");
-    return stored ? JSON.parse(stored) : initialComments;
-  });
+  const [comments, setComments] = useState<CaseComment[]>([]);
 
   const fetchCases = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("/api/cases");
+      const token = localStorage.getItem("lawfirm_token");
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const response = await fetch("/api/cases", { headers });
       if (response.ok) {
         const data = await response.json();
         setCases(data.map(migrateCase));
@@ -196,10 +80,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     fetchCases();
   }, [fetchCases]);
-
-  useEffect(() => {
-    localStorage.setItem("lawfirm_case_comments", JSON.stringify(comments));
-  }, [comments]);
 
   const addCase = async (data: Partial<LawCase>, createdBy: string, createdByName: string): Promise<LawCase> => {
     const now = new Date().toISOString();

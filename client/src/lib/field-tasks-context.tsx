@@ -1,15 +1,22 @@
-import { createContext, useContext, useState, useEffect } from "react";
-import type { FieldTask, FieldTaskStatusValue, FieldTaskTypeValue, PriorityType } from "@shared/schema";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import type { FieldTask } from "@shared/schema";
 import { FieldTaskStatus } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("lawfirm_token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
 
 interface FieldTasksContextType {
   fieldTasks: FieldTask[];
-  addFieldTask: (data: Partial<FieldTask>) => FieldTask;
-  updateFieldTask: (id: string, data: Partial<FieldTask>) => void;
-  deleteFieldTask: (id: string) => void;
-  startTask: (id: string) => void;
-  completeTask: (id: string, notes: string, proofDescription: string, proofFileLink: string) => void;
-  cancelTask: (id: string) => void;
+  isLoading: boolean;
+  addFieldTask: (data: Partial<FieldTask>) => Promise<FieldTask>;
+  updateFieldTask: (id: string, data: Partial<FieldTask>) => Promise<void>;
+  deleteFieldTask: (id: string) => Promise<void>;
+  startTask: (id: string) => Promise<void>;
+  completeTask: (id: string, notes: string, proofDescription: string, proofFileLink: string) => Promise<void>;
+  cancelTask: (id: string) => Promise<void>;
   getTaskById: (id: string) => FieldTask | undefined;
   getTasksByAssignee: (userId: string) => FieldTask[];
   getTasksByCase: (caseId: string) => FieldTask[];
@@ -20,118 +27,79 @@ interface FieldTasksContextType {
 
 const FieldTasksContext = createContext<FieldTasksContextType | undefined>(undefined);
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
-
-const initialFieldTasks: FieldTask[] = [
-  {
-    id: "1",
-    title: "مراجعة ملف العقد في الجهة الحكومية",
-    description: "مراجعة ملف العقد رقم 2024/156 في وزارة التجارة",
-    taskType: "مراجعة_ميدانية",
-    caseId: "1",
-    consultationId: null,
-    assignedTo: "3",
-    assignedBy: "1",
-    status: "قيد_الانتظار",
-    priority: "عالي",
-    dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    completedAt: null,
-    completionNotes: "",
-    proofDescription: "",
-    proofFileLink: "",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "2",
-    title: "تسليم المذكرة للمحكمة",
-    description: "تسليم المذكرة الختامية للقضية رقم 2024/001 للمحكمة التجارية",
-    taskType: "تسليم_مستندات",
-    caseId: "1",
-    consultationId: null,
-    assignedTo: "4",
-    assignedBy: "2",
-    status: "قيد_التنفيذ",
-    priority: "عاجل",
-    dueDate: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    completedAt: null,
-    completionNotes: "",
-    proofDescription: "",
-    proofFileLink: "",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
 export function FieldTasksProvider({ children }: { children: React.ReactNode }) {
-  const [fieldTasks, setFieldTasks] = useState<FieldTask[]>(() => {
-    const stored = localStorage.getItem("lawfirm_field_tasks");
-    return stored ? JSON.parse(stored) : initialFieldTasks;
-  });
+  const [fieldTasks, setFieldTasks] = useState<FieldTask[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchFieldTasks = useCallback(async () => {
+    try {
+      const res = await fetch("/api/field-tasks", {
+        credentials: "include",
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFieldTasks(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch field tasks:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem("lawfirm_field_tasks", JSON.stringify(fieldTasks));
-  }, [fieldTasks]);
+    fetchFieldTasks();
+  }, [fetchFieldTasks]);
 
-  const addFieldTask = (data: Partial<FieldTask>): FieldTask => {
-    const newTask: FieldTask = {
-      id: generateId(),
-      title: data.title || "",
-      description: data.description || "",
-      taskType: data.taskType || "أخرى",
-      caseId: data.caseId || null,
-      consultationId: data.consultationId || null,
-      assignedTo: data.assignedTo || "",
+  const addFieldTask = async (data: Partial<FieldTask>): Promise<FieldTask> => {
+    const res = await apiRequest("POST", "/api/field-tasks", {
+      ...data,
       assignedBy: data.assignedBy || "",
-      status: FieldTaskStatus.PENDING,
-      priority: data.priority || "متوسط",
-      dueDate: data.dueDate || "",
-      completedAt: null,
-      completionNotes: "",
-      proofDescription: "",
-      proofFileLink: "",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    setFieldTasks((prev) => [...prev, newTask]);
+    });
+    const newTask = await res.json();
+    await fetchFieldTasks();
     return newTask;
   };
 
-  const updateFieldTask = (id: string, data: Partial<FieldTask>) => {
-    setFieldTasks((prev) =>
-      prev.map((task) =>
-        task.id === id
-          ? { ...task, ...data, updatedAt: new Date().toISOString() }
-          : task
-      )
-    );
+  const updateFieldTask = async (id: string, data: Partial<FieldTask>): Promise<void> => {
+    await apiRequest("PATCH", `/api/field-tasks/${id}`, data);
+    await fetchFieldTasks();
   };
 
-  const deleteFieldTask = (id: string) => {
-    setFieldTasks((prev) => prev.filter((task) => task.id !== id));
+  const deleteFieldTask = async (id: string): Promise<void> => {
+    await apiRequest("DELETE", `/api/field-tasks/${id}`);
+    await fetchFieldTasks();
   };
 
-  const startTask = (id: string) => {
-    updateFieldTask(id, { status: FieldTaskStatus.IN_PROGRESS });
+  const startTask = async (id: string): Promise<void> => {
+    await apiRequest("PATCH", `/api/field-tasks/${id}`, {
+      status: FieldTaskStatus.IN_PROGRESS,
+    });
+    await fetchFieldTasks();
   };
 
-  const completeTask = (
+  const completeTask = async (
     id: string,
     notes: string,
     proofDescription: string,
     proofFileLink: string
-  ) => {
-    updateFieldTask(id, {
+  ): Promise<void> => {
+    await apiRequest("PATCH", `/api/field-tasks/${id}`, {
       status: FieldTaskStatus.COMPLETED,
       completedAt: new Date().toISOString(),
       completionNotes: notes,
       proofDescription,
       proofFileLink,
     });
+    await fetchFieldTasks();
   };
 
-  const cancelTask = (id: string) => {
-    updateFieldTask(id, { status: FieldTaskStatus.CANCELLED });
+  const cancelTask = async (id: string): Promise<void> => {
+    await apiRequest("PATCH", `/api/field-tasks/${id}`, {
+      status: FieldTaskStatus.CANCELLED,
+    });
+    await fetchFieldTasks();
   };
 
   const getTaskById = (id: string) => {
@@ -172,6 +140,7 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
     <FieldTasksContext.Provider
       value={{
         fieldTasks,
+        isLoading,
         addFieldTask,
         updateFieldTask,
         deleteFieldTask,

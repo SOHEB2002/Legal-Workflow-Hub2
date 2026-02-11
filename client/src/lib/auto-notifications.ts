@@ -2,7 +2,7 @@ import type { LawCase, Consultation, FieldTask, Hearing, Notification } from "@s
 import { NotificationType, NotificationPriority, FieldTaskStatus, ConsultationStatus } from "@shared/schema";
 
 interface AutoNotificationContext {
-  sendNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo">) => void;
+  sendNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo">) => Promise<Notification> | void;
   checkAndEscalate: () => void;
   notifications: Notification[];
 }

@@ -1,11 +1,18 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { ContactLog, ContactTypeValue, FollowUpStatusValue, FollowUpStatus } from "@shared/schema";
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
+import { ContactLog, FollowUpStatus } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
+
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("lawfirm_token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
 
 interface ContactsContextType {
   contacts: ContactLog[];
-  addContact: (contact: Omit<ContactLog, "id" | "createdAt" | "updatedAt">) => ContactLog;
-  updateContact: (id: string, data: Partial<ContactLog>) => void;
-  deleteContact: (id: string) => void;
+  isLoading: boolean;
+  addContact: (contact: Omit<ContactLog, "id" | "createdAt" | "updatedAt">) => Promise<ContactLog>;
+  updateContact: (id: string, data: Partial<ContactLog>) => Promise<void>;
+  deleteContact: (id: string) => Promise<void>;
   getContactById: (id: string) => ContactLog | undefined;
   getContactsByClientId: (clientId: string) => ContactLog[];
   getPendingFollowUps: () => ContactLog[];
@@ -16,46 +23,46 @@ interface ContactsContextType {
 
 const ContactsContext = createContext<ContactsContextType | undefined>(undefined);
 
-const STORAGE_KEY = "lawfirm_contacts";
-
-function generateId(): string {
-  return `contact_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
 export function ContactsProvider({ children }: { children: ReactNode }) {
-  const [contacts, setContacts] = useState<ContactLog[]>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) : [];
-  });
+  const [contacts, setContacts] = useState<ContactLog[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchContacts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/contact-logs", {
+        credentials: "include",
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setContacts(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch contacts:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(contacts));
-  }, [contacts]);
+    fetchContacts();
+  }, [fetchContacts]);
 
-  const addContact = (contactData: Omit<ContactLog, "id" | "createdAt" | "updatedAt">): ContactLog => {
-    const now = new Date().toISOString();
-    const newContact: ContactLog = {
-      ...contactData,
-      id: generateId(),
-      createdAt: now,
-      updatedAt: now,
-    };
-    setContacts((prev) => [...prev, newContact]);
+  const addContact = async (contactData: Omit<ContactLog, "id" | "createdAt" | "updatedAt">): Promise<ContactLog> => {
+    const res = await apiRequest("POST", "/api/contact-logs", contactData);
+    const newContact = await res.json();
+    await fetchContacts();
     return newContact;
   };
 
-  const updateContact = (id: string, data: Partial<ContactLog>) => {
-    setContacts((prev) =>
-      prev.map((contact) =>
-        contact.id === id
-          ? { ...contact, ...data, updatedAt: new Date().toISOString() }
-          : contact
-      )
-    );
+  const updateContact = async (id: string, data: Partial<ContactLog>): Promise<void> => {
+    await apiRequest("PATCH", `/api/contact-logs/${id}`, data);
+    await fetchContacts();
   };
 
-  const deleteContact = (id: string) => {
-    setContacts((prev) => prev.filter((contact) => contact.id !== id));
+  const deleteContact = async (id: string): Promise<void> => {
+    await apiRequest("DELETE", `/api/contact-logs/${id}`);
+    await fetchContacts();
   };
 
   const getContactById = (id: string): ContactLog | undefined => {
@@ -105,6 +112,7 @@ export function ContactsProvider({ children }: { children: ReactNode }) {
     <ContactsContext.Provider
       value={{
         contacts,
+        isLoading,
         addContact,
         updateContact,
         deleteContact,

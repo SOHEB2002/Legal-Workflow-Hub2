@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useMemo, useEffect, type ReactNode } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { apiRequest } from "@/lib/queryClient";
 import {
   User,
   ExtendedUser,
@@ -36,11 +37,11 @@ interface UsersContextType {
   activityLogs: UserActivityLog[];
   sessions: UserSession[];
   
-  addUser: (userData: Partial<ExtendedUser>) => ExtendedUser;
-  updateUser: (id: string, userData: Partial<ExtendedUser>) => void;
-  deleteUser: (id: string) => { success: boolean; error?: string };
-  resetPassword: (id: string, newPassword: string) => void;
-  toggleUserStatus: (id: string, status: UserStatusValue) => void;
+  addUser: (userData: Partial<ExtendedUser>) => Promise<ExtendedUser>;
+  updateUser: (id: string, userData: Partial<ExtendedUser>) => Promise<void>;
+  deleteUser: (id: string) => Promise<{ success: boolean; error?: string }>;
+  resetPassword: (id: string, newPassword: string) => Promise<void>;
+  toggleUserStatus: (id: string, status: UserStatusValue) => Promise<void>;
   getUserById: (id: string) => ExtendedUser | undefined;
   getUsersByDepartment: (departmentId: string) => ExtendedUser[];
   getUsersByTeam: (teamId: string) => ExtendedUser[];
@@ -97,38 +98,30 @@ const defaultStats: UserStats = {
 const UsersContext = createContext<UsersContextType | null>(null);
 
 export function UsersProvider({ children }: { children: ReactNode }) {
-  const { users: authUsers } = useAuth();
+  const { users: authUsers, refetchUsers } = useAuth();
   
-  const [extendedUsers, setExtendedUsers] = useState<ExtendedUser[]>(() => {
-    const saved = localStorage.getItem("extended_users");
-    return saved ? JSON.parse(saved) : [];
+  const [localExtensions, setLocalExtensions] = useState<Record<string, { status?: UserStatusValue; hireDate?: string | null; lastLoginAt?: string | null; teamId?: string | null }>>(() => {
+    const saved = localStorage.getItem("user_local_extensions");
+    return saved ? JSON.parse(saved) : {};
   });
-  
-  useEffect(() => {
-    setExtendedUsers(prev => {
-      const updatedUsers = authUsers.map(authUser => {
-        const existingExtended = prev.find(eu => eu.id === authUser.id);
-        if (existingExtended) {
-          return {
-            ...existingExtended,
-            ...authUser,
-            status: existingExtended.status,
-            hireDate: existingExtended.hireDate,
-            lastLoginAt: existingExtended.lastLoginAt,
-            teamId: existingExtended.teamId,
-          };
-        }
-        return {
-          ...authUser,
-          status: authUser.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE,
-          hireDate: null,
-          lastLoginAt: null,
-          teamId: null,
-        } as ExtendedUser;
-      });
-      return updatedUsers;
+
+  const extendedUsers = useMemo<ExtendedUser[]>(() => {
+    return authUsers.map(authUser => {
+      const ext = localExtensions[authUser.id] || {};
+      return {
+        ...authUser,
+        password: "",
+        status: ext.status || (authUser.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE),
+        hireDate: ext.hireDate ?? null,
+        lastLoginAt: ext.lastLoginAt ?? null,
+        teamId: ext.teamId ?? null,
+        currentVacation: null,
+        activeDelegations: [],
+        customPermissions: null,
+        stats: defaultStats,
+      } as ExtendedUser;
     });
-  }, [authUsers]);
+  }, [authUsers, localExtensions]);
   
   const [vacations, setVacations] = useState<UserVacation[]>(() => {
     const saved = localStorage.getItem("user_vacations");
@@ -161,8 +154,8 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   });
   
   useEffect(() => {
-    localStorage.setItem("extended_users", JSON.stringify(extendedUsers));
-  }, [extendedUsers]);
+    localStorage.setItem("user_local_extensions", JSON.stringify(localExtensions));
+  }, [localExtensions]);
   
   useEffect(() => {
     localStorage.setItem("user_vacations", JSON.stringify(vacations));
@@ -188,9 +181,8 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("user_sessions", JSON.stringify(sessions));
   }, [sessions]);
 
-  const addUser = useCallback((userData: Partial<ExtendedUser>): ExtendedUser => {
-    const newUser: ExtendedUser = {
-      id: generateId(),
+  const addUser = useCallback(async (userData: Partial<ExtendedUser>): Promise<ExtendedUser> => {
+    const apiData = {
       username: userData.username || "",
       password: userData.password || "",
       name: userData.name || "",
@@ -201,30 +193,62 @@ export function UsersProvider({ children }: { children: ReactNode }) {
       isActive: userData.isActive ?? true,
       canBeAssignedCases: userData.canBeAssignedCases ?? false,
       canBeAssignedConsultations: userData.canBeAssignedConsultations ?? false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      status: userData.status || UserStatus.ACTIVE,
       avatar: userData.avatar || null,
-      teamId: userData.teamId || null,
       supervisorId: userData.supervisorId || null,
+    };
+
+    const res = await apiRequest("POST", "/api/users", apiData);
+    const newUser = await res.json();
+    await refetchUsers();
+
+    if (userData.status || userData.hireDate || userData.teamId) {
+      setLocalExtensions(prev => ({
+        ...prev,
+        [newUser.id]: {
+          status: userData.status || UserStatus.ACTIVE,
+          hireDate: userData.hireDate || new Date().toISOString(),
+          teamId: userData.teamId || null,
+        },
+      }));
+    }
+
+    return {
+      ...newUser,
+      password: "",
+      status: userData.status || UserStatus.ACTIVE,
       hireDate: userData.hireDate || new Date().toISOString(),
       lastLoginAt: null,
+      teamId: userData.teamId || null,
       currentVacation: null,
       activeDelegations: [],
       customPermissions: null,
       stats: defaultStats,
-    };
-    setExtendedUsers(prev => [...prev, newUser]);
-    return newUser;
-  }, []);
+    } as ExtendedUser;
+  }, [refetchUsers]);
 
-  const updateUser = useCallback((id: string, userData: Partial<ExtendedUser>) => {
-    setExtendedUsers(prev => prev.map(u => 
-      u.id === id ? { ...u, ...userData, updatedAt: new Date().toISOString() } : u
-    ));
-  }, []);
+  const updateUser = useCallback(async (id: string, userData: Partial<ExtendedUser>) => {
+    const { status, hireDate, lastLoginAt, teamId, currentVacation, activeDelegations, customPermissions: cp, stats, ...apiFields } = userData as any;
 
-  const deleteUser = useCallback((id: string): { success: boolean; error?: string } => {
+    if (Object.keys(apiFields).length > 0) {
+      await apiRequest("PATCH", `/api/users/${id}`, apiFields);
+      await refetchUsers();
+    }
+
+    if (status !== undefined || hireDate !== undefined || lastLoginAt !== undefined || teamId !== undefined) {
+      setLocalExtensions(prev => ({
+        ...prev,
+        [id]: {
+          ...(prev[id] || {}),
+          ...(status !== undefined ? { status } : {}),
+          ...(hireDate !== undefined ? { hireDate } : {}),
+          ...(lastLoginAt !== undefined ? { lastLoginAt } : {}),
+          ...(teamId !== undefined ? { teamId } : {}),
+        },
+      }));
+    }
+  }, [refetchUsers]);
+
+  const deleteUser = useCallback(async (id: string): Promise<{ success: boolean; error?: string }> => {
     const user = extendedUsers.find(u => u.id === id);
     if (!user) return { success: false, error: "المستخدم غير موجود" };
     
@@ -237,21 +261,37 @@ export function UsersProvider({ children }: { children: ReactNode }) {
       return { success: false, error: "لا يمكن حذف مستخدم لديه قضايا أو استشارات نشطة" };
     }
     
-    setExtendedUsers(prev => prev.filter(u => u.id !== id));
-    return { success: true };
-  }, [extendedUsers]);
+    try {
+      await apiRequest("DELETE", `/api/users/${id}`);
+      await refetchUsers();
+      setLocalExtensions(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      return { success: true };
+    } catch {
+      return { success: false, error: "فشل في حذف المستخدم" };
+    }
+  }, [extendedUsers, refetchUsers]);
 
-  const resetPassword = useCallback((id: string, newPassword: string) => {
-    setExtendedUsers(prev => prev.map(u => 
-      u.id === id ? { ...u, password: newPassword, updatedAt: new Date().toISOString() } : u
-    ));
-  }, []);
+  const resetPassword = useCallback(async (id: string, newPassword: string) => {
+    await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword });
+    await refetchUsers();
+  }, [refetchUsers]);
 
-  const toggleUserStatus = useCallback((id: string, status: UserStatusValue) => {
-    setExtendedUsers(prev => prev.map(u => 
-      u.id === id ? { ...u, status, isActive: status === UserStatus.ACTIVE, updatedAt: new Date().toISOString() } : u
-    ));
-  }, []);
+  const toggleUserStatus = useCallback(async (id: string, status: UserStatusValue) => {
+    const isActive = status === UserStatus.ACTIVE;
+    await apiRequest("PATCH", `/api/users/${id}`, { isActive });
+    await refetchUsers();
+    setLocalExtensions(prev => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] || {}),
+        status,
+      },
+    }));
+  }, [refetchUsers]);
 
   const getUserById = useCallback((id: string): ExtendedUser | undefined => {
     return extendedUsers.find(u => u.id === id);
@@ -379,27 +419,35 @@ export function UsersProvider({ children }: { children: ReactNode }) {
 
   const deleteTeam = useCallback((id: string) => {
     setTeams(prev => prev.filter(t => t.id !== id));
-    setExtendedUsers(prev => prev.map(u => 
-      u.teamId === id ? { ...u, teamId: null } : u
-    ));
+    setLocalExtensions(prev => {
+      const next = { ...prev };
+      for (const userId of Object.keys(next)) {
+        if (next[userId]?.teamId === id) {
+          next[userId] = { ...next[userId], teamId: null };
+        }
+      }
+      return next;
+    });
   }, []);
 
   const addTeamMember = useCallback((teamId: string, userId: string) => {
     setTeams(prev => prev.map(t => 
       t.id === teamId ? { ...t, memberIds: [...t.memberIds, userId], updatedAt: new Date().toISOString() } : t
     ));
-    setExtendedUsers(prev => prev.map(u => 
-      u.id === userId ? { ...u, teamId } : u
-    ));
+    setLocalExtensions(prev => ({
+      ...prev,
+      [userId]: { ...(prev[userId] || {}), teamId },
+    }));
   }, []);
 
   const removeTeamMember = useCallback((teamId: string, userId: string) => {
     setTeams(prev => prev.map(t => 
       t.id === teamId ? { ...t, memberIds: t.memberIds.filter(id => id !== userId), updatedAt: new Date().toISOString() } : t
     ));
-    setExtendedUsers(prev => prev.map(u => 
-      u.id === userId ? { ...u, teamId: null } : u
-    ));
+    setLocalExtensions(prev => ({
+      ...prev,
+      [userId]: { ...(prev[userId] || {}), teamId: null },
+    }));
   }, []);
 
   const changeTeamLead = useCallback((teamId: string, newLeaderId: string) => {

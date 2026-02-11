@@ -46,7 +46,7 @@ import {
 import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
-import { useAuth, getActiveUsers } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import {
   FieldTaskStatus,
@@ -63,11 +63,11 @@ import { format } from "date-fns";
 import { ar } from "date-fns/locale";
 
 export default function FieldTasksPage() {
-  const { user, permissions } = useAuth();
+  const { user, permissions, users } = useAuth();
   const { fieldTasks, addFieldTask, startTask, completeTask, cancelTask } = useFieldTasks();
   const { cases } = useCases();
   const { consultations } = useConsultations();
-  const activeUsers = getActiveUsers();
+  const activeUsers = users.filter(u => u.isActive);
   const { toast } = useToast();
 
   const [showAddDialog, setShowAddDialog] = useState(false);

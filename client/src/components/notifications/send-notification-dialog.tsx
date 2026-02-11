@@ -28,7 +28,7 @@ import {
 import { formatDateArabic } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
 import { useNotifications } from "@/lib/notifications-context";
-import { useAuth, getAllUsers } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
@@ -60,14 +60,14 @@ export function SendNotificationDialog({
   prefilledTitle,
   prefilledMessage,
 }: SendNotificationDialogProps) {
-  const { user } = useAuth();
+  const { user, users } = useAuth();
   const { sendNotification, sendBulkNotification, getTemplates, scheduleNotification } = useNotifications();
   const { departments } = useDepartments();
   const { cases } = useCases();
   const { consultations } = useConsultations();
   const { toast } = useToast();
 
-  const allUsers = getAllUsers().filter(u => u.id !== user?.id && u.isActive);
+  const allUsers = users.filter(u => u.id !== user?.id && u.isActive);
   const templates = getTemplates();
 
   const [recipientMode, setRecipientMode] = useState<"single" | "multiple" | "department">("single");
