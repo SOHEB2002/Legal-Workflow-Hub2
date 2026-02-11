@@ -105,7 +105,8 @@ export default function HearingsPage() {
   const { toast } = useToast();
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [detailHearing, setDetailHearing] = useState<Hearing | null>(null);
+  const [detailHearingId, setDetailHearingId] = useState<string | null>(null);
+  const detailHearing = detailHearingId ? hearings.find(h => h.id === detailHearingId) || null : null;
   const [resultDialogHearing, setResultDialogHearing] = useState<Hearing | null>(null);
   const [reportDialogHearing, setReportDialogHearing] = useState<Hearing | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -242,7 +243,19 @@ export default function HearingsPage() {
     try {
       await closeHearing(hearing.id);
       toast({ title: "تم إغلاق الجلسة بنجاح" });
-      setDetailHearing(null);
+      setDetailHearingId(null);
+    } catch (e: any) {
+      toast({ title: "خطأ", description: e.message, variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleMarkContactCompleted = async (hearing: Hearing) => {
+    setSubmitting(true);
+    try {
+      await updateHearing(hearing.id, { contactCompleted: true });
+      toast({ title: "تم تأكيد التواصل مع العميل" });
     } catch (e: any) {
       toast({ title: "خطأ", description: e.message, variant: "destructive" });
     } finally {
@@ -567,7 +580,7 @@ export default function HearingsPage() {
                                     size="icon"
                                     variant="ghost"
                                     data-testid={`button-view-${hearing.id}`}
-                                    onClick={() => setDetailHearing(hearing)}
+                                    onClick={() => setDetailHearingId(hearing.id)}
                                   >
                                     <Eye className="w-4 h-4" />
                                   </Button>
@@ -623,6 +636,22 @@ export default function HearingsPage() {
                                     </Button>
                                   </TooltipTrigger>
                                   <TooltipContent>كتابة التقرير</TooltipContent>
+                                </Tooltip>
+                              )}
+                              {hearing.result && !hearing.contactCompleted && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      data-testid={`button-contact-${hearing.id}`}
+                                      onClick={() => handleMarkContactCompleted(hearing)}
+                                      disabled={submitting}
+                                    >
+                                      <Phone className="w-4 h-4 text-orange-500" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>تأكيد التواصل مع العميل</TooltipContent>
                                 </Tooltip>
                               )}
                             </div>
@@ -869,7 +898,7 @@ export default function HearingsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!detailHearing} onOpenChange={(open) => !open && setDetailHearing(null)}>
+      <Dialog open={!!detailHearing} onOpenChange={(open) => !open && setDetailHearingId(null)}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1024,7 +1053,7 @@ export default function HearingsPage() {
                         onClick={() => {
                           resetReportForm();
                           setReportDialogHearing(detailHearing);
-                          setDetailHearing(null);
+                          setDetailHearingId(null);
                         }}
                         data-testid="button-write-report"
                       >
@@ -1042,6 +1071,12 @@ export default function HearingsPage() {
                     done={!!detailHearing.result}
                     label="تسجيل النتيجة"
                     icon={<Gavel className="w-4 h-4" />}
+                    actionLabel={!detailHearing.result && detailHearing.status === HearingStatus.UPCOMING ? "تسجيل" : undefined}
+                    onAction={() => {
+                      resetResultForm();
+                      setResultDialogHearing(detailHearing);
+                      setDetailHearingId(null);
+                    }}
                   />
                   <WorkflowStep
                     done={detailHearing.adminTasksCreated}
@@ -1054,36 +1089,32 @@ export default function HearingsPage() {
                     label="كتابة التقرير"
                     icon={<FileText className="w-4 h-4" />}
                     disabled={!detailHearing.result}
+                    actionLabel={detailHearing.result && !detailHearing.reportCompleted ? "كتابة التقرير" : undefined}
+                    onAction={() => {
+                      resetReportForm();
+                      setReportDialogHearing(detailHearing);
+                      setDetailHearingId(null);
+                    }}
                   />
                   <WorkflowStep
                     done={detailHearing.contactCompleted}
                     label="التواصل مع العميل"
                     icon={<Phone className="w-4 h-4" />}
                     disabled={!detailHearing.result}
+                    actionLabel={detailHearing.result && !detailHearing.contactCompleted ? "تأكيد التواصل" : undefined}
+                    onAction={() => handleMarkContactCompleted(detailHearing)}
+                    actionDisabled={submitting}
                   />
                   <WorkflowStep
                     done={detailHearing.status === HearingStatus.COMPLETED && detailHearing.reportCompleted}
                     label="إغلاق الجلسة"
                     icon={<Lock className="w-4 h-4" />}
                     disabled={!detailHearing.reportCompleted || !detailHearing.contactCompleted}
+                    actionLabel={detailHearing.reportCompleted && detailHearing.contactCompleted && detailHearing.status !== HearingStatus.COMPLETED ? "إغلاق" : undefined}
+                    onAction={() => handleCloseHearing(detailHearing)}
+                    actionDisabled={submitting}
                   />
                 </div>
-
-                {detailHearing.result &&
-                  detailHearing.reportCompleted &&
-                  detailHearing.contactCompleted &&
-                  detailHearing.status !== HearingStatus.COMPLETED && (
-                    <Button
-                      onClick={() => handleCloseHearing(detailHearing)}
-                      className="w-full"
-                      disabled={submitting}
-                      data-testid="button-close-hearing"
-                    >
-                      {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
-                      <Lock className="w-4 h-4 ml-1" />
-                      إغلاق الجلسة
-                    </Button>
-                  )}
               </TabsContent>
             </Tabs>
           )}
@@ -1098,11 +1129,17 @@ function WorkflowStep({
   label,
   icon,
   disabled,
+  actionLabel,
+  onAction,
+  actionDisabled,
 }: {
   done: boolean;
   label: string;
   icon: React.ReactNode;
   disabled?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
+  actionDisabled?: boolean;
 }) {
   return (
     <div
@@ -1124,6 +1161,18 @@ function WorkflowStep({
         <Badge variant="outline" className="mr-auto border-green-600 text-green-600 dark:border-green-400 dark:text-green-400">
           مكتمل
         </Badge>
+      )}
+      {!done && actionLabel && onAction && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="mr-auto"
+          onClick={onAction}
+          disabled={actionDisabled}
+          data-testid={`button-workflow-action-${label}`}
+        >
+          {actionLabel}
+        </Button>
       )}
     </div>
   );
