@@ -13,6 +13,9 @@ import {
   FolderOpen,
   ClipboardCheck,
   Bell,
+  Paperclip,
+  Trash2,
+  ExternalLink,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -69,7 +72,8 @@ import {
   Priority,
   Department
 } from "@shared/schema";
-import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType } from "@shared/schema";
+import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType, Attachment } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
 import { sendCaseReminder } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -170,6 +174,53 @@ export default function CasesPage() {
   const [rejectNotes, setRejectNotes] = useState("");
   const [newComment, setNewComment] = useState("");
   const [activeTab, setActiveTab] = useState("info");
+  const [caseAttachments, setCaseAttachments] = useState<Attachment[]>([]);
+  const [attachmentForm, setAttachmentForm] = useState({ fileName: "", fileUrl: "" });
+  const [isLoadingAttachments, setIsLoadingAttachments] = useState(false);
+
+  const fetchAttachments = async (caseId: string) => {
+    setIsLoadingAttachments(true);
+    try {
+      const res = await fetch(`/api/attachments/case/${caseId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCaseAttachments(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoadingAttachments(false);
+    }
+  };
+
+  const addAttachment = async () => {
+    if (!selectedCase || !user || !attachmentForm.fileName.trim() || !attachmentForm.fileUrl.trim()) return;
+    try {
+      await apiRequest("POST", "/api/attachments", {
+        entityType: "case",
+        entityId: selectedCase.id,
+        fileName: attachmentForm.fileName.trim(),
+        fileUrl: attachmentForm.fileUrl.trim(),
+        uploadedBy: user.id,
+      });
+      setAttachmentForm({ fileName: "", fileUrl: "" });
+      fetchAttachments(selectedCase.id);
+      toast({ title: "تم إضافة المرفق بنجاح" });
+    } catch (e) {
+      toast({ title: "فشل إضافة المرفق", variant: "destructive" });
+    }
+  };
+
+  const deleteAttachment = async (attachmentId: string) => {
+    if (!selectedCase) return;
+    try {
+      await apiRequest("DELETE", `/api/attachments/${attachmentId}`);
+      fetchAttachments(selectedCase.id);
+      toast({ title: "تم حذف المرفق" });
+    } catch (e) {
+      toast({ title: "فشل حذف المرفق", variant: "destructive" });
+    }
+  };
 
   const [showReminderDialog, setShowReminderDialog] = useState(false);
   const [reminderCaseId, setReminderCaseId] = useState<string | null>(null);
@@ -293,6 +344,7 @@ export default function CasesPage() {
   const openDetailsDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
     setShowDetailsDialog(true);
+    fetchAttachments(caseItem.id);
     addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
   };
 
@@ -734,10 +786,11 @@ export default function CasesPage() {
               </div>
 
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="grid w-full grid-cols-4">
+                <TabsList className="grid w-full grid-cols-5">
                   <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
                   <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
+                  <TabsTrigger value="attachments" data-testid="tab-attachments">المرفقات</TabsTrigger>
                   <TabsTrigger value="comments" data-testid="tab-comments">التعليقات</TabsTrigger>
                 </TabsList>
                 
@@ -870,6 +923,89 @@ export default function CasesPage() {
                   ) : (
                     <p className="text-muted-foreground text-center py-8">لا يوجد سجل للمراحل</p>
                   )}
+                </TabsContent>
+
+                <TabsContent value="attachments" className="mt-4">
+                  <div className="space-y-4">
+                    <div className="border rounded-lg p-4 space-y-3">
+                      <h4 className="font-semibold flex items-center gap-2">
+                        <Paperclip className="w-4 h-4" />
+                        إضافة مرفق جديد
+                      </h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <Label>اسم الملف</Label>
+                          <Input
+                            data-testid="input-attachment-name"
+                            placeholder="مثال: عقد التأسيس"
+                            value={attachmentForm.fileName}
+                            onChange={(e) => setAttachmentForm({ ...attachmentForm, fileName: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <Label>رابط الملف (URL)</Label>
+                          <Input
+                            data-testid="input-attachment-url"
+                            placeholder="https://drive.google.com/..."
+                            value={attachmentForm.fileUrl}
+                            onChange={(e) => setAttachmentForm({ ...attachmentForm, fileUrl: e.target.value })}
+                            dir="ltr"
+                          />
+                        </div>
+                      </div>
+                      <Button
+                        data-testid="button-add-attachment"
+                        onClick={addAttachment}
+                        disabled={!attachmentForm.fileName.trim() || !attachmentForm.fileUrl.trim()}
+                        size="sm"
+                      >
+                        <Plus className="w-4 h-4 ml-2" />
+                        إضافة مرفق
+                      </Button>
+                    </div>
+
+                    {isLoadingAttachments ? (
+                      <p className="text-center text-muted-foreground py-4">جارٍ تحميل المرفقات...</p>
+                    ) : caseAttachments.length === 0 ? (
+                      <p className="text-muted-foreground text-center py-4">لا توجد مرفقات</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {caseAttachments.map((att) => (
+                          <div key={att.id} className="flex items-center justify-between p-3 border rounded-lg" data-testid={`attachment-item-${att.id}`}>
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                              <Paperclip className="w-4 h-4 text-muted-foreground shrink-0" />
+                              <div className="min-w-0">
+                                <p className="font-medium truncate">{att.fileName}</p>
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                                  <span>{users.find(u => u.id === att.uploadedBy)?.name || "غير معروف"}</span>
+                                  <span>-</span>
+                                  <span>{format(new Date(att.createdAt), "d MMMM yyyy - HH:mm", { locale: ar })}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                data-testid={`button-open-attachment-${att.id}`}
+                                onClick={() => window.open(att.fileUrl, "_blank")}
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                data-testid={`button-delete-attachment-${att.id}`}
+                                onClick={() => deleteAttachment(att.id)}
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="comments" className="mt-4">

@@ -196,6 +196,18 @@ export const departments = pgTable("departments", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const attachments = pgTable("attachments", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  entityType: varchar("entity_type", { length: 60 }).notNull(),
+  entityId: varchar("entity_id", { length: 255 }).notNull(),
+  fileName: varchar("file_name", { length: 255 }).notNull(),
+  fileUrl: varchar("file_url", { length: 500 }).notNull(),
+  fileType: varchar("file_type", { length: 60 }).default(""),
+  fileSize: integer("file_size").default(0),
+  uploadedBy: varchar("uploaded_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // ==================== Drizzle Insert Schemas ====================
 
 export const insertUserDbSchema = createInsertSchema(users).omit({ createdAt: true, updatedAt: true });
@@ -206,6 +218,7 @@ export const insertHearingDbSchema = createInsertSchema(hearings).omit({ created
 export const insertFieldTaskDbSchema = createInsertSchema(fieldTasks).omit({ createdAt: true, updatedAt: true });
 export const insertContactLogDbSchema = createInsertSchema(contactLogs).omit({ createdAt: true, updatedAt: true });
 export const insertNotificationDbSchema = createInsertSchema(notifications).omit({ createdAt: true, updatedAt: true });
+export const insertAttachmentDbSchema = createInsertSchema(attachments).omit({ createdAt: true });
 
 // ==================== Select Types ====================
 
@@ -218,6 +231,7 @@ export type DbFieldTask = typeof fieldTasks.$inferSelect;
 export type DbContactLog = typeof contactLogs.$inferSelect;
 export type DbNotification = typeof notifications.$inferSelect;
 export type DbDepartment = typeof departments.$inferSelect;
+export type DbAttachment = typeof attachments.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
 export const UserRole = {
@@ -703,6 +717,19 @@ export interface FieldTask {
   updatedAt: string;
 }
 
+// ==================== المرفقات ====================
+export interface Attachment {
+  id: string;
+  entityType: string;
+  entityId: string;
+  fileName: string;
+  fileUrl: string;
+  fileType: string;
+  fileSize: number;
+  uploadedBy: string;
+  createdAt: string;
+}
+
 // ==================== أنواع التواصل مع العملاء ====================
 export const ContactType = {
   PHONE_CALL: "اتصال_هاتفي",
@@ -882,6 +909,18 @@ export const insertFieldTaskSchema = z.object({
 });
 
 export type InsertFieldTask = z.infer<typeof insertFieldTaskSchema>;
+
+export const insertAttachmentSchema = z.object({
+  entityType: z.enum(["case", "consultation"]),
+  entityId: z.string().min(1, "معرف العنصر مطلوب"),
+  fileName: z.string().min(1, "اسم الملف مطلوب"),
+  fileUrl: z.string().url("رابط الملف غير صحيح"),
+  fileType: z.string().optional().default(""),
+  fileSize: z.number().optional().default(0),
+  uploadedBy: z.string().min(1, "معرف الرافع مطلوب"),
+});
+
+export type InsertAttachment = z.infer<typeof insertAttachmentSchema>;
 
 export const loginSchema = z.object({
   username: z.string().min(1, "اسم المستخدم مطلوب"),

@@ -1,11 +1,11 @@
 import { 
   type User, type LawCase, type Client, type Consultation, type Hearing, 
-  type FieldTask, type ContactLog, type Notification, type DepartmentInfo,
+  type FieldTask, type ContactLog, type Notification, type DepartmentInfo, type Attachment,
   CaseStatus, CaseStage,
-  users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments
+  users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments
 } from "@shared/schema";
 import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
@@ -69,6 +69,11 @@ export interface IStorage {
   // Departments
   getAllDepartments(): Promise<DepartmentInfo[]>;
   getDepartmentById(id: string): Promise<DepartmentInfo | undefined>;
+
+  // Attachments
+  getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]>;
+  createAttachment(data: Partial<Attachment>): Promise<Attachment>;
+  deleteAttachment(id: string): Promise<boolean>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -810,6 +815,56 @@ export class DatabaseStorage implements IStorage {
   async getDepartmentById(id: string): Promise<DepartmentInfo | undefined> {
     const result = await db.select().from(departments).where(eq(departments.id, id));
     return result[0] ? mapDbDepartment(result[0]) : undefined;
+  }
+
+  // ==================== Attachments ====================
+
+  async getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]> {
+    const result = await db.select().from(attachments)
+      .where(and(eq(attachments.entityType, entityType), eq(attachments.entityId, entityId)));
+    return result
+      .map(a => ({
+        id: a.id,
+        entityType: a.entityType,
+        entityId: a.entityId,
+        fileName: a.fileName,
+        fileUrl: a.fileUrl,
+        fileType: a.fileType || "",
+        fileSize: a.fileSize || 0,
+        uploadedBy: a.uploadedBy,
+        createdAt: toISOString(a.createdAt),
+      }));
+  }
+
+  async createAttachment(data: Partial<Attachment>): Promise<Attachment> {
+    const id = data.id || randomUUID();
+    const result = await db.insert(attachments).values({
+      id,
+      entityType: data.entityType!,
+      entityId: data.entityId!,
+      fileName: data.fileName!,
+      fileUrl: data.fileUrl!,
+      fileType: data.fileType || "",
+      fileSize: data.fileSize || 0,
+      uploadedBy: data.uploadedBy!,
+    }).returning();
+    const a = result[0];
+    return {
+      id: a.id,
+      entityType: a.entityType,
+      entityId: a.entityId,
+      fileName: a.fileName,
+      fileUrl: a.fileUrl,
+      fileType: a.fileType || "",
+      fileSize: a.fileSize || 0,
+      uploadedBy: a.uploadedBy,
+      createdAt: toISOString(a.createdAt),
+    };
+  }
+
+  async deleteAttachment(id: string): Promise<boolean> {
+    const result = await db.delete(attachments).where(eq(attachments.id, id)).returning();
+    return result.length > 0;
   }
 
   // ==================== Initialize Default Data ====================

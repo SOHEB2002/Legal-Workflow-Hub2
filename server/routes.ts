@@ -9,6 +9,7 @@ import {
   insertConsultationSchema, 
   insertHearingSchema, 
   insertFieldTaskSchema,
+  insertAttachmentSchema,
   hearingResultSchema,
   hearingReportSchema,
   HearingStatus,
@@ -740,6 +741,43 @@ export async function registerRoutes(
       res.json(department);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب القسم" });
+    }
+  });
+
+  // ==================== Attachments ====================
+
+  app.post("/api/attachments", async (req, res) => {
+    try {
+      const data = insertAttachmentSchema.parse(req.body);
+      const attachment = await storage.createAttachment(data);
+      res.status(201).json(attachment);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      res.status(500).json({ error: "حدث خطأ في إضافة المرفق" });
+    }
+  });
+
+  app.get("/api/attachments/:entityType/:entityId", async (req, res) => {
+    try {
+      const { entityType, entityId } = req.params;
+      const list = await storage.getAttachmentsByEntity(entityType, entityId);
+      res.json(list);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب المرفقات" });
+    }
+  });
+
+  app.delete("/api/attachments/:id", async (req, res) => {
+    try {
+      const deleted = await storage.deleteAttachment(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ error: "المرفق غير موجود" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في حذف المرفق" });
     }
   });
 
