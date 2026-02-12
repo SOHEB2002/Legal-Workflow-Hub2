@@ -127,6 +127,11 @@ export default function ConsultationsPage() {
     setReminderConsultation(null);
   };
 
+  const handleSendToReview = (consultation: Consultation) => {
+    sendToReviewCommittee(consultation.id);
+    toast({ title: "تم إرسال الاستشارة للمراجعة" });
+  };
+
   const [formData, setFormData] = useState({
     clientId: "",
     consultationType: "عام" as CaseTypeValue,
@@ -348,8 +353,11 @@ export default function ConsultationsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          {consultation.status === ConsultationStatus.STUDY && permissions.canManageDepartment && (
-                            <DropdownMenuItem data-testid={`button-send-review-${consultation.id}`} onClick={() => sendToReviewCommittee(consultation.id)}>
+                          {(consultation.status === ConsultationStatus.STUDY ||
+                            consultation.status === ConsultationStatus.PREPARING_RESPONSE ||
+                            consultation.status === ConsultationStatus.AMENDMENTS) &&
+                            (permissions.canManageDepartment || consultation.assignedTo === user?.id) && (
+                            <DropdownMenuItem data-testid={`button-send-review-${consultation.id}`} onClick={() => handleSendToReview(consultation)}>
                               <Send className="w-4 h-4 ml-2" />
                               إرسال للمراجعة
                             </DropdownMenuItem>
