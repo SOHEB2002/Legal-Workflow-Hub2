@@ -24,21 +24,22 @@ export async function comparePassword(
   }
 }
 
-export function generateToken(userId: string, role: string): string {
-  return jwt.sign({ userId, role }, JWT_SECRET, {
+export function generateToken(userId: string, role: string, departmentId?: string | null): string {
+  return jwt.sign({ userId, role, departmentId: departmentId || null }, JWT_SECRET, {
     expiresIn: TOKEN_EXPIRY,
   });
 }
 
 export function verifyToken(
   token: string
-): { userId: string; role: string } | null {
+): { userId: string; role: string; departmentId: string | null } | null {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as {
       userId: string;
       role: string;
+      departmentId: string | null;
     };
-    return { userId: decoded.userId, role: decoded.role };
+    return { userId: decoded.userId, role: decoded.role, departmentId: decoded.departmentId || null };
   } catch {
     return null;
   }
@@ -65,6 +66,7 @@ export function authMiddleware(
       (req as any).user = {
         id: decoded.userId,
         role: decoded.role,
+        departmentId: decoded.departmentId,
       };
     }
   }
