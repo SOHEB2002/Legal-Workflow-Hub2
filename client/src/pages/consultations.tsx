@@ -32,7 +32,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck } from "lucide-react";
+import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -45,6 +45,7 @@ import { ConsultationStatus, ConsultationStatusLabels, CaseType, DeliveryType, D
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 import { DialogFooter } from "@/components/ui/dialog";
+import { sendConsultationReminder } from "@/lib/notification-triggers";
 
 function getStatusColor(status: ConsultationStatusValue) {
   switch (status) {
@@ -94,6 +95,35 @@ export default function ConsultationsPage() {
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [consultationToReview, setConsultationToReview] = useState<Consultation | null>(null);
+
+  const [showReminderDialog, setShowReminderDialog] = useState(false);
+  const [reminderConsultation, setReminderConsultation] = useState<Consultation | null>(null);
+  const [reminderData, setReminderData] = useState({
+    reminderType: "تذكير بتحديث الحالة",
+    message: "",
+  });
+
+  const openReminderDialog = (c: Consultation) => {
+    setReminderConsultation(c);
+    setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "" });
+    setShowReminderDialog(true);
+  };
+
+  const handleSendReminder = async () => {
+    if (!reminderConsultation || !reminderConsultation.assignedTo) {
+      toast({ title: "لا يوجد محامي مسؤول لهذه الاستشارة", variant: "destructive" });
+      return;
+    }
+    const msg = reminderData.message || `${reminderData.reminderType} للاستشارة رقم ${reminderConsultation.consultationNumber}`;
+    try {
+      await sendConsultationReminder(reminderConsultation.id, reminderConsultation.consultationNumber, reminderConsultation.assignedTo, reminderData.reminderType, msg);
+      toast({ title: "تم إرسال التذكير بنجاح" });
+    } catch {
+      toast({ title: "فشل إرسال التذكير", variant: "destructive" });
+    }
+    setShowReminderDialog(false);
+    setReminderConsultation(null);
+  };
 
   const [formData, setFormData] = useState({
     clientId: "",
@@ -418,6 +448,21 @@ export default function ConsultationsPage() {
                           <TooltipContent>تسليم الاستشارة</TooltipContent>
                         </Tooltip>
                       )}
+                      {permissions.canSendReminders && consultation.assignedTo && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-reminder-${consultation.id}`}
+                              onClick={() => openReminderDialog(consultation)}
+                            >
+                              <Bell className="w-4 h-4 text-accent" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>إرسال تذكير</TooltipContent>
+                        </Tooltip>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -506,6 +551,54 @@ export default function ConsultationsPage() {
               لا توجد معايير مراجعة متاحة. يرجى إضافة معايير من صفحة معايير المراجعة.
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReminderDialog} onOpenChange={setShowReminderDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bell className="w-5 h-5 text-accent" />
+              إرسال تذكير
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>نوع التذكير</Label>
+              <Select
+                value={reminderData.reminderType}
+                onValueChange={(value) => setReminderData({ ...reminderData, reminderType: value })}
+              >
+                <SelectTrigger data-testid="select-reminder-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="تذكير بتحديث الحالة">تذكير بتحديث الحالة</SelectItem>
+                  <SelectItem value="تذكير بالمتابعة">تذكير بالمتابعة</SelectItem>
+                  <SelectItem value="إطلاع مدة">إطلاع مدة (Deadline)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>رسالة نصية</Label>
+              <Textarea
+                data-testid="input-reminder-message"
+                placeholder="اكتب رسالة التذكير هنا..."
+                value={reminderData.message}
+                onChange={(e) => setReminderData({ ...reminderData, message: e.target.value })}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReminderDialog(false)} data-testid="button-cancel-reminder">
+              إلغاء
+            </Button>
+            <Button onClick={handleSendReminder} data-testid="button-send-reminder">
+              <Bell className="w-4 h-4 ml-2" />
+              إرسال التذكير
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -15,6 +15,7 @@ import {
   MessageSquare,
   FolderOpen,
   ClipboardCheck,
+  Bell,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { FavoriteButton } from "@/components/favorite-button";
@@ -72,6 +73,7 @@ import {
   Department
 } from "@shared/schema";
 import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType } from "@shared/schema";
+import { sendCaseReminder } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
@@ -164,6 +166,13 @@ export default function CasesPage() {
   const [rejectNotes, setRejectNotes] = useState("");
   const [newComment, setNewComment] = useState("");
   const [activeTab, setActiveTab] = useState("info");
+
+  const [showReminderDialog, setShowReminderDialog] = useState(false);
+  const [reminderCaseId, setReminderCaseId] = useState<string | null>(null);
+  const [reminderData, setReminderData] = useState({
+    reminderType: "تذكير بتحديث الحالة",
+    message: "",
+  });
 
   const [formData, setFormData] = useState({
     clientId: "",
@@ -292,6 +301,31 @@ export default function CasesPage() {
   const openReviewDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
     setShowReviewDialog(true);
+  };
+
+  const openReminderDialog = (caseItem: LawCase) => {
+    setReminderCaseId(caseItem.id);
+    setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "" });
+    setShowReminderDialog(true);
+  };
+
+  const handleSendReminder = async () => {
+    const caseItem = reminderCaseId ? getCaseById(reminderCaseId) : null;
+    if (!caseItem) return;
+    const recipientId = caseItem.responsibleLawyerId || caseItem.primaryLawyerId;
+    if (!recipientId) {
+      toast({ title: "لا يوجد محامي مسؤول لهذه القضية", variant: "destructive" });
+      return;
+    }
+    const msg = reminderData.message || `${reminderData.reminderType} للقضية رقم ${caseItem.caseNumber}`;
+    try {
+      await sendCaseReminder(caseItem.id, caseItem.caseNumber, recipientId, reminderData.reminderType, msg);
+      toast({ title: "تم إرسال التذكير بنجاح" });
+    } catch {
+      toast({ title: "فشل إرسال التذكير", variant: "destructive" });
+    }
+    setShowReminderDialog(false);
+    setReminderCaseId(null);
   };
 
   const canAssign = (c: LawCase) => 
@@ -520,6 +554,21 @@ export default function CasesPage() {
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>مجموعة واتساب</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {permissions.canSendReminders && (c.responsibleLawyerId || c.primaryLawyerId) && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              data-testid={`button-reminder-${c.id}`}
+                              onClick={() => openReminderDialog(c)}
+                            >
+                              <Bell className="w-4 h-4 text-accent" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>إرسال تذكير</TooltipContent>
                         </Tooltip>
                       )}
                     </div>
@@ -1011,6 +1060,54 @@ export default function CasesPage() {
               لا توجد معايير مراجعة متاحة. يرجى إضافة معايير من صفحة معايير المراجعة.
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReminderDialog} onOpenChange={setShowReminderDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bell className="w-5 h-5 text-accent" />
+              إرسال تذكير
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>نوع التذكير</Label>
+              <Select
+                value={reminderData.reminderType}
+                onValueChange={(value) => setReminderData({ ...reminderData, reminderType: value })}
+              >
+                <SelectTrigger data-testid="select-reminder-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="تذكير بتحديث الحالة">تذكير بتحديث الحالة</SelectItem>
+                  <SelectItem value="تذكير بالمتابعة">تذكير بالمتابعة</SelectItem>
+                  <SelectItem value="إطلاع مدة">إطلاع مدة (Deadline)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>رسالة نصية</Label>
+              <Textarea
+                data-testid="input-reminder-message"
+                placeholder="اكتب رسالة التذكير هنا..."
+                value={reminderData.message}
+                onChange={(e) => setReminderData({ ...reminderData, message: e.target.value })}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReminderDialog(false)} data-testid="button-cancel-reminder">
+              إلغاء
+            </Button>
+            <Button onClick={handleSendReminder} data-testid="button-send-reminder">
+              <Bell className="w-4 h-4 ml-2" />
+              إرسال التذكير
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
