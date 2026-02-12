@@ -4,13 +4,11 @@ import { ar } from "date-fns/locale";
 import {
   Plus,
   Search,
-  ExternalLink,
   MoreHorizontal,
   Send,
   CheckCircle,
   XCircle,
   Archive,
-  Pencil,
   UserPlus,
   MessageSquare,
   FolderOpen,
@@ -18,7 +16,6 @@ import {
   Bell,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
-import { FavoriteButton } from "@/components/favorite-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -191,8 +188,6 @@ export default function CasesPage() {
     courtName: "",
     courtCaseNumber: "",
     opponentName: "",
-    opponentLawyer: "",
-    whatsappGroupLink: "",
   });
 
   const [assignData, setAssignData] = useState({
@@ -211,8 +206,6 @@ export default function CasesPage() {
       courtName: "",
       courtCaseNumber: "",
       opponentName: "",
-      opponentLawyer: "",
-      whatsappGroupLink: "",
     });
   };
 
@@ -229,8 +222,6 @@ export default function CasesPage() {
       courtName: formData.courtName,
       courtCaseNumber: formData.courtCaseNumber,
       opponentName: formData.opponentName,
-      opponentLawyer: formData.opponentLawyer,
-      whatsappGroupLink: formData.whatsappGroupLink,
     }, user.id, user.name);
     
     toast({ title: "تم إضافة القضية بنجاح" });
@@ -437,147 +428,75 @@ export default function CasesPage() {
                   <TableCell>{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
-                      <FavoriteButton
-                        entityType="case"
-                        entityId={c.id}
-                        entityTitle={`${c.caseNumber} - ${getClientName(c.clientId)}`}
-                      />
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            data-testid={`button-view-${c.id}`}
-                            onClick={() => openDetailsDialog(c)}
-                          >
-                            <FolderOpen className="w-4 h-4" />
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        data-testid={`button-view-${c.id}`}
+                        onClick={() => openDetailsDialog(c)}
+                      >
+                        <FolderOpen className="w-4 h-4" />
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="icon" variant="ghost" data-testid={`button-actions-${c.id}`}>
+                            <MoreHorizontal className="w-4 h-4" />
                           </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>عرض التفاصيل</TooltipContent>
-                      </Tooltip>
-                      
-                      {canAssign(c) && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-assign-${c.id}`}
-                              onClick={() => openAssignDialog(c)}
-                            >
-                              <UserPlus className="w-4 h-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>إسناد القضية</TooltipContent>
-                        </Tooltip>
-                      )}
-                      
-                      {canSendToReview(c) && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-send-review-${c.id}`}
-                              onClick={() => handleSendToReview(c)}
-                            >
-                              <Send className="w-4 h-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>إرسال للمراجعة</TooltipContent>
-                        </Tooltip>
-                      )}
-                      
-                      {canReview(c) && (
-                        <>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                data-testid={`button-review-checklist-${c.id}`}
-                                onClick={() => openReviewDialog(c)}
-                              >
-                                <ClipboardCheck className="w-4 h-4 text-accent" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>قائمة المراجعة</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                data-testid={`button-approve-${c.id}`}
-                                onClick={() => handleApprove(c)}
-                              >
-                                <CheckCircle className="w-4 h-4 text-green-600" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>اعتماد القضية</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                data-testid={`button-reject-${c.id}`}
-                                onClick={() => openRejectDialog(c)}
-                              >
-                                <XCircle className="w-4 h-4 text-destructive" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>إعادة للتعديل</TooltipContent>
-                          </Tooltip>
-                        </>
-                      )}
-                      
-                      {canClose(c) && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-close-${c.id}`}
-                              onClick={() => handleClose(c)}
-                            >
-                              <Archive className="w-4 h-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>إغلاق القضية</TooltipContent>
-                        </Tooltip>
-                      )}
-                      
-                      {c.whatsappGroupLink && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-whatsapp-${c.id}`}
-                              onClick={() => window.open(c.whatsappGroupLink, "_blank")}
-                            >
-                              <MessageSquare className="w-4 h-4 text-green-600" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>مجموعة واتساب</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {permissions.canSendReminders && (c.responsibleLawyerId || c.primaryLawyerId) && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-reminder-${c.id}`}
-                              onClick={() => openReminderDialog(c)}
-                            >
-                              <Bell className="w-4 h-4 text-accent" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>إرسال تذكير</TooltipContent>
-                        </Tooltip>
-                      )}
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {canAssign(c) && (
+                            <DropdownMenuItem data-testid={`button-assign-${c.id}`} onClick={() => openAssignDialog(c)}>
+                              <UserPlus className="w-4 h-4 ml-2" />
+                              إسناد القضية
+                            </DropdownMenuItem>
+                          )}
+                          {canSendToReview(c) && (
+                            <DropdownMenuItem data-testid={`button-send-review-${c.id}`} onClick={() => handleSendToReview(c)}>
+                              <Send className="w-4 h-4 ml-2" />
+                              إرسال للمراجعة
+                            </DropdownMenuItem>
+                          )}
+                          {canReview(c) && (
+                            <>
+                              <DropdownMenuItem data-testid={`button-review-checklist-${c.id}`} onClick={() => openReviewDialog(c)}>
+                                <ClipboardCheck className="w-4 h-4 ml-2" />
+                                قائمة المراجعة
+                              </DropdownMenuItem>
+                              <DropdownMenuItem data-testid={`button-approve-${c.id}`} onClick={() => handleApprove(c)}>
+                                <CheckCircle className="w-4 h-4 ml-2 text-green-600" />
+                                اعتماد القضية
+                              </DropdownMenuItem>
+                              <DropdownMenuItem data-testid={`button-reject-${c.id}`} onClick={() => openRejectDialog(c)}>
+                                <XCircle className="w-4 h-4 ml-2 text-destructive" />
+                                إعادة للتعديل
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {canClose(c) && (
+                            <DropdownMenuItem data-testid={`button-close-${c.id}`} onClick={() => handleClose(c)}>
+                              <Archive className="w-4 h-4 ml-2" />
+                              إغلاق القضية
+                            </DropdownMenuItem>
+                          )}
+                          {c.whatsappGroupLink && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem data-testid={`button-whatsapp-${c.id}`} onClick={() => window.open(c.whatsappGroupLink, "_blank")}>
+                                <MessageSquare className="w-4 h-4 ml-2 text-green-600" />
+                                مجموعة واتساب
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {permissions.canSendReminders && (c.responsibleLawyerId || c.primaryLawyerId) && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem data-testid={`button-reminder-${c.id}`} onClick={() => openReminderDialog(c)}>
+                                <Bell className="w-4 h-4 ml-2 text-accent" />
+                                إرسال تذكير
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -697,31 +616,12 @@ export default function CasesPage() {
                 onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>اسم الخصم</Label>
-                <Input
-                  data-testid="input-opponent-name"
-                  value={formData.opponentName}
-                  onChange={(e) => setFormData({ ...formData, opponentName: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label>محامي الخصم</Label>
-                <Input
-                  data-testid="input-opponent-lawyer"
-                  value={formData.opponentLawyer}
-                  onChange={(e) => setFormData({ ...formData, opponentLawyer: e.target.value })}
-                />
-              </div>
-            </div>
             <div>
-              <Label>رابط مجموعة واتساب</Label>
+              <Label>اسم الخصم</Label>
               <Input
-                data-testid="input-whatsapp"
-                value={formData.whatsappGroupLink}
-                onChange={(e) => setFormData({ ...formData, whatsappGroupLink: e.target.value })}
-                placeholder="https://wa.me/..."
+                data-testid="input-opponent-name"
+                value={formData.opponentName}
+                onChange={(e) => setFormData({ ...formData, opponentName: e.target.value })}
               />
             </div>
           </div>

@@ -21,12 +21,12 @@ import logoImage from "@assets/WhatsApp_Image_2026-01-30_at_8.35.33_PM_176979498
 
 const menuItems = [
   {
-    title: "لوحة التحكم",
+    title: "الرئيسية",
     url: "/",
     icon: LayoutDashboard,
   },
   {
-    title: "إدارة القضايا",
+    title: "القضايا",
     url: "/cases",
     icon: Briefcase,
   },
@@ -77,7 +77,7 @@ const adminMenuItems = [
 
 const workflowMenuItems = [
   {
-    title: "لوحة سير العمل",
+    title: "سير العمل",
     url: "/workflow-board",
     icon: Workflow,
   },
@@ -87,7 +87,7 @@ const workflowMenuItems = [
     icon: Activity,
   },
   {
-    title: "لوحة الأداء",
+    title: "الأداء",
     url: "/performance-dashboard",
     icon: TrendingUp,
   },
@@ -95,17 +95,17 @@ const workflowMenuItems = [
 
 const toolsMenuItems = [
   {
-    title: "مؤشرات الأداء",
+    title: "الأداء",
     url: "/kpis",
     icon: BarChart3,
   },
   {
-    title: "معايير المراجعة",
+    title: "المراجعة",
     url: "/standards",
     icon: ClipboardCheck,
   },
   {
-    title: "إعدادات لوحة التحكم",
+    title: "الإعدادات",
     url: "/dashboard-settings",
     icon: Settings,
   },
