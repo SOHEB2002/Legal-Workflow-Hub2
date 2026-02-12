@@ -210,3 +210,39 @@ export async function notifyFieldTaskAssigned(taskId: string, taskTitle: string,
     taskId,
   );
 }
+
+export async function sendCaseReminder(
+  caseId: string,
+  caseNumber: string,
+  recipientId: string,
+  reminderType: string,
+  message: string,
+) {
+  await sendNotificationDirect(
+    recipientId,
+    NotificationType.TASK_REMINDER,
+    NotificationPriority.HIGH,
+    `تذكير: ${reminderType} - قضية ${caseNumber}`,
+    message,
+    "case",
+    caseId,
+  );
+}
+
+export async function sendConsultationReminder(
+  consultationId: string,
+  consultationNumber: string,
+  recipientId: string,
+  reminderType: string,
+  message: string,
+) {
+  await sendNotificationDirect(
+    recipientId,
+    NotificationType.TASK_REMINDER,
+    NotificationPriority.HIGH,
+    `تذكير: ${reminderType} - استشارة ${consultationNumber}`,
+    message,
+    "consultation",
+    consultationId,
+  );
+}

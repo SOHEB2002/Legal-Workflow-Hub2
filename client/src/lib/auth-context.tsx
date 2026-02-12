@@ -10,7 +10,8 @@ import {
   canManageUsers,
   canAccessHR,
   canCloseCases,
-  canSendNotifications
+  canSendNotifications,
+  canSendReminders
 } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -29,6 +30,7 @@ interface AuthContextType {
     canAccessHR: boolean;
     canCloseCases: boolean;
     canSendNotifications: boolean;
+    canSendReminders: boolean;
   };
   users: User[];
   refetchUsers: () => Promise<void>;
@@ -191,6 +193,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     canAccessHR: user ? canAccessHR(user.role) : false,
     canCloseCases: user ? canCloseCases(user.role) : false,
     canSendNotifications: user ? canSendNotifications(user.role) : false,
+    canSendReminders: user ? canSendReminders(user.role) : false,
   };
 
   return (

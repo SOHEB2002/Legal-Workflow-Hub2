@@ -937,6 +937,10 @@ export function canMoveToPreviousStage(role: UserRoleType): boolean {
   return role === "branch_manager";
 }
 
+export function canSendReminders(role: UserRoleType): boolean {
+  return ["branch_manager", "admin_support", "department_head", "cases_review_head", "consultations_review_head"].includes(role);
+}
+
 // ==================== معايير المراجعة ====================
 export const ReviewStandardType = {
   CONTRACT_REVIEW: "contract_review",
