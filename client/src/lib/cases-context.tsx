@@ -4,6 +4,7 @@ import { CaseStatus, Priority, CaseStage, CaseStagesOrder } from "@shared/schema
 import { apiRequest } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
+import { useAuth } from "./auth-context";
 
 interface CasesContextType {
   cases: LawCase[];
@@ -60,6 +61,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const [cases, setCases] = useState<LawCase[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [comments, setComments] = useState<CaseComment[]>([]);
+  const { user } = useAuth();
 
   const fetchCases = useCallback(async () => {
     try {
@@ -80,8 +82,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchCases();
-  }, [fetchCases]);
+    if (user) {
+      fetchCases();
+    } else {
+      setCases([]);
+    }
+  }, [user, fetchCases]);
 
   const addCase = async (data: Partial<LawCase>, createdBy: string, createdByName: string): Promise<LawCase> => {
     const now = new Date().toISOString();

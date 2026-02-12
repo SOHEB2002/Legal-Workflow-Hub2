@@ -5,6 +5,7 @@ import type { UserRoleType } from "@shared/schema";
 import { apiRequest } from "./queryClient";
 import { validateConsultationTransition } from "./transitions-engine";
 import { notifyConsultationAdded, notifyConsultationAssigned, notifyConsultationSentToReview, notifyConsultationReturnedForRevision } from "./notification-triggers";
+import { useAuth } from "./auth-context";
 
 interface ConsultationsContextType {
   consultations: Consultation[];
@@ -39,6 +40,7 @@ function getAuthHeaders(): Record<string, string> {
 export function ConsultationsProvider({ children }: { children: React.ReactNode }) {
   const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { user } = useAuth();
 
   const fetchConsultations = useCallback(async () => {
     try {
@@ -56,8 +58,12 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
   }, []);
 
   useEffect(() => {
-    fetchConsultations();
-  }, [fetchConsultations]);
+    if (user) {
+      fetchConsultations();
+    } else {
+      setConsultations([]);
+    }
+  }, [user, fetchConsultations]);
 
   const addConsultation = async (data: Partial<Consultation>, createdBy: string): Promise<Consultation> => {
     const consultationData = {
