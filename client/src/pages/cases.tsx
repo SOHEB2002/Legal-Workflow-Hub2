@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { format } from "date-fns";
 import { ar } from "date-fns/locale";
 import {
@@ -155,6 +155,13 @@ export default function CasesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const s = params.get("status");
+    if (s === "pending_review") setStatusFilter(CaseStatus.REVIEW_COMMITTEE);
+    else if (s === "ready") setStatusFilter(CaseStatus.READY_TO_SUBMIT);
+  }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showAssignDialog, setShowAssignDialog] = useState(false);

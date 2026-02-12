@@ -24,6 +24,7 @@ interface StatCardWidgetProps {
   variant?: "default" | "warning" | "success" | "danger" | "accent";
   alert?: boolean;
   suffix?: string;
+  onClick?: () => void;
 }
 
 export function StatCardWidget({ 
@@ -32,7 +33,8 @@ export function StatCardWidget({
   icon: Icon, 
   variant = "default",
   alert = false,
-  suffix
+  suffix,
+  onClick
 }: StatCardWidgetProps) {
   const bgColors = {
     default: "from-primary/20 to-primary/5",
@@ -51,8 +53,11 @@ export function StatCardWidget({
   };
 
   return (
-    <Card className={`relative overflow-hidden ${alert && value > 0 ? "ring-2 ring-red-500/50" : ""}`}>
-      <div className={`absolute inset-0 bg-gradient-to-br ${bgColors[variant]} pointer-events-none`} />
+    <Card 
+      className={`relative overflow-visible ${alert && value > 0 ? "ring-2 ring-red-500/50" : ""} ${onClick ? "cursor-pointer hover-elevate transition-shadow" : ""}`}
+      onClick={onClick}
+    >
+      <div className={`absolute inset-0 bg-gradient-to-br ${bgColors[variant]} pointer-events-none rounded-[inherit]`} />
       <CardContent className="p-6 relative">
         <div className="flex items-center justify-between gap-4">
           <div>

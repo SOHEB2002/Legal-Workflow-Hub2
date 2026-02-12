@@ -124,6 +124,19 @@ export default function DashboardPage() {
     }
   };
 
+  const getWidgetOnClick = (widgetId: string): (() => void) | undefined => {
+    switch (widgetId) {
+      case "active_cases": return () => setLocation("/cases");
+      case "pending_review": return () => setLocation("/cases?status=pending_review");
+      case "today_hearings": return () => setLocation("/hearings");
+      case "overdue_tasks": return () => setLocation("/field-tasks");
+      case "active_consultations": return () => setLocation("/consultations");
+      case "ready_cases": return () => setLocation("/cases?status=ready");
+      case "new_clients_month": return () => setLocation("/clients");
+      default: return undefined;
+    }
+  };
+
   const quickActions = [
     { label: "قضية جديدة", icon: Briefcase, onClick: () => setLocation("/cases"), variant: "default" as const },
     { label: "استشارة جديدة", icon: MessageSquare, onClick: () => setLocation("/consultations"), variant: "outline" as const },
@@ -231,6 +244,7 @@ export default function DashboardPage() {
                 icon={Icon}
                 variant={variant}
                 alert={isAlert}
+                onClick={getWidgetOnClick(widget.id)}
               />
             </div>
           );
