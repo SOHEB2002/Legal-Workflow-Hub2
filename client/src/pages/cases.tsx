@@ -10,7 +10,6 @@ import {
   XCircle,
   Archive,
   UserPlus,
-  MessageSquare,
   FolderOpen,
   ClipboardCheck,
   Bell,
@@ -478,15 +477,6 @@ export default function CasesPage() {
                               إغلاق القضية
                             </DropdownMenuItem>
                           )}
-                          {c.whatsappGroupLink && (
-                            <>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem data-testid={`button-whatsapp-${c.id}`} onClick={() => window.open(c.whatsappGroupLink, "_blank")}>
-                                <MessageSquare className="w-4 h-4 ml-2 text-green-600" />
-                                مجموعة واتساب
-                              </DropdownMenuItem>
-                            </>
-                          )}
                           {permissions.canSendReminders && (c.responsibleLawyerId || c.primaryLawyerId) && (
                             <>
                               <DropdownMenuSeparator />
@@ -788,10 +778,6 @@ export default function CasesPage() {
                       <div>
                         <Label className="text-muted-foreground">اسم الخصم</Label>
                         <p>{selectedCase.opponentName || "-"}</p>
-                      </div>
-                      <div>
-                        <Label className="text-muted-foreground">محامي الخصم</Label>
-                        <p>{selectedCase.opponentLawyer || "-"}</p>
                       </div>
                       <div>
                         <Label className="text-muted-foreground">هاتف الخصم</Label>
