@@ -34,7 +34,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal } from "lucide-react";
+import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -98,6 +98,10 @@ export default function ConsultationsPage() {
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [consultationToReview, setConsultationToReview] = useState<Consultation | null>(null);
 
+  const [showAssignDialog, setShowAssignDialog] = useState(false);
+  const [assignConsultationId, setAssignConsultationId] = useState<string | null>(null);
+  const [assignData, setAssignData] = useState({ lawyerId: "", departmentId: "" });
+
   const [showReminderDialog, setShowReminderDialog] = useState(false);
   const [reminderConsultation, setReminderConsultation] = useState<Consultation | null>(null);
   const [reminderData, setReminderData] = useState({
@@ -125,6 +129,28 @@ export default function ConsultationsPage() {
     }
     setShowReminderDialog(false);
     setReminderConsultation(null);
+  };
+
+  const consultationLawyers = users.filter(u => u.canBeAssignedConsultations);
+
+  const canAssignConsultation = (c: Consultation) =>
+    c.status === ConsultationStatus.RECEIVED &&
+    (user?.role === "branch_manager" ||
+     (permissions.canAssignInDepartment && c.departmentId === user?.departmentId));
+
+  const openAssignDialog = (c: Consultation) => {
+    setAssignConsultationId(c.id);
+    setAssignData({ lawyerId: "", departmentId: c.departmentId || "" });
+    setShowAssignDialog(true);
+  };
+
+  const handleAssignConsultation = () => {
+    if (!assignConsultationId || !assignData.lawyerId || !assignData.departmentId) return;
+    assignConsultation(assignConsultationId, assignData.lawyerId, assignData.departmentId);
+    toast({ title: "تم إسناد الاستشارة بنجاح" });
+    setShowAssignDialog(false);
+    setAssignConsultationId(null);
+    setAssignData({ lawyerId: "", departmentId: "" });
   };
 
   const handleSendToReview = (consultation: Consultation) => {
@@ -353,6 +379,12 @@ export default function ConsultationsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {canAssignConsultation(consultation) && (
+                            <DropdownMenuItem data-testid={`button-assign-consultation-${consultation.id}`} onClick={() => openAssignDialog(consultation)}>
+                              <UserPlus className="w-4 h-4 ml-2" />
+                              إسناد الاستشارة
+                            </DropdownMenuItem>
+                          )}
                           {(consultation.status === ConsultationStatus.STUDY ||
                             consultation.status === ConsultationStatus.PREPARING_RESPONSE ||
                             consultation.status === ConsultationStatus.AMENDMENTS) &&
@@ -530,6 +562,62 @@ export default function ConsultationsPage() {
             <Button onClick={handleSendReminder} data-testid="button-send-reminder">
               <Bell className="w-4 h-4 ml-2" />
               إرسال التذكير
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="w-5 h-5" />
+              إسناد الاستشارة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>القسم</Label>
+              <Select
+                value={assignData.departmentId}
+                onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "" })}
+              >
+                <SelectTrigger data-testid="select-assign-department">
+                  <SelectValue placeholder="اختر القسم" />
+                </SelectTrigger>
+                <SelectContent>
+                  {departments.map((dept) => (
+                    <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>المحامي المسؤول</Label>
+              <Select
+                value={assignData.lawyerId}
+                onValueChange={(value) => setAssignData({ ...assignData, lawyerId: value })}
+              >
+                <SelectTrigger data-testid="select-assign-lawyer">
+                  <SelectValue placeholder="اختر المحامي" />
+                </SelectTrigger>
+                <SelectContent>
+                  {consultationLawyers
+                    .filter(l => !assignData.departmentId || l.departmentId === assignData.departmentId)
+                    .map((lawyer) => (
+                      <SelectItem key={lawyer.id} value={lawyer.id}>{lawyer.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAssignDialog(false)} data-testid="button-cancel-assign">
+              إلغاء
+            </Button>
+            <Button onClick={handleAssignConsultation} disabled={!assignData.lawyerId || !assignData.departmentId} data-testid="button-confirm-assign">
+              <UserPlus className="w-4 h-4 ml-2" />
+              إسناد
             </Button>
           </DialogFooter>
         </DialogContent>

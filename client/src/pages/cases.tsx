@@ -327,8 +327,9 @@ export default function CasesPage() {
   };
 
   const canAssign = (c: LawCase) => 
-    permissions.canAddCasesAndConsultations && 
-    (c.status === CaseStatus.RECEIVED || c.status === CaseStatus.DATA_COMPLETION);
+    (c.status === CaseStatus.RECEIVED || c.status === CaseStatus.DATA_COMPLETION) &&
+    (user?.role === "branch_manager" || 
+     (permissions.canAssignInDepartment && c.departmentId === user?.departmentId));
 
   const canSendToReview = (c: LawCase) => 
     permissions.canManageDepartment && 

@@ -928,6 +928,10 @@ export function canCloseCases(role: UserRoleType): boolean {
   return ["branch_manager", "admin_support"].includes(role);
 }
 
+export function canAssignInDepartment(role: UserRoleType): boolean {
+  return ["branch_manager", "department_head"].includes(role);
+}
+
 export function canAssignFieldTasks(role: UserRoleType): boolean {
   return ["branch_manager", "cases_review_head", "consultations_review_head", "department_head"].includes(role);
 }

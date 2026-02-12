@@ -5,6 +5,7 @@ import {
   canManageAllConsultations, 
   canManageDepartment,
   canAddCasesAndConsultations,
+  canAssignInDepartment,
   canReviewCases,
   canReviewConsultations,
   canManageUsers,
@@ -24,6 +25,7 @@ interface AuthContextType {
     canManageAllConsultations: boolean;
     canManageDepartment: boolean;
     canAddCasesAndConsultations: boolean;
+    canAssignInDepartment: boolean;
     canReviewCases: boolean;
     canReviewConsultations: boolean;
     canManageUsers: boolean;
@@ -187,6 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     canManageAllConsultations: user ? canManageAllConsultations(user.role) : false,
     canManageDepartment: user ? canManageDepartment(user.role) : false,
     canAddCasesAndConsultations: user ? canAddCasesAndConsultations(user.role) : false,
+    canAssignInDepartment: user ? canAssignInDepartment(user.role) : false,
     canReviewCases: user ? canReviewCases(user.role) : false,
     canReviewConsultations: user ? canReviewConsultations(user.role) : false,
     canManageUsers: user ? canManageUsers(user.role) : false,
