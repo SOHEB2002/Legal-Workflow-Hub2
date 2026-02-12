@@ -46,6 +46,7 @@ import PerformanceDashboardPage from "@/pages/performance-dashboard";
 import TeamsPage from "@/pages/teams";
 import ActivityLogPage from "@/pages/activity-log";
 import UserProfilePage from "@/pages/user-profile";
+import ReportsPage from "@/pages/reports";
 import { WorkflowProvider } from "@/lib/workflow-context";
 import { UsersProvider } from "@/lib/users-context";
 
@@ -72,6 +73,7 @@ function Router() {
       <Route path="/teams" component={TeamsPage} />
       <Route path="/activity-log" component={ActivityLogPage} />
       <Route path="/user-profile/:id" component={UserProfilePage} />
+      <Route path="/reports" component={ReportsPage} />
       <Route component={NotFound} />
     </Switch>
   );

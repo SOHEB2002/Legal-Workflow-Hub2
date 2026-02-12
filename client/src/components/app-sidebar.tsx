@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, UsersRound, FileText } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, UsersRound, FileText, FileBarChart } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -94,6 +94,11 @@ const workflowMenuItems = [
 ];
 
 const toolsMenuItems = [
+  {
+    title: "التقارير",
+    url: "/reports",
+    icon: FileBarChart,
+  },
   {
     title: "الأداء",
     url: "/kpis",
@@ -220,7 +225,14 @@ export function AppSidebar() {
           <SidebarGroupLabel className="text-sidebar-foreground/60">الأدوات</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {toolsMenuItems.map((item) => (
+              {toolsMenuItems
+                .filter((item) => {
+                  if (item.url === "/reports") {
+                    return ["branch_manager", "cases_review_head", "consultations_review_head"].includes(user?.role || "");
+                  }
+                  return true;
+                })
+                .map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
