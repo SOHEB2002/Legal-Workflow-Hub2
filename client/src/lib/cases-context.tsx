@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment } from "@shared/schema";
+import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment, UserRoleType } from "@shared/schema";
 import { CaseStatus, Priority, CaseStage, CaseStagesOrder } from "@shared/schema";
 import { apiRequest } from "./queryClient";
+import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
 
 interface CasesContextType {
@@ -19,8 +20,8 @@ interface CasesContextType {
   markReadyToSubmit: (id: string) => void;
   markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
-  moveToNextStage: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
-  moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
+  moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
+  moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
   addComment: (caseId: string, userId: string, userName: string, content: string) => void;
   getCommentsByCaseId: (caseId: string) => CaseComment[];
   getCaseById: (id: string) => LawCase | undefined;
@@ -41,7 +42,7 @@ const generateCaseNumber = () => `C-${new Date().getFullYear()}-${Math.floor(Mat
 // Helper to migrate old cases without new fields
 const migrateCase = (c: LawCase): LawCase => {
   if (!c.currentStage) {
-    c.currentStage = c.status as CaseStageValue || CaseStage.RECEIVED;
+    c.currentStage = normalizeCaseStage(c.status as CaseStageValue) || CaseStage.RECEIVED;
   }
   if (!c.stageHistory) {
     c.stageHistory = [{ stage: c.currentStage, timestamp: c.createdAt, userId: c.createdBy, userName: "النظام", notes: "تهجير البيانات" }];
@@ -214,30 +215,24 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const getCasesByClient = (clientId: string) =>
     cases.filter((c) => c.clientId === clientId);
 
-  const legacyStageMap: Record<string, CaseStageValue> = {
-    "رفع_للدائرة": "تم_الرفع_للدائرة" as CaseStageValue,
-  };
-
-  const normalizeStage = (stage: CaseStageValue): CaseStageValue => {
-    return (legacyStageMap[stage] || stage) as CaseStageValue;
-  };
-
-  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
+  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
-    const normalized = normalizeStage(lawCase.currentStage);
+    if (userRole) {
+      const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType);
+      if (!validation.allowed) {
+        console.warn("انتقال مرفوض:", validation.reason);
+        return false;
+      }
+    }
+
+    const normalized = normalizeCaseStage(lawCase.currentStage);
     const currentIndex = CaseStagesOrder.indexOf(normalized);
     if (currentIndex === -1 || currentIndex >= CaseStagesOrder.length - 1) return false;
 
     const nextStage = CaseStagesOrder[currentIndex + 1];
-    const newTransition: CaseStageTransition = {
-      stage: nextStage,
-      timestamp: new Date().toISOString(),
-      userId,
-      userName,
-      notes,
-    };
+    const newTransition = createStageTransitionRecord(nextStage, userId, userName, notes);
 
     const updateData: Record<string, unknown> = {
       currentStage: nextStage,
@@ -253,22 +248,24 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const moveToPreviousStage = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
+  const moveToPreviousStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
-    const normalized = normalizeStage(lawCase.currentStage);
+    if (userRole) {
+      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType);
+      if (!validation.allowed) {
+        console.warn("إرجاع مرفوض:", validation.reason);
+        return false;
+      }
+    }
+
+    const normalized = normalizeCaseStage(lawCase.currentStage);
     const currentIndex = CaseStagesOrder.indexOf(normalized);
     if (currentIndex <= 0) return false;
 
     const prevStage = CaseStagesOrder[currentIndex - 1];
-    const newTransition: CaseStageTransition = {
-      stage: prevStage,
-      timestamp: new Date().toISOString(),
-      userId,
-      userName,
-      notes: notes || "إرجاع للمرحلة السابقة",
-    };
+    const newTransition = createStageTransitionRecord(prevStage, userId, userName, notes || "إرجاع للمرحلة السابقة");
 
     await updateCase(id, {
       currentStage: prevStage,

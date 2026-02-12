@@ -712,14 +712,22 @@ export default function CasesPage() {
                   userRole={user?.role || "employee"}
                   onMoveToNext={async (notes) => {
                     if (user) {
-                      await moveToNextStage(selectedCase.id, user.id, user.name, notes);
-                      toast({ title: "تم نقل القضية للمرحلة التالية" });
+                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role);
+                      if (success) {
+                        toast({ title: "تم نقل القضية للمرحلة التالية" });
+                      } else {
+                        toast({ title: "لا يمكن نقل القضية", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
+                      }
                     }
                   }}
                   onMoveToPrevious={async (notes) => {
                     if (user) {
-                      await moveToPreviousStage(selectedCase.id, user.id, user.name, notes);
-                      toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
+                      const success = await moveToPreviousStage(selectedCase.id, user.id, user.name, notes, user.role);
+                      if (success) {
+                        toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
+                      } else {
+                        toast({ title: "لا يمكن إرجاع القضية", description: "ليس لديك صلاحية لهذا الإرجاع", variant: "destructive" });
+                      }
                     }
                   }}
                 />

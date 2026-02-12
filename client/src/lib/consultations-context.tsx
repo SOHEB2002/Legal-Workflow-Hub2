@@ -1,7 +1,9 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { Consultation, ConsultationStatusValue, ReviewDecisionType, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
 import { ConsultationStatus } from "@shared/schema";
+import type { UserRoleType } from "@shared/schema";
 import { apiRequest } from "./queryClient";
+import { validateConsultationTransition } from "./transitions-engine";
 import { notifyConsultationAdded, notifyConsultationAssigned, notifyConsultationSentToReview, notifyConsultationReturnedForRevision } from "./notification-triggers";
 
 interface ConsultationsContextType {
@@ -11,11 +13,11 @@ interface ConsultationsContextType {
   updateConsultation: (id: string, data: Partial<Consultation>) => Promise<void>;
   deleteConsultation: (id: string) => Promise<void>;
   assignConsultation: (id: string, assignedTo: string, departmentId: string) => void;
-  sendToReviewCommittee: (id: string) => void;
-  approveConsultation: (id: string, notes?: string) => void;
-  rejectConsultation: (id: string, notes: string) => void;
-  markDelivered: (id: string) => void;
-  closeConsultation: (id: string) => void;
+  sendToReviewCommittee: (id: string, userRole?: string) => void;
+  approveConsultation: (id: string, notes?: string, userRole?: string) => void;
+  rejectConsultation: (id: string, notes: string, userRole?: string) => void;
+  markDelivered: (id: string, userRole?: string) => void;
+  closeConsultation: (id: string, userRole?: string) => void;
   convertToCase: (id: string, caseId: string) => void;
   getConsultationById: (id: string) => Consultation | undefined;
   getConsultationsByDepartment: (departmentId: string) => Consultation[];
@@ -112,13 +114,30 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     notifyConsultationAssigned(id, consultation?.consultationNumber || "", assignedTo).catch(console.error);
   };
 
-  const sendToReviewCommittee = (id: string) => {
+  const sendToReviewCommittee = (id: string, userRole?: string) => {
     const consultation = consultations.find(c => c.id === id);
+    if (!consultation) return;
+    if (userRole) {
+      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.REVIEW_COMMITTEE, userRole as UserRoleType);
+      if (!validation.allowed) {
+        console.warn("انتقال استشارة مرفوض:", validation.reason);
+        return;
+      }
+    }
     updateConsultation(id, { status: ConsultationStatus.REVIEW_COMMITTEE as ConsultationStatusValue });
-    notifyConsultationSentToReview(id, consultation?.consultationNumber || "").catch(console.error);
+    notifyConsultationSentToReview(id, consultation.consultationNumber || "").catch(console.error);
   };
 
-  const approveConsultation = (id: string, notes?: string) => {
+  const approveConsultation = (id: string, notes?: string, userRole?: string) => {
+    const consultation = consultations.find(c => c.id === id);
+    if (!consultation) return;
+    if (userRole) {
+      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.READY, userRole as UserRoleType);
+      if (!validation.allowed) {
+        console.warn("اعتماد استشارة مرفوض:", validation.reason);
+        return;
+      }
+    }
     updateConsultation(id, {
       status: ConsultationStatus.READY as ConsultationStatusValue,
       reviewDecision: "approved" as ReviewDecisionType,
@@ -126,21 +145,47 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     });
   };
 
-  const rejectConsultation = (id: string, notes: string) => {
+  const rejectConsultation = (id: string, notes: string, userRole?: string) => {
     const consultation = consultations.find(c => c.id === id);
+    if (!consultation) return;
+    if (userRole) {
+      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.AMENDMENTS, userRole as UserRoleType);
+      if (!validation.allowed) {
+        console.warn("رفض استشارة مرفوض:", validation.reason);
+        return;
+      }
+    }
     updateConsultation(id, {
       status: ConsultationStatus.AMENDMENTS as ConsultationStatusValue,
       reviewDecision: "rejected" as ReviewDecisionType,
       reviewNotes: notes,
     });
-    notifyConsultationReturnedForRevision(id, consultation?.consultationNumber || "", consultation?.assignedTo || null, notes).catch(console.error);
+    notifyConsultationReturnedForRevision(id, consultation.consultationNumber || "", consultation.assignedTo || null, notes).catch(console.error);
   };
 
-  const markDelivered = (id: string) => {
+  const markDelivered = (id: string, userRole?: string) => {
+    const consultation = consultations.find(c => c.id === id);
+    if (!consultation) return;
+    if (userRole) {
+      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.DELIVERED, userRole as UserRoleType);
+      if (!validation.allowed) {
+        console.warn("تسليم استشارة مرفوض:", validation.reason);
+        return;
+      }
+    }
     updateConsultation(id, { status: ConsultationStatus.DELIVERED as ConsultationStatusValue });
   };
 
-  const closeConsultation = (id: string) => {
+  const closeConsultation = (id: string, userRole?: string) => {
+    const consultation = consultations.find(c => c.id === id);
+    if (!consultation) return;
+    if (userRole) {
+      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.CLOSED, userRole as UserRoleType);
+      if (!validation.allowed) {
+        console.warn("إقفال استشارة مرفوض:", validation.reason);
+        return;
+      }
+    }
     updateConsultation(id, {
       status: ConsultationStatus.CLOSED as ConsultationStatusValue,
       closedAt: new Date().toISOString(),
