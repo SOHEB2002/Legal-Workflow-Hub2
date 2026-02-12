@@ -16,6 +16,7 @@ import {
   Bell,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
+import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -514,21 +515,10 @@ export default function CasesPage() {
           <div className="space-y-4">
             <div>
               <Label>العميل</Label>
-              <Select
+              <ClientAutocomplete
                 value={formData.clientId}
-                onValueChange={(value) => setFormData({ ...formData, clientId: value })}
-              >
-                <SelectTrigger data-testid="select-client">
-                  <SelectValue placeholder="اختر العميل" />
-                </SelectTrigger>
-                <SelectContent>
-                  {clients.map((client) => (
-                    <SelectItem key={client.id} value={client.id}>
-                      {getClientName(client.id)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onChange={(clientId) => setFormData({ ...formData, clientId })}
+              />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>

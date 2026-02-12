@@ -28,16 +28,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell } from "lucide-react";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
-import { FavoriteButton } from "@/components/favorite-button";
 import { useClients } from "@/lib/clients-context";
+import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Consultation, ConsultationStatusValue, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
@@ -131,7 +133,6 @@ export default function ConsultationsPage() {
     deliveryType: "مكتوبة" as DeliveryTypeValue,
     departmentId: "",
     questionSummary: "",
-    whatsappGroupLink: "",
   });
 
   const resetForm = () => {
@@ -141,7 +142,6 @@ export default function ConsultationsPage() {
       deliveryType: "مكتوبة",
       departmentId: "",
       questionSummary: "",
-      whatsappGroupLink: "",
     });
   };
 
@@ -184,21 +184,10 @@ export default function ConsultationsPage() {
               <div className="space-y-4">
                 <div>
                   <Label>العميل</Label>
-                  <Select
+                  <ClientAutocomplete
                     value={formData.clientId}
-                    onValueChange={(value) => setFormData({ ...formData, clientId: value })}
-                  >
-                    <SelectTrigger data-testid="select-client">
-                      <SelectValue placeholder="اختر العميل" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {clients.map((client) => (
-                        <SelectItem key={client.id} value={client.id}>
-                          {getClientName(client.id)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={(clientId) => setFormData({ ...formData, clientId })}
+                  />
                 </div>
                 <div>
                   <Label>نوع الاستشارة</Label>
@@ -263,15 +252,6 @@ export default function ConsultationsPage() {
                     onChange={(e) => setFormData({ ...formData, questionSummary: e.target.value })}
                     placeholder="اكتب ملخص الاستشارة المطلوبة..."
                     rows={4}
-                  />
-                </div>
-                <div>
-                  <Label>رابط واتساب (اختياري)</Label>
-                  <Input
-                    data-testid="input-whatsapp"
-                    value={formData.whatsappGroupLink}
-                    onChange={(e) => setFormData({ ...formData, whatsappGroupLink: e.target.value })}
-                    placeholder="https://wa.me/..."
                   />
                 </div>
               </div>
@@ -350,119 +330,64 @@ export default function ConsultationsPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
-                      <FavoriteButton
-                        entityType="consultation"
-                        entityId={consultation.id}
-                        entityTitle={`استشارة #${consultation.id.slice(0, 6)} - ${getClientName(consultation.clientId)}`}
-                      />
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            data-testid={`button-view-consultation-${consultation.id}`}
-                            onClick={() => {
-                              setSelectedConsultation(consultation);
-                              addRecentVisit("consultation", consultation.id, `استشارة #${consultation.id.slice(0, 6)} - ${getClientName(consultation.clientId)}`);
-                            }}
-                          >
-                            <MessageSquare className="w-4 h-4" />
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        data-testid={`button-view-consultation-${consultation.id}`}
+                        onClick={() => {
+                          setSelectedConsultation(consultation);
+                          addRecentVisit("consultation", consultation.id, `استشارة #${consultation.id.slice(0, 6)} - ${getClientName(consultation.clientId)}`);
+                        }}
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="icon" variant="ghost" data-testid={`button-actions-${consultation.id}`}>
+                            <MoreHorizontal className="w-4 h-4" />
                           </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>عرض التفاصيل</TooltipContent>
-                      </Tooltip>
-                      {consultation.status === ConsultationStatus.STUDY && permissions.canManageDepartment && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-send-review-${consultation.id}`}
-                              onClick={() => sendToReviewCommittee(consultation.id)}
-                            >
-                              <Send className="w-4 h-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>إرسال للمراجعة</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {consultation.status === ConsultationStatus.REVIEW_COMMITTEE &&
-                        permissions.canReviewConsultations && (
-                          <>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  data-testid={`button-review-checklist-${consultation.id}`}
-                                  onClick={() => {
-                                    setConsultationToReview(consultation);
-                                    setShowReviewDialog(true);
-                                  }}
-                                >
-                                  <ClipboardCheck className="w-4 h-4 text-accent" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>قائمة المراجعة</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  data-testid={`button-approve-${consultation.id}`}
-                                  onClick={() => approveConsultation(consultation.id)}
-                                >
-                                  <CheckCircle className="w-4 h-4 text-green-600" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>اعتماد الاستشارة</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  data-testid={`button-reject-${consultation.id}`}
-                                  onClick={() => rejectConsultation(consultation.id, "يرجى المراجعة")}
-                                >
-                                  <XCircle className="w-4 h-4 text-destructive" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>إعادة للتعديل</TooltipContent>
-                            </Tooltip>
-                          </>
-                        )}
-                      {consultation.status === ConsultationStatus.READY && permissions.canCloseCases && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-deliver-${consultation.id}`}
-                              onClick={() => markDelivered(consultation.id)}
-                            >
-                              <FileText className="w-4 h-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>تسليم الاستشارة</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {permissions.canSendReminders && consultation.assignedTo && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-reminder-${consultation.id}`}
-                              onClick={() => openReminderDialog(consultation)}
-                            >
-                              <Bell className="w-4 h-4 text-accent" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>إرسال تذكير</TooltipContent>
-                        </Tooltip>
-                      )}
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {consultation.status === ConsultationStatus.STUDY && permissions.canManageDepartment && (
+                            <DropdownMenuItem data-testid={`button-send-review-${consultation.id}`} onClick={() => sendToReviewCommittee(consultation.id)}>
+                              <Send className="w-4 h-4 ml-2" />
+                              إرسال للمراجعة
+                            </DropdownMenuItem>
+                          )}
+                          {consultation.status === ConsultationStatus.REVIEW_COMMITTEE &&
+                            permissions.canReviewConsultations && (
+                              <>
+                                <DropdownMenuItem data-testid={`button-review-checklist-${consultation.id}`} onClick={() => { setConsultationToReview(consultation); setShowReviewDialog(true); }}>
+                                  <ClipboardCheck className="w-4 h-4 ml-2" />
+                                  قائمة المراجعة
+                                </DropdownMenuItem>
+                                <DropdownMenuItem data-testid={`button-approve-${consultation.id}`} onClick={() => approveConsultation(consultation.id)}>
+                                  <CheckCircle className="w-4 h-4 ml-2 text-green-600" />
+                                  اعتماد الاستشارة
+                                </DropdownMenuItem>
+                                <DropdownMenuItem data-testid={`button-reject-${consultation.id}`} onClick={() => rejectConsultation(consultation.id, "يرجى المراجعة")}>
+                                  <XCircle className="w-4 h-4 ml-2 text-destructive" />
+                                  إعادة للتعديل
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          {consultation.status === ConsultationStatus.READY && permissions.canCloseCases && (
+                            <DropdownMenuItem data-testid={`button-deliver-${consultation.id}`} onClick={() => markDelivered(consultation.id)}>
+                              <FileText className="w-4 h-4 ml-2" />
+                              تسليم الاستشارة
+                            </DropdownMenuItem>
+                          )}
+                          {permissions.canSendReminders && consultation.assignedTo && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem data-testid={`button-reminder-${consultation.id}`} onClick={() => openReminderDialog(consultation)}>
+                                <Bell className="w-4 h-4 ml-2 text-accent" />
+                                إرسال تذكير
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </TableCell>
                 </TableRow>
