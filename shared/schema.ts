@@ -1044,6 +1044,7 @@ export const NotificationType = {
   ESCALATION: "escalation",
   RESPONSE_REQUEST: "response_request",
   MANUAL_NOTIFICATION: "manual_notification",
+  FIELD_TASK_ASSIGNED: "field_task_assigned",
 } as const;
 
 export type NotificationTypeValue = typeof NotificationType[keyof typeof NotificationType];
@@ -1075,6 +1076,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   escalation: "تصعيد",
   response_request: "طلب رد",
   manual_notification: "إشعار يدوي",
+  field_task_assigned: "تم تكليف بمهمة ميدانية",
 };
 
 export const NotificationPriority = {

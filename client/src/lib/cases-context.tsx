@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback } from "rea
 import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment } from "@shared/schema";
 import { CaseStatus, Priority, CaseStage, CaseStagesOrder } from "@shared/schema";
 import { apiRequest } from "./queryClient";
+import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
 
 interface CasesContextType {
   cases: LawCase[];
@@ -117,6 +118,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const response = await apiRequest("POST", "/api/cases", caseData);
     const newCase = await response.json();
     setCases((prev) => [migrateCase(newCase), ...prev]);
+    if (newCase.departmentId) {
+      notifyCaseAdded(newCase.id, newCase.caseNumber, newCase.departmentId).catch(console.error);
+    }
     return newCase;
   };
 
@@ -137,12 +141,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const assignCase = (id: string, lawyerId: string, departmentId: string) => {
+    const lawCase = cases.find(c => c.id === id);
     updateCase(id, {
       assignedLawyers: [lawyerId],
       primaryLawyerId: lawyerId,
       departmentId,
       status: CaseStatus.STUDY as CaseStatusValue,
     });
+    notifyCaseAssigned(id, lawCase?.caseNumber || "", lawyerId).catch(console.error);
   };
 
   const sendToDepartmentHead = (id: string) => {
@@ -150,7 +156,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const sendToReviewCommittee = (id: string) => {
+    const lawCase = cases.find(c => c.id === id);
     updateCase(id, { status: CaseStatus.REVIEW_COMMITTEE as CaseStatusValue });
+    notifyCaseSentToReview(id, lawCase?.caseNumber || "").catch(console.error);
   };
 
   const approveCase = (id: string, notes?: string) => {
@@ -162,11 +170,13 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const rejectCase = (id: string, notes: string, decision: ReviewDecisionType) => {
+    const lawCase = cases.find(c => c.id === id);
     updateCase(id, {
       status: CaseStatus.AMENDMENTS as CaseStatusValue,
       reviewDecision: decision,
       reviewNotes: notes,
     });
+    notifyCaseReturnedForRevision(id, lawCase?.caseNumber || "", lawCase?.responsibleLawyerId || lawCase?.primaryLawyerId || null, notes).catch(console.error);
   };
 
   const markReadyToSubmit = (id: string) => {

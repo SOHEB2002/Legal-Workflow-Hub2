@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback } from "rea
 import type { FieldTask } from "@shared/schema";
 import { FieldTaskStatus } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+import { notifyFieldTaskAssigned } from "@/lib/notification-triggers";
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("lawfirm_token");
@@ -59,6 +60,9 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
     });
     const newTask = await res.json();
     await fetchFieldTasks();
+    if (newTask.assignedTo) {
+      notifyFieldTaskAssigned(newTask.id, newTask.title, newTask.assignedTo).catch(console.error);
+    }
     return newTask;
   };
 

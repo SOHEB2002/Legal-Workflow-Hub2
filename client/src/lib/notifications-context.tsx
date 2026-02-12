@@ -164,6 +164,18 @@ const defaultNotificationRules: NotificationRule[] = [
     autoEscalate: false,
     escalateAfterHours: 24,
   },
+  {
+    id: "rule_11",
+    name: "تكليف مهمة ميدانية",
+    triggerEvent: NotificationType.FIELD_TASK_ASSIGNED,
+    conditions: {},
+    recipients: { assignedEmployee: true, departmentHead: false, branchManager: false, reviewCommittee: false, customUserIds: [] },
+    notificationPriority: NotificationPriority.HIGH,
+    template: { title: "مهمة ميدانية جديدة", message: "تم تكليفك بمهمة ميدانية جديدة: {entityName}" },
+    isActive: true,
+    autoEscalate: false,
+    escalateAfterHours: 24,
+  },
 ];
 
 interface NotificationFilters {
@@ -594,7 +606,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       case NotificationType.STAGE_CHANGED:
         return userPrefs.notifyOnStageChange !== false;
       case NotificationType.SENT_TO_REVIEW:
-      case NotificationType.REVIEW_NOTES:
+      case NotificationType.REVIEW_NOTES_ADDED:
         return userPrefs.notifyOnReviewNotes !== false;
       case NotificationType.RETURNED_FOR_REVISION:
       case NotificationType.THIRD_RETURN_WARNING:

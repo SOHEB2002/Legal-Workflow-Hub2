@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback } from "rea
 import type { Consultation, ConsultationStatusValue, ReviewDecisionType, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
 import { ConsultationStatus } from "@shared/schema";
 import { apiRequest } from "./queryClient";
+import { notifyConsultationAdded, notifyConsultationAssigned, notifyConsultationSentToReview, notifyConsultationReturnedForRevision } from "./notification-triggers";
 
 interface ConsultationsContextType {
   consultations: Consultation[];
@@ -28,6 +29,11 @@ const ConsultationsContext = createContext<ConsultationsContextType | undefined>
 
 const generateConsultationNumber = () => `S-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem("lawfirm_token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
+
 export function ConsultationsProvider({ children }: { children: React.ReactNode }) {
   const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -35,7 +41,7 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
   const fetchConsultations = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("/api/consultations");
+      const response = await fetch("/api/consultations", { headers: getAuthHeaders() });
       if (response.ok) {
         const data = await response.json();
         setConsultations(data);
@@ -73,6 +79,9 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     const response = await apiRequest("POST", "/api/consultations", consultationData);
     const newConsultation = await response.json();
     setConsultations((prev) => [newConsultation, ...prev]);
+    if (newConsultation.departmentId) {
+      notifyConsultationAdded(newConsultation.id, newConsultation.consultationNumber, newConsultation.departmentId).catch(console.error);
+    }
     return newConsultation;
   };
 
@@ -93,16 +102,20 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
   };
 
   const assignConsultation = (id: string, assignedTo: string, departmentId: string) => {
+    const consultation = consultations.find(c => c.id === id);
     const data = {
       assignedTo,
       departmentId,
       status: ConsultationStatus.STUDY as ConsultationStatusValue,
     };
     updateConsultation(id, data);
+    notifyConsultationAssigned(id, consultation?.consultationNumber || "", assignedTo).catch(console.error);
   };
 
   const sendToReviewCommittee = (id: string) => {
+    const consultation = consultations.find(c => c.id === id);
     updateConsultation(id, { status: ConsultationStatus.REVIEW_COMMITTEE as ConsultationStatusValue });
+    notifyConsultationSentToReview(id, consultation?.consultationNumber || "").catch(console.error);
   };
 
   const approveConsultation = (id: string, notes?: string) => {
@@ -114,11 +127,13 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
   };
 
   const rejectConsultation = (id: string, notes: string) => {
+    const consultation = consultations.find(c => c.id === id);
     updateConsultation(id, {
       status: ConsultationStatus.AMENDMENTS as ConsultationStatusValue,
       reviewDecision: "rejected" as ReviewDecisionType,
       reviewNotes: notes,
     });
+    notifyConsultationReturnedForRevision(id, consultation?.consultationNumber || "", consultation?.assignedTo || null, notes).catch(console.error);
   };
 
   const markDelivered = (id: string) => {
