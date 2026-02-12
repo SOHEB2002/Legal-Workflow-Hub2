@@ -298,7 +298,8 @@ export const CaseStage = {
   DRAFTING: "تحرير_المذكرة",
   REVIEW_COMMITTEE: "إحالة_للجنة_المراجعة",
   AMENDMENTS: "الأخذ_بالملاحظات",
-  SUBMITTED: "رفع_للدائرة",
+  SUBMITTED: "تم_الرفع_للدائرة",
+  CLOSED: "مقفلة",
 } as const;
 
 export type CaseStageValue = typeof CaseStage[keyof typeof CaseStage];
@@ -310,7 +311,8 @@ export const CaseStageLabels: Record<CaseStageValue, string> = {
   "تحرير_المذكرة": "تحرير المذكرة",
   "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
   "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
-  "رفع_للدائرة": "رفع للدائرة",
+  "تم_الرفع_للدائرة": "تم الرفع للدائرة",
+  "مقفلة": "مقفلة",
 };
 
 export const CaseStagesOrder: CaseStageValue[] = [
@@ -320,7 +322,8 @@ export const CaseStagesOrder: CaseStageValue[] = [
   "تحرير_المذكرة",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
-  "رفع_للدائرة",
+  "تم_الرفع_للدائرة",
+  "مقفلة",
 ];
 
 // سجل انتقال المراحل

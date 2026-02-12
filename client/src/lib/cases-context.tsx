@@ -214,11 +214,20 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const getCasesByClient = (clientId: string) =>
     cases.filter((c) => c.clientId === clientId);
 
+  const legacyStageMap: Record<string, CaseStageValue> = {
+    "رفع_للدائرة": "تم_الرفع_للدائرة" as CaseStageValue,
+  };
+
+  const normalizeStage = (stage: CaseStageValue): CaseStageValue => {
+    return (legacyStageMap[stage] || stage) as CaseStageValue;
+  };
+
   const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
-    const currentIndex = CaseStagesOrder.indexOf(lawCase.currentStage);
+    const normalized = normalizeStage(lawCase.currentStage);
+    const currentIndex = CaseStagesOrder.indexOf(normalized);
     if (currentIndex === -1 || currentIndex >= CaseStagesOrder.length - 1) return false;
 
     const nextStage = CaseStagesOrder[currentIndex + 1];
@@ -230,10 +239,17 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       notes,
     };
 
-    await updateCase(id, {
+    const updateData: Record<string, unknown> = {
       currentStage: nextStage,
       stageHistory: [...lawCase.stageHistory, newTransition],
-    });
+    };
+
+    if (nextStage === "مقفلة") {
+      updateData.status = CaseStatus.CLOSED as CaseStatusValue;
+      updateData.closedAt = new Date().toISOString();
+    }
+
+    await updateCase(id, updateData);
     return true;
   };
 
@@ -241,7 +257,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
-    const currentIndex = CaseStagesOrder.indexOf(lawCase.currentStage);
+    const normalized = normalizeStage(lawCase.currentStage);
+    const currentIndex = CaseStagesOrder.indexOf(normalized);
     if (currentIndex <= 0) return false;
 
     const prevStage = CaseStagesOrder[currentIndex - 1];

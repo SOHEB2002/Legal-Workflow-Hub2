@@ -31,7 +31,11 @@ export function CaseProgressBar({
   disabled = false,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
-  const currentIndex = CaseStagesOrder.indexOf(currentStage);
+  const legacyStageMap: Record<string, CaseStageValue> = {
+    "رفع_للدائرة": "تم_الرفع_للدائرة" as CaseStageValue,
+  };
+  const normalizedStage = legacyStageMap[currentStage] || currentStage;
+  const currentIndex = CaseStagesOrder.indexOf(normalizedStage);
   const canGoNext = currentIndex < CaseStagesOrder.length - 1 && !disabled;
   const canGoPrev = currentIndex > 0 && canMoveToPreviousStage(userRole) && !disabled;
 
