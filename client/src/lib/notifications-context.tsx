@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type {
   Notification,
   NotificationTemplate,
@@ -14,6 +14,7 @@ import type {
 } from "@shared/schema";
 import { NotificationType, NotificationPriority, NotificationStatus, DigestMode } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "./auth-context";
 
 const TEMPLATES_STORAGE_KEY = "lawfirm_notification_templates";
 const PREFERENCES_STORAGE_KEY = "lawfirm_notification_preferences";
@@ -306,22 +307,36 @@ const defaultPreferences: UserNotificationPreferences = {
 };
 
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [templates, setTemplates] = useState<NotificationTemplate[]>(() => getStoredTemplates());
   const [preferences, setPreferences] = useState<Record<string, UserNotificationPreferences>>(() => getStoredPreferences());
   const [rules, setRules] = useState<NotificationRule[]>(() => getStoredRules());
   const [hasNewNotifications, setHasNewNotifications] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevCountRef = useRef<number>(0);
 
   const fetchNotifications = useCallback(async () => {
+    const authToken = localStorage.getItem("lawfirm_token");
+    if (!authToken) {
+      setNotifications([]);
+      setIsLoading(false);
+      return;
+    }
     try {
       const res = await fetch("/api/notifications", {
         credentials: "include",
-        headers: getAuthHeaders(),
+        headers: { "Authorization": `Bearer ${authToken}` },
       });
       if (res.ok) {
         const data = await res.json();
+        const prevCount = prevCountRef.current;
         setNotifications(data);
+        if (prevCount > 0 && data.length > prevCount) {
+          setHasNewNotifications(true);
+        }
+        prevCountRef.current = data.length;
       }
     } catch (err) {
       console.error("Failed to fetch notifications:", err);
@@ -335,8 +350,28 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   }, [fetchNotifications]);
 
   useEffect(() => {
-    fetchNotifications();
-  }, [fetchNotifications]);
+    prevCountRef.current = 0;
+    if (user) {
+      fetchNotifications();
+
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+      pollingRef.current = setInterval(() => {
+        fetchNotifications();
+      }, 15000);
+    } else {
+      setNotifications([]);
+      setIsLoading(false);
+    }
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [user, fetchNotifications]);
 
   useEffect(() => {
     localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
@@ -372,8 +407,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     recipientIds: string[],
     notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">
   ): Promise<Notification[]> => {
-    const results: Notification[] = [];
-    for (const recipientId of recipientIds) {
+    const promises = recipientIds.map(async (recipientId) => {
       try {
         const res = await apiRequest("POST", "/api/notifications", {
           ...notificationData,
@@ -385,12 +419,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           escalationLevel: 0,
           escalatedTo: null,
         });
-        const created = await res.json();
-        results.push(created);
+        return await res.json();
       } catch (err) {
         console.error("Failed to send notification to", recipientId, err);
+        return null;
       }
-    }
+    });
+    const results = (await Promise.all(promises)).filter(Boolean) as Notification[];
     await refetchNotifications();
     setHasNewNotifications(true);
     return results;
@@ -437,19 +472,14 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     }
   }, [refetchNotifications]);
 
-  const markAllAsRead = useCallback(async (userId: string) => {
-    const now = new Date().toISOString();
-    const unread = notifications.filter(n => n.recipientId === userId && !n.isRead);
-    const promises = unread.map(n =>
-      apiRequest("PATCH", `/api/notifications/${n.id}`, {
-        isRead: true,
-        readAt: now,
-        status: NotificationStatus.READ,
-      }).catch(err => console.error("Failed to mark notification as read:", err))
-    );
-    await Promise.all(promises);
-    await refetchNotifications();
-  }, [notifications, refetchNotifications]);
+  const markAllAsRead = useCallback(async (_userId: string) => {
+    try {
+      await apiRequest("POST", "/api/notifications/mark-all-read", {});
+      await refetchNotifications();
+    } catch (err) {
+      console.error("Failed to mark all notifications as read:", err);
+    }
+  }, [refetchNotifications]);
 
   const deleteNotification = useCallback(async (id: string) => {
     try {

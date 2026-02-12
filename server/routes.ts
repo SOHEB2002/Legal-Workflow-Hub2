@@ -721,6 +721,31 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/notifications/mark-all-read", async (req, res) => {
+    try {
+      const authUser = (req as any).user;
+      if (!authUser || !authUser.id) {
+        return res.status(401).json({ error: "يجب تسجيل الدخول أولاً" });
+      }
+      const userId = authUser.id;
+      const allNotifications = await storage.getNotificationsByRecipient(userId);
+      const unread = allNotifications.filter(n => !n.isRead);
+      const now = new Date().toISOString();
+      await Promise.all(
+        unread.map(n =>
+          storage.updateNotification(n.id, {
+            isRead: true,
+            readAt: now,
+            status: "read",
+          })
+        )
+      );
+      res.json({ success: true, count: unread.length });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في تحديث الإشعارات" });
+    }
+  });
+
   // ==================== Departments ====================
 
   app.get("/api/departments", async (req, res) => {
