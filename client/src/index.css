@@ -296,7 +296,8 @@
   input[type="date"],
   input[type="time"],
   input[type="datetime-local"] {
-    direction: ltr;
+    direction: ltr !important;
+    unicode-bidi: bidi-override !important;
     text-align: right;
   }
 }

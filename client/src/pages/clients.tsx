@@ -184,6 +184,7 @@ export default function ClientsPage() {
         <div>
           <Label>تاريخ التواصل</Label>
           <Input
+            dir="ltr"
             type="date"
             value={contactFormData.contactDate}
             onChange={(e) => setContactFormData({ ...contactFormData, contactDate: e.target.value })}
@@ -194,6 +195,7 @@ export default function ClientsPage() {
       <div>
         <Label>تاريخ المتابعة القادمة (اختياري)</Label>
         <Input
+          dir="ltr"
           type="date"
           value={contactFormData.nextFollowUpDate}
           onChange={(e) => setContactFormData({ ...contactFormData, nextFollowUpDate: e.target.value })}

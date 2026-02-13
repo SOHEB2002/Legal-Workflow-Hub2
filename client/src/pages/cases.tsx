@@ -845,6 +845,7 @@ export default function CasesPage() {
                     <div>
                       <Label>مهلة الرد (تاريخ)</Label>
                       <Input
+                        dir="ltr"
                         data-testid="input-response-deadline"
                         type="date"
                         value={formData.responseDeadline}
@@ -855,6 +856,7 @@ export default function CasesPage() {
                       <div>
                         <Label>تاريخ الجلسة القادمة (اختياري)</Label>
                         <Input
+                          dir="ltr"
                           data-testid="input-next-hearing-date"
                           type="date"
                           value={formData.nextHearingDate}

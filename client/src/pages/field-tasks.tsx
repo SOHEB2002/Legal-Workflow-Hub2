@@ -331,6 +331,7 @@ export default function FieldTasksPage() {
                 <div>
                   <Label>تاريخ الاستحقاق *</Label>
                   <Input
+                    dir="ltr"
                     type="date"
                     data-testid="input-due-date"
                     value={newTask.dueDate}

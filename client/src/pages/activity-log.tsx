@@ -202,6 +202,7 @@ export default function ActivityLogPage() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">من:</span>
               <Input
+                dir="ltr"
                 type="date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
@@ -212,6 +213,7 @@ export default function ActivityLogPage() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">إلى:</span>
               <Input
+                dir="ltr"
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}

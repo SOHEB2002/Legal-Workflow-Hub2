@@ -359,6 +359,7 @@ export default function HearingsPage() {
                 <div>
                   <Label>التاريخ</Label>
                   <Input
+                    dir="ltr"
                     data-testid="input-hearing-date"
                     type="date"
                     value={formData.hearingDate}
@@ -751,6 +752,7 @@ export default function HearingsPage() {
                   <div>
                     <Label>تاريخ الجلسة القادمة</Label>
                     <Input
+                      dir="ltr"
                       data-testid="input-next-date"
                       type="date"
                       value={resultForm.nextHearingDate}
@@ -844,6 +846,7 @@ export default function HearingsPage() {
                       <div>
                         <Label>مهلة الاعتراض</Label>
                         <Input
+                          dir="ltr"
                           data-testid="input-objection-deadline"
                           type="date"
                           value={resultForm.objectionDeadline}

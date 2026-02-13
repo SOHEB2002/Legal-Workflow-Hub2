@@ -508,6 +508,7 @@ export default function MemosPage() {
               <div>
                 <Label>الموعد النهائي *</Label>
                 <Input
+                  dir="ltr"
                   data-testid="input-memo-deadline"
                   type="date"
                   value={formData.deadline}
