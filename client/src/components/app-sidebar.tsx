@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, UsersRound, FileText, FileBarChart } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, UsersRound, FileText, FileBarChart, ScrollText } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -44,6 +44,11 @@ const menuItems = [
     title: "الجلسات",
     url: "/hearings",
     icon: Calendar,
+  },
+  {
+    title: "المذكرات القانونية",
+    url: "/memos",
+    icon: ScrollText,
   },
   {
     title: "المهام الميدانية",

@@ -49,6 +49,8 @@ import UserProfilePage from "@/pages/user-profile";
 import ReportsPage from "@/pages/reports";
 import { WorkflowProvider } from "@/lib/workflow-context";
 import { UsersProvider } from "@/lib/users-context";
+import { MemosProvider } from "@/lib/memos-context";
+import MemosPage from "@/pages/memos";
 
 function Router() {
   return (
@@ -74,6 +76,7 @@ function Router() {
       <Route path="/activity-log" component={ActivityLogPage} />
       <Route path="/user-profile/:id" component={UserProfilePage} />
       <Route path="/reports" component={ReportsPage} />
+      <Route path="/memos" component={MemosPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -129,6 +132,7 @@ function App() {
                 <ConsultationsProvider>
                   <HearingsProvider>
                     <FieldTasksProvider>
+                      <MemosProvider>
                       <ContactsProvider>
                         <DashboardProvider>
                           <StandardsProvider>
@@ -151,6 +155,7 @@ function App() {
                           </StandardsProvider>
                         </DashboardProvider>
                       </ContactsProvider>
+                      </MemosProvider>
                     </FieldTasksProvider>
                   </HearingsProvider>
                 </ConsultationsProvider>
