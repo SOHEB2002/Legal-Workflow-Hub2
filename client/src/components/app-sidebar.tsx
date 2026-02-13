@@ -17,7 +17,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-provider";
 import { UserRoleLabels } from "@shared/schema";
-import logoImage from "@assets/WhatsApp_Image_2026-01-30_at_8.35.33_PM_1769794981480.jpeg";
+import logoImage from "@assets/WhatsApp_Image_2026-02-13_at_2.24.30_PM_1770981889395.jpeg";
 
 const menuItems = [
   {
