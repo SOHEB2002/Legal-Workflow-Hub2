@@ -88,7 +88,7 @@ export default function ConsultationsPage() {
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
   const { toast } = useToast();
-  const lawyers = users.filter(u => u.canBeAssignedCases);
+  const lawyers = users.filter(u => u.canBeAssignedConsultations);
   const consultationReviewStandards = getStandardsByType("legal_consultation");
 
   const [searchQuery, setSearchQuery] = useState("");

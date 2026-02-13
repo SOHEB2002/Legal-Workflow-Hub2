@@ -301,7 +301,7 @@ export async function requestConsultationTransfer(
   const currentUser = getCurrentUser();
   const recipients = [
     ...findUsersByRole(users, "branch_manager"),
-    ...findUsersByRole(users, "cases_review_head"),
+    ...findUsersByRole(users, "consultations_review_head"),
   ];
   for (const recipient of recipients) {
     try {
