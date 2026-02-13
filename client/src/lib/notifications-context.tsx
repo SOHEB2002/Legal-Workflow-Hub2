@@ -207,7 +207,7 @@ interface NotificationsContextType {
   archiveOldNotifications: (daysOld: number) => void;
   getUnreadCount: (userId: string) => number;
   getMyNotifications: (userId: string, filters?: NotificationFilters) => Notification[];
-  respondToNotification: (id: string, responseType: ResponseTypeValue, message: string) => Promise<void>;
+  respondToNotification: (id: string, responseType: ResponseTypeValue | string, message: string) => Promise<void>;
   getNotificationResponses: (senderId: string) => Notification[];
   checkAndEscalate: () => void;
   escalateNotification: (id: string, escalateToUserId: string) => Promise<void>;
@@ -536,17 +536,23 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [notifications]);
 
-  const respondToNotification = useCallback(async (id: string, responseType: ResponseTypeValue, message: string) => {
+  const respondToNotification = useCallback(async (id: string, responseType: ResponseTypeValue | string, message: string) => {
     try {
       await apiRequest("PATCH", `/api/notifications/${id}`, {
-        response: { type: responseType, message, respondedAt: new Date().toISOString() },
+        response: {
+          type: responseType,
+          message,
+          respondedAt: new Date().toISOString(),
+          responderId: user?.id || "",
+          responderName: user?.name || "",
+        },
         status: NotificationStatus.RESPONDED,
       });
       await refetchNotifications();
     } catch (err) {
       console.error("Failed to respond to notification:", err);
     }
-  }, [refetchNotifications]);
+  }, [refetchNotifications, user]);
 
   const getNotificationResponses = useCallback((senderId: string): Notification[] => {
     return notifications.filter(n => n.senderId === senderId && n.response !== null);

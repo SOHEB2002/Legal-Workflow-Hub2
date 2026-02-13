@@ -235,7 +235,7 @@ export function SendNotificationDialog({
                   <SelectValue placeholder="اختر المستلم" />
                 </SelectTrigger>
                 <SelectContent>
-                  {allUsers.map(u => (
+                  {allUsers.filter(u => u.id).map(u => (
                     <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -270,7 +270,7 @@ export function SendNotificationDialog({
                 </SelectTrigger>
                 <SelectContent>
                   {departments.map(d => (
-                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                    <SelectItem key={d.id} value={d.id || `dept-${d.name}`}>{d.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

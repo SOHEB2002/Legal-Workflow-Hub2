@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, CheckCheck, Trash2, Archive, Send, Filter, ArrowUpCircle, Eye, RefreshCw } from "lucide-react";
+import { Bell, CheckCheck, Trash2, Archive, Send, Filter, ArrowUpCircle, Eye, RefreshCw, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -158,7 +158,7 @@ export default function NotificationsPage() {
     return sender?.name || "غير معروف";
   };
 
-  const uniqueSenders = Array.from(new Set(notifications.map(n => n.senderId).filter((id): id is string => id !== null)));
+  const uniqueSenders = Array.from(new Set(notifications.map(n => n.senderId).filter((id): id is string => !!id)));
 
   return (
     <div className="p-6 space-y-6" dir="rtl">
@@ -321,9 +321,23 @@ export default function NotificationsPage() {
                         <TableCell>
                           <div className="flex flex-col gap-1">
                             {notification.response ? (
-                              <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
-                                {ResponseTypeLabels[notification.response.type]}
-                              </Badge>
+                              <div className="space-y-1">
+                                <Badge variant="outline" className="text-xs bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800">
+                                  {(notification.response as any).type === "text_reply"
+                                    ? "رد نصي"
+                                    : ResponseTypeLabels[(notification.response as any).type] || "تم الرد"}
+                                </Badge>
+                                {(notification.response as any).message && (
+                                  <p className="text-xs text-muted-foreground truncate max-w-[200px]" title={(notification.response as any).message}>
+                                    {(notification.response as any).message}
+                                  </p>
+                                )}
+                                {(notification.response as any).responderName && (
+                                  <p className="text-xs text-muted-foreground">
+                                    {(notification.response as any).responderName}
+                                  </p>
+                                )}
+                              </div>
                             ) : notification.requiresResponse ? (
                               <Badge variant="outline" className="text-xs bg-yellow-50 text-yellow-700 border-yellow-200">
                                 بانتظار الرد
@@ -349,16 +363,14 @@ export default function NotificationsPage() {
                                 <Eye className="w-4 h-4" />
                               </Button>
                             )}
-                            {notification.requiresResponse && !notification.response && (
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => handleRespond(notification)}
-                                data-testid={`button-respond-${notification.id}`}
-                              >
-                                <RefreshCw className="w-4 h-4" />
-                              </Button>
-                            )}
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => handleRespond(notification)}
+                              data-testid={`button-respond-${notification.id}`}
+                            >
+                              <MessageSquare className="w-4 h-4" />
+                            </Button>
                             <Button
                               size="icon"
                               variant="ghost"

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle, Clock, RefreshCw, Eye, Send } from "lucide-react";
+import { CheckCircle, Clock, RefreshCw, Eye, Send, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -12,6 +12,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useNotifications } from "@/lib/notifications-context";
+import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import {
   ResponseType,
@@ -19,10 +20,11 @@ import {
   NotificationPriorityLabels,
   NotificationTypeLabels,
   NotificationPriority,
+  NotificationStatus,
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
 import { cn } from "@/lib/utils";
-import { formatDateArabic } from "@/lib/date-utils";
+import { formatDateArabic, formatDateTimeArabic } from "@/lib/date-utils";
 
 interface RespondDialogProps {
   open: boolean;
@@ -52,17 +54,19 @@ const responseOptions: { type: ResponseTypeValue; icon: typeof CheckCircle; labe
 
 export function RespondDialog({ open, onOpenChange, notification }: RespondDialogProps) {
   const { respondToNotification, markAsRead } = useNotifications();
+  const { user } = useAuth();
   const { toast } = useToast();
 
   const [selectedResponse, setSelectedResponse] = useState<ResponseTypeValue | null>(null);
   const [responseMessage, setResponseMessage] = useState("");
 
   const handleRespond = () => {
-    if (!notification || !selectedResponse) return;
+    if (!notification) return;
+    if (!selectedResponse && !responseMessage.trim()) return;
 
-    respondToNotification(notification.id, selectedResponse, responseMessage);
+    respondToNotification(notification.id, selectedResponse || "text_reply", responseMessage);
     markAsRead(notification.id);
-    
+
     toast({ title: "تم إرسال الرد بنجاح" });
     setSelectedResponse(null);
     setResponseMessage("");
@@ -74,19 +78,23 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
 
     respondToNotification(notification.id, type, "");
     markAsRead(notification.id);
-    
+
     toast({ title: `تم الرد: ${ResponseTypeLabels[type]}` });
     onOpenChange(false);
   };
 
   if (!notification) return null;
 
+  const existingResponse = notification.response as { type?: string; message?: string; respondedAt?: string; responderName?: string } | null;
+  const hasRequiresResponse = notification.requiresResponse;
+  const canSubmit = selectedResponse || responseMessage.trim();
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md" data-testid="respond-notification-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Send className="w-5 h-5" />
+            <MessageSquare className="w-5 h-5" />
             الرد على الإشعار
           </DialogTitle>
         </DialogHeader>
@@ -108,45 +116,72 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
             </p>
           </div>
 
-          <div>
-            <Label className="mb-3 block">رد سريع</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {responseOptions.map((option) => {
-                const Icon = option.icon;
-                return (
-                  <Button
-                    key={option.type}
-                    variant={selectedResponse === option.type ? "default" : "outline"}
-                    className="justify-start"
-                    onClick={() => setSelectedResponse(option.type)}
-                    data-testid={`button-response-${option.type}`}
-                  >
-                    <Icon className="w-4 h-4 ml-2" />
-                    {option.label}
-                  </Button>
-                );
-              })}
+          {existingResponse && (
+            <div className="p-3 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg space-y-1">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+                <span className="text-sm font-medium text-green-700 dark:text-green-400">رد سابق</span>
+                {existingResponse.type && existingResponse.type !== "text_reply" && (
+                  <Badge variant="outline" className="text-xs">
+                    {ResponseTypeLabels[existingResponse.type as ResponseTypeValue] || existingResponse.type}
+                  </Badge>
+                )}
+              </div>
+              {existingResponse.message && (
+                <p className="text-sm text-green-700 dark:text-green-300">{existingResponse.message}</p>
+              )}
+              {existingResponse.respondedAt && (
+                <p className="text-xs text-green-600 dark:text-green-400">
+                  {existingResponse.responderName ? `${existingResponse.responderName} • ` : ""}
+                  {formatDateTimeArabic(existingResponse.respondedAt)}
+                </p>
+              )}
             </div>
-          </div>
+          )}
+
+          {hasRequiresResponse && (
+            <div>
+              <Label className="mb-3 block">رد سريع</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {responseOptions.map((option) => {
+                  const Icon = option.icon;
+                  return (
+                    <Button
+                      key={option.type}
+                      variant={selectedResponse === option.type ? "default" : "outline"}
+                      className="justify-start"
+                      onClick={() => setSelectedResponse(prev => prev === option.type ? null : option.type)}
+                      data-testid={`button-response-${option.type}`}
+                    >
+                      <Icon className="w-4 h-4 ml-2" />
+                      {option.label}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div>
-            <Label>رسالة إضافية (اختياري)</Label>
+            <Label className="mb-2 block">
+              {hasRequiresResponse ? "رد نصي (اختياري)" : "اكتب ردك"}
+            </Label>
             <Textarea
               value={responseMessage}
               onChange={(e) => setResponseMessage(e.target.value)}
-              placeholder="أضف تعليقاً..."
+              placeholder="اكتب ردك هنا..."
               rows={3}
-              className="mt-2"
+              className="mt-1"
               data-testid="input-response-message"
             />
           </div>
         </div>
 
         <DialogFooter className="mt-4 gap-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-response">
             إلغاء
           </Button>
-          <Button onClick={handleRespond} disabled={!selectedResponse} data-testid="button-submit-response">
+          <Button onClick={handleRespond} disabled={!canSubmit} data-testid="button-submit-response">
             <Send className="w-4 h-4 ml-2" />
             إرسال الرد
           </Button>
