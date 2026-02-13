@@ -16,6 +16,10 @@ import {
   Paperclip,
   Trash2,
   ExternalLink,
+  Shield,
+  Swords,
+  FileText,
+  AlertTriangle,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -70,9 +74,12 @@ import {
   CaseStageLabels,
   CaseType, 
   Priority,
-  Department
+  Department,
+  CaseClassification,
+  CaseClassificationLabels,
+  getStageLabel,
 } from "@shared/schema";
-import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType, Attachment } from "@shared/schema";
+import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { sendCaseReminder } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
@@ -229,6 +236,7 @@ export default function CasesPage() {
     message: "",
   });
 
+  const [classificationFilter, setClassificationFilter] = useState<string>("all");
   const [formData, setFormData] = useState({
     clientId: "",
     caseType: "عام" as CaseTypeValue,
@@ -239,6 +247,12 @@ export default function CasesPage() {
     courtName: "",
     courtCaseNumber: "",
     opponentName: "",
+    caseClassification: "" as CaseClassificationValue | "",
+    previousHearingsCount: 0,
+    currentSituation: "",
+    responseDeadline: "",
+    nextHearingDate: "",
+    nextHearingTime: "",
   });
 
   const [assignData, setAssignData] = useState({
@@ -257,13 +271,23 @@ export default function CasesPage() {
       courtName: "",
       courtCaseNumber: "",
       opponentName: "",
+      caseClassification: "",
+      previousHearingsCount: 0,
+      currentSituation: "",
+      responseDeadline: "",
+      nextHearingDate: "",
+      nextHearingTime: "",
     });
   };
 
-  const handleAddCase = () => {
+  const handleAddCase = async () => {
     if (!user) return;
+    if (!formData.caseClassification) {
+      toast({ title: "يرجى اختيار تصنيف القضية", variant: "destructive" });
+      return;
+    }
     
-    addCase({
+    await addCase({
       clientId: formData.clientId || "",
       caseType: formData.caseType,
       caseTypeOther: formData.caseTypeOther,
@@ -273,9 +297,16 @@ export default function CasesPage() {
       courtName: formData.courtName,
       courtCaseNumber: formData.courtCaseNumber,
       opponentName: formData.opponentName,
-    }, user.id, user.name);
+      caseClassification: formData.caseClassification as CaseClassificationValue,
+      previousHearingsCount: formData.previousHearingsCount,
+      currentSituation: formData.currentSituation,
+      responseDeadline: formData.responseDeadline || null,
+      nextHearingDate: formData.nextHearingDate || null,
+      nextHearingTime: formData.nextHearingTime || null,
+    } as any, user.id, user.name);
     
-    toast({ title: "تم إضافة القضية بنجاح" });
+    const classLabel = CaseClassificationLabels[formData.caseClassification as CaseClassificationValue] || "";
+    toast({ title: `تم إضافة القضية بنجاح (${classLabel})` });
     setShowAddDialog(false);
     resetForm();
   };
@@ -322,9 +353,10 @@ export default function CasesPage() {
         (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesStatus = statusFilter === "all" || c.status === statusFilter;
       const matchesType = typeFilter === "all" || c.caseType === typeFilter;
-      return matchesSearch && matchesStatus && matchesType;
+      const matchesClassification = classificationFilter === "all" || c.caseClassification === classificationFilter;
+      return matchesSearch && matchesStatus && matchesType && matchesClassification;
     });
-  }, [cases, searchQuery, statusFilter, typeFilter, getClientName]);
+  }, [cases, searchQuery, statusFilter, typeFilter, classificationFilter, getClientName]);
 
   const openAssignDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
@@ -445,6 +477,17 @@ export default function CasesPage() {
                 ))}
               </SelectContent>
             </Select>
+            <Select value={classificationFilter} onValueChange={setClassificationFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-classification-filter">
+                <SelectValue placeholder="التصنيف" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">جميع التصنيفات</SelectItem>
+                {Object.entries(CaseClassificationLabels).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </CardHeader>
         <CardContent>
@@ -453,6 +496,7 @@ export default function CasesPage() {
               <TableRow>
                 <TableHead className="text-right">رقم القضية</TableHead>
                 <TableHead className="text-right">العميل</TableHead>
+                <TableHead className="text-right">التصنيف</TableHead>
                 <TableHead className="text-right">النوع</TableHead>
                 <TableHead className="text-right">المرحلة</TableHead>
                 <TableHead className="text-right">المحامي المسؤول</TableHead>
@@ -467,11 +511,22 @@ export default function CasesPage() {
                   <TableCell className="font-medium">{c.caseNumber}</TableCell>
                   <TableCell>{getClientName(c.clientId)}</TableCell>
                   <TableCell>
+                    <Badge variant="outline" className={
+                      c.caseClassification === CaseClassification.DEFENDANT
+                        ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
+                        : c.caseClassification === CaseClassification.PLAINTIFF_EXISTING
+                        ? "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
+                        : ""
+                    }>
+                      {CaseClassificationLabels[c.caseClassification as CaseClassificationValue] || "مدعي - جديدة"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
                     <Badge variant="outline">{c.caseType === "أخرى" ? (c.caseTypeOther || "أخرى") : c.caseType}</Badge>
                   </TableCell>
                   <TableCell>
                     <Badge className="bg-accent/20 text-accent border-accent/30">
-                      {c.currentStage ? CaseStageLabels[c.currentStage] || c.currentStage : CaseStatusLabels[c.status]}
+                      {c.currentStage ? getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue) : CaseStatusLabels[c.status]}
                     </Badge>
                   </TableCell>
                   <TableCell>{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
@@ -551,116 +606,231 @@ export default function CasesPage() {
       </Card>
 
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>إضافة قضية جديدة</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>العميل</Label>
-              <ClientAutocomplete
-                value={formData.clientId}
-                onChange={(clientId) => setFormData({ ...formData, clientId })}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>نوع القضية</Label>
-                <Select
-                  value={formData.caseType}
-                  onValueChange={(value: CaseTypeValue) => setFormData({ ...formData, caseType: value, caseTypeOther: "" })}
+              <Label className="text-sm font-medium mb-2 block">تصنيف القضية</Label>
+              <div className="grid grid-cols-3 gap-3">
+                <button
+                  type="button"
+                  data-testid="classification-plaintiff-new"
+                  onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_NEW, previousHearingsCount: 0, currentSituation: "", responseDeadline: "" })}
+                  className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                    formData.caseClassification === CaseClassification.PLAINTIFF_NEW
+                      ? "border-[#D4AF37] bg-[#D4AF37]/10"
+                      : "border-border hover-elevate"
+                  }`}
                 >
-                  <SelectTrigger data-testid="select-case-type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.values(CaseType).map((type) => (
-                      <SelectItem key={type} value={type}>{type}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {formData.caseType === "أخرى" && (
-                  <Input
-                    data-testid="input-case-type-other"
-                    value={formData.caseTypeOther}
-                    onChange={(e) => setFormData({ ...formData, caseTypeOther: e.target.value })}
-                    placeholder="اكتب نوع القضية..."
-                    className="mt-2"
+                  <FileText className="h-6 w-6 text-[#345774]" />
+                  <span className="text-xs font-medium text-center">مدعي - قضية جديدة</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="classification-plaintiff-existing"
+                  onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_EXISTING, responseDeadline: "" })}
+                  className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                    formData.caseClassification === CaseClassification.PLAINTIFF_EXISTING
+                      ? "border-[#D4AF37] bg-[#D4AF37]/10"
+                      : "border-border hover-elevate"
+                  }`}
+                >
+                  <Shield className="h-6 w-6 text-blue-600" />
+                  <span className="text-xs font-medium text-center">مدعي - قضية مقيدة</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="classification-defendant"
+                  onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.DEFENDANT, previousHearingsCount: 0, currentSituation: "", priority: "عاجل" })}
+                  className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                    formData.caseClassification === CaseClassification.DEFENDANT
+                      ? "border-red-500 bg-red-500/10"
+                      : "border-border hover-elevate"
+                  }`}
+                >
+                  <Swords className="h-6 w-6 text-red-600" />
+                  <span className="text-xs font-medium text-center">مدعى عليه</span>
+                </button>
+              </div>
+            </div>
+
+            {formData.caseClassification === CaseClassification.DEFENDANT && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
+                <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
+                <span className="text-xs text-red-700 dark:text-red-400">سيتم إنشاء مذكرة جوابية عاجلة وإشعار فوري تلقائيًا</span>
+              </div>
+            )}
+
+            {formData.caseClassification && (
+              <>
+                <div>
+                  <Label>العميل</Label>
+                  <ClientAutocomplete
+                    value={formData.clientId}
+                    onChange={(clientId) => setFormData({ ...formData, clientId })}
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>نوع القضية</Label>
+                    <Select
+                      value={formData.caseType}
+                      onValueChange={(value: CaseTypeValue) => setFormData({ ...formData, caseType: value, caseTypeOther: "" })}
+                    >
+                      <SelectTrigger data-testid="select-case-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.values(CaseType).map((type) => (
+                          <SelectItem key={type} value={type}>{type}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {formData.caseType === "أخرى" && (
+                      <Input
+                        data-testid="input-case-type-other"
+                        value={formData.caseTypeOther}
+                        onChange={(e) => setFormData({ ...formData, caseTypeOther: e.target.value })}
+                        placeholder="اكتب نوع القضية..."
+                        className="mt-2"
+                      />
+                    )}
+                  </div>
+                  <div>
+                    <Label>الأولوية</Label>
+                    <Select
+                      value={formData.priority}
+                      onValueChange={(value: PriorityType) => setFormData({ ...formData, priority: value })}
+                    >
+                      <SelectTrigger data-testid="select-priority">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.values(Priority).map((p) => (
+                          <SelectItem key={p} value={p}>{p}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <Label>القسم</Label>
+                  <Select
+                    value={formData.departmentId}
+                    onValueChange={(value) => setFormData({ ...formData, departmentId: value, departmentOther: "" })}
+                  >
+                    <SelectTrigger data-testid="select-department">
+                      <SelectValue placeholder="اختر القسم" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departments.map((dept) => (
+                        <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
+                      ))}
+                      <SelectItem value="أخرى">أخرى</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {formData.departmentId === "أخرى" && (
+                    <Input
+                      data-testid="input-department-other"
+                      value={formData.departmentOther}
+                      onChange={(e) => setFormData({ ...formData, departmentOther: e.target.value })}
+                      placeholder="اكتب اسم القسم..."
+                      className="mt-2"
+                    />
+                  )}
+                </div>
+                <div>
+                  <Label>اسم المحكمة</Label>
+                  <Input
+                    data-testid="input-court-name"
+                    value={formData.courtName}
+                    onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
+                    placeholder="مثال: المحكمة التجارية بالرياض"
+                  />
+                </div>
+                <div>
+                  <Label>رقم القضية بالمحكمة</Label>
+                  <Input
+                    data-testid="input-court-case-number"
+                    value={formData.courtCaseNumber}
+                    onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label>اسم الخصم</Label>
+                  <Input
+                    data-testid="input-opponent-name"
+                    value={formData.opponentName}
+                    onChange={(e) => setFormData({ ...formData, opponentName: e.target.value })}
+                  />
+                </div>
+
+                {formData.caseClassification === CaseClassification.PLAINTIFF_EXISTING && (
+                  <>
+                    <div>
+                      <Label>عدد الجلسات السابقة</Label>
+                      <Input
+                        data-testid="input-previous-hearings"
+                        type="number"
+                        min={0}
+                        value={formData.previousHearingsCount}
+                        onChange={(e) => setFormData({ ...formData, previousHearingsCount: parseInt(e.target.value) || 0 })}
+                      />
+                    </div>
+                    <div>
+                      <Label>الوضع الحالي للقضية</Label>
+                      <Textarea
+                        data-testid="input-current-situation"
+                        value={formData.currentSituation}
+                        onChange={(e) => setFormData({ ...formData, currentSituation: e.target.value })}
+                        placeholder="وصف موجز للوضع الحالي..."
+                        rows={2}
+                      />
+                    </div>
+                  </>
                 )}
-              </div>
-              <div>
-                <Label>الأولوية</Label>
-                <Select
-                  value={formData.priority}
-                  onValueChange={(value: PriorityType) => setFormData({ ...formData, priority: value })}
-                >
-                  <SelectTrigger data-testid="select-priority">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.values(Priority).map((p) => (
-                      <SelectItem key={p} value={p}>{p}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div>
-              <Label>القسم</Label>
-              <Select
-                value={formData.departmentId}
-                onValueChange={(value) => setFormData({ ...formData, departmentId: value, departmentOther: "" })}
-              >
-                <SelectTrigger data-testid="select-department">
-                  <SelectValue placeholder="اختر القسم" />
-                </SelectTrigger>
-                <SelectContent>
-                  {departments.map((dept) => (
-                    <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
-                  ))}
-                  <SelectItem value="أخرى">أخرى</SelectItem>
-                </SelectContent>
-              </Select>
-              {formData.departmentId === "أخرى" && (
-                <Input
-                  data-testid="input-department-other"
-                  value={formData.departmentOther}
-                  onChange={(e) => setFormData({ ...formData, departmentOther: e.target.value })}
-                  placeholder="اكتب اسم القسم..."
-                  className="mt-2"
-                />
-              )}
-            </div>
-            <div>
-              <Label>اسم المحكمة</Label>
-              <Input
-                data-testid="input-court-name"
-                value={formData.courtName}
-                onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
-                placeholder="مثال: المحكمة التجارية بالرياض"
-              />
-            </div>
-            <div>
-              <Label>رقم القضية بالمحكمة</Label>
-              <Input
-                data-testid="input-court-case-number"
-                value={formData.courtCaseNumber}
-                onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label>اسم الخصم</Label>
-              <Input
-                data-testid="input-opponent-name"
-                value={formData.opponentName}
-                onChange={(e) => setFormData({ ...formData, opponentName: e.target.value })}
-              />
-            </div>
+
+                {formData.caseClassification === CaseClassification.DEFENDANT && (
+                  <>
+                    <div>
+                      <Label>مهلة الرد (تاريخ)</Label>
+                      <Input
+                        data-testid="input-response-deadline"
+                        type="date"
+                        value={formData.responseDeadline}
+                        onChange={(e) => setFormData({ ...formData, responseDeadline: e.target.value })}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label>تاريخ الجلسة القادمة (اختياري)</Label>
+                        <Input
+                          data-testid="input-next-hearing-date"
+                          type="date"
+                          value={formData.nextHearingDate}
+                          onChange={(e) => setFormData({ ...formData, nextHearingDate: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <Label>وقت الجلسة (اختياري)</Label>
+                        <Input
+                          data-testid="input-next-hearing-time"
+                          type="time"
+                          value={formData.nextHearingTime}
+                          onChange={(e) => setFormData({ ...formData, nextHearingTime: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddDialog(false)}>إلغاء</Button>
-            <Button data-testid="button-submit-case" onClick={handleAddCase}>
+            <Button data-testid="button-submit-case" onClick={handleAddCase} disabled={!formData.caseClassification}>
               إضافة القضية
             </Button>
           </DialogFooter>
@@ -762,6 +932,7 @@ export default function CasesPage() {
                 <CaseProgressBar
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
+                  caseClassification={selectedCase.caseClassification as CaseClassificationValue}
                   onMoveToNext={async (notes) => {
                     if (user) {
                       const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role);

@@ -1,6 +1,6 @@
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CaseStagesOrder, CaseStageLabels, type CaseStageValue, canMoveToPreviousStage, type UserRoleType } from "@shared/schema";
+import { CaseStagesOrder, CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +21,7 @@ interface CaseProgressBarProps {
   onMoveToPrevious: (notes: string) => void;
   userRole: UserRoleType;
   disabled?: boolean;
+  caseClassification?: CaseClassificationValue;
 }
 
 export function CaseProgressBar({
@@ -29,14 +30,18 @@ export function CaseProgressBar({
   onMoveToPrevious,
   userRole,
   disabled = false,
+  caseClassification,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
   const legacyStageMap: Record<string, CaseStageValue> = {
     "رفع_للدائرة": "تم_الرفع_للدائرة" as CaseStageValue,
   };
   const normalizedStage = legacyStageMap[currentStage] || currentStage;
-  const currentIndex = CaseStagesOrder.indexOf(normalizedStage);
-  const canGoNext = currentIndex < CaseStagesOrder.length - 1 && !disabled;
+  const effectiveClassification = caseClassification || "مدعي_قضية_جديدة";
+  const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue);
+  const rawIndex = stagesOrder.indexOf(normalizedStage);
+  const currentIndex = rawIndex >= 0 ? rawIndex : 0;
+  const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;
   const canGoPrev = currentIndex > 0 && canMoveToPreviousStage(userRole) && !disabled;
 
   const getStageStatus = (stageIndex: number) => {
@@ -58,7 +63,7 @@ export function CaseProgressBar({
   return (
     <div className="w-full space-y-4">
       <div className="flex items-center justify-between gap-2 overflow-x-auto pb-2">
-        {CaseStagesOrder.map((stage, index) => {
+        {stagesOrder.map((stage, index) => {
           const status = getStageStatus(index);
           return (
             <div key={stage} className="flex items-center flex-1 min-w-0">
@@ -88,10 +93,10 @@ export function CaseProgressBar({
                       : "text-muted-foreground"
                   }`}
                 >
-                  {CaseStageLabels[stage]}
+                  {getStageLabel(stage, effectiveClassification as CaseClassificationValue)}
                 </span>
               </div>
-              {index < CaseStagesOrder.length - 1 && (
+              {index < stagesOrder.length - 1 && (
                 <div
                   className={`h-1 flex-1 mx-1 rounded ${
                     index < currentIndex
@@ -157,7 +162,7 @@ export function CaseProgressBar({
                 <AlertDialogTitle>نقل للمرحلة التالية</AlertDialogTitle>
                 <AlertDialogDescription>
                   هل أنت متأكد من نقل القضية للمرحلة التالية:{" "}
-                  <strong>{CaseStageLabels[CaseStagesOrder[currentIndex + 1]]}</strong>؟
+                  <strong>{getStageLabel(stagesOrder[currentIndex + 1], effectiveClassification as CaseClassificationValue)}</strong>؟
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <Textarea

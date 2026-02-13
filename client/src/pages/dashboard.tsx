@@ -13,8 +13,11 @@ import {
   CalendarPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCardWidget, ListWidget, QuickActionsWidget, widgetIcons, widgetVariants } from "@/components/dashboard-widgets";
 import { useCases } from "@/lib/cases-context";
+import { CaseClassification, CaseClassificationLabels } from "@shared/schema";
+import type { CaseClassificationValue } from "@shared/schema";
 import { useConsultations } from "@/lib/consultations-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useClients } from "@/lib/clients-context";
@@ -97,6 +100,13 @@ export default function DashboardPage() {
   const upcomingHearings = useMemo(() => {
     return getUpcomingHearings().slice(0, 5);
   }, [getUpcomingHearings]);
+
+  const classificationStats = useMemo(() => {
+    const plaintiffNew = cases.filter(c => (c.caseClassification || CaseClassification.PLAINTIFF_NEW) === CaseClassification.PLAINTIFF_NEW).length;
+    const plaintiffExisting = cases.filter(c => c.caseClassification === CaseClassification.PLAINTIFF_EXISTING).length;
+    const defendant = cases.filter(c => c.caseClassification === CaseClassification.DEFENDANT).length;
+    return { plaintiffNew, plaintiffExisting, defendant, total: cases.length };
+  }, [cases]);
 
   const recentCases = useMemo(() => {
     return [...cases]
@@ -250,6 +260,30 @@ export default function DashboardPage() {
           );
         })}
       </div>
+
+      {cases.length > 0 && (
+        <Card data-testid="widget-classification-stats">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-sm font-medium">القضايا حسب التصنيف</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="space-y-1">
+                <p className="text-2xl font-bold text-[#345774]">{classificationStats.plaintiffNew}</p>
+                <p className="text-xs text-muted-foreground">مدعي - جديدة</p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-2xl font-bold text-blue-600">{classificationStats.plaintiffExisting}</p>
+                <p className="text-xs text-muted-foreground">مدعي - مقيدة</p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-2xl font-bold text-red-600">{classificationStats.defendant}</p>
+                <p className="text-xs text-muted-foreground">مدعى عليه</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {listWidgets.map(widget => {

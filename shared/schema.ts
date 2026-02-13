@@ -76,6 +76,10 @@ export const lawCases = pgTable("law_cases", {
   lastHearingDate: varchar("last_hearing_date", { length: 50 }),
   nextHearingDate: varchar("next_hearing_date", { length: 50 }),
   activeMemoCount: integer("active_memo_count").default(0),
+  caseClassification: varchar("case_classification", { length: 50 }).notNull().default("مدعي_قضية_جديدة"),
+  previousHearingsCount: integer("previous_hearings_count").default(0),
+  currentSituation: text("current_situation").default(""),
+  responseDeadline: varchar("response_deadline", { length: 50 }),
 });
 
 export const consultations = pgTable("consultations", {
@@ -314,6 +318,21 @@ export const CaseType = {
 
 export type CaseTypeValue = typeof CaseType[keyof typeof CaseType];
 
+// ==================== تصنيف القضية ====================
+export const CaseClassification = {
+  PLAINTIFF_NEW: "مدعي_قضية_جديدة",
+  PLAINTIFF_EXISTING: "مدعي_قضية_مقيدة",
+  DEFENDANT: "مدعى_عليه",
+} as const;
+
+export type CaseClassificationValue = typeof CaseClassification[keyof typeof CaseClassification];
+
+export const CaseClassificationLabels: Record<CaseClassificationValue, string> = {
+  "مدعي_قضية_جديدة": "مدعي - قضية جديدة (نرفعها نحن)",
+  "مدعي_قضية_مقيدة": "مدعي - قضية مقيدة (مرفوعة مسبقاً)",
+  "مدعى_عليه": "مدعى عليه",
+};
+
 // ==================== حالات القضايا ====================
 export const CaseStatus = {
   RECEIVED: "استلام",
@@ -376,6 +395,78 @@ export const CaseStagesOrder: CaseStageValue[] = [
   "تم_الرفع_للدائرة",
   "مقفلة",
 ];
+
+// ==================== مراحل القضية حسب التصنيف ====================
+
+export const PlaintiffNewStages: CaseStageValue[] = [
+  "استلام",
+  "استكمال_البيانات",
+  "دراسة",
+  "تحرير_المذكرة",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "تم_الرفع_للدائرة",
+];
+
+export const PlaintiffExistingStages: CaseStageValue[] = [
+  "استلام",
+  "استكمال_البيانات",
+  "دراسة",
+  "تحرير_المذكرة",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "تم_الرفع_للدائرة",
+];
+
+export const DefendantStages: CaseStageValue[] = [
+  "استلام",
+  "استكمال_البيانات",
+  "دراسة",
+  "تحرير_المذكرة",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "تم_الرفع_للدائرة",
+];
+
+export function getStagesForClassification(classification: CaseClassificationValue): CaseStageValue[] {
+  switch (classification) {
+    case "مدعي_قضية_جديدة": return PlaintiffNewStages;
+    case "مدعي_قضية_مقيدة": return PlaintiffExistingStages;
+    case "مدعى_عليه": return DefendantStages;
+    default: return PlaintiffNewStages;
+  }
+}
+
+export function getStageLabel(stage: CaseStageValue, classification?: CaseClassificationValue): string {
+  const commonLabels: Partial<Record<CaseStageValue, string>> = {
+    "استلام": "استلام",
+    "استكمال_البيانات": "استكمال البيانات",
+    "دراسة": "دراسة",
+    "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
+    "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
+    "مقفلة": "مقفلة",
+  };
+
+  if (commonLabels[stage]) return commonLabels[stage]!;
+
+  if (stage === "تحرير_المذكرة") {
+    switch (classification) {
+      case "مدعي_قضية_جديدة": return "تحرير صحيفة الدعوى";
+      case "مدعي_قضية_مقيدة": return "تحرير المذكرة";
+      case "مدعى_عليه": return "تحرير المذكرة الجوابية";
+    }
+  }
+
+  if (stage === "تم_الرفع_للدائرة") {
+    switch (classification) {
+      case "مدعي_قضية_جديدة": return "رفع الدعوى للمحكمة";
+      case "مدعي_قضية_مقيدة": return "تقديم المذكرة للمحكمة";
+      case "مدعى_عليه": return "تقديم المذكرة الجوابية للمحكمة";
+    }
+  }
+
+  return CaseStageLabels[stage] || stage;
+}
 
 // سجل انتقال المراحل
 export interface CaseStageTransition {
@@ -675,6 +766,10 @@ export interface LawCase {
   lastHearingDate: string | null;
   nextHearingDate: string | null;
   activeMemoCount: number;
+  caseClassification: CaseClassificationValue;
+  previousHearingsCount: number;
+  currentSituation: string;
+  responseDeadline: string | null;
   najizNumber: string;
   createdBy: string;
   createdAt: string;
@@ -954,6 +1049,10 @@ export const insertCaseSchema = z.object({
   opponentNotes: z.string().optional().default(""),
   whatsappGroupLink: z.string().optional().default(""),
   googleDriveFolderId: z.string().optional().default(""),
+  caseClassification: z.enum(["مدعي_قضية_جديدة", "مدعي_قضية_مقيدة", "مدعى_عليه"]).default("مدعي_قضية_جديدة"),
+  previousHearingsCount: z.number().optional().default(0),
+  currentSituation: z.string().optional().default(""),
+  responseDeadline: z.string().nullable().optional(),
 });
 
 export type InsertCase = z.infer<typeof insertCaseSchema>;

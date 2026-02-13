@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment, UserRoleType } from "@shared/schema";
-import { CaseStatus, Priority, CaseStage, CaseStagesOrder } from "@shared/schema";
+import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
+import { CaseStatus, Priority, CaseStage, CaseStagesOrder, CaseClassification } from "@shared/schema";
 import { apiRequest } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
@@ -53,6 +53,18 @@ const migrateCase = (c: LawCase): LawCase => {
   }
   if (!c.circuitNumber) {
     c.circuitNumber = "";
+  }
+  if (!c.caseClassification) {
+    c.caseClassification = CaseClassification.PLAINTIFF_NEW;
+  }
+  if (c.previousHearingsCount === undefined) {
+    c.previousHearingsCount = 0;
+  }
+  if (!c.currentSituation) {
+    c.currentSituation = "";
+  }
+  if (c.responseDeadline === undefined) {
+    c.responseDeadline = null;
   }
   return c;
 };
@@ -119,6 +131,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       reviewDecision: null,
       reviewActionTaken: null,
       priority: data.priority || Priority.MEDIUM,
+      caseClassification: data.caseClassification || CaseClassification.PLAINTIFF_NEW,
+      previousHearingsCount: data.previousHearingsCount || 0,
+      currentSituation: data.currentSituation || "",
+      responseDeadline: data.responseDeadline || null,
       createdBy,
     };
     
