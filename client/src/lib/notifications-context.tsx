@@ -596,6 +596,33 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
             });
           } catch {}
         }
+      } else if (notification && notification.senderId && notification.senderId !== user?.id) {
+        try {
+          const responseLabel = responseType === "approve" ? "موافقة" 
+            : responseType === "reject" ? "رفض"
+            : responseType === "in_progress" ? "قيد التنفيذ"
+            : "رد";
+          await apiRequest("POST", "/api/notifications", {
+            type: NotificationType.GENERAL_ALERT,
+            priority: NotificationPriority.MEDIUM,
+            status: NotificationStatus.SENT,
+            title: `رد على إشعارك: ${notification.title || ""}`,
+            message: `قام ${user?.name || "مستخدم"} بالرد (${responseLabel}) على إشعارك "${notification.title || ""}". ${message ? "الرد: " + message : ""}`,
+            senderId: user?.id || "system",
+            senderName: user?.name || "النظام",
+            recipientId: notification.senderId,
+            relatedType: notification.relatedType || null,
+            relatedId: notification.relatedId || null,
+            isRead: false,
+            readAt: null,
+            response: null,
+            requiresResponse: false,
+            scheduledAt: null,
+            escalationLevel: 0,
+            escalatedTo: null,
+            autoEscalateAfterHours: 0,
+          });
+        } catch {}
       }
 
       await refetchNotifications();
