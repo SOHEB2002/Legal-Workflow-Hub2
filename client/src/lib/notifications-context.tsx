@@ -538,6 +538,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const respondToNotification = useCallback(async (id: string, responseType: ResponseTypeValue | string, message: string) => {
     try {
+      const notification = notifications.find(n => n.id === id);
       await apiRequest("PATCH", `/api/notifications/${id}`, {
         response: {
           type: responseType,
@@ -548,11 +549,60 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         },
         status: NotificationStatus.RESPONDED,
       });
+
+      if (notification && notification.title?.includes("طلب تحويل") && notification.relatedId) {
+        const isCase = notification.title.includes("قضية");
+        const toDeptMatch = notification.title.match(/إلى (.+)$/);
+        const toDeptName = toDeptMatch ? toDeptMatch[1] : "";
+        const deptIdMatch = notification.message?.match(/\[DEPT_ID:(.+?)\]/);
+        const toDeptId = deptIdMatch ? deptIdMatch[1] : "";
+        const entityName = isCase ? "القضية" : "الاستشارة";
+        const relatedType = isCase ? "case" : "consultation";
+        
+        if (responseType === "approve" && toDeptId) {
+          try {
+            const endpoint = isCase ? `/api/cases/${notification.relatedId}` : `/api/consultations/${notification.relatedId}`;
+            await apiRequest("PATCH", endpoint, { departmentId: toDeptId });
+          } catch (err) {
+            console.error("Failed to transfer entity:", err);
+          }
+        }
+
+        const senderId = notification.senderId;
+        if (senderId) {
+          const isApproval = responseType === "approve";
+          try {
+            await apiRequest("POST", "/api/notifications", {
+              type: NotificationType.GENERAL_ALERT,
+              priority: NotificationPriority.MEDIUM,
+              status: NotificationStatus.SENT,
+              title: isApproval ? `تمت الموافقة على طلب التحويل` : `تم رفض طلب التحويل`,
+              message: isApproval
+                ? `تمت الموافقة على طلب تحويل ${entityName} إلى ${toDeptName}. ${message ? "ملاحظة: " + message : ""}`
+                : `تم رفض طلب تحويل ${entityName} إلى ${toDeptName}. ${message ? "السبب: " + message : ""}`,
+              senderId: user?.id || "system",
+              senderName: user?.name || "النظام",
+              recipientId: senderId,
+              relatedType,
+              relatedId: notification.relatedId,
+              isRead: false,
+              readAt: null,
+              response: null,
+              requiresResponse: false,
+              scheduledAt: null,
+              escalationLevel: 0,
+              escalatedTo: null,
+              autoEscalateAfterHours: 0,
+            });
+          } catch {}
+        }
+      }
+
       await refetchNotifications();
     } catch (err) {
       console.error("Failed to respond to notification:", err);
     }
-  }, [refetchNotifications, user]);
+  }, [refetchNotifications, user, notifications]);
 
   const getNotificationResponses = useCallback((senderId: string): Notification[] => {
     return notifications.filter(n => n.senderId === senderId && n.response !== null);

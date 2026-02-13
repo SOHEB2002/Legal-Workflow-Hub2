@@ -246,3 +246,87 @@ export async function sendConsultationReminder(
     consultationId,
   );
 }
+
+export async function requestCaseTransfer(
+  caseId: string,
+  caseNumber: string,
+  fromDepartmentName: string,
+  toDepartmentId: string,
+  toDepartmentName: string,
+  reason: string,
+) {
+  const users = await getUsers();
+  const currentUser = getCurrentUser();
+  const recipients = [
+    ...findUsersByRole(users, "branch_manager"),
+    ...findUsersByRole(users, "cases_review_head"),
+  ];
+  for (const recipient of recipients) {
+    try {
+      await apiRequest("POST", "/api/notifications", {
+        type: NotificationType.GENERAL_ALERT,
+        priority: NotificationPriority.HIGH,
+        status: NotificationStatus.SENT,
+        title: `طلب تحويل قضية ${caseNumber} إلى ${toDepartmentName}`,
+        message: `طلب تحويل القضية رقم ${caseNumber} من ${fromDepartmentName} إلى ${toDepartmentName}.\nالسبب: ${reason}\nمقدم الطلب: ${currentUser?.name || "غير معروف"}\n[DEPT_ID:${toDepartmentId}]`,
+        senderId: currentUser?.id || "system",
+        senderName: currentUser?.name || "النظام",
+        recipientId: recipient.id,
+        relatedType: "case",
+        relatedId: caseId,
+        isRead: false,
+        readAt: null,
+        response: null,
+        requiresResponse: true,
+        scheduledAt: null,
+        escalationLevel: 0,
+        escalatedTo: null,
+        autoEscalateAfterHours: 24,
+      });
+    } catch (err) {
+      console.error("Failed to send transfer request:", err);
+    }
+  }
+}
+
+export async function requestConsultationTransfer(
+  consultationId: string,
+  consultationNumber: string,
+  fromDepartmentName: string,
+  toDepartmentId: string,
+  toDepartmentName: string,
+  reason: string,
+) {
+  const users = await getUsers();
+  const currentUser = getCurrentUser();
+  const recipients = [
+    ...findUsersByRole(users, "branch_manager"),
+    ...findUsersByRole(users, "cases_review_head"),
+  ];
+  for (const recipient of recipients) {
+    try {
+      await apiRequest("POST", "/api/notifications", {
+        type: NotificationType.GENERAL_ALERT,
+        priority: NotificationPriority.HIGH,
+        status: NotificationStatus.SENT,
+        title: `طلب تحويل استشارة ${consultationNumber} إلى ${toDepartmentName}`,
+        message: `طلب تحويل الاستشارة رقم ${consultationNumber} من ${fromDepartmentName} إلى ${toDepartmentName}.\nالسبب: ${reason}\nمقدم الطلب: ${currentUser?.name || "غير معروف"}\n[DEPT_ID:${toDepartmentId}]`,
+        senderId: currentUser?.id || "system",
+        senderName: currentUser?.name || "النظام",
+        recipientId: recipient.id,
+        relatedType: "consultation",
+        relatedId: consultationId,
+        isRead: false,
+        readAt: null,
+        response: null,
+        requiresResponse: true,
+        scheduledAt: null,
+        escalationLevel: 0,
+        escalatedTo: null,
+        autoEscalateAfterHours: 24,
+      });
+    } catch (err) {
+      console.error("Failed to send consultation transfer request:", err);
+    }
+  }
+}

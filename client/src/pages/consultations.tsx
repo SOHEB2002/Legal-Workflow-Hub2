@@ -34,7 +34,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus } from "lucide-react";
+import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -47,7 +47,7 @@ import { ConsultationStatus, ConsultationStatusLabels, CaseType, DeliveryType, D
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 import { DialogFooter } from "@/components/ui/dialog";
-import { sendConsultationReminder } from "@/lib/notification-triggers";
+import { sendConsultationReminder, requestConsultationTransfer } from "@/lib/notification-triggers";
 
 function getStatusColor(status: ConsultationStatusValue) {
   switch (status) {
@@ -132,6 +132,11 @@ export default function ConsultationsPage() {
   };
 
   const consultationLawyers = users.filter(u => u.canBeAssignedConsultations);
+  const isDeptHead = user?.role === "department_head";
+
+  const [showTransferDialog, setShowTransferDialog] = useState(false);
+  const [transferConsultationId, setTransferConsultationId] = useState<string | null>(null);
+  const [transferData, setTransferData] = useState({ toDepartmentId: "", reason: "" });
 
   const canAssignConsultation = (c: Consultation) =>
     c.status === ConsultationStatus.RECEIVED &&
@@ -140,8 +145,33 @@ export default function ConsultationsPage() {
 
   const openAssignDialog = (c: Consultation) => {
     setAssignConsultationId(c.id);
-    setAssignData({ lawyerId: "", departmentId: c.departmentId || "" });
+    setAssignData({ lawyerId: "", departmentId: isDeptHead ? (user?.departmentId || "") : (c.departmentId || "") });
     setShowAssignDialog(true);
+  };
+
+  const openTransferDialog = (c: Consultation) => {
+    setTransferConsultationId(c.id);
+    setTransferData({ toDepartmentId: "", reason: "" });
+    setShowTransferDialog(true);
+  };
+
+  const handleTransferRequest = async () => {
+    const consultation = consultations.find(c => c.id === transferConsultationId);
+    if (!consultation || !transferData.toDepartmentId || !transferData.reason.trim()) return;
+    const fromDeptName = getDepartmentName(consultation.departmentId || user?.departmentId || "");
+    const toDeptName = getDepartmentName(transferData.toDepartmentId);
+    try {
+      await requestConsultationTransfer(
+        consultation.id, consultation.consultationNumber,
+        fromDeptName, transferData.toDepartmentId, toDeptName,
+        transferData.reason,
+      );
+      toast({ title: "تم إرسال طلب التحويل بنجاح", description: "سيتم إشعارك عند الموافقة أو الرفض" });
+    } catch {
+      toast({ title: "فشل إرسال طلب التحويل", variant: "destructive" });
+    }
+    setShowTransferDialog(false);
+    setTransferConsultationId(null);
   };
 
   const handleAssignConsultation = () => {
@@ -417,6 +447,15 @@ export default function ConsultationsPage() {
                               تسليم الاستشارة
                             </DropdownMenuItem>
                           )}
+                          {isDeptHead && consultation.departmentId === user?.departmentId && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem data-testid={`button-transfer-${consultation.id}`} onClick={() => openTransferDialog(consultation)}>
+                                <ArrowLeftRight className="w-4 h-4 ml-2" />
+                                طلب تحويل لقسم آخر
+                              </DropdownMenuItem>
+                            </>
+                          )}
                           {permissions.canSendReminders && consultation.assignedTo && (
                             <>
                               <DropdownMenuSeparator />
@@ -578,19 +617,27 @@ export default function ConsultationsPage() {
           <div className="space-y-4">
             <div>
               <Label>القسم</Label>
-              <Select
-                value={assignData.departmentId}
-                onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "" })}
-              >
-                <SelectTrigger data-testid="select-assign-department">
-                  <SelectValue placeholder="اختر القسم" />
-                </SelectTrigger>
-                <SelectContent>
-                  {departments.map((dept) => (
-                    <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {isDeptHead ? (
+                <Input
+                  value={getDepartmentName(user?.departmentId || "")}
+                  disabled
+                  data-testid="select-assign-department"
+                />
+              ) : (
+                <Select
+                  value={assignData.departmentId}
+                  onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "" })}
+                >
+                  <SelectTrigger data-testid="select-assign-department">
+                    <SelectValue placeholder="اختر القسم" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {departments.map((dept) => (
+                      <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <div>
               <Label>المحامي المسؤول</Label>
@@ -618,6 +665,63 @@ export default function ConsultationsPage() {
             <Button onClick={handleAssignConsultation} disabled={!assignData.lawyerId || !assignData.departmentId} data-testid="button-confirm-assign">
               <UserPlus className="w-4 h-4 ml-2" />
               إسناد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showTransferDialog} onOpenChange={setShowTransferDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowLeftRight className="w-5 h-5" />
+              طلب تحويل الاستشارة لقسم آخر
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            سيتم إرسال طلب التحويل إلى مدير الفرع ورئيس لجنة المراجعة للموافقة عليه.
+          </p>
+          <div className="space-y-4">
+            <div>
+              <Label>القسم المراد التحويل إليه</Label>
+              <Select
+                value={transferData.toDepartmentId}
+                onValueChange={(value) => setTransferData({ ...transferData, toDepartmentId: value })}
+              >
+                <SelectTrigger data-testid="select-transfer-department">
+                  <SelectValue placeholder="اختر القسم" />
+                </SelectTrigger>
+                <SelectContent>
+                  {departments
+                    .filter(d => d.id !== user?.departmentId)
+                    .map((dept) => (
+                      <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>سبب التحويل</Label>
+              <Textarea
+                data-testid="input-transfer-reason"
+                placeholder="اكتب سبب طلب التحويل..."
+                value={transferData.reason}
+                onChange={(e) => setTransferData({ ...transferData, reason: e.target.value })}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTransferDialog(false)} data-testid="button-cancel-transfer">
+              إلغاء
+            </Button>
+            <Button
+              onClick={handleTransferRequest}
+              disabled={!transferData.toDepartmentId || !transferData.reason.trim()}
+              data-testid="button-submit-transfer"
+            >
+              <ArrowLeftRight className="w-4 h-4 ml-2" />
+              إرسال الطلب
             </Button>
           </DialogFooter>
         </DialogContent>
