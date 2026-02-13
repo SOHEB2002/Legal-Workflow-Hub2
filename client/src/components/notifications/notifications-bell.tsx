@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import { Bell, BellRing, Check, CheckCheck, Eye, Clock } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Bell, BellRing, Check, CheckCheck, Eye, Clock, MessageSquare, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -16,6 +16,7 @@ import { NotificationPriority, NotificationPriorityLabels, NotificationTypeLabel
 import type { Notification } from "@shared/schema";
 import { cn } from "@/lib/utils";
 import { formatRelativeArabic } from "@/lib/date-utils";
+import { useToast } from "@/hooks/use-toast";
 
 function getPriorityColor(priority: string): string {
   switch (priority) {
@@ -43,6 +44,19 @@ function getPriorityBorderColor(priority: string): string {
   }
 }
 
+function getPriorityIcon(priority: string) {
+  switch (priority) {
+    case NotificationPriority.URGENT:
+      return <AlertTriangle className="w-4 h-4 text-destructive" />;
+    case NotificationPriority.HIGH:
+      return <BellRing className="w-4 h-4 text-orange-500" />;
+    case NotificationPriority.MEDIUM:
+      return <Bell className="w-4 h-4 text-yellow-500" />;
+    default:
+      return <MessageSquare className="w-4 h-4 text-muted-foreground" />;
+  }
+}
+
 function formatTimeAgo(dateStr: string): string {
   return formatRelativeArabic(dateStr);
 }
@@ -61,34 +75,45 @@ function NotificationItem({ notification, onMarkAsRead }: NotificationItemProps)
         !notification.isRead && "bg-accent/20"
       )}
       onClick={() => !notification.isRead && onMarkAsRead(notification.id)}
+      data-testid={`notification-item-${notification.id}`}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <Badge variant="outline" className={cn("text-xs", getPriorityColor(notification.priority))}>
-              {NotificationPriorityLabels[notification.priority]}
-            </Badge>
-            <span className="text-xs text-muted-foreground">
-              {NotificationTypeLabels[notification.type]}
-            </span>
+        <div className="flex items-start gap-2 flex-1 min-w-0">
+          <div className="mt-0.5 shrink-0">
+            {getPriorityIcon(notification.priority)}
           </div>
-          <p className="font-medium text-sm truncate">{notification.title}</p>
-          <p className="text-xs text-muted-foreground truncate">{notification.message}</p>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              {formatTimeAgo(notification.createdAt)}
-            </span>
-            {notification.isRead && (
-              <CheckCheck className="w-3 h-3 text-green-500" />
-            )}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <Badge variant="outline" className={cn("text-xs", getPriorityColor(notification.priority))}>
+                {NotificationPriorityLabels[notification.priority]}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                {NotificationTypeLabels[notification.type]}
+              </span>
+            </div>
+            <p className="font-medium text-sm truncate">{notification.title}</p>
+            <p className="text-xs text-muted-foreground truncate mt-0.5">{notification.message}</p>
+            <div className="flex items-center gap-2 mt-1.5">
+              {notification.senderName && (
+                <span className="text-xs text-muted-foreground">
+                  من: {notification.senderName}
+                </span>
+              )}
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {formatTimeAgo(notification.createdAt)}
+              </span>
+              {notification.isRead && (
+                <CheckCheck className="w-3 h-3 text-green-500" />
+              )}
+            </div>
           </div>
         </div>
         {!notification.isRead && (
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6 shrink-0"
+            className="shrink-0"
             onClick={(e) => {
               e.stopPropagation();
               onMarkAsRead(notification.id);
@@ -115,9 +140,11 @@ export function NotificationsBell() {
     setHasNewNotifications,
     getUserPreferences
   } = useNotifications();
+  const { toast } = useToast();
   
   const [isOpen, setIsOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const lastToastNotifRef = useRef<string>("");
 
   const userId = user?.id || "";
   const notifications = getMyNotifications(userId).slice(0, 5);
@@ -125,17 +152,39 @@ export function NotificationsBell() {
   const urgentCount = getUrgentCount(userId);
   const preferences = getUserPreferences(userId);
 
+  const playNotificationSound = useCallback(() => {
+    try {
+      if (!audioRef.current) {
+        audioRef.current = new Audio("/notification-chime.wav");
+        audioRef.current.volume = 0.6;
+      }
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(() => {});
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    if (hasNewNotifications && preferences.enableSound && unreadCount > 0) {
-      try {
-        if (!audioRef.current) {
-          audioRef.current = new Audio("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2DhIOLk5KBfIJ8iI6Lf36IjI+Of4OHjI6Rf4aLjJGNfomKkI+Kf4eMjJCKgISLi5CPfoWLi4+RfoOKi5CRfYOJio+RfoOIio+Rf4OGio6Sf4OFiI2TfYWEho2Ue4eCho2WeoeCgYyYe4eAAIuag4d+f4qdiYN7foiei4R3foCcj4NzfIGakYNyfIGZlH9yfIGYln1yfYKXl3pyfYKWmXlyfYOVmnhzfoOUm3ZzfoOUnHVzgIOTnXNzgISTnnJzgIOSnW9zgYSTnW1zgYSSn2tzgYSSoGlzgoOSoWdzg4OQomVzg4OPopx0g4GPoZx1gn+Oopy1goB/jaBMgoB+jaFvg4B9jKJ1g4B8i6J7g4B8iqJ/gn98iaKDgn98iKKGgn98h6GJgn98hqCLgn98hZ+OgX98hZ6QgX99hJyTf35+hJqWfn5/g5iYfn6Ag5WbfH+Bg5Kdfn+Bgo+ffoGCgYyifoGCgIqkgoCCgIimgICCf4eogoF/f4W");
-        }
-        audioRef.current.play().catch(() => {});
-      } catch {}
+    if (hasNewNotifications && unreadCount > 0) {
+      if (preferences.enableSound) {
+        playNotificationSound();
+      }
+
+      const latestUnread = getMyNotifications(userId).find(n => !n.isRead);
+      if (latestUnread && latestUnread.id !== lastToastNotifRef.current) {
+        lastToastNotifRef.current = latestUnread.id;
+        const priorityLabel = NotificationPriorityLabels[latestUnread.priority] || "";
+        const isUrgent = latestUnread.priority === NotificationPriority.URGENT || latestUnread.priority === NotificationPriority.HIGH;
+        toast({
+          title: `${isUrgent ? "تنبيه! " : ""}إشعار جديد - ${priorityLabel}`,
+          description: latestUnread.title || latestUnread.message || "لديك إشعار جديد",
+          variant: isUrgent ? "destructive" : "default",
+          duration: isUrgent ? 8000 : 5000,
+        });
+      }
+      
       setHasNewNotifications(false);
     }
-  }, [hasNewNotifications, preferences.enableSound, unreadCount, setHasNewNotifications]);
+  }, [hasNewNotifications, preferences.enableSound, unreadCount, setHasNewNotifications, playNotificationSound, userId, getMyNotifications, toast]);
 
   if (!user) return null;
 
@@ -145,34 +194,49 @@ export function NotificationsBell() {
         <Button
           size="icon"
           variant="ghost"
-          className="relative"
+          className={cn(
+            "relative",
+            urgentCount > 0 && "animate-pulse"
+          )}
           data-testid="button-notifications-bell"
         >
           {hasNewNotifications || urgentCount > 0 ? (
-            <BellRing className={cn("w-5 h-5", urgentCount > 0 && "text-destructive animate-pulse")} />
+            <BellRing className={cn(
+              "w-5 h-5 transition-all",
+              urgentCount > 0 ? "text-destructive" : "text-accent"
+            )} />
           ) : (
             <Bell className="w-5 h-5" />
           )}
           {unreadCount > 0 && (
             <span
               className={cn(
-                "absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] text-[10px] font-bold rounded-full",
-                urgentCount > 0 ? "bg-destructive text-destructive-foreground animate-pulse" : "bg-accent text-accent-foreground"
+                "absolute -top-1 -right-1 flex items-center justify-center min-w-[20px] h-[20px] text-[10px] font-bold rounded-full border-2 border-background",
+                urgentCount > 0 ? "bg-destructive text-destructive-foreground" : "bg-accent text-accent-foreground"
               )}
+              data-testid="notification-count-badge"
             >
               {unreadCount > 99 ? "99+" : unreadCount}
             </span>
           )}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80 max-h-96 overflow-hidden" data-testid="notifications-dropdown">
-        <div className="flex items-center justify-between p-3 border-b">
-          <h3 className="font-semibold">الإشعارات</h3>
+      <DropdownMenuContent align="end" className="w-96 max-h-[28rem] overflow-hidden" data-testid="notifications-dropdown">
+        <div className="flex items-center justify-between p-3 border-b bg-muted/30">
+          <div className="flex items-center gap-2">
+            <Bell className="w-4 h-4 text-accent" />
+            <h3 className="font-semibold">الإشعارات</h3>
+            {unreadCount > 0 && (
+              <Badge variant="secondary" className="text-xs">
+                {unreadCount} جديد
+              </Badge>
+            )}
+          </div>
           {unreadCount > 0 && (
             <Button
               size="sm"
               variant="ghost"
-              className="text-xs h-7"
+              className="text-xs"
               onClick={() => markAllAsRead(userId)}
               data-testid="button-mark-all-read"
             >
@@ -182,11 +246,12 @@ export function NotificationsBell() {
           )}
         </div>
         
-        <div className="max-h-64 overflow-y-auto">
+        <div className="max-h-72 overflow-y-auto">
           {notifications.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground">
-              <Bell className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">لا توجد إشعارات</p>
+            <div className="p-8 text-center text-muted-foreground">
+              <Bell className="w-10 h-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm font-medium">لا توجد إشعارات</p>
+              <p className="text-xs mt-1">ستظهر الإشعارات الجديدة هنا</p>
             </div>
           ) : (
             <div className="divide-y">
@@ -203,7 +268,7 @@ export function NotificationsBell() {
         
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild className="justify-center cursor-pointer">
-          <Link href="/notifications" className="w-full text-center py-2" data-testid="link-view-all-notifications">
+          <Link href="/notifications" className="w-full text-center py-2 font-medium" data-testid="link-view-all-notifications">
             عرض جميع الإشعارات
           </Link>
         </DropdownMenuItem>
