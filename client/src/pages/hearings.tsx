@@ -131,6 +131,7 @@ export default function HearingsPage() {
     nextHearingDate: "",
     nextHearingTime: "",
     responseRequired: false,
+    caseId: "",
   });
 
   const [reportForm, setReportForm] = useState({
@@ -162,6 +163,7 @@ export default function HearingsPage() {
       nextHearingDate: "",
       nextHearingTime: "",
       responseRequired: false,
+      caseId: "",
     });
   };
 
@@ -191,12 +193,18 @@ export default function HearingsPage() {
 
   const handleSubmitResult = async () => {
     if (!resultDialogHearing || !resultForm.result) return;
+    const effectiveCaseId = resultDialogHearing.caseId || resultForm.caseId;
+    if (resultForm.responseRequired && !effectiveCaseId) {
+      toast({ title: "يجب اختيار القضية المرتبطة لإنشاء المذكرة", variant: "destructive" });
+      return;
+    }
     setSubmitting(true);
     try {
       const data: any = {
         result: resultForm.result,
         resultDetails: resultForm.resultDetails,
         userId: user?.id,
+        caseId: effectiveCaseId || undefined,
       };
       if (resultForm.result === HearingResult.JUDGMENT) {
         data.judgmentSide = resultForm.judgmentSide;
@@ -213,7 +221,10 @@ export default function HearingsPage() {
       const tasksMsg = res.createdTasks?.length
         ? `\nتم إنشاء ${res.createdTasks.length} مهمة تلقائياً`
         : "";
-      toast({ title: "تم تسجيل النتيجة بنجاح" + tasksMsg });
+      const memosMsg = res.createdMemos?.length
+        ? `\nتم إنشاء ${res.createdMemos.length} مذكرة تلقائياً`
+        : "";
+      toast({ title: "تم تسجيل النتيجة بنجاح" + tasksMsg + memosMsg });
       setResultDialogHearing(null);
       resetResultForm();
     } catch (e: any) {
@@ -706,6 +717,30 @@ export default function HearingsPage() {
               />
             </div>
 
+            {!resultDialogHearing?.caseId && (
+              <div>
+                <Label>القضية المرتبطة {resultForm.responseRequired && <span className="text-destructive">*</span>}</Label>
+                <Select
+                  value={resultForm.caseId}
+                  onValueChange={(value) => setResultForm({ ...resultForm, caseId: value })}
+                >
+                  <SelectTrigger data-testid="select-result-case">
+                    <SelectValue placeholder="اختر القضية" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">بدون قضية</SelectItem>
+                    {cases
+                      .filter((c) => c.status !== "مغلق")
+                      .map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.caseNumber} - {getClientName(c.clientId)}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {resultForm.result === HearingResult.POSTPONEMENT && (
               <Card className="p-4 space-y-3">
                 <p className="text-sm font-medium text-primary flex items-center gap-1">
@@ -745,6 +780,11 @@ export default function HearingsPage() {
                     مطلوب إعداد رد قبل الجلسة القادمة
                   </Label>
                 </div>
+                {resultForm.responseRequired && (
+                  <p className="text-xs text-muted-foreground">
+                    سيتم إنشاء مذكرة جوابية تلقائياً ومهمة إعداد الرد
+                  </p>
+                )}
               </Card>
             )}
 

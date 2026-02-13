@@ -1099,6 +1099,7 @@ export const hearingResultSchema = z.object({
   nextHearingTime: z.string().nullable().optional(),
   responseRequired: z.boolean().optional().default(false),
   userId: z.string().optional(),
+  caseId: z.string().nullable().optional(),
 });
 
 export type HearingResultInput = z.infer<typeof hearingResultSchema>;

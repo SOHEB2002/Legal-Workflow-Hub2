@@ -479,6 +479,13 @@ export async function registerRoutes(
 
       const data = hearingResultSchema.parse(req.body);
       
+      const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
+
+      if (!hearing.caseId && effectiveCaseId) {
+        await storage.updateHearing(hearingId, { caseId: effectiveCaseId });
+        hearing.caseId = effectiveCaseId;
+      }
+
       const updateData: any = {
         result: data.result,
         resultDetails: data.resultDetails || "",
@@ -506,8 +513,7 @@ export async function registerRoutes(
       const createdTasks: any[] = [];
       const createdMemos: any[] = [];
 
-      // Update case fields with hearing result
-      if (hearing.caseId) {
+      if (effectiveCaseId) {
         const caseUpdate: any = {
           lastHearingResult: data.result,
           lastHearingDate: hearing.hearingDate,
@@ -515,12 +521,12 @@ export async function registerRoutes(
         if (data.result === HearingResult.POSTPONEMENT && data.nextHearingDate) {
           caseUpdate.nextHearingDate = data.nextHearingDate;
         }
-        await storage.updateCase(hearing.caseId, caseUpdate);
+        await storage.updateCase(effectiveCaseId, caseUpdate);
       }
 
       if (data.result === HearingResult.POSTPONEMENT && data.nextHearingDate) {
         const newHearing = await storage.createHearing({
-          caseId: hearing.caseId,
+          caseId: effectiveCaseId,
           hearingDate: data.nextHearingDate,
           hearingTime: data.nextHearingTime || hearing.hearingTime,
           courtName: hearing.courtName,
@@ -531,26 +537,25 @@ export async function registerRoutes(
         } as any);
         createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
 
-        if (data.responseRequired) {
+        if (data.responseRequired && effectiveCaseId) {
           const dueDate = data.nextHearingDate;
           const task = await storage.createFieldTask({
-            title: `إعداد رد للجلسة القادمة - ${hearing.caseId}`,
+            title: `إعداد رد للجلسة القادمة - ${effectiveCaseId}`,
             description: `مطلوب إعداد رد قبل الجلسة القادمة بتاريخ ${data.nextHearingDate}`,
             taskType: "متابعة_محكمة",
-            caseId: hearing.caseId,
+            caseId: effectiveCaseId,
             assignedTo: data.userId || "admin",
             priority: "عالي",
             dueDate,
           } as any, "system");
           createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
 
-          // Auto-create response memo - assign to case's primary lawyer or the user submitting the result
           const deadlineDate = new Date(data.nextHearingDate);
           deadlineDate.setDate(deadlineDate.getDate() - 3);
-          const relatedCase = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
+          const relatedCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
           const memoAssignee = relatedCase?.primaryLawyerId || relatedCase?.responsibleLawyerId || data.userId || "1";
           const memo = await storage.createMemo({
-            caseId: hearing.caseId,
+            caseId: effectiveCaseId,
             hearingId: hearingId,
             memoType: MemoType.RESPONSE,
             title: `مذكرة جوابية - جلسة ${data.nextHearingDate}`,
@@ -564,21 +569,18 @@ export async function registerRoutes(
           });
           createdMemos.push({ type: "response_memo", id: memo.id, description: "مذكرة جوابية تلقائية" });
 
-          // Update active memo count
-          if (hearing.caseId) {
-            const caseMemos = await storage.getMemosByCase(hearing.caseId);
-            const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
-            await storage.updateCase(hearing.caseId, { activeMemoCount: activeCount } as any);
-          }
+          const caseMemos = await storage.getMemosByCase(effectiveCaseId);
+          const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+          await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
         }
       }
 
-      if (data.result === HearingResult.JUDGMENT) {
+      if (data.result === HearingResult.JUDGMENT && effectiveCaseId) {
         const contactTask = await storage.createFieldTask({
-          title: `إبلاغ العميل بنتيجة الحكم - ${hearing.caseId}`,
+          title: `إبلاغ العميل بنتيجة الحكم - ${effectiveCaseId}`,
           description: `صدر حكم ${data.judgmentSide || ""} - يرجى إبلاغ العميل بالتفاصيل`,
           taskType: "زيارة_عميل",
-          caseId: hearing.caseId,
+          caseId: effectiveCaseId,
           assignedTo: data.userId || "admin",
           priority: "عاجل",
           dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
@@ -587,22 +589,21 @@ export async function registerRoutes(
 
         if (!data.judgmentFinal && data.judgmentSide === "ضدنا" && data.objectionFeasible) {
           const objectionTask = await storage.createFieldTask({
-            title: `تقديم اعتراض على الحكم - ${hearing.caseId}`,
+            title: `تقديم اعتراض على الحكم - ${effectiveCaseId}`,
             description: `مهلة الاعتراض: ${data.objectionDeadline || "غير محددة"}`,
             taskType: "متابعة_محكمة",
-            caseId: hearing.caseId,
+            caseId: effectiveCaseId,
             assignedTo: data.userId || "admin",
             priority: "عاجل",
             dueDate: data.objectionDeadline || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
           } as any, "system");
           createdTasks.push({ type: "file_objection", id: objectionTask.id, description: "مهمة تقديم اعتراض" });
 
-          // Auto-create objection memo - assign to case's primary lawyer
           const objDeadline = data.objectionDeadline || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-          const objCase = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
+          const objCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
           const objAssignee = objCase?.primaryLawyerId || objCase?.responsibleLawyerId || data.userId || "1";
           const memo = await storage.createMemo({
-            caseId: hearing.caseId,
+            caseId: effectiveCaseId,
             hearingId: hearingId,
             memoType: MemoType.OBJECTION,
             title: `لائحة اعتراضية - حكم ${hearing.hearingDate}`,
@@ -616,12 +617,9 @@ export async function registerRoutes(
           });
           createdMemos.push({ type: "objection_memo", id: memo.id, description: "لائحة اعتراضية تلقائية" });
 
-          // Update active memo count
-          if (hearing.caseId) {
-            const caseMemos = await storage.getMemosByCase(hearing.caseId);
-            const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
-            await storage.updateCase(hearing.caseId, { activeMemoCount: activeCount } as any);
-          }
+          const caseMemos = await storage.getMemosByCase(effectiveCaseId);
+          const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+          await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
         }
       }
 
