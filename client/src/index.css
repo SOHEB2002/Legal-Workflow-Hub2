@@ -292,4 +292,11 @@
   p, span, h1, h2, h3, h4, h5, h6, td, th, li, label, dt, dd {
     unicode-bidi: plaintext;
   }
+
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"] {
+    direction: ltr;
+    text-align: right;
+  }
 }
