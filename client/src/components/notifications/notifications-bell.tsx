@@ -91,8 +91,8 @@ function NotificationItem({ notification, onMarkAsRead }: NotificationItemProps)
                 {NotificationTypeLabels[notification.type]}
               </span>
             </div>
-            <p className="font-medium text-sm truncate">{notification.title}</p>
-            <p className="text-xs text-muted-foreground truncate mt-0.5">{notification.message}</p>
+            <p className="font-medium text-sm truncate bidi-override">{notification.title}</p>
+            <p className="text-xs text-muted-foreground truncate mt-0.5 bidi-override">{notification.message}</p>
             <div className="flex items-center gap-2 mt-1.5">
               {notification.senderName && (
                 <span className="text-xs text-muted-foreground">

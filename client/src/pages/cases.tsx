@@ -547,7 +547,7 @@ export default function CasesPage() {
             <TableBody>
               {filteredCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
-                  <TableCell className="font-medium">{c.caseNumber}</TableCell>
+                  <TableCell className="font-medium bidi-override">{c.caseNumber}</TableCell>
                   <TableCell>{getClientName(c.clientId)}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className={
@@ -981,7 +981,7 @@ export default function CasesPage() {
       <Dialog open={showDetailsDialog} onOpenChange={(open) => { setShowDetailsDialog(open); if (!open) setActiveTab("info"); }}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>تفاصيل القضية {selectedCase?.caseNumber}</DialogTitle>
+            <DialogTitle className="bidi-override">تفاصيل القضية {selectedCase?.caseNumber}</DialogTitle>
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">

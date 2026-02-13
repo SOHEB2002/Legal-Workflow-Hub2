@@ -373,7 +373,7 @@ export default function ConsultationsPage() {
             <TableBody>
               {filteredConsultations.map((consultation) => (
                 <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`}>
-                  <TableCell className="font-medium">{consultation.consultationNumber}</TableCell>
+                  <TableCell className="font-medium bidi-override">{consultation.consultationNumber}</TableCell>
                   <TableCell>{getClientName(consultation.clientId)}</TableCell>
                   <TableCell>
                     <Badge variant="outline">{consultation.consultationType}</Badge>
@@ -479,7 +479,7 @@ export default function ConsultationsPage() {
       <Dialog open={!!selectedConsultation} onOpenChange={(open) => !open && setSelectedConsultation(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>تفاصيل الاستشارة {selectedConsultation?.consultationNumber}</DialogTitle>
+            <DialogTitle className="bidi-override">تفاصيل الاستشارة {selectedConsultation?.consultationNumber}</DialogTitle>
           </DialogHeader>
           {selectedConsultation && (
             <div className="space-y-4">

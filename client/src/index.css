@@ -281,4 +281,15 @@
   .gradient-petrol {
     background: linear-gradient(135deg, hsl(206 38% 38%) 0%, hsl(206 38% 28%) 100%);
   }
+
+  .bidi-override {
+    unicode-bidi: plaintext;
+    direction: rtl;
+  }
+}
+
+@layer base {
+  p, span, h1, h2, h3, h4, h5, h6, td, th, li, label, dt, dd {
+    unicode-bidi: plaintext;
+  }
 }

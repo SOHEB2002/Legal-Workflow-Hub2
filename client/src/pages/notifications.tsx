@@ -308,8 +308,8 @@ export default function NotificationsPage() {
                         </TableCell>
                         <TableCell>
                           <div>
-                            <p className="font-medium">{notification.title}</p>
-                            <p className="text-sm text-muted-foreground truncate max-w-xs">{notification.message}</p>
+                            <p className="font-medium bidi-override">{notification.title}</p>
+                            <p className="text-sm text-muted-foreground truncate max-w-xs bidi-override">{notification.message}</p>
                           </div>
                         </TableCell>
                         <TableCell>
