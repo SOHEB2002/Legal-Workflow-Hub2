@@ -81,7 +81,7 @@ import {
 } from "@shared/schema";
 import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
-import { sendCaseReminder } from "@/lib/notification-triggers";
+import { sendCaseReminder, notifyCaseSentToReview } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";

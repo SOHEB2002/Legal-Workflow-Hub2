@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
-import { CaseStatus, Priority, CaseStage, CaseStagesOrder, CaseClassification } from "@shared/schema";
+import { CaseStatus, Priority, CaseStage, CaseStagesOrder, CaseClassification, getStagesForClassification } from "@shared/schema";
 import { apiRequest } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
@@ -250,10 +250,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
-    const currentIndex = CaseStagesOrder.indexOf(normalized);
-    if (currentIndex === -1 || currentIndex >= CaseStagesOrder.length - 1) return false;
+    const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
+    const stagesOrder = getStagesForClassification(effectiveClassification);
+    const currentIndex = stagesOrder.indexOf(normalized);
+    if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) return false;
 
-    const nextStage = CaseStagesOrder[currentIndex + 1];
+    const nextStage = stagesOrder[currentIndex + 1];
     const newTransition = createStageTransitionRecord(nextStage, userId, userName, notes);
 
     const updateData: Record<string, unknown> = {
@@ -267,6 +269,13 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
 
     await updateCase(id, updateData);
+
+    if (nextStage === CaseStage.REVIEW_COMMITTEE) {
+      notifyCaseSentToReview(lawCase.id, lawCase.caseNumber).catch(err =>
+        console.error("فشل إرسال إشعار لجنة المراجعة:", err)
+      );
+    }
+
     return true;
   };
 
@@ -283,16 +292,28 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
-    const currentIndex = CaseStagesOrder.indexOf(normalized);
+    const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
+    const stagesOrder = getStagesForClassification(effectiveClassification);
+    const currentIndex = stagesOrder.indexOf(normalized);
     if (currentIndex <= 0) return false;
 
-    const prevStage = CaseStagesOrder[currentIndex - 1];
+    const prevStage = stagesOrder[currentIndex - 1];
     const newTransition = createStageTransitionRecord(prevStage, userId, userName, notes || "إرجاع للمرحلة السابقة");
 
     await updateCase(id, {
       currentStage: prevStage,
       stageHistory: [...lawCase.stageHistory, newTransition],
     });
+
+    if (prevStage === CaseStage.REVIEW_NOTES) {
+      const responsibleId = lawCase.responsibleLawyerId || lawCase.primaryLawyerId;
+      if (responsibleId) {
+        notifyCaseReturnedForRevision(lawCase.id, lawCase.caseNumber, responsibleId, notes).catch(err =>
+          console.error("فشل إرسال إشعار الإرجاع:", err)
+        );
+      }
+    }
+
     return true;
   };
 
