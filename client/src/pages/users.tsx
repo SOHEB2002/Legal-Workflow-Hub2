@@ -109,9 +109,12 @@ export default function UsersPage() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
+  const isDepartmentHead = user?.role === "department_head";
+  const userDepartmentId = user?.departmentId || "";
+
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
-  const [departmentFilter, setDepartmentFilter] = useState<string>("all");
+  const [departmentFilter, setDepartmentFilter] = useState<string>(isDepartmentHead ? userDepartmentId : "all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
   const [showVacationDialog, setShowVacationDialog] = useState(false);
@@ -326,6 +329,9 @@ export default function UsersPage() {
   };
 
   const filteredUsers = users.filter((u) => {
+    if (isDepartmentHead && u.departmentId !== userDepartmentId) {
+      return false;
+    }
     const matchesSearch =
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -380,36 +386,48 @@ export default function UsersPage() {
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">إدارة المستخدمين</h1>
-          <p className="text-muted-foreground">إدارة حسابات وصلاحيات المستخدمين</p>
+          <h1 className="text-2xl font-bold text-foreground">
+            {isDepartmentHead ? "موظفو القسم" : "إدارة المستخدمين"}
+          </h1>
+          <p className="text-muted-foreground">
+            {isDepartmentHead
+              ? `عرض الموظفين التابعين لقسمك`
+              : "إدارة حسابات وصلاحيات المستخدمين"}
+          </p>
         </div>
-        <Button data-testid="button-add-user" onClick={() => { resetForm(); setShowAddDialog(true); }}>
-          <Plus className="w-4 h-4 ml-2" />
-          إضافة مستخدم
-        </Button>
+        {!isDepartmentHead && (
+          <Button data-testid="button-add-user" onClick={() => { resetForm(); setShowAddDialog(true); }}>
+            <Plus className="w-4 h-4 ml-2" />
+            إضافة مستخدم
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">إجمالي المستخدمين</CardTitle>
+            <CardTitle className="text-sm font-medium">
+              {isDepartmentHead ? "موظفو قسمك" : "إجمالي المستخدمين"}
+            </CardTitle>
             <User className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{users.length}</div>
+            <div className="text-2xl font-bold">{filteredUsers.length}</div>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">رؤساء الأقسام</CardTitle>
-            <Building2 className="h-4 w-4 text-accent" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {users.filter((u) => u.role === UserRole.DEPARTMENT_HEAD).length}
-            </div>
-          </CardContent>
-        </Card>
+        {!isDepartmentHead && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">رؤساء الأقسام</CardTitle>
+              <Building2 className="h-4 w-4 text-accent" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {users.filter((u) => u.role === UserRole.DEPARTMENT_HEAD).length}
+              </div>
+            </CardContent>
+          </Card>
+        )}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">الموظفين</CardTitle>
@@ -417,18 +435,18 @@ export default function UsersPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {users.filter((u) => u.role === UserRole.EMPLOYEE).length}
+              {(isDepartmentHead ? filteredUsers : users).filter((u) => u.role === UserRole.EMPLOYEE).length}
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">المستخدمين النشطين</CardTitle>
+            <CardTitle className="text-sm font-medium">النشطين</CardTitle>
             <Shield className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {users.filter((u) => u.isActive).length}
+              {(isDepartmentHead ? filteredUsers : users).filter((u) => u.isActive).length}
             </div>
           </CardContent>
         </Card>
@@ -460,19 +478,21 @@ export default function UsersPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-              <SelectTrigger className="w-[180px]" data-testid="select-department-filter">
-                <SelectValue placeholder="القسم" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">جميع الأقسام</SelectItem>
-                {departments.map((dept) => (
-                  <SelectItem key={dept.id} value={dept.id}>
-                    {dept.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {!isDepartmentHead && (
+              <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
+                <SelectTrigger className="w-[180px]" data-testid="select-department-filter">
+                  <SelectValue placeholder="القسم" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">جميع الأقسام</SelectItem>
+                  {departments.map((dept) => (
+                    <SelectItem key={dept.id} value={dept.id}>
+                      {dept.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-[150px]" data-testid="select-status-filter">
                 <SelectValue placeholder="الحالة" />
@@ -551,39 +571,45 @@ export default function UsersPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          data-testid={`button-edit-${u.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenEdit(u);
-                          }}
-                        >
-                          <Pencil className="w-4 h-4 ml-2" />
-                          تعديل
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          data-testid={`button-reset-password-${u.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setUserToAction(u);
-                            setNewPassword("");
-                            setShowResetPasswordDialog(true);
-                          }}
-                        >
-                          <Key className="w-4 h-4 ml-2" />
-                          إعادة تعيين كلمة المرور
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          data-testid={`button-toggle-status-${u.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleStatus(u);
-                          }}
-                        >
-                          <Power className="w-4 h-4 ml-2" />
-                          {u.isActive ? "تعطيل" : "تفعيل"}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
+                        {!isDepartmentHead && (
+                          <DropdownMenuItem
+                            data-testid={`button-edit-${u.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenEdit(u);
+                            }}
+                          >
+                            <Pencil className="w-4 h-4 ml-2" />
+                            تعديل
+                          </DropdownMenuItem>
+                        )}
+                        {!isDepartmentHead && (
+                          <DropdownMenuItem
+                            data-testid={`button-reset-password-${u.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUserToAction(u);
+                              setNewPassword("");
+                              setShowResetPasswordDialog(true);
+                            }}
+                          >
+                            <Key className="w-4 h-4 ml-2" />
+                            إعادة تعيين كلمة المرور
+                          </DropdownMenuItem>
+                        )}
+                        {!isDepartmentHead && (
+                          <DropdownMenuItem
+                            data-testid={`button-toggle-status-${u.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleStatus(u);
+                            }}
+                          >
+                            <Power className="w-4 h-4 ml-2" />
+                            {u.isActive ? "تعطيل" : "تفعيل"}
+                          </DropdownMenuItem>
+                        )}
+                        {!isDepartmentHead && <DropdownMenuSeparator />}
                         <DropdownMenuItem
                           data-testid={`button-view-profile-${u.id}`}
                           onClick={(e) => {
@@ -594,39 +620,45 @@ export default function UsersPage() {
                           <Eye className="w-4 h-4 ml-2" />
                           عرض الملف الشخصي
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          data-testid={`button-schedule-vacation-${u.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setUserToAction(u);
-                            setShowVacationDialog(true);
-                          }}
-                        >
-                          <Palmtree className="w-4 h-4 ml-2" />
-                          جدولة إجازة
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          data-testid={`button-create-delegation-${u.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setUserToAction(u);
-                            setShowDelegationDialog(true);
-                          }}
-                        >
-                          <UserCheck className="w-4 h-4 ml-2" />
-                          إنشاء تفويض
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          data-testid={`button-custom-permissions-${u.id}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setUserToAction(u);
-                            setShowPermissionsDialog(true);
-                          }}
-                        >
-                          <Shield className="w-4 h-4 ml-2" />
-                          تخصيص الصلاحيات
-                        </DropdownMenuItem>
+                        {!isDepartmentHead && (
+                          <DropdownMenuItem
+                            data-testid={`button-schedule-vacation-${u.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUserToAction(u);
+                              setShowVacationDialog(true);
+                            }}
+                          >
+                            <Palmtree className="w-4 h-4 ml-2" />
+                            جدولة إجازة
+                          </DropdownMenuItem>
+                        )}
+                        {!isDepartmentHead && (
+                          <DropdownMenuItem
+                            data-testid={`button-create-delegation-${u.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUserToAction(u);
+                              setShowDelegationDialog(true);
+                            }}
+                          >
+                            <UserCheck className="w-4 h-4 ml-2" />
+                            إنشاء تفويض
+                          </DropdownMenuItem>
+                        )}
+                        {!isDepartmentHead && (
+                          <DropdownMenuItem
+                            data-testid={`button-custom-permissions-${u.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUserToAction(u);
+                              setShowPermissionsDialog(true);
+                            }}
+                          >
+                            <Shield className="w-4 h-4 ml-2" />
+                            تخصيص الصلاحيات
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           data-testid={`button-activity-log-${u.id}`}
                           onClick={(e) => {
@@ -637,19 +669,23 @@ export default function UsersPage() {
                           <FileText className="w-4 h-4 ml-2" />
                           سجل النشاط
                         </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          data-testid={`button-delete-${u.id}`}
-                          className="text-destructive focus:text-destructive"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setUserToAction(u);
-                            setShowDeleteDialog(true);
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4 ml-2" />
-                          حذف
-                        </DropdownMenuItem>
+                        {!isDepartmentHead && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              data-testid={`button-delete-${u.id}`}
+                              className="text-destructive focus:text-destructive"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setUserToAction(u);
+                                setShowDeleteDialog(true);
+                              }}
+                            >
+                              <Trash2 className="w-4 h-4 ml-2" />
+                              حذف
+                            </DropdownMenuItem>
+                          </>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>

@@ -1188,7 +1188,7 @@ export function canReviewConsultations(role: UserRoleType): boolean {
 }
 
 export function canManageUsers(role: UserRoleType): boolean {
-  return role === "branch_manager";
+  return ["branch_manager", "department_head"].includes(role);
 }
 
 export function canAccessHR(role: UserRoleType): boolean {
