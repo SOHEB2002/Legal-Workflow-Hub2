@@ -235,6 +235,7 @@ export default function CasesPage() {
   const [reminderData, setReminderData] = useState({
     reminderType: "تذكير بتحديث الحالة",
     message: "",
+    recipientId: "",
   });
 
   const [showTransferDialog, setShowTransferDialog] = useState(false);
@@ -419,21 +420,27 @@ export default function CasesPage() {
 
   const openReminderDialog = (caseItem: LawCase) => {
     setReminderCaseId(caseItem.id);
-    setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "" });
+    const defaultRecipient = caseItem.responsibleLawyerId || caseItem.primaryLawyerId || "";
+    setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "", recipientId: defaultRecipient });
     setShowReminderDialog(true);
   };
 
+  const reminderCase = reminderCaseId ? getCaseById(reminderCaseId) : null;
+  const reminderHasDefaultRecipient = !!(reminderCase?.responsibleLawyerId || reminderCase?.primaryLawyerId);
+  const reminderDeptLawyers = reminderCase
+    ? users.filter(u => u.canBeAssignedCases && u.departmentId === reminderCase.departmentId && u.id !== (reminderCase.responsibleLawyerId || reminderCase.primaryLawyerId))
+    : [];
+
   const handleSendReminder = async () => {
-    const caseItem = reminderCaseId ? getCaseById(reminderCaseId) : null;
-    if (!caseItem) return;
-    const recipientId = caseItem.responsibleLawyerId || caseItem.primaryLawyerId;
+    if (!reminderCase) return;
+    const recipientId = reminderData.recipientId;
     if (!recipientId) {
-      toast({ title: "لا يوجد محامي مسؤول لهذه القضية", variant: "destructive" });
+      toast({ title: "يرجى اختيار المحامي المستلم للتذكير", variant: "destructive" });
       return;
     }
-    const msg = reminderData.message || `${reminderData.reminderType} للقضية رقم ${caseItem.caseNumber}`;
+    const msg = reminderData.message || `${reminderData.reminderType} للقضية رقم ${reminderCase.caseNumber}`;
     try {
-      await sendCaseReminder(caseItem.id, caseItem.caseNumber, recipientId, reminderData.reminderType, msg);
+      await sendCaseReminder(reminderCase.id, reminderCase.caseNumber, recipientId, reminderData.reminderType, msg);
       toast({ title: "تم إرسال التذكير بنجاح" });
     } catch {
       toast({ title: "فشل إرسال التذكير", variant: "destructive" });
@@ -1322,6 +1329,34 @@ export default function CasesPage() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {reminderHasDefaultRecipient ? (
+              <div>
+                <Label>المستلم</Label>
+                <Input
+                  disabled
+                  value={users.find(u => u.id === reminderData.recipientId)?.fullName || "المحامي المسؤول"}
+                  data-testid="input-reminder-recipient-display"
+                />
+              </div>
+            ) : (
+              <div>
+                <Label>اختر المحامي المستلم</Label>
+                <p className="text-sm text-muted-foreground mb-2">لا يوجد محامي مسؤول معيّن لهذه القضية</p>
+                <Select
+                  value={reminderData.recipientId}
+                  onValueChange={(value) => setReminderData({ ...reminderData, recipientId: value })}
+                >
+                  <SelectTrigger data-testid="select-reminder-recipient">
+                    <SelectValue placeholder="اختر محامي من القسم..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {reminderDeptLawyers.map(l => (
+                      <SelectItem key={l.id} value={l.id}>{l.fullName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div>
               <Label>نوع التذكير</Label>
               <Select
@@ -1353,7 +1388,7 @@ export default function CasesPage() {
             <Button variant="outline" onClick={() => setShowReminderDialog(false)} data-testid="button-cancel-reminder">
               إلغاء
             </Button>
-            <Button onClick={handleSendReminder} data-testid="button-send-reminder">
+            <Button onClick={handleSendReminder} disabled={!reminderData.recipientId} data-testid="button-send-reminder">
               <Bell className="w-4 h-4 ml-2" />
               إرسال التذكير
             </Button>
