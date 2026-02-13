@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -6,6 +7,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { ThemeProvider } from "@/lib/theme-provider";
 import { CasesProvider } from "@/lib/cases-context";
 import { ClientsProvider } from "@/lib/clients-context";
@@ -113,11 +117,84 @@ function AuthenticatedLayout() {
   );
 }
 
+function ForceChangePassword() {
+  const { changePassword, logout } = useAuth();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (newPassword !== confirmPassword) {
+      setError("كلمتا المرور غير متطابقتين");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setError("كلمة المرور يجب أن تكون 8 أحرف على الأقل");
+      return;
+    }
+    if (!/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+      setError("يجب أن تحتوي على حروف وأرقام");
+      return;
+    }
+    setLoading(true);
+    const result = await changePassword(currentPassword, newPassword);
+    setLoading(false);
+    if (!result.success) {
+      setError(result.error || "حدث خطأ");
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background p-4" dir="rtl">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle className="text-xl text-center">تغيير كلمة المرور</CardTitle>
+          <p className="text-sm text-muted-foreground text-center">يجب تغيير كلمة المرور قبل الاستمرار</p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">كلمة المرور الحالية</label>
+              <Input data-testid="input-current-password" type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">كلمة المرور الجديدة</label>
+              <Input data-testid="input-new-password" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+              <p className="text-xs text-muted-foreground">8 أحرف على الأقل، تحتوي على حروف وأرقام</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">تأكيد كلمة المرور الجديدة</label>
+              <Input data-testid="input-confirm-password" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
+            </div>
+            <div className="flex gap-2">
+              <Button data-testid="button-change-password" type="submit" className="flex-1" disabled={loading}>
+                {loading ? "جاري التغيير..." : "تغيير كلمة المرور"}
+              </Button>
+              <Button data-testid="button-logout" type="button" variant="outline" onClick={logout}>
+                خروج
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function AppContent() {
-  const { user } = useAuth();
+  const { user, mustChangePassword } = useAuth();
 
   if (!user) {
     return <LoginPage />;
+  }
+
+  if (mustChangePassword) {
+    return <ForceChangePassword />;
   }
 
   return <AuthenticatedLayout />;

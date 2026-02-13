@@ -30,13 +30,20 @@ export default function LoginPage() {
   const onSubmit = async (data: LoginInput) => {
     setIsLoading(true);
     try {
-      const success = await login(data.username, data.password);
-      if (success) {
-        toast({
-          title: "تم تسجيل الدخول بنجاح",
-          description: "مرحباً بك في نظام شركة عون للمحاماة",
-        });
-        setLocation("/");
+      const result = await login(data.username, data.password);
+      if (result.success) {
+        if (result.mustChangePassword) {
+          toast({
+            title: "يجب تغيير كلمة المرور",
+            description: "يرجى تعيين كلمة مرور جديدة للمتابعة",
+          });
+        } else {
+          toast({
+            title: "تم تسجيل الدخول بنجاح",
+            description: "مرحباً بك في نظام شركة عون للمحاماة",
+          });
+          setLocation("/");
+        }
       } else {
         toast({
           variant: "destructive",

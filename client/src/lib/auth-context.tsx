@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { User, UserRoleType } from "@shared/schema";
 import { 
   canManageAllCases, 
@@ -18,8 +18,10 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface AuthContextType {
   user: User | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  mustChangePassword: boolean;
+  login: (username: string, password: string) => Promise<{ success: boolean; mustChangePassword?: boolean }>;
   logout: () => void;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   permissions: {
     canManageAllCases: boolean;
     canManageAllConsultations: boolean;
@@ -38,7 +40,7 @@ interface AuthContextType {
   refetchUsers: () => Promise<void>;
   addUser: (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => void;
   updateUser: (id: string, userData: Partial<User>) => void;
-  deleteUser: (id: string) => { success: boolean; message: string };
+  deleteUser: (id: string) => Promise<{ success: boolean; message: string }>;
   resetPassword: (id: string, newPassword: string) => void;
   toggleUserStatus: (id: string) => void;
 }
@@ -62,7 +64,8 @@ async function fetchUsersFromAPI(): Promise<User[]> {
     });
     if (!res.ok) return [];
     return await res.json();
-  } catch {
+  } catch (error) {
+    console.error("Error fetching users:", error);
     return [];
   }
 }
@@ -73,12 +76,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return stored ? JSON.parse(stored) : null;
   });
 
+  const [mustChangePassword, setMustChangePassword] = useState<boolean>(() => {
+    return localStorage.getItem("lawfirm_must_change_password") === "true";
+  });
+
   const [users, setUsers] = useState<User[]>([]);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refetchUsers = useCallback(async () => {
     const fetched = await fetchUsersFromAPI();
     setUsers(fetched);
   }, []);
+
+  const logout = useCallback(() => {
+    setUser(null);
+    setMustChangePassword(false);
+    localStorage.removeItem("lawfirm_token");
+    localStorage.removeItem("lawfirm_user");
+    localStorage.removeItem("lawfirm_must_change_password");
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+  }, []);
+
+  const refreshToken = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/refresh", {
+        method: "POST",
+        headers: {
+          ...getAuthHeaders(),
+          "Content-Type": "application/json",
+        },
+      });
+      if (!res.ok) {
+        logout();
+        return;
+      }
+      const data = await res.json();
+      if (data.token) {
+        localStorage.setItem("lawfirm_token", data.token);
+        scheduleTokenRefresh();
+      }
+    } catch (error) {
+      console.error("Token refresh failed:", error);
+      logout();
+    }
+  }, [logout]);
+
+  const scheduleTokenRefresh = useCallback(() => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = setTimeout(() => {
+      refreshToken();
+    }, (2 * 60 - 10) * 60 * 1000);
+  }, [refreshToken]);
 
   useEffect(() => {
     if (user) {
@@ -91,41 +144,77 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (user) {
       refetchUsers();
+      scheduleTokenRefresh();
     }
-  }, [user, refetchUsers]);
+    return () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
+    };
+  }, [user, refetchUsers, scheduleTokenRefresh]);
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const login = async (username: string, password: string): Promise<{ success: boolean; mustChangePassword?: boolean }> => {
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      if (!res.ok) return false;
+      if (!res.ok) return { success: false };
       const data = await res.json();
       if (data.user) {
         setUser(data.user);
         if (data.token) {
           localStorage.setItem("lawfirm_token", data.token);
         }
-        return true;
+        if (data.mustChangePassword) {
+          setMustChangePassword(true);
+          localStorage.setItem("lawfirm_must_change_password", "true");
+          return { success: true, mustChangePassword: true };
+        }
+        setMustChangePassword(false);
+        localStorage.removeItem("lawfirm_must_change_password");
+        return { success: true };
       }
-      return false;
-    } catch {
-      return false;
+      return { success: false };
+    } catch (error) {
+      console.error("Login error:", error);
+      return { success: false };
     }
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem("lawfirm_token");
+  const changePassword = async (currentPassword: string, newPassword: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: {
+          ...getAuthHeaders(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || "حدث خطأ" };
+      }
+      if (data.token) {
+        localStorage.setItem("lawfirm_token", data.token);
+      }
+      setMustChangePassword(false);
+      localStorage.removeItem("lawfirm_must_change_password");
+      return { success: true };
+    } catch (error) {
+      console.error("Change password error:", error);
+      return { success: false, error: "حدث خطأ في تغيير كلمة المرور" };
+    }
   };
 
   const addUser = async (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => {
     try {
       await apiRequest("POST", "/api/users", userData);
       await refetchUsers();
-    } catch {
+    } catch (error) {
+      console.error("Error adding user:", error);
     }
   };
 
@@ -133,11 +222,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await apiRequest("PATCH", `/api/users/${id}`, userData);
       await refetchUsers();
-    } catch {
+    } catch (error) {
+      console.error("Error updating user:", error);
     }
   };
 
-  const deleteUser = (id: string): { success: boolean; message: string } => {
+  const deleteUser = async (id: string): Promise<{ success: boolean; message: string }> => {
     const userToDelete = users.find(u => u.id === id);
     if (!userToDelete) {
       return { success: false, message: "المستخدم غير موجود" };
@@ -154,15 +244,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { success: false, message: "لا يمكنك حذف حسابك الحالي" };
     }
 
-    apiRequest("DELETE", `/api/users/${id}`).then(() => refetchUsers()).catch(() => {});
-    return { success: true, message: "تم حذف المستخدم بنجاح" };
+    try {
+      await apiRequest("DELETE", `/api/users/${id}`);
+      await refetchUsers();
+      return { success: true, message: "تم حذف المستخدم بنجاح" };
+    } catch (error) {
+      console.error("Error deleting user:", error);
+      return { success: false, message: "فشل حذف المستخدم" };
+    }
   };
 
   const resetPassword = async (id: string, newPassword: string) => {
     try {
       await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword });
       await refetchUsers();
-    } catch {
+    } catch (error) {
+      console.error("Error resetting password:", error);
     }
   };
 
@@ -180,7 +277,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await apiRequest("PATCH", `/api/users/${id}`, { isActive: !targetUser.isActive });
       await refetchUsers();
-    } catch {
+    } catch (error) {
+      console.error("Error toggling user status:", error);
     }
   };
 
@@ -200,7 +298,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
+    <AuthContext.Provider value={{ user, mustChangePassword, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
       {children}
     </AuthContext.Provider>
   );
@@ -212,28 +310,4 @@ export function useAuth() {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
-}
-
-export async function getAllUsers(): Promise<User[]> {
-  return fetchUsersFromAPI();
-}
-
-export async function getUserById(id: string): Promise<User | undefined> {
-  const users = await fetchUsersFromAPI();
-  return users.find(u => u.id === id);
-}
-
-export async function getUsersByDepartment(departmentId: string): Promise<User[]> {
-  const users = await fetchUsersFromAPI();
-  return users.filter(u => u.departmentId === departmentId);
-}
-
-export async function getLawyers(): Promise<User[]> {
-  const users = await fetchUsersFromAPI();
-  return users.filter(u => u.canBeAssignedCases);
-}
-
-export async function getActiveUsers(): Promise<User[]> {
-  const users = await fetchUsersFromAPI();
-  return users.filter(u => u.isActive);
 }

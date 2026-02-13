@@ -24,7 +24,15 @@ The system features a formal and luxurious design.
 - **Frontend**: React, TypeScript, Tailwind CSS, Shadcn/UI (components), React Context with API + localStorage (state management), Wouter (routing).
 - **Backend**: Express.js, Node.js.
 - **Database**: PostgreSQL with Drizzle ORM.
-- **Authentication**: Custom authentication system with 10 distinct roles and permissions.
+- **Authentication**: JWT-based authentication with 10 distinct roles and permissions.
+  - **Token Lifespan**: 2 hours with automatic refresh at 110 minutes.
+  - **Refresh Token**: 30-minute grace period for expired tokens via `/api/auth/refresh`.
+  - **Password Policy**: Minimum 8 characters, must contain letters and numbers.
+  - **Default Password**: `Awn@2024!` for all seed users with `mustChangePassword: true`.
+  - **Rate Limiting**: Login (5 attempts/15 min per IP), API (100 requests/min).
+  - **SESSION_SECRET**: Required environment variable - app exits if not set.
+  - **Forced Password Change**: Users with `mustChangePassword` flag see a change-password screen before accessing the system.
+- **Security Middleware**: `requireAuth` on all API endpoints (except login/refresh), `requireRole` on admin operations.
 - **Data Storage**: Client-side data is temporarily saved in `localStorage`.
 - **API Endpoints**: Ready for future expansion.
 

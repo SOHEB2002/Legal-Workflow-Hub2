@@ -260,10 +260,10 @@ export default function UsersPage() {
     setUserToAction(null);
   };
 
-  const handleDeleteUser = () => {
+  const handleDeleteUser = async () => {
     if (!userToAction) return;
 
-    const result = deleteUser(userToAction.id);
+    const result = await deleteUser(userToAction.id);
     if (result.success) {
       toast({ title: result.message });
     } else {

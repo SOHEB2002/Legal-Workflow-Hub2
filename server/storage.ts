@@ -8,6 +8,7 @@ import {
 import { db } from "./db";
 import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { hashPassword } from "./auth";
 
 export interface IStorage {
   // Users
@@ -117,6 +118,7 @@ function mapDbUser(dbUser: any): User {
     isActive: dbUser.isActive ?? true,
     canBeAssignedCases: dbUser.canBeAssignedCases ?? false,
     canBeAssignedConsultations: dbUser.canBeAssignedConsultations ?? false,
+    mustChangePassword: dbUser.mustChangePassword ?? true,
     createdAt: toISOString(dbUser.createdAt),
     updatedAt: toISOString(dbUser.updatedAt),
   };
@@ -1065,15 +1067,14 @@ export class DatabaseStorage implements IStorage {
   // ==================== Initialize Default Data ====================
 
   async initializeDefaultData(): Promise<void> {
-    // Check if users exist
     const existingUsers = await db.select().from(users);
     if (existingUsers.length === 0) {
-      // Add default users
+      const defaultPassword = await hashPassword("Awn@2024!");
       const defaultUsers = [
         { 
           id: "1", 
           username: "manager", 
-          password: "1234", 
+          password: defaultPassword, 
           name: "مدير الفرع", 
           email: "manager@lawfirm.com",
           phone: "0501234567",
@@ -1082,11 +1083,12 @@ export class DatabaseStorage implements IStorage {
           isActive: true,
           canBeAssignedCases: true,
           canBeAssignedConsultations: true,
+          mustChangePassword: true,
         },
         { 
           id: "4", 
           username: "omar", 
-          password: "1234", 
+          password: defaultPassword, 
           name: "المحامي عمر - رئيس القسم العام", 
           email: "omar@lawfirm.com",
           phone: "0504234567",
@@ -1095,11 +1097,12 @@ export class DatabaseStorage implements IStorage {
           isActive: true,
           canBeAssignedCases: true,
           canBeAssignedConsultations: true,
+          mustChangePassword: true,
         },
         { 
           id: "6", 
           username: "support", 
-          password: "1234", 
+          password: defaultPassword, 
           name: "الدعم الإداري", 
           email: "support@lawfirm.com",
           phone: "0506234567",
@@ -1108,6 +1111,7 @@ export class DatabaseStorage implements IStorage {
           isActive: true,
           canBeAssignedCases: false,
           canBeAssignedConsultations: false,
+          mustChangePassword: true,
         },
       ];
       

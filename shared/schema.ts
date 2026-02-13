@@ -16,6 +16,7 @@ export const users = pgTable("users", {
   isActive: boolean("is_active").default(true),
   canBeAssignedCases: boolean("can_be_assigned_cases").default(false),
   canBeAssignedConsultations: boolean("can_be_assigned_consultations").default(false),
+  mustChangePassword: boolean("must_change_password").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -734,6 +735,7 @@ export interface User {
   isActive: boolean;
   canBeAssignedCases: boolean;
   canBeAssignedConsultations: boolean;
+  mustChangePassword: boolean;
   createdAt: string;
   updatedAt: string;
 }

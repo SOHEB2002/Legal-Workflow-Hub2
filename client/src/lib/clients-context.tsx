@@ -24,7 +24,10 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
   const fetchClients = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("/api/clients");
+      const token = localStorage.getItem("lawfirm_token");
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const response = await fetch("/api/clients", { headers });
       if (response.ok) {
         const data = await response.json();
         setClients(data);

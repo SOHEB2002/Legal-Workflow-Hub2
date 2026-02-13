@@ -26,19 +26,43 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { comparePassword, hashPassword, generateToken } from "./auth";
+import { requireAuth, requireRole, generateToken, verifyTokenForRefresh, validatePassword, hashPassword, comparePassword } from "./auth";
+import rateLimit from "express-rate-limit";
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: "محاولات كثيرة. حاول بعد 15 دقيقة" },
+  standardHeaders: true,
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+});
+
+function sanitizeUser(user: any) {
+  const { password, ...safe } = user;
+  return safe;
+}
+
+async function getActiveMemoCount(caseId: string): Promise<number> {
+  const memos = await storage.getMemosByCase(caseId);
+  return memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   
-  // Initialize default data on startup
+  app.use("/api/", apiLimiter);
+
   await storage.initializeDefaultData();
 
   // ==================== Auth ====================
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginLimiter, async (req, res) => {
     try {
       const data = loginSchema.parse(req.body);
       const user = await storage.getUserByUsername(data.username);
@@ -54,7 +78,7 @@ export async function registerRoutes(
 
       const token = generateToken(user.id, user.role, user.departmentId);
       const { password, ...userWithoutPassword } = user;
-      res.json({ user: userWithoutPassword, token });
+      res.json({ user: userWithoutPassword, token, mustChangePassword: user.mustChangePassword });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
@@ -63,40 +87,80 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/auth/refresh", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "توكن غير موجود" });
+      }
+      const token = authHeader.slice(7);
+      const decoded = verifyTokenForRefresh(token);
+      if (!decoded) {
+        return res.status(401).json({ error: "جلسة منتهية" });
+      }
+      const user = await storage.getUser(decoded.userId);
+      if (!user || !user.isActive) {
+        return res.status(401).json({ error: "المستخدم غير فعال" });
+      }
+      const newToken = generateToken(user.id, user.role, user.departmentId);
+      res.json({ token: newToken });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في تجديد الجلسة" });
+    }
+  });
+
+  app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const { currentPassword, newPassword } = req.body;
+      const dbUser = await storage.getUser(user.id);
+      if (!dbUser) return res.status(404).json({ error: "المستخدم غير موجود" });
+      const isValid = await comparePassword(currentPassword, dbUser.password);
+      if (!isValid) return res.status(400).json({ error: "كلمة المرور الحالية غير صحيحة" });
+      const validation = validatePassword(newPassword);
+      if (!validation.valid) return res.status(400).json({ error: validation.message });
+      const hashed = await hashPassword(newPassword);
+      await storage.updateUser(user.id, { password: hashed, mustChangePassword: false } as any);
+      const newToken = generateToken(user.id, user.role, user.departmentId);
+      res.json({ success: true, token: newToken });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في تغيير كلمة المرور" });
+    }
+  });
+
   // ==================== Users ====================
 
-  app.get("/api/users", async (req, res) => {
+  app.get("/api/users", requireAuth, async (req, res) => {
     try {
       const users = await storage.getAllUsers();
-      res.json(users.map(u => {
-        const { password, ...rest } = u;
-        return rest;
-      }));
+      res.json(users.map(u => sanitizeUser(u)));
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب المستخدمين" });
     }
   });
 
-  app.get("/api/users/:id", async (req, res) => {
+  app.get("/api/users/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.params.id);
       if (!user) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
-      const { password, ...userWithoutPassword } = user;
-      res.json(userWithoutPassword);
+      res.json(sanitizeUser(user));
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب المستخدم" });
     }
   });
 
-  app.post("/api/users", async (req, res) => {
+  app.post("/api/users", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
       const validatedData = insertUserSchema.parse(req.body);
+      const pwValidation = validatePassword(validatedData.password);
+      if (!pwValidation.valid) {
+        return res.status(400).json({ error: pwValidation.message });
+      }
       const hashedPassword = await hashPassword(validatedData.password);
       const newUser = await storage.createUser({ ...validatedData, password: hashedPassword });
-      const { password, ...userWithoutPassword } = newUser;
-      res.status(201).json(userWithoutPassword);
+      res.status(201).json(sanitizeUser(newUser));
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
@@ -105,20 +169,27 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:id", async (req, res) => {
+  app.patch("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
-      const updated = await storage.updateUser(req.params.id, req.body);
+      const updateData = { ...req.body };
+      if (updateData.password) {
+        const pwValidation = validatePassword(updateData.password);
+        if (!pwValidation.valid) {
+          return res.status(400).json({ error: pwValidation.message });
+        }
+        updateData.password = await hashPassword(updateData.password);
+      }
+      const updated = await storage.updateUser(req.params.id, updateData);
       if (!updated) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
-      const { password, ...userWithoutPassword } = updated;
-      res.json(userWithoutPassword);
+      res.json(sanitizeUser(updated));
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث المستخدم" });
     }
   });
 
-  app.delete("/api/users/:id", async (req, res) => {
+  app.delete("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
       await storage.deleteUser(req.params.id);
       res.json({ success: true });
@@ -129,7 +200,7 @@ export async function registerRoutes(
 
   // ==================== Cases ====================
 
-  app.get("/api/cases", async (req, res) => {
+  app.get("/api/cases", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) {
@@ -163,7 +234,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/cases/:id", async (req, res) => {
+  app.get("/api/cases/:id", requireAuth, async (req, res) => {
     try {
       const caseItem = await storage.getCaseById(req.params.id);
       if (!caseItem) {
@@ -175,7 +246,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/cases", async (req, res) => {
+  app.post("/api/cases", requireAuth, async (req, res) => {
     try {
       const validatedData = insertCaseSchema.parse(req.body);
       const createdBy = req.body.createdBy || "unknown";
@@ -249,7 +320,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/cases/:id", async (req, res) => {
+  app.patch("/api/cases/:id", requireAuth, async (req, res) => {
     try {
       const updated = await storage.updateCase(req.params.id, req.body);
       if (!updated) {
@@ -261,7 +332,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/cases/:id", async (req, res) => {
+  app.delete("/api/cases/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       const deleted = await storage.deleteCase(req.params.id);
       if (!deleted) {
@@ -275,7 +346,7 @@ export async function registerRoutes(
 
   // ==================== Clients ====================
 
-  app.get("/api/clients", async (req, res) => {
+  app.get("/api/clients", requireAuth, async (req, res) => {
     try {
       const clients = await storage.getAllClients();
       res.json(clients);
@@ -284,7 +355,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/clients/:id", async (req, res) => {
+  app.get("/api/clients/:id", requireAuth, async (req, res) => {
     try {
       const client = await storage.getClientById(req.params.id);
       if (!client) {
@@ -296,7 +367,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/clients", async (req, res) => {
+  app.post("/api/clients", requireAuth, async (req, res) => {
     try {
       const validatedData = insertClientSchema.parse(req.body);
       const createdBy = req.body.createdBy || "unknown";
@@ -310,7 +381,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/clients/:id", async (req, res) => {
+  app.patch("/api/clients/:id", requireAuth, async (req, res) => {
     try {
       const updated = await storage.updateClient(req.params.id, req.body);
       if (!updated) {
@@ -322,7 +393,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/clients/:id", async (req, res) => {
+  app.delete("/api/clients/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       await storage.deleteClient(req.params.id);
       res.json({ success: true });
@@ -333,7 +404,7 @@ export async function registerRoutes(
 
   // ==================== Consultations ====================
 
-  app.get("/api/consultations", async (req, res) => {
+  app.get("/api/consultations", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) {
@@ -363,7 +434,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/consultations/:id", async (req, res) => {
+  app.get("/api/consultations/:id", requireAuth, async (req, res) => {
     try {
       const consultation = await storage.getConsultationById(req.params.id);
       if (!consultation) {
@@ -375,7 +446,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/consultations", async (req, res) => {
+  app.post("/api/consultations", requireAuth, async (req, res) => {
     try {
       const validatedData = insertConsultationSchema.parse(req.body);
       const createdBy = req.body.createdBy || "unknown";
@@ -389,7 +460,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/consultations/:id", async (req, res) => {
+  app.patch("/api/consultations/:id", requireAuth, async (req, res) => {
     try {
       const updated = await storage.updateConsultation(req.params.id, req.body);
       if (!updated) {
@@ -401,7 +472,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/consultations/:id", async (req, res) => {
+  app.delete("/api/consultations/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       await storage.deleteConsultation(req.params.id);
       res.json({ success: true });
@@ -412,7 +483,7 @@ export async function registerRoutes(
 
   // ==================== Hearings ====================
 
-  app.get("/api/hearings", async (req, res) => {
+  app.get("/api/hearings", requireAuth, async (req, res) => {
     try {
       const hearings = await storage.getAllHearings();
       res.json(hearings);
@@ -421,7 +492,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/hearings/:id", async (req, res) => {
+  app.get("/api/hearings/:id", requireAuth, async (req, res) => {
     try {
       const hearing = await storage.getHearingById(req.params.id);
       if (!hearing) {
@@ -433,7 +504,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/hearings", async (req, res) => {
+  app.post("/api/hearings", requireAuth, async (req, res) => {
     try {
       const validatedData = insertHearingSchema.parse(req.body);
       const newHearing = await storage.createHearing(validatedData);
@@ -446,7 +517,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/hearings/:id", async (req, res) => {
+  app.patch("/api/hearings/:id", requireAuth, async (req, res) => {
     try {
       const updated = await storage.updateHearing(req.params.id, req.body);
       if (!updated) {
@@ -458,7 +529,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/hearings/:id", async (req, res) => {
+  app.delete("/api/hearings/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       await storage.deleteHearing(req.params.id);
       res.json({ success: true });
@@ -469,7 +540,7 @@ export async function registerRoutes(
 
   // ==================== Hearing Workflow ====================
 
-  app.post("/api/hearings/:id/result", async (req, res) => {
+  app.post("/api/hearings/:id/result", requireAuth, async (req, res) => {
     try {
       const hearingId = req.params.id;
       const hearing = await storage.getHearingById(hearingId);
@@ -572,8 +643,7 @@ export async function registerRoutes(
           });
           createdMemos.push({ type: "response_memo", id: memo.id, description: "مذكرة جوابية تلقائية" });
 
-          const caseMemos = await storage.getMemosByCase(effectiveCaseId);
-          const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+          const activeCount = await getActiveMemoCount(effectiveCaseId);
           await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
         }
       }
@@ -620,8 +690,7 @@ export async function registerRoutes(
           });
           createdMemos.push({ type: "objection_memo", id: memo.id, description: "لائحة اعتراضية تلقائية" });
 
-          const caseMemos = await storage.getMemosByCase(effectiveCaseId);
-          const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+          const activeCount = await getActiveMemoCount(effectiveCaseId);
           await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
         }
       }
@@ -640,7 +709,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/hearings/:id/report", async (req, res) => {
+  app.post("/api/hearings/:id/report", requireAuth, async (req, res) => {
     try {
       const hearingId = req.params.id;
       const hearing = await storage.getHearingById(hearingId);
@@ -671,7 +740,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/hearings/:id/close", async (req, res) => {
+  app.post("/api/hearings/:id/close", requireAuth, async (req, res) => {
     try {
       const hearingId = req.params.id;
       const hearing = await storage.getHearingById(hearingId);
@@ -698,7 +767,7 @@ export async function registerRoutes(
 
   // ==================== Field Tasks ====================
 
-  app.get("/api/field-tasks", async (req, res) => {
+  app.get("/api/field-tasks", requireAuth, async (req, res) => {
     try {
       const tasks = await storage.getAllFieldTasks();
       res.json(tasks);
@@ -707,7 +776,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/field-tasks/:id", async (req, res) => {
+  app.get("/api/field-tasks/:id", requireAuth, async (req, res) => {
     try {
       const task = await storage.getFieldTaskById(req.params.id);
       if (!task) {
@@ -719,7 +788,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/field-tasks", async (req, res) => {
+  app.post("/api/field-tasks", requireAuth, async (req, res) => {
     try {
       const validatedData = insertFieldTaskSchema.parse(req.body);
       const assignedBy = req.body.assignedBy || "unknown";
@@ -733,7 +802,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/field-tasks/:id", async (req, res) => {
+  app.patch("/api/field-tasks/:id", requireAuth, async (req, res) => {
     try {
       const updated = await storage.updateFieldTask(req.params.id, req.body);
       if (!updated) {
@@ -745,7 +814,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/field-tasks/:id", async (req, res) => {
+  app.delete("/api/field-tasks/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       await storage.deleteFieldTask(req.params.id);
       res.json({ success: true });
@@ -756,7 +825,7 @@ export async function registerRoutes(
 
   // ==================== Contact Logs ====================
 
-  app.get("/api/contact-logs", async (req, res) => {
+  app.get("/api/contact-logs", requireAuth, async (req, res) => {
     try {
       const logs = await storage.getAllContactLogs();
       res.json(logs);
@@ -765,7 +834,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/contact-logs/client/:clientId", async (req, res) => {
+  app.get("/api/contact-logs/client/:clientId", requireAuth, async (req, res) => {
     try {
       const logs = await storage.getContactLogsByClient(req.params.clientId);
       res.json(logs);
@@ -774,7 +843,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contact-logs", async (req, res) => {
+  app.post("/api/contact-logs", requireAuth, async (req, res) => {
     try {
       const createdBy = req.body.createdBy || "unknown";
       const newLog = await storage.createContactLog(req.body, createdBy);
@@ -784,7 +853,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/contact-logs/:id", async (req, res) => {
+  app.patch("/api/contact-logs/:id", requireAuth, async (req, res) => {
     try {
       const updated = await storage.updateContactLog(req.params.id, req.body);
       if (!updated) {
@@ -796,7 +865,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/contact-logs/:id", async (req, res) => {
+  app.delete("/api/contact-logs/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       await storage.deleteContactLog(req.params.id);
       res.json({ success: true });
@@ -807,7 +876,7 @@ export async function registerRoutes(
 
   // ==================== Memos (المذكرات القانونية) ====================
 
-  app.get("/api/memos", async (req, res) => {
+  app.get("/api/memos", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
@@ -818,7 +887,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/memos/:id", async (req, res) => {
+  app.get("/api/memos/:id", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
@@ -832,7 +901,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/memos/case/:caseId", async (req, res) => {
+  app.get("/api/memos/case/:caseId", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
@@ -843,7 +912,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/memos/hearing/:hearingId", async (req, res) => {
+  app.get("/api/memos/hearing/:hearingId", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
@@ -854,7 +923,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/memos", async (req, res) => {
+  app.post("/api/memos", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
@@ -869,8 +938,7 @@ export async function registerRoutes(
       });
 
       if (memo.caseId) {
-        const caseMemos = await storage.getMemosByCase(memo.caseId);
-        const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+        const activeCount = await getActiveMemoCount(memo.caseId);
         await storage.updateCase(memo.caseId, { activeMemoCount: activeCount } as any);
       }
 
@@ -897,7 +965,7 @@ export async function registerRoutes(
     reviewerId: z.string().optional(),
   });
 
-  app.patch("/api/memos/:id", async (req, res) => {
+  app.patch("/api/memos/:id", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
@@ -910,14 +978,12 @@ export async function registerRoutes(
       const validated = updateMemoSchema.parse(req.body);
       const updateData: any = { ...validated };
 
-      // Enforce review permissions
       if (updateData.status === MemoStatus.APPROVED || updateData.status === MemoStatus.REVISION_REQUIRED) {
         if (!canReviewMemos(user.role)) {
           return res.status(403).json({ error: "ليس لديك صلاحية لمراجعة المذكرات" });
         }
       }
 
-      // Handle status transitions with timestamps
       if (updateData.status) {
         const now = new Date().toISOString();
         if (updateData.status === MemoStatus.DRAFTING && !memo.startedAt) {
@@ -941,8 +1007,7 @@ export async function registerRoutes(
       const updated = await storage.updateMemo(req.params.id, updateData);
 
       if (memo.caseId) {
-        const caseMemos = await storage.getMemosByCase(memo.caseId);
-        const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+        const activeCount = await getActiveMemoCount(memo.caseId);
         await storage.updateCase(memo.caseId, { activeMemoCount: activeCount } as any);
       }
 
@@ -956,7 +1021,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/memos/:id", async (req, res) => {
+  app.delete("/api/memos/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
@@ -972,8 +1037,7 @@ export async function registerRoutes(
       await storage.deleteMemo(req.params.id);
 
       if (memo.caseId) {
-        const caseMemos = await storage.getMemosByCase(memo.caseId);
-        const activeCount = caseMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+        const activeCount = await getActiveMemoCount(memo.caseId);
         await storage.updateCase(memo.caseId, { activeMemoCount: activeCount } as any);
       }
 
@@ -985,7 +1049,7 @@ export async function registerRoutes(
 
   // ==================== Notifications ====================
 
-  app.get("/api/notifications", async (req, res) => {
+  app.get("/api/notifications", requireAuth, async (req, res) => {
     try {
       const notifications = await storage.getAllNotifications();
       res.json(notifications);
@@ -994,7 +1058,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/notifications/user/:userId", async (req, res) => {
+  app.get("/api/notifications/user/:userId", requireAuth, async (req, res) => {
     try {
       const notifications = await storage.getNotificationsByRecipient(req.params.userId);
       res.json(notifications);
@@ -1003,7 +1067,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/notifications", async (req, res) => {
+  app.post("/api/notifications", requireAuth, async (req, res) => {
     try {
       const newNotification = await storage.createNotification(req.body);
       res.status(201).json(newNotification);
@@ -1012,7 +1076,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/notifications/:id", async (req, res) => {
+  app.patch("/api/notifications/:id", requireAuth, async (req, res) => {
     try {
       const updated = await storage.updateNotification(req.params.id, req.body);
       if (!updated) {
@@ -1024,7 +1088,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/notifications/:id", async (req, res) => {
+  app.delete("/api/notifications/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       await storage.deleteNotification(req.params.id);
       res.json({ success: true });
@@ -1033,7 +1097,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/notifications/mark-all-read", async (req, res) => {
+  app.post("/api/notifications/mark-all-read", requireAuth, async (req, res) => {
     try {
       const authUser = (req as any).user;
       if (!authUser || !authUser.id) {
@@ -1060,7 +1124,7 @@ export async function registerRoutes(
 
   // ==================== Departments ====================
 
-  app.get("/api/departments", async (req, res) => {
+  app.get("/api/departments", requireAuth, async (req, res) => {
     try {
       const departments = await storage.getAllDepartments();
       res.json(departments);
@@ -1069,7 +1133,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/departments/:id", async (req, res) => {
+  app.get("/api/departments/:id", requireAuth, async (req, res) => {
     try {
       const department = await storage.getDepartmentById(req.params.id);
       if (!department) {
@@ -1083,7 +1147,7 @@ export async function registerRoutes(
 
   // ==================== Attachments ====================
 
-  app.post("/api/attachments", async (req, res) => {
+  app.post("/api/attachments", requireAuth, async (req, res) => {
     try {
       const data = insertAttachmentSchema.parse(req.body);
       const attachment = await storage.createAttachment(data);
@@ -1096,7 +1160,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/attachments/:entityType/:entityId", async (req, res) => {
+  app.get("/api/attachments/:entityType/:entityId", requireAuth, async (req, res) => {
     try {
       const { entityType, entityId } = req.params;
       const list = await storage.getAttachmentsByEntity(entityType, entityId);
@@ -1106,7 +1170,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/attachments/:id", async (req, res) => {
+  app.delete("/api/attachments/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       const deleted = await storage.deleteAttachment(req.params.id);
       if (!deleted) {
@@ -1120,7 +1184,7 @@ export async function registerRoutes(
 
   // ==================== Support Tickets ====================
 
-  app.get("/api/support/tickets", async (req, res) => {
+  app.get("/api/support/tickets", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
@@ -1137,7 +1201,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/support/tickets/open-count", async (req, res) => {
+  app.get("/api/support/tickets/open-count", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
@@ -1155,7 +1219,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/support/tickets/:id", async (req, res) => {
+  app.get("/api/support/tickets/:id", requireAuth, async (req, res) => {
     try {
       const ticket = await storage.getSupportTicketById(req.params.id);
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
@@ -1165,7 +1229,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/support/tickets", async (req, res) => {
+  app.post("/api/support/tickets", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
@@ -1182,8 +1246,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/support/tickets/:id/status", async (req, res) => {
+  app.patch("/api/support/tickets/:id/status", requireAuth, async (req, res) => {
     try {
+      const reqUser = (req as any).user;
+      if (!canManageSupportTickets(reqUser.role)) {
+        return res.status(403).json({ error: "غير مصرح بتغيير الحالة" });
+      }
       const { status } = req.body;
       const updates: any = { status };
       if (status === "تم_الحل") updates.resolvedAt = new Date();
@@ -1196,8 +1264,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/support/tickets/:id/assign", async (req, res) => {
+  app.patch("/api/support/tickets/:id/assign", requireAuth, async (req, res) => {
     try {
+      const reqUser = (req as any).user;
+      if (!canManageSupportTickets(reqUser.role)) {
+        return res.status(403).json({ error: "غير مصرح بتعيين التذكرة" });
+      }
       const { assignedTo } = req.body;
       const ticket = await storage.updateSupportTicket(req.params.id, { assignedTo, status: "مفتوحة" });
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
@@ -1207,8 +1279,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/support/tickets/:id/priority", async (req, res) => {
+  app.patch("/api/support/tickets/:id/priority", requireAuth, async (req, res) => {
     try {
+      const reqUser = (req as any).user;
+      if (!canManageSupportTickets(reqUser.role)) {
+        return res.status(403).json({ error: "غير مصرح بتغيير الأولوية" });
+      }
       const { priority } = req.body;
       const ticket = await storage.updateSupportTicket(req.params.id, { priority });
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
@@ -1218,16 +1294,21 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/support/tickets/:id/comment", async (req, res) => {
+  app.post("/api/support/tickets/:id/comment", requireAuth, async (req, res) => {
     try {
+      const reqUser = (req as any).user;
       const ticket = await storage.getSupportTicketById(req.params.id);
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
 
-      const { message, isInternal, userId, userName, userRole } = req.body;
+      const dbUser = await storage.getUser(reqUser.id);
+      const userName = dbUser?.name || "مستخدم";
+      const userRole = reqUser.role;
+
+      const { message, isInternal } = req.body;
       const comments = Array.isArray(ticket.comments) ? [...(ticket.comments as any[])] : [];
       comments.push({
         id: randomUUID(),
-        userId,
+        userId: reqUser.id,
         userName,
         userRole,
         message,
@@ -1241,7 +1322,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/support/tickets/:id/rate", async (req, res) => {
+  app.post("/api/support/tickets/:id/rate", requireAuth, async (req, res) => {
     try {
       const { rating, ratingComment } = req.body;
       const ticket = await storage.updateSupportTicket(req.params.id, { rating, ratingComment: ratingComment || "" });
@@ -1252,7 +1333,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/support/tickets/:id", async (req, res) => {
+  app.delete("/api/support/tickets/:id", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
       if (!reqUser || reqUser.role !== "branch_manager") {
