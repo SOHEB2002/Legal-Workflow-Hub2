@@ -1,8 +1,9 @@
 import { 
   type User, type LawCase, type Client, type Consultation, type Hearing, 
   type FieldTask, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
+  type SupportTicket,
   CaseStatus, CaseStage,
-  users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos
+  users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and } from "drizzle-orm";
@@ -83,6 +84,15 @@ export interface IStorage {
   getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]>;
   createAttachment(data: Partial<Attachment>): Promise<Attachment>;
   deleteAttachment(id: string): Promise<boolean>;
+
+  // Support Tickets
+  getAllSupportTickets(): Promise<SupportTicket[]>;
+  getSupportTicketById(id: string): Promise<SupportTicket | undefined>;
+  getSupportTicketsByUser(userId: string): Promise<SupportTicket[]>;
+  createSupportTicket(data: Partial<SupportTicket>): Promise<SupportTicket>;
+  updateSupportTicket(id: string, data: Partial<SupportTicket>): Promise<SupportTicket | undefined>;
+  deleteSupportTicket(id: string): Promise<boolean>;
+  getNextTicketNumber(): Promise<string>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -1000,6 +1010,56 @@ export class DatabaseStorage implements IStorage {
   async deleteAttachment(id: string): Promise<boolean> {
     const result = await db.delete(attachments).where(eq(attachments.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ==================== Support Tickets ====================
+
+  async getAllSupportTickets(): Promise<SupportTicket[]> {
+    return await db.select().from(supportTickets).orderBy(supportTickets.createdAt);
+  }
+
+  async getSupportTicketById(id: string): Promise<SupportTicket | undefined> {
+    const [ticket] = await db.select().from(supportTickets).where(eq(supportTickets.id, id));
+    return ticket;
+  }
+
+  async getSupportTicketsByUser(userId: string): Promise<SupportTicket[]> {
+    return await db.select().from(supportTickets).where(eq(supportTickets.submittedBy, userId)).orderBy(supportTickets.createdAt);
+  }
+
+  async createSupportTicket(data: Partial<SupportTicket>): Promise<SupportTicket> {
+    const id = randomUUID();
+    const ticketNumber = await this.getNextTicketNumber();
+    const [ticket] = await db.insert(supportTickets).values({
+      id,
+      ticketNumber,
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as any).returning();
+    return ticket;
+  }
+
+  async updateSupportTicket(id: string, data: Partial<SupportTicket>): Promise<SupportTicket | undefined> {
+    const [ticket] = await db.update(supportTickets)
+      .set({ ...data, updatedAt: new Date() } as any)
+      .where(eq(supportTickets.id, id))
+      .returning();
+    return ticket;
+  }
+
+  async deleteSupportTicket(id: string): Promise<boolean> {
+    const result = await db.delete(supportTickets).where(eq(supportTickets.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async getNextTicketNumber(): Promise<string> {
+    const allTickets = await db.select().from(supportTickets);
+    const maxNum = allTickets.reduce((max, t) => {
+      const num = parseInt(t.ticketNumber.replace("TK-", ""), 10);
+      return isNaN(num) ? max : Math.max(max, num);
+    }, 0);
+    return `TK-${String(maxNum + 1).padStart(4, "0")}`;
   }
 
   // ==================== Initialize Default Data ====================

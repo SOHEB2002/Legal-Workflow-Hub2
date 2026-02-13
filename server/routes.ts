@@ -21,8 +21,11 @@ import {
   canCreateMemos,
   canReviewMemos,
   canDeleteMemos,
+  insertTicketSchema,
+  canManageSupportTickets,
 } from "@shared/schema";
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import { comparePassword, hashPassword, generateToken } from "./auth";
 
 export async function registerRoutes(
@@ -1112,6 +1115,154 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف المرفق" });
+    }
+  });
+
+  // ==================== Support Tickets ====================
+
+  app.get("/api/support/tickets", async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      let tickets;
+      if (canManageSupportTickets(reqUser.role)) {
+        tickets = await storage.getAllSupportTickets();
+      } else {
+        tickets = await storage.getSupportTicketsByUser(reqUser.id);
+      }
+      res.json(tickets);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/support/tickets/open-count", async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      let tickets;
+      if (canManageSupportTickets(reqUser.role)) {
+        tickets = await storage.getAllSupportTickets();
+      } else {
+        tickets = await storage.getSupportTicketsByUser(reqUser.id);
+      }
+      const openCount = tickets.filter(t => !["مغلقة", "تم_الحل"].includes(t.status)).length;
+      res.json({ count: openCount });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/support/tickets/:id", async (req, res) => {
+    try {
+      const ticket = await storage.getSupportTicketById(req.params.id);
+      if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      res.json(ticket);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/support/tickets", async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const data = insertTicketSchema.parse(req.body);
+      const ticket = await storage.createSupportTicket({
+        ...data,
+        submittedBy: reqUser.id,
+        status: "جديدة",
+      });
+      res.json(ticket);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.patch("/api/support/tickets/:id/status", async (req, res) => {
+    try {
+      const { status } = req.body;
+      const updates: any = { status };
+      if (status === "تم_الحل") updates.resolvedAt = new Date();
+      if (status === "مغلقة") updates.closedAt = new Date();
+      const ticket = await storage.updateSupportTicket(req.params.id, updates);
+      if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      res.json(ticket);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.patch("/api/support/tickets/:id/assign", async (req, res) => {
+    try {
+      const { assignedTo } = req.body;
+      const ticket = await storage.updateSupportTicket(req.params.id, { assignedTo, status: "مفتوحة" });
+      if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      res.json(ticket);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.patch("/api/support/tickets/:id/priority", async (req, res) => {
+    try {
+      const { priority } = req.body;
+      const ticket = await storage.updateSupportTicket(req.params.id, { priority });
+      if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      res.json(ticket);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/support/tickets/:id/comment", async (req, res) => {
+    try {
+      const ticket = await storage.getSupportTicketById(req.params.id);
+      if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
+
+      const { message, isInternal, userId, userName, userRole } = req.body;
+      const comments = Array.isArray(ticket.comments) ? [...(ticket.comments as any[])] : [];
+      comments.push({
+        id: randomUUID(),
+        userId,
+        userName,
+        userRole,
+        message,
+        isInternal: isInternal || false,
+        createdAt: new Date().toISOString(),
+      });
+      const updated = await storage.updateSupportTicket(req.params.id, { comments });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/support/tickets/:id/rate", async (req, res) => {
+    try {
+      const { rating, ratingComment } = req.body;
+      const ticket = await storage.updateSupportTicket(req.params.id, { rating, ratingComment: ratingComment || "" });
+      if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      res.json(ticket);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/support/tickets/:id", async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser || reqUser.role !== "branch_manager") {
+        return res.status(403).json({ error: "غير مصرح بالحذف" });
+      }
+      const success = await storage.deleteSupportTicket(req.params.id);
+      if (!success) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 

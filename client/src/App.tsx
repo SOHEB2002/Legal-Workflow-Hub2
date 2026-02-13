@@ -51,6 +51,7 @@ import { WorkflowProvider } from "@/lib/workflow-context";
 import { UsersProvider } from "@/lib/users-context";
 import { MemosProvider } from "@/lib/memos-context";
 import MemosPage from "@/pages/memos";
+import SupportPage from "@/pages/support";
 
 function Router() {
   return (
@@ -77,6 +78,7 @@ function Router() {
       <Route path="/user-profile/:id" component={UserProfilePage} />
       <Route path="/reports" component={ReportsPage} />
       <Route path="/memos" component={MemosPage} />
+      <Route path="/support" component={SupportPage} />
       <Route component={NotFound} />
     </Switch>
   );

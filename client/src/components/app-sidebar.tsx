@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, FileText, FileBarChart, ScrollText } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, FileText, FileBarChart, ScrollText, Headphones } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -113,6 +113,11 @@ const toolsMenuItems = [
     title: "الإعدادات",
     url: "/dashboard-settings",
     icon: Settings,
+  },
+  {
+    title: "الدعم الفني",
+    url: "/support",
+    icon: Headphones,
   },
   {
     title: "المساعدة",

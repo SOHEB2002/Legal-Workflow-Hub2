@@ -247,6 +247,27 @@ export const memos = pgTable("memos", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const supportTickets = pgTable("support_tickets", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  ticketNumber: varchar("ticket_number", { length: 50 }).notNull().unique(),
+  ticketType: varchar("ticket_type", { length: 50 }).notNull(),
+  title: varchar("title", { length: 500 }).notNull(),
+  description: text("description").notNull(),
+  relatedPage: varchar("related_page", { length: 255 }).default(""),
+  screenshotUrl: text("screenshot_url").default(""),
+  priority: varchar("priority", { length: 50 }).notNull().default("متوسط"),
+  status: varchar("status", { length: 50 }).notNull().default("جديدة"),
+  submittedBy: varchar("submitted_by", { length: 255 }).notNull(),
+  assignedTo: varchar("assigned_to", { length: 255 }),
+  comments: jsonb("comments").default([]),
+  rating: integer("rating"),
+  ratingComment: text("rating_comment").default(""),
+  resolvedAt: timestamp("resolved_at"),
+  closedAt: timestamp("closed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // ==================== Drizzle Insert Schemas ====================
 
 export const insertUserDbSchema = createInsertSchema(users).omit({ createdAt: true, updatedAt: true });
@@ -283,6 +304,7 @@ export const UserRole = {
   ADMIN_SUPPORT: "admin_support",             // الدعم الإداري
   EMPLOYEE: "employee",                       // موظف قسم
   HR: "hr",                                   // موظف الموارد البشرية
+  TECHNICAL_SUPPORT: "technical_support",      // دعم فني
 } as const;
 
 export type UserRoleType = typeof UserRole[keyof typeof UserRole];
@@ -295,6 +317,7 @@ export const UserRoleLabels: Record<UserRoleType, string> = {
   admin_support: "الدعم الإداري",
   employee: "موظف",
   hr: "الموارد البشرية",
+  technical_support: "دعم فني",
 };
 
 // ==================== الأقسام (Departments) ====================
@@ -1007,6 +1030,7 @@ export const insertUserSchema = z.object({
     "admin_support",
     "employee",
     "hr",
+    "technical_support",
   ]),
   departmentId: z.string().nullable().optional(),
   isActive: z.boolean().default(true),
@@ -1364,6 +1388,13 @@ export const NotificationType = {
   MEMO_APPROVED: "memo_approved",
   MEMO_RETURNED: "memo_returned",
   MEMO_SUBMITTED: "memo_submitted",
+
+  // إشعارات الدعم الفني
+  TICKET_CREATED: "ticket_created",
+  TICKET_ASSIGNED: "ticket_assigned",
+  TICKET_REPLY: "ticket_reply",
+  TICKET_STATUS_CHANGED: "ticket_status_changed",
+  TICKET_RESOLVED: "ticket_resolved",
 } as const;
 
 export type NotificationTypeValue = typeof NotificationType[keyof typeof NotificationType];
@@ -1409,6 +1440,11 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   memo_approved: "مذكرة معتمدة",
   memo_returned: "مذكرة مُرجعة",
   memo_submitted: "مذكرة مرفوعة",
+  ticket_created: "تذكرة دعم جديدة",
+  ticket_assigned: "تم تعيين تذكرة",
+  ticket_reply: "رد على تذكرة",
+  ticket_status_changed: "تغيير حالة تذكرة",
+  ticket_resolved: "تم حل تذكرة",
 };
 
 export const NotificationPriority = {
@@ -1562,6 +1598,74 @@ export interface NotificationRule {
   isActive: boolean;
   autoEscalate: boolean;
   escalateAfterHours: number;
+}
+
+// ==================== تذاكر الدعم الفني ====================
+
+export const TicketType = {
+  BUG: "خلل_فني",
+  FEATURE_REQUEST: "اقتراح_تطوير",
+  QUESTION: "استفسار",
+  UI_ISSUE: "مشكلة_واجهة",
+  PERFORMANCE: "بطء_أداء",
+  OTHER: "أخرى",
+} as const;
+
+export type TicketTypeValue = typeof TicketType[keyof typeof TicketType];
+
+export const TicketTypeLabels: Record<TicketTypeValue, string> = {
+  "خلل_فني": "خلل فني / مشكلة تقنية",
+  "اقتراح_تطوير": "اقتراح تطوير / ميزة جديدة",
+  "استفسار": "استفسار عن استخدام النظام",
+  "مشكلة_واجهة": "مشكلة في الواجهة أو العرض",
+  "بطء_أداء": "بطء في الأداء",
+  "أخرى": "أخرى",
+};
+
+export const TicketStatus = {
+  NEW: "جديدة",
+  OPEN: "مفتوحة",
+  IN_PROGRESS: "قيد_المعالجة",
+  WAITING_RESPONSE: "بانتظار_رد_المستخدم",
+  RESOLVED: "تم_الحل",
+  CLOSED: "مغلقة",
+} as const;
+
+export type TicketStatusValue = typeof TicketStatus[keyof typeof TicketStatus];
+
+export const TicketStatusLabels: Record<TicketStatusValue, string> = {
+  "جديدة": "جديدة",
+  "مفتوحة": "مفتوحة",
+  "قيد_المعالجة": "قيد المعالجة",
+  "بانتظار_رد_المستخدم": "بانتظار رد المستخدم",
+  "تم_الحل": "تم الحل",
+  "مغلقة": "مغلقة",
+};
+
+export interface TicketComment {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  message: string;
+  isInternal: boolean;
+  createdAt: string;
+}
+
+export const insertTicketSchema = z.object({
+  ticketType: z.enum(["خلل_فني", "اقتراح_تطوير", "استفسار", "مشكلة_واجهة", "بطء_أداء", "أخرى"]),
+  title: z.string().min(5, "العنوان يجب أن يكون 5 أحرف على الأقل"),
+  description: z.string().min(10, "الوصف يجب أن يكون 10 أحرف على الأقل"),
+  relatedPage: z.string().optional().default(""),
+  priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).default("متوسط"),
+  screenshotUrl: z.string().optional().default(""),
+});
+
+export type InsertTicket = z.infer<typeof insertTicketSchema>;
+export type SupportTicket = typeof supportTickets.$inferSelect;
+
+export function canManageSupportTickets(role: string): boolean {
+  return ["branch_manager", "cases_review_head", "technical_support"].includes(role);
 }
 
 // ==================== Workflow System Enums ====================
@@ -2056,5 +2160,11 @@ export const RolePermissions: Record<UserRoleType, PermissionType[]> = {
   hr: [
     "view_users", "create_users", "edit_users",
     "view_activity_log", "view_reports",
+  ],
+  technical_support: [
+    "view_cases",
+    "view_consultations",
+    "view_clients",
+    "view_users",
   ],
 };
