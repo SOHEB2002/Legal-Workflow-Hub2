@@ -43,7 +43,7 @@ import NotificationDashboardPage from "@/pages/notification-dashboard";
 import WorkflowBoardPage from "@/pages/workflow-board";
 import WorkloadDashboardPage from "@/pages/workload-dashboard";
 import PerformanceDashboardPage from "@/pages/performance-dashboard";
-import TeamsPage from "@/pages/teams";
+
 import ActivityLogPage from "@/pages/activity-log";
 import UserProfilePage from "@/pages/user-profile";
 import ReportsPage from "@/pages/reports";
@@ -72,7 +72,7 @@ function Router() {
       <Route path="/workflow-board" component={WorkflowBoardPage} />
       <Route path="/workload-dashboard" component={WorkloadDashboardPage} />
       <Route path="/performance-dashboard" component={PerformanceDashboardPage} />
-      <Route path="/teams" component={TeamsPage} />
+
       <Route path="/activity-log" component={ActivityLogPage} />
       <Route path="/user-profile/:id" component={UserProfilePage} />
       <Route path="/reports" component={ReportsPage} />
