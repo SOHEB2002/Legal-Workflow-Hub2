@@ -60,6 +60,10 @@ The system features a formal and luxurious design.
     - **User Preferences**: Sound alerts, desktop notifications, notification mode (instant, daily, weekly summary), quiet hours, muting specific types, workflow notification toggles (assignment, stage change, review notes, returns, SLA warnings).
     - **Rule-Based System**: 10 default notification rules with configurable conditions (stages, priorities, departments), recipients (assigned employee, department head, branch manager, review committee), and auto-escalation settings.
     - **Workflow Integration**: Automatic notifications triggered by workflow events (case/consultation assignment, stage changes, returns, SLA warnings) via triggerWorkflowNotification function.
+    - **Automated Scheduler** (`server/scheduler.ts`): Background `node-cron` jobs for:
+        - Unupdated hearing alerts: 8h (lawyer+dept head+admin), 24h (branch manager escalation), 48h (final escalation).
+        - Upcoming hearing reminders: 48h and 24h before hearing date.
+        - Memo deadline reminders: 3 days, 1 day, and overdue alerts with `reminderSent*` flags to prevent duplicates.
 - **Workflow Management System**:
     - **Workflow Board (`/workflow-board`)**: Kanban-style board for visualizing cases/consultations across stages with drag-like stage progression.
     - **Workload Dashboard (`/workload-dashboard`)**: Monitors employee workload distribution with overload alerts (>15 items), overdue counts, and bottleneck detection.
