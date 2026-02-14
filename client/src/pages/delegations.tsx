@@ -18,8 +18,8 @@ import { DelegationReasonLabels } from "@shared/schema";
 import {
   Plus, UserCheck, Calendar, Clock, CheckCircle, XCircle, ArrowLeftRight, RefreshCw,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { ar } from "date-fns/locale";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
+import { formatDateShortArabic } from "@/lib/date-utils";
 
 function getAuthHeaders() {
   return { Authorization: `Bearer ${localStorage.getItem("lawfirm_token")}` };
@@ -199,13 +199,13 @@ export default function DelegationsPage() {
               <TableBody>
                 {delegations.map((d: any) => (
                   <TableRow key={d.id} data-testid={`delegation-row-${d.id}`}>
-                    <TableCell className="font-medium">{getUserName(d.fromUserId)}</TableCell>
-                    <TableCell>{getUserName(d.toUserId)}</TableCell>
+                    <TableCell className="font-medium"><BidiText>{getUserName(d.fromUserId)}</BidiText></TableCell>
+                    <TableCell><BidiText>{getUserName(d.toUserId)}</BidiText></TableCell>
                     <TableCell>
                       <Badge variant="outline">{DelegationReasonLabels[d.reason] || d.reason}</Badge>
                     </TableCell>
-                    <TableCell className="text-center">{d.startDate}</TableCell>
-                    <TableCell className="text-center">{d.endDate}</TableCell>
+                    <TableCell className="text-center"><LtrInline>{formatDateShortArabic(d.startDate)}</LtrInline></TableCell>
+                    <TableCell className="text-center"><LtrInline>{formatDateShortArabic(d.endDate)}</LtrInline></TableCell>
                     <TableCell className="text-center">
                       {d.scope === "all_cases" ? "جميع القضايا" : "قضايا محددة"}
                     </TableCell>

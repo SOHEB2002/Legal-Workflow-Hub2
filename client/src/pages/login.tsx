@@ -5,6 +5,7 @@ import { useLocation } from "wouter";
 import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartInput } from "@/components/ui/smart-input";
 import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
@@ -92,7 +93,8 @@ export default function LoginPage() {
                   <FormItem>
                     <FormLabel className="text-foreground">اسم المستخدم</FormLabel>
                     <FormControl>
-                      <Input
+                      <SmartInput
+                        inputType="code"
                         data-testid="input-username"
                         placeholder="أدخل اسم المستخدم"
                         className="bg-background border-input focus:border-accent"

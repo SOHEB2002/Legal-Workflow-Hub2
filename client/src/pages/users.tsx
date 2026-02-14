@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartInput } from "@/components/ui/smart-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -56,6 +57,7 @@ import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels } from "@shared/
 import { VacationDialog } from "@/components/users/vacation-dialog";
 import { DelegationDialog } from "@/components/users/delegation-dialog";
 import { CustomPermissionsDialog } from "@/components/users/custom-permissions-dialog";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 
 function getRoleBadgeColor(role: UserRoleType) {
   switch (role) {
@@ -457,7 +459,8 @@ export default function UsersPage() {
           <div className="flex flex-wrap items-center gap-4">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
+              <SmartInput
+                inputType="text"
                 data-testid="input-search-users"
                 placeholder="بحث بالاسم أو البريد..."
                 value={searchQuery}
@@ -533,8 +536,8 @@ export default function UsersPage() {
                         <User className="w-5 h-5 text-primary" />
                       </div>
                       <div>
-                        <p className="font-medium">{u.name}</p>
-                        <p className="text-sm text-muted-foreground">@{u.username}</p>
+                        <p className="font-medium"><BidiText>{u.name}</BidiText></p>
+                        <p className="text-sm text-muted-foreground"><LtrInline>@{u.username}</LtrInline></p>
                       </div>
                     </div>
                   </TableCell>
@@ -550,11 +553,11 @@ export default function UsersPage() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-1 text-sm">
                         <Phone className="w-3 h-3" />
-                        {u.phone}
+                        <LtrInline>{u.phone}</LtrInline>
                       </div>
                       <div className="flex items-center gap-1 text-sm text-muted-foreground">
                         <Mail className="w-3 h-3" />
-                        {u.email}
+                        <LtrInline>{u.email}</LtrInline>
                       </div>
                     </div>
                   </TableCell>
@@ -705,7 +708,8 @@ export default function UsersPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>الاسم الكامل *</Label>
-                <Input
+                <SmartInput
+                  inputType="text"
                   data-testid="input-user-name"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -714,7 +718,8 @@ export default function UsersPage() {
               </div>
               <div>
                 <Label>اسم المستخدم *</Label>
-                <Input
+                <SmartInput
+                  inputType="code"
                   data-testid="input-username"
                   value={formData.username}
                   onChange={(e) => setFormData({ ...formData, username: e.target.value })}
@@ -735,7 +740,8 @@ export default function UsersPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>البريد الإلكتروني</Label>
-                <Input
+                <SmartInput
+                  inputType="email"
                   data-testid="input-email"
                   type="email"
                   value={formData.email}
@@ -745,7 +751,8 @@ export default function UsersPage() {
               </div>
               <div>
                 <Label>الهاتف</Label>
-                <Input
+                <SmartInput
+                  inputType="phone"
                   data-testid="input-phone"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
@@ -841,7 +848,8 @@ export default function UsersPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>الاسم الكامل *</Label>
-                <Input
+                <SmartInput
+                  inputType="text"
                   data-testid="input-edit-name"
                   value={editFormData.name}
                   onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
@@ -850,7 +858,8 @@ export default function UsersPage() {
               </div>
               <div>
                 <Label>اسم المستخدم *</Label>
-                <Input
+                <SmartInput
+                  inputType="code"
                   data-testid="input-edit-username"
                   value={editFormData.username}
                   onChange={(e) => setEditFormData({ ...editFormData, username: e.target.value })}
@@ -861,7 +870,8 @@ export default function UsersPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>البريد الإلكتروني</Label>
-                <Input
+                <SmartInput
+                  inputType="email"
                   data-testid="input-edit-email"
                   type="email"
                   value={editFormData.email}
@@ -871,7 +881,8 @@ export default function UsersPage() {
               </div>
               <div>
                 <Label>الهاتف</Label>
-                <Input
+                <SmartInput
+                  inputType="phone"
                   data-testid="input-edit-phone"
                   value={editFormData.phone}
                   onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
@@ -1021,8 +1032,8 @@ export default function UsersPage() {
                   <User className="w-8 h-8 text-primary" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold">{selectedUser.name}</h3>
-                  <p className="text-muted-foreground">@{selectedUser.username}</p>
+                  <h3 className="text-lg font-semibold"><BidiText>{selectedUser.name}</BidiText></h3>
+                  <p className="text-muted-foreground"><LtrInline>@{selectedUser.username}</LtrInline></p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -1042,11 +1053,11 @@ export default function UsersPage() {
                 </div>
                 <div>
                   <Label className="text-muted-foreground">البريد</Label>
-                  <p>{selectedUser.email}</p>
+                  <p><LtrInline>{selectedUser.email}</LtrInline></p>
                 </div>
                 <div>
                   <Label className="text-muted-foreground">الجوال</Label>
-                  <p>{selectedUser.phone}</p>
+                  <p><LtrInline>{selectedUser.phone}</LtrInline></p>
                 </div>
               </div>
               <div className="flex gap-2 flex-wrap">

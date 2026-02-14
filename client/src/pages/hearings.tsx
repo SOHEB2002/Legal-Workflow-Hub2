@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartInput } from "@/components/ui/smart-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,6 +36,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import {
   Plus,
   Calendar,
@@ -59,8 +61,8 @@ import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
 import { HearingStatus, HearingResult, CourtType } from "@shared/schema";
-import { format, differenceInDays, isToday } from "date-fns";
-import { ar } from "date-fns/locale";
+import { differenceInDays, isToday } from "date-fns";
+import { formatDateArabic, formatTimeAmPm } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
 
 function getUrgencyColor(hearingDate: string) {
@@ -398,7 +400,8 @@ export default function HearingsPage() {
               </div>
               <div>
                 <Label>رقم الدائرة</Label>
-                <Input
+                <SmartInput
+                  inputType="code"
                   data-testid="input-court-room"
                   value={formData.courtRoom}
                   onChange={(e) => setFormData({ ...formData, courtRoom: e.target.value })}
@@ -515,14 +518,14 @@ export default function HearingsPage() {
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <Badge className={getUrgencyColor(hearing.hearingDate)}>
-                                {format(new Date(hearing.hearingDate), "dd MMM yyyy", { locale: ar })}
+                                {formatDateArabic(hearing.hearingDate, "dd MMM yyyy")}
                               </Badge>
-                              <span className="text-sm text-muted-foreground">{hearing.hearingTime}</span>
+                              <LtrInline className="text-sm text-muted-foreground">{formatTimeAmPm(hearing.hearingTime)}</LtrInline>
                             </div>
                           </TableCell>
                           <TableCell>
                             <div>
-                              <p className="font-medium text-sm">{caseInfo.number}</p>
+                              <p className="font-medium text-sm"><LtrInline>{caseInfo.number}</LtrInline></p>
                               {caseInfo.client && (
                                 <p className="text-xs text-muted-foreground">{caseInfo.client}</p>
                               )}
@@ -531,9 +534,9 @@ export default function HearingsPage() {
                           <TableCell>
                             <div className="flex items-center gap-1 text-sm">
                               <MapPin className="w-3 h-3 shrink-0" />
-                              <span>{hearing.courtName}</span>
+                              <BidiText>{hearing.courtName}</BidiText>
                               {hearing.courtRoom && (
-                                <span className="text-muted-foreground">- {hearing.courtRoom}</span>
+                                <span className="text-muted-foreground">- <LtrInline>{hearing.courtRoom}</LtrInline></span>
                               )}
                             </div>
                           </TableCell>
@@ -962,23 +965,23 @@ export default function HearingsPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <p className="text-xs text-muted-foreground">التاريخ</p>
-                    <p className="font-medium">{format(new Date(detailHearing.hearingDate), "dd MMMM yyyy", { locale: ar })}</p>
+                    <p className="font-medium">{formatDateArabic(detailHearing.hearingDate, "dd MMMM yyyy")}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">الوقت</p>
-                    <p className="font-medium">{detailHearing.hearingTime}</p>
+                    <p className="font-medium"><LtrInline>{formatTimeAmPm(detailHearing.hearingTime)}</LtrInline></p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">المحكمة</p>
-                    <p className="font-medium">{detailHearing.courtName}</p>
+                    <p className="font-medium"><BidiText>{detailHearing.courtName}</BidiText></p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">الدائرة</p>
-                    <p className="font-medium">{detailHearing.courtRoom || "-"}</p>
+                    <p className="font-medium"><LtrInline>{detailHearing.courtRoom || "-"}</LtrInline></p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">القضية</p>
-                    <p className="font-medium">{getCaseInfo(detailHearing.caseId).number}</p>
+                    <p className="font-medium"><LtrInline>{getCaseInfo(detailHearing.caseId).number}</LtrInline></p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">الحالة</p>
@@ -1031,15 +1034,15 @@ export default function HearingsPage() {
                     {detailHearing.objectionDeadline && (
                       <div>
                         <p className="text-xs text-muted-foreground">مهلة الاعتراض</p>
-                        <p className="text-sm">{format(new Date(detailHearing.objectionDeadline), "dd MMMM yyyy", { locale: ar })}</p>
+                        <p className="text-sm">{formatDateArabic(detailHearing.objectionDeadline, "dd MMMM yyyy")}</p>
                       </div>
                     )}
                     {detailHearing.nextHearingDate && (
                       <div>
                         <p className="text-xs text-muted-foreground">الجلسة القادمة</p>
                         <p className="text-sm">
-                          {format(new Date(detailHearing.nextHearingDate), "dd MMMM yyyy", { locale: ar })}
-                          {detailHearing.nextHearingTime && ` - ${detailHearing.nextHearingTime}`}
+                          {formatDateArabic(detailHearing.nextHearingDate, "dd MMMM yyyy")}
+                          {detailHearing.nextHearingTime && <> - <LtrInline>{formatTimeAmPm(detailHearing.nextHearingTime)}</LtrInline></>}
                         </p>
                       </div>
                     )}

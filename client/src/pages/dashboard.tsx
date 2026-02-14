@@ -1,7 +1,7 @@
 import { useMemo } from "react";
-import { format, isWithinInterval, addDays, startOfMonth, isToday } from "date-fns";
-import { ar } from "date-fns/locale";
+import { isWithinInterval, addDays, startOfMonth, isToday } from "date-fns";
 import { useLocation } from "wouter";
+import { formatDayMonthArabic } from "@/lib/date-utils";
 import {
   Briefcase,
   FileText,
@@ -186,7 +186,7 @@ export default function DashboardPage() {
                 id: h.id,
                 title: getClientName(caseData?.clientId || ""),
                 subtitle: `${h.courtName} - ${h.hearingTime}`,
-                badge: format(new Date(h.hearingDate), "d MMM", { locale: ar }),
+                badge: formatDayMonthArabic(h.hearingDate),
                 urgent: isUrgent(h.hearingDate),
               };
             })}

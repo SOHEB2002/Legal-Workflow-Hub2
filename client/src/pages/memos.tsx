@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import {
   Dialog,
   DialogContent,
@@ -55,8 +56,8 @@ import {
   canDeleteMemos,
 } from "@shared/schema";
 import type { Memo, MemoTypeValue, MemoStatusValue } from "@shared/schema";
-import { format, differenceInDays } from "date-fns";
-import { ar } from "date-fns/locale";
+import { differenceInDays } from "date-fns";
+import { formatDateArabic, formatDateTimeArabic } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
 
 function getStatusBadgeClass(status: MemoStatusValue): string {
@@ -374,14 +375,14 @@ export default function MemosPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm">{getCaseNumber(memo.caseId)}</span>
+                          <span className="text-sm"><LtrInline>{getCaseNumber(memo.caseId)}</LtrInline></span>
                         </TableCell>
                         <TableCell>
                           <span className="text-sm">{getUserName(memo.assignedTo)}</span>
                         </TableCell>
                         <TableCell>
                           <span className={`text-sm ${getDeadlineColor(memo.deadline)}`}>
-                            {format(new Date(memo.deadline), "dd MMM yyyy", { locale: ar })}
+                            {formatDateArabic(memo.deadline)}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -438,7 +439,7 @@ export default function MemosPage() {
                     .filter((c) => c.status !== "مغلق")
                     .map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.caseNumber}
+                        <LtrInline>{c.caseNumber}</LtrInline>
                       </SelectItem>
                     ))}
                 </SelectContent>
@@ -582,7 +583,7 @@ export default function MemosPage() {
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">القضية</p>
-                    <p className="font-medium">{getCaseNumber(detailMemo.caseId)}</p>
+                    <p className="font-medium"><LtrInline>{getCaseNumber(detailMemo.caseId)}</LtrInline></p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">المحامي المكلف</p>
@@ -591,7 +592,7 @@ export default function MemosPage() {
                   <div>
                     <p className="text-sm text-muted-foreground">الموعد النهائي</p>
                     <p className={`font-medium ${getDeadlineColor(detailMemo.deadline)}`}>
-                      {format(new Date(detailMemo.deadline), "dd MMM yyyy", { locale: ar })}
+                      {formatDateArabic(detailMemo.deadline)}
                     </p>
                   </div>
                   <div>
@@ -751,34 +752,34 @@ export default function MemosPage() {
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-primary shrink-0" />
                       <span className="text-muted-foreground">تاريخ الإنشاء:</span>
-                      <span>{format(new Date(detailMemo.createdAt), "dd MMM yyyy HH:mm", { locale: ar })}</span>
+                      <span>{formatDateTimeArabic(detailMemo.createdAt)}</span>
                     </div>
                     {detailMemo.startedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
                         <span className="text-muted-foreground">بدء التحرير:</span>
-                        <span>{format(new Date(detailMemo.startedAt), "dd MMM yyyy HH:mm", { locale: ar })}</span>
+                        <span>{formatDateTimeArabic(detailMemo.startedAt)}</span>
                       </div>
                     )}
                     {detailMemo.completedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-yellow-500 shrink-0" />
                         <span className="text-muted-foreground">إرسال للمراجعة:</span>
-                        <span>{format(new Date(detailMemo.completedAt), "dd MMM yyyy HH:mm", { locale: ar })}</span>
+                        <span>{formatDateTimeArabic(detailMemo.completedAt)}</span>
                       </div>
                     )}
                     {detailMemo.reviewedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
                         <span className="text-muted-foreground">تاريخ المراجعة:</span>
-                        <span>{format(new Date(detailMemo.reviewedAt), "dd MMM yyyy HH:mm", { locale: ar })}</span>
+                        <span>{formatDateTimeArabic(detailMemo.reviewedAt)}</span>
                       </div>
                     )}
                     {detailMemo.submittedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
                         <span className="text-muted-foreground">تاريخ الرفع:</span>
-                        <span>{format(new Date(detailMemo.submittedAt), "dd MMM yyyy HH:mm", { locale: ar })}</span>
+                        <span>{formatDateTimeArabic(detailMemo.submittedAt)}</span>
                       </div>
                     )}
                   </div>

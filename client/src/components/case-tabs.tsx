@@ -14,8 +14,8 @@ import {
   MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, Star,
 } from "lucide-react";
 import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels } from "@shared/schema";
-import { format, formatDistanceToNow } from "date-fns";
-import { ar } from "date-fns/locale";
+import { LtrInline } from "@/components/ui/bidi-text";
+import { formatRelativeArabic, formatDateShortArabic } from "@/lib/date-utils";
 
 function getAuthHeaders() {
   return { Authorization: `Bearer ${localStorage.getItem("lawfirm_token")}` };
@@ -69,7 +69,7 @@ export function CaseActivityTab({ caseId }: { caseId: string }) {
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <p className="font-medium text-sm">{activity.title}</p>
               <span className="text-xs text-muted-foreground">
-                {activity.createdAt ? formatDistanceToNow(new Date(activity.createdAt), { addSuffix: true, locale: ar }) : ""}
+                {formatRelativeArabic(activity.createdAt)}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -247,7 +247,7 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
               )}
               <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                 <span>{note.userName}</span>
-                <span>{note.createdAt ? formatDistanceToNow(new Date(note.createdAt), { addSuffix: true, locale: ar }) : ""}</span>
+                <span>{formatRelativeArabic(note.createdAt)}</span>
                 {note.editedAt && <span>(معدّلة)</span>}
               </div>
             </div>
@@ -444,8 +444,8 @@ export function CaseDeadlinesTab({ caseId }: { caseId: string }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-4 mt-2 text-xs">
-                  <span>من: {deadline.startDate}</span>
-                  <span>إلى: {deadline.deadlineDate}</span>
+                  <span>من: <LtrInline>{formatDateShortArabic(deadline.startDate)}</LtrInline></span>
+                  <span>إلى: <LtrInline>{formatDateShortArabic(deadline.deadlineDate)}</LtrInline></span>
                   <span>المدة: {deadline.durationDays} يوم</span>
                   {deadline.status === "نشط" && (
                     <span className="font-bold">

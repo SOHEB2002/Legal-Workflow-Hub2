@@ -59,8 +59,8 @@ import {
   type FieldTaskStatusValue,
   type FieldTaskTypeValue,
 } from "@shared/schema";
-import { format } from "date-fns";
-import { ar } from "date-fns/locale";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
+import { formatDateShortArabic, formatDateTimeArabic } from "@/lib/date-utils";
 
 export default function FieldTasksPage() {
   const { user, permissions, users } = useAuth();
@@ -353,7 +353,7 @@ export default function FieldTasksPage() {
                       <SelectItem value="_none">بدون قضية</SelectItem>
                       {cases.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
-                          قضية {c.caseNumber}
+                          قضية <LtrInline>{c.caseNumber}</LtrInline>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -374,7 +374,7 @@ export default function FieldTasksPage() {
                       <SelectItem value="_none">بدون استشارة</SelectItem>
                       {consultations.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
-                          استشارة {c.consultationNumber}
+                          استشارة <LtrInline>{c.consultationNumber}</LtrInline>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -464,11 +464,9 @@ export default function FieldTasksPage() {
                         {FieldTaskTypeLabels[task.taskType as FieldTaskTypeValue] || task.taskType}
                       </Badge>
                     </TableCell>
-                    <TableCell>{getUserName(task.assignedTo)}</TableCell>
+                    <TableCell><BidiText>{getUserName(task.assignedTo)}</BidiText></TableCell>
                     <TableCell>
-                      {task.dueDate
-                        ? format(new Date(task.dueDate), "dd/MM/yyyy", { locale: ar })
-                        : "-"}
+                      <LtrInline>{formatDateShortArabic(task.dueDate)}</LtrInline>
                     </TableCell>
                     <TableCell>
                       <Badge className={getPriorityColor(task.priority)}>{task.priority}</Badge>
@@ -649,24 +647,22 @@ export default function FieldTasksPage() {
                 </div>
                 <div>
                   <Label className="text-muted-foreground text-sm">المكلف</Label>
-                  <p>{getUserName(selectedTask.assignedTo)}</p>
+                  <p><BidiText>{getUserName(selectedTask.assignedTo)}</BidiText></p>
                 </div>
                 <div>
                   <Label className="text-muted-foreground text-sm">المُسند</Label>
-                  <p>{getUserName(selectedTask.assignedBy)}</p>
+                  <p><BidiText>{getUserName(selectedTask.assignedBy)}</BidiText></p>
                 </div>
                 <div>
                   <Label className="text-muted-foreground text-sm">تاريخ الاستحقاق</Label>
                   <p>
-                    {selectedTask.dueDate
-                      ? format(new Date(selectedTask.dueDate), "dd/MM/yyyy", { locale: ar })
-                      : "-"}
+                    <LtrInline>{formatDateShortArabic(selectedTask.dueDate)}</LtrInline>
                   </p>
                 </div>
                 <div>
                   <Label className="text-muted-foreground text-sm">تاريخ الإنشاء</Label>
                   <p>
-                    {format(new Date(selectedTask.createdAt), "dd/MM/yyyy", { locale: ar })}
+                    <LtrInline>{formatDateShortArabic(selectedTask.createdAt)}</LtrInline>
                   </p>
                 </div>
               </div>
@@ -693,11 +689,7 @@ export default function FieldTasksPage() {
                   <div>
                     <Label className="text-muted-foreground text-sm">تاريخ الإنجاز</Label>
                     <p>
-                      {selectedTask.completedAt
-                        ? format(new Date(selectedTask.completedAt), "dd/MM/yyyy HH:mm", {
-                            locale: ar,
-                          })
-                        : "-"}
+                      <LtrInline>{formatDateTimeArabic(selectedTask.completedAt)}</LtrInline>
                     </p>
                   </div>
                   {selectedTask.completionNotes && (
@@ -721,7 +713,7 @@ export default function FieldTasksPage() {
                         rel="noopener noreferrer"
                         className="text-primary hover:underline block"
                       >
-                        {selectedTask.proofFileLink}
+                        <LtrInline>{selectedTask.proofFileLink}</LtrInline>
                       </a>
                     </div>
                   )}

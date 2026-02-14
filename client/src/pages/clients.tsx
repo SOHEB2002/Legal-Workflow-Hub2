@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartInput } from "@/components/ui/smart-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -33,6 +34,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import { Plus, Search, Pencil, Trash2, Building2, User, Phone as PhoneIcon, Mail, Eye, Briefcase, MessageSquare, PhoneCall, Clock, CheckCircle } from "lucide-react";
 import { useClients } from "@/lib/clients-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -43,8 +45,7 @@ import { useConsultations } from "@/lib/consultations-context";
 import { useContacts } from "@/lib/contacts-context";
 import type { Client, ClientTypeValue, ContactTypeValue, FollowUpStatusValue } from "@shared/schema";
 import { ClientType, CaseStageLabels, ContactType, ContactTypeLabels, FollowUpStatus, FollowUpStatusLabels } from "@shared/schema";
-import { format } from "date-fns";
-import { ar } from "date-fns/locale";
+import { formatDateArabic } from "@/lib/date-utils";
 
 export default function ClientsPage() {
   const { clients, addClient, updateClient, deleteClient, getClientName } = useClients();
@@ -256,7 +257,8 @@ export default function ClientsPage() {
         <>
           <div>
             <Label>الاسم الكامل</Label>
-            <Input
+            <SmartInput
+              inputType="text"
               data-testid="input-individual-name"
               value={formData.individualName || ""}
               onChange={(e) => setFormData({ ...formData, individualName: e.target.value })}
@@ -265,7 +267,8 @@ export default function ClientsPage() {
           </div>
           <div>
             <Label>رقم الهوية</Label>
-            <Input
+            <SmartInput
+              inputType="numeric"
               data-testid="input-national-id"
               value={formData.nationalId || ""}
               onChange={(e) => setFormData({ ...formData, nationalId: e.target.value })}
@@ -277,7 +280,8 @@ export default function ClientsPage() {
         <>
           <div>
             <Label>اسم الشركة</Label>
-            <Input
+            <SmartInput
+              inputType="text"
               data-testid="input-company-name"
               value={formData.companyName || ""}
               onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
@@ -286,7 +290,8 @@ export default function ClientsPage() {
           </div>
           <div>
             <Label>السجل التجاري</Label>
-            <Input
+            <SmartInput
+              inputType="numeric"
               data-testid="input-commercial-register"
               value={formData.commercialRegister || ""}
               onChange={(e) => setFormData({ ...formData, commercialRegister: e.target.value })}
@@ -295,7 +300,8 @@ export default function ClientsPage() {
           </div>
           <div>
             <Label>اسم الممثل</Label>
-            <Input
+            <SmartInput
+              inputType="text"
               data-testid="input-representative-name"
               value={formData.representativeName || ""}
               onChange={(e) => setFormData({ ...formData, representativeName: e.target.value })}
@@ -304,7 +310,8 @@ export default function ClientsPage() {
           </div>
           <div>
             <Label>صفة الممثل</Label>
-            <Input
+            <SmartInput
+              inputType="text"
               data-testid="input-representative-title"
               value={formData.representativeTitle || ""}
               onChange={(e) => setFormData({ ...formData, representativeTitle: e.target.value })}
@@ -316,7 +323,8 @@ export default function ClientsPage() {
 
       <div>
         <Label>رقم الجوال</Label>
-        <Input
+        <SmartInput
+          inputType="phone"
           data-testid="input-phone"
           value={formData.phone || ""}
           onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
@@ -325,7 +333,8 @@ export default function ClientsPage() {
       </div>
       <div>
         <Label>البريد الإلكتروني</Label>
-        <Input
+        <SmartInput
+          inputType="email"
           data-testid="input-email"
           type="email"
           value={formData.email || ""}
@@ -335,7 +344,8 @@ export default function ClientsPage() {
       </div>
       <div>
         <Label>العنوان</Label>
-        <Input
+        <SmartInput
+          inputType="text"
           data-testid="input-address"
           value={formData.address || ""}
           onChange={(e) => setFormData({ ...formData, address: e.target.value })}
@@ -387,7 +397,8 @@ export default function ClientsPage() {
           <div className="flex flex-wrap items-center gap-4">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
+              <SmartInput
+                inputType="text"
                 data-testid="input-search-clients"
                 placeholder="بحث بالاسم أو الجوال..."
                 value={searchQuery}
@@ -433,7 +444,7 @@ export default function ClientsPage() {
                       </div>
                       <div>
                         <p className="font-medium">
-                          {client.clientType === "فرد" ? client.individualName : client.companyName}
+                          <BidiText>{client.clientType === "فرد" ? client.individualName : client.companyName}</BidiText>
                         </p>
                         {client.clientType === "شركة" && client.representativeName && (
                           <p className="text-sm text-muted-foreground">
@@ -452,12 +463,12 @@ export default function ClientsPage() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-1 text-sm">
                         <PhoneIcon className="w-3 h-3" />
-                        {client.phone}
+                        <LtrInline>{client.phone}</LtrInline>
                       </div>
                       {client.email && (
                         <div className="flex items-center gap-1 text-sm text-muted-foreground">
                           <Mail className="w-3 h-3" />
-                          {client.email}
+                          <LtrInline>{client.email}</LtrInline>
                         </div>
                       )}
                     </div>
@@ -552,7 +563,7 @@ export default function ClientsPage() {
                   <Building2 className="w-5 h-5 text-primary" />
                 )}
               </div>
-              {viewingClient?.clientType === "فرد" ? viewingClient?.individualName : viewingClient?.companyName}
+              <BidiText>{viewingClient?.clientType === "فرد" ? viewingClient?.individualName : viewingClient?.companyName}</BidiText>
             </DialogTitle>
           </DialogHeader>
           {viewingClient && (
@@ -583,40 +594,40 @@ export default function ClientsPage() {
                     <>
                       <div>
                         <Label className="text-muted-foreground">الاسم</Label>
-                        <p className="font-medium">{viewingClient.individualName}</p>
+                        <p className="font-medium"><BidiText>{viewingClient.individualName}</BidiText></p>
                       </div>
                       <div>
                         <Label className="text-muted-foreground">رقم الهوية</Label>
-                        <p className="font-medium">{viewingClient.nationalId || "-"}</p>
+                        <p className="font-medium"><LtrInline>{viewingClient.nationalId || "-"}</LtrInline></p>
                       </div>
                     </>
                   ) : (
                     <>
                       <div>
                         <Label className="text-muted-foreground">اسم الشركة</Label>
-                        <p className="font-medium">{viewingClient.companyName}</p>
+                        <p className="font-medium"><BidiText>{viewingClient.companyName}</BidiText></p>
                       </div>
                       <div>
                         <Label className="text-muted-foreground">السجل التجاري</Label>
-                        <p className="font-medium">{viewingClient.commercialRegister || "-"}</p>
+                        <p className="font-medium"><LtrInline>{viewingClient.commercialRegister || "-"}</LtrInline></p>
                       </div>
                       <div>
                         <Label className="text-muted-foreground">ممثل الشركة</Label>
-                        <p className="font-medium">{viewingClient.representativeName || "-"}</p>
+                        <p className="font-medium"><BidiText>{viewingClient.representativeName || "-"}</BidiText></p>
                       </div>
                       <div>
                         <Label className="text-muted-foreground">صفة الممثل</Label>
-                        <p className="font-medium">{viewingClient.representativeTitle || "-"}</p>
+                        <p className="font-medium"><BidiText>{viewingClient.representativeTitle || "-"}</BidiText></p>
                       </div>
                     </>
                   )}
                   <div>
                     <Label className="text-muted-foreground">رقم الجوال</Label>
-                    <p className="font-medium">{viewingClient.phone}</p>
+                    <p className="font-medium"><LtrInline>{viewingClient.phone}</LtrInline></p>
                   </div>
                   <div>
                     <Label className="text-muted-foreground">البريد الإلكتروني</Label>
-                    <p className="font-medium">{viewingClient.email || "-"}</p>
+                    <p className="font-medium"><LtrInline>{viewingClient.email || "-"}</LtrInline></p>
                   </div>
                   <div className="col-span-2">
                     <Label className="text-muted-foreground">العنوان</Label>
@@ -630,7 +641,7 @@ export default function ClientsPage() {
                   )}
                 </div>
                 <div className="border-t pt-4 text-sm text-muted-foreground">
-                  تاريخ الإضافة: {format(new Date(viewingClient.createdAt), "d MMMM yyyy", { locale: ar })}
+                  تاريخ الإضافة: {formatDateArabic(viewingClient.createdAt)}
                 </div>
               </TabsContent>
 
@@ -672,12 +683,12 @@ export default function ClientsPage() {
                               <Badge variant="outline">{ContactTypeLabels[contact.contactType]}</Badge>
                             </TableCell>
                             <TableCell>
-                              {format(new Date(contact.contactDate), "d MMMM yyyy", { locale: ar })}
+                              {formatDateArabic(contact.contactDate)}
                             </TableCell>
                             <TableCell>
                               {contact.nextFollowUpDate ? (
                                 <span className={new Date(contact.nextFollowUpDate) < new Date() && contact.followUpStatus === FollowUpStatus.PENDING ? "text-destructive font-medium" : ""}>
-                                  {format(new Date(contact.nextFollowUpDate), "d MMMM yyyy", { locale: ar })}
+                                  {formatDateArabic(contact.nextFollowUpDate)}
                                 </span>
                               ) : "-"}
                             </TableCell>
@@ -736,7 +747,7 @@ export default function ClientsPage() {
                               <Badge variant="outline">{CaseStageLabels[c.currentStage] || c.currentStage}</Badge>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
-                              {format(new Date(c.createdAt), "d MMMM yyyy", { locale: ar })}
+                              {formatDateArabic(c.createdAt)}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -771,7 +782,7 @@ export default function ClientsPage() {
                               <Badge variant="outline">{c.status}</Badge>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
-                              {format(new Date(c.createdAt), "d MMMM yyyy", { locale: ar })}
+                              {formatDateArabic(c.createdAt)}
                             </TableCell>
                           </TableRow>
                         ))}

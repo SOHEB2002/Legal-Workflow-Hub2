@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, isWithinInterval, subMonths } from "date-fns";
 import { ar } from "date-fns/locale";
 import { useQuery } from "@tanstack/react-query";
+import { formatDateShortArabic, formatMonthYearArabic } from "@/lib/date-utils";
 import {
   Briefcase,
   MessageSquare,
@@ -916,7 +917,7 @@ function HearingsReportSection() {
     downloadCSV(
       upcomingHearings.map(h => ({
         "القضية": getCaseName(h.caseId),
-        "التاريخ": (() => { try { return format(parseISO(h.hearingDate), "yyyy/MM/dd"); } catch { return h.hearingDate; } })(),
+        "التاريخ": formatDateShortArabic(h.hearingDate),
         "الوقت": h.hearingTime || "-",
         "المحكمة": h.courtName || "-",
         "القاعة": h.courtRoom || "-",
@@ -956,7 +957,7 @@ function HearingsReportSection() {
                   <TableRow key={hearing.id} data-testid={`row-hearing-${hearing.id}`}>
                     <TableCell className="font-medium">{getCaseName(hearing.caseId)}</TableCell>
                     <TableCell>
-                      {(() => { try { return format(parseISO(hearing.hearingDate), "yyyy/MM/dd"); } catch { return hearing.hearingDate; } })()}
+                      {formatDateShortArabic(hearing.hearingDate)}
                     </TableCell>
                     <TableCell>{hearing.hearingTime || "-"}</TableCell>
                     <TableCell>{hearing.courtName || "-"}</TableCell>

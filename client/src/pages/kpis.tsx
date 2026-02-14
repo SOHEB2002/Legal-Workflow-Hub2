@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, subMonths, startOfYear, endOfYear } from "date-fns";
-import { ar } from "date-fns/locale";
+import { startOfMonth, endOfMonth, isWithinInterval, parseISO, subMonths, startOfYear, endOfYear } from "date-fns";
+import { formatMonthYearArabic } from "@/lib/date-utils";
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -327,7 +327,7 @@ export default function KPIsPage() {
             مؤشرات الأداء الرئيسية
           </h1>
           <p className="text-muted-foreground">
-            تحليل شامل لأداء مكتب المحاماة - {format(new Date(), "MMMM yyyy", { locale: ar })}
+            تحليل شامل لأداء مكتب المحاماة - {formatMonthYearArabic(new Date())}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

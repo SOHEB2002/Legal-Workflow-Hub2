@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
-import { format } from "date-fns";
-import { ar } from "date-fns/locale";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
+import { formatDateArabic, formatDateTimeArabic, formatTimeAmPm } from "@/lib/date-utils";
 import {
   Plus,
   Search,
@@ -27,6 +27,7 @@ import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SmartInput } from "@/components/ui/smart-input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -487,7 +488,8 @@ export default function CasesPage() {
           <div className="flex flex-wrap items-center gap-4">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
+              <SmartInput
+                inputType="text"
                 data-testid="input-search"
                 placeholder="بحث برقم القضية أو اسم العميل..."
                 value={searchQuery}
@@ -548,8 +550,8 @@ export default function CasesPage() {
             <TableBody>
               {filteredCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
-                  <TableCell className="font-medium bidi-override">{c.caseNumber}</TableCell>
-                  <TableCell>{getClientName(c.clientId)}</TableCell>
+                  <TableCell className="font-medium"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
+                  <TableCell><BidiText>{getClientName(c.clientId)}</BidiText></TableCell>
                   <TableCell>
                     <Badge variant="outline" className={
                       c.caseClassification === CaseClassification.DEFENDANT
@@ -738,7 +740,8 @@ export default function CasesPage() {
                       </SelectContent>
                     </Select>
                     {formData.caseType === "أخرى" && (
-                      <Input
+                      <SmartInput
+                        inputType="text"
                         data-testid="input-case-type-other"
                         value={formData.caseTypeOther}
                         onChange={(e) => setFormData({ ...formData, caseTypeOther: e.target.value })}
@@ -781,7 +784,8 @@ export default function CasesPage() {
                     </SelectContent>
                   </Select>
                   {formData.departmentId === "أخرى" && (
-                    <Input
+                    <SmartInput
+                      inputType="text"
                       data-testid="input-department-other"
                       value={formData.departmentOther}
                       onChange={(e) => setFormData({ ...formData, departmentOther: e.target.value })}
@@ -792,7 +796,8 @@ export default function CasesPage() {
                 </div>
                 <div>
                   <Label>اسم المحكمة</Label>
-                  <Input
+                  <SmartInput
+                    inputType="text"
                     data-testid="input-court-name"
                     value={formData.courtName}
                     onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
@@ -801,7 +806,8 @@ export default function CasesPage() {
                 </div>
                 <div>
                   <Label>رقم القضية بالمحكمة</Label>
-                  <Input
+                  <SmartInput
+                    inputType="code"
                     data-testid="input-court-case-number"
                     value={formData.courtCaseNumber}
                     onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
@@ -809,7 +815,8 @@ export default function CasesPage() {
                 </div>
                 <div>
                   <Label>اسم الخصم</Label>
-                  <Input
+                  <SmartInput
+                    inputType="text"
                     data-testid="input-opponent-name"
                     value={formData.opponentName}
                     onChange={(e) => setFormData({ ...formData, opponentName: e.target.value })}
@@ -984,7 +991,7 @@ export default function CasesPage() {
       <Dialog open={showDetailsDialog} onOpenChange={(open) => { setShowDetailsDialog(open); if (!open) setActiveTab("info"); }}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="bidi-override">تفاصيل القضية {selectedCase?.caseNumber}</DialogTitle>
+            <DialogTitle>تفاصيل القضية <LtrInline>{selectedCase?.caseNumber}</LtrInline></DialogTitle>
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
@@ -1033,7 +1040,7 @@ export default function CasesPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label className="text-muted-foreground">العميل</Label>
-                      <p className="font-medium">{getClientName(selectedCase.clientId)}</p>
+                      <p className="font-medium"><BidiText>{getClientName(selectedCase.clientId)}</BidiText></p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">المحامي المسؤول</Label>
@@ -1057,11 +1064,11 @@ export default function CasesPage() {
                     </div>
                     <div>
                       <Label className="text-muted-foreground">رقم القضية بالمحكمة</Label>
-                      <p>{selectedCase.courtCaseNumber || "-"}</p>
+                      <p><LtrInline>{selectedCase.courtCaseNumber || "-"}</LtrInline></p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">الدائرة</Label>
-                      <p>{selectedCase.circuitNumber || "-"}</p>
+                      <p><LtrInline>{selectedCase.circuitNumber || "-"}</LtrInline></p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">القاضي</Label>
@@ -1074,11 +1081,11 @@ export default function CasesPage() {
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <Label className="text-muted-foreground">اسم الخصم</Label>
-                        <p>{selectedCase.opponentName || "-"}</p>
+                        <p><BidiText>{selectedCase.opponentName || "-"}</BidiText></p>
                       </div>
                       <div>
                         <Label className="text-muted-foreground">هاتف الخصم</Label>
-                        <p>{selectedCase.opponentPhone || "-"}</p>
+                        <p><LtrInline>{selectedCase.opponentPhone || "-"}</LtrInline></p>
                       </div>
                     </div>
                   </div>
@@ -1094,8 +1101,8 @@ export default function CasesPage() {
                   
                   <div className="border-t pt-4">
                     <div className="flex justify-between text-sm text-muted-foreground">
-                      <span>تاريخ الإنشاء: {format(new Date(selectedCase.createdAt), "d MMMM yyyy", { locale: ar })}</span>
-                      <span>آخر تحديث: {format(new Date(selectedCase.updatedAt), "d MMMM yyyy", { locale: ar })}</span>
+                      <span>تاريخ الإنشاء: {formatDateArabic(selectedCase.createdAt)}</span>
+                      <span>آخر تحديث: {formatDateArabic(selectedCase.updatedAt)}</span>
                     </div>
                   </div>
                 </TabsContent>
@@ -1119,8 +1126,8 @@ export default function CasesPage() {
                         <TableBody>
                           {caseHearings.map((hearing) => (
                             <TableRow key={hearing.id}>
-                              <TableCell>{format(new Date(hearing.hearingDate), "d MMMM yyyy", { locale: ar })}</TableCell>
-                              <TableCell>{hearing.hearingTime}</TableCell>
+                              <TableCell>{formatDateArabic(hearing.hearingDate)}</TableCell>
+                              <TableCell><LtrInline>{formatTimeAmPm(hearing.hearingTime)}</LtrInline></TableCell>
                               <TableCell>{hearing.courtName}</TableCell>
                               <TableCell>
                                 <Badge variant="outline">{hearing.status}</Badge>
@@ -1146,7 +1153,7 @@ export default function CasesPage() {
                             <div className="text-sm text-muted-foreground">
                               <span>{transition.userName}</span>
                               <span className="mx-2">•</span>
-                              <span>{format(new Date(transition.timestamp), "d MMMM yyyy - HH:mm", { locale: ar })}</span>
+                              <span>{formatDateTimeArabic(transition.timestamp)}</span>
                             </div>
                             {transition.notes && (
                               <p className="mt-1 text-sm bg-muted p-2 rounded">{transition.notes}</p>
@@ -1170,7 +1177,8 @@ export default function CasesPage() {
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <Label>اسم الملف</Label>
-                          <Input
+                          <SmartInput
+                            inputType="text"
                             data-testid="input-attachment-name"
                             placeholder="مثال: عقد التأسيس"
                             value={attachmentForm.fileName}
@@ -1179,12 +1187,12 @@ export default function CasesPage() {
                         </div>
                         <div>
                           <Label>رابط الملف (URL)</Label>
-                          <Input
+                          <SmartInput
+                            inputType="code"
                             data-testid="input-attachment-url"
                             placeholder="https://drive.google.com/..."
                             value={attachmentForm.fileUrl}
                             onChange={(e) => setAttachmentForm({ ...attachmentForm, fileUrl: e.target.value })}
-                            dir="ltr"
                           />
                         </div>
                       </div>
@@ -1214,7 +1222,7 @@ export default function CasesPage() {
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                                   <span>{users.find(u => u.id === att.uploadedBy)?.name || "غير معروف"}</span>
                                   <span>-</span>
-                                  <span>{format(new Date(att.createdAt), "d MMMM yyyy - HH:mm", { locale: ar })}</span>
+                                  <span>{formatDateTimeArabic(att.createdAt)}</span>
                                 </div>
                               </div>
                             </div>
@@ -1281,7 +1289,7 @@ export default function CasesPage() {
                               <div className="flex items-center gap-2 mb-2">
                                 <span className="font-medium">{comment.userName}</span>
                                 <span className="text-xs text-muted-foreground">
-                                  {format(new Date(comment.createdAt), "d MMMM yyyy - HH:mm", { locale: ar })}
+                                  {formatDateTimeArabic(comment.createdAt)}
                                 </span>
                               </div>
                               <p className="text-sm">{comment.content}</p>
@@ -1315,7 +1323,7 @@ export default function CasesPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ClipboardCheck className="w-5 h-5" />
-              مراجعة القضية: {selectedCase?.caseNumber}
+              مراجعة القضية: <LtrInline>{selectedCase?.caseNumber}</LtrInline>
             </DialogTitle>
           </DialogHeader>
           {selectedCase && contractReviewStandards.length > 0 && (

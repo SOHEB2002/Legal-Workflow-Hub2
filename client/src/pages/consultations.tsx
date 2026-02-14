@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import {
   Dialog,
   DialogContent,
@@ -373,8 +374,12 @@ export default function ConsultationsPage() {
             <TableBody>
               {filteredConsultations.map((consultation) => (
                 <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`}>
-                  <TableCell className="font-medium bidi-override">{consultation.consultationNumber}</TableCell>
-                  <TableCell>{getClientName(consultation.clientId)}</TableCell>
+                  <TableCell className="font-medium">
+                    <LtrInline>{consultation.consultationNumber}</LtrInline>
+                  </TableCell>
+                  <TableCell>
+                    <BidiText>{getClientName(consultation.clientId)}</BidiText>
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline">{consultation.consultationType}</Badge>
                   </TableCell>
@@ -479,14 +484,19 @@ export default function ConsultationsPage() {
       <Dialog open={!!selectedConsultation} onOpenChange={(open) => !open && setSelectedConsultation(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="bidi-override">تفاصيل الاستشارة {selectedConsultation?.consultationNumber}</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <span>تفاصيل الاستشارة</span>
+              <LtrInline>{selectedConsultation?.consultationNumber}</LtrInline>
+            </DialogTitle>
           </DialogHeader>
           {selectedConsultation && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-muted-foreground">العميل</Label>
-                  <p className="font-medium">{getClientName(selectedConsultation.clientId)}</p>
+                  <p className="font-medium">
+                    <BidiText>{getClientName(selectedConsultation.clientId)}</BidiText>
+                  </p>
                 </div>
                 <div>
                   <Label className="text-muted-foreground">الحالة</Label>
@@ -531,7 +541,8 @@ export default function ConsultationsPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ClipboardCheck className="w-5 h-5" />
-              مراجعة الاستشارة: {consultationToReview?.consultationNumber}
+              <span>مراجعة الاستشارة:</span>
+              <LtrInline>{consultationToReview?.consultationNumber}</LtrInline>
             </DialogTitle>
           </DialogHeader>
           {consultationToReview && consultationReviewStandards.length > 0 && (
