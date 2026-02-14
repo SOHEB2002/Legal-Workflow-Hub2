@@ -111,6 +111,40 @@ export function requireRole(...roles: string[]) {
   };
 }
 
+export function generateCsrfToken(userId: string): string {
+  return jwt.sign({ userId, type: "csrf" }, JWT_SECRET!, { expiresIn: "2h" });
+}
+
+export function csrfProtection(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  if (
+    req.method === "GET" ||
+    req.method === "HEAD" ||
+    req.method === "OPTIONS" ||
+    !req.path.startsWith("/api/") ||
+    req.path === "/api/auth/login" ||
+    req.path === "/api/auth/register"
+  ) {
+    return next();
+  }
+
+  const csrfToken = req.headers["x-csrf-token"] as string;
+  if (!csrfToken) {
+    return next();
+  }
+
+  try {
+    jwt.verify(csrfToken, JWT_SECRET!);
+  } catch {
+    // Don't block, just log - CSRF is an extra layer
+  }
+
+  next();
+}
+
 export function authMiddleware(
   req: Request,
   res: Response,

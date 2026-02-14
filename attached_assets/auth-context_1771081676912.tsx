@@ -144,6 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);
     }
+    // Refresh 5 minutes before token expires (token lasts 2h = 120min)
     refreshTimerRef.current = setTimeout(() => {
       refreshToken();
     }, 115 * 60 * 1000);

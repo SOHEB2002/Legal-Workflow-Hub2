@@ -1107,7 +1107,9 @@ export interface ContactLog {
 
 export const insertUserSchema = z.object({
   username: z.string().min(3, "اسم المستخدم يجب أن يكون 3 أحرف على الأقل"),
-  password: z.string().min(4, "كلمة المرور يجب أن تكون 4 أحرف على الأقل"),
+  password: z.string()
+    .min(8, "كلمة المرور يجب أن تكون 8 أحرف على الأقل")
+    .max(128, "كلمة المرور طويلة جداً"),
   name: z.string().min(2, "الاسم مطلوب"),
   email: z.string().email("البريد الإلكتروني غير صحيح").optional().default(""),
   phone: z.string().optional().default(""),
@@ -1130,7 +1132,6 @@ export const insertUserSchema = z.object({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
 export const updateUserSchema = z.object({
-  username: z.string().min(2).optional(),
   name: z.string().min(2, "الاسم مطلوب").optional(),
   email: z.string().email("البريد الإلكتروني غير صحيح").optional(),
   phone: z.string().optional(),

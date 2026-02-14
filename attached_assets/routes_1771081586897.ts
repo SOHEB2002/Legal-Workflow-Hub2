@@ -1,14 +1,14 @@
 import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { 
-  loginSchema, 
-  insertUserSchema, 
+import {
+  loginSchema,
+  insertUserSchema,
   updateUserSchema,
-  insertClientSchema, 
-  insertCaseSchema, 
-  insertConsultationSchema, 
-  insertHearingSchema, 
+  insertClientSchema,
+  insertCaseSchema,
+  insertConsultationSchema,
+  insertHearingSchema,
   insertFieldTaskSchema,
   insertAttachmentSchema,
   insertMemoSchema,
@@ -278,6 +278,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
 
+      // Check dependencies before deletion
       const dependencies: string[] = [];
       const allCases = await storage.getAllCases();
       const assignedCases = allCases.filter(c =>
@@ -304,6 +305,7 @@ export async function registerRoutes(
       }
 
       if (dependencies.length > 0) {
+        // If force=true and user is branch_manager, deactivate instead of delete
         if (req.query.force === "true" && currentUser.role === "branch_manager") {
           await storage.updateUser(userId, { isActive: false } as any);
           return res.json({ success: true, message: "تم تعطيل الحساب بدلاً من الحذف بسبب وجود بيانات مرتبطة" });
@@ -457,11 +459,17 @@ export async function registerRoutes(
   app.patch("/api/cases/:id", requireAuth, async (req, res) => {
     try {
       const existing = await storage.getCaseById(String(req.params.id));
+      if (!existing) {
+        return res.status(404).json({ error: "القضية غير موجودة" });
+      }
+      const user = (req as any).user;
+      if (!canModifyCase(user, existing)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
+      }
       const updated = await storage.updateCase(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
-      const user = (req as any).user;
       if (user && existing) {
         try {
           if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -621,6 +629,14 @@ export async function registerRoutes(
 
   app.patch("/api/consultations/:id", requireAuth, async (req, res) => {
     try {
+      const user = (req as any).user;
+      const existing = await storage.getConsultationById(String(req.params.id));
+      if (!existing) {
+        return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      }
+      if (!canModifyConsultation(user, existing)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الاستشارة" });
+      }
       const updated = await storage.updateConsultation(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
@@ -692,6 +708,15 @@ export async function registerRoutes(
 
   app.patch("/api/hearings/:id", requireAuth, async (req, res) => {
     try {
+      const user = (req as any).user;
+      const existing = await storage.getHearingById(String(req.params.id));
+      if (!existing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      const relatedCase = await storage.getCaseById(existing.caseId);
+      if (relatedCase && !canModifyCase(user, relatedCase)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الجلسة" });
+      }
       const updated = await storage.updateHearing(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
