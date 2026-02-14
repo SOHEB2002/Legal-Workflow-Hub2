@@ -149,23 +149,6 @@ export default function LoginPage() {
             </form>
           </Form>
 
-          <div className="mt-6 pt-6 border-t border-border">
-            <p className="text-sm text-muted-foreground text-center mb-3">بيانات الدخول التجريبية:</p>
-            <div className="grid grid-cols-1 gap-2 text-xs">
-              <div className="flex justify-between items-center p-2 bg-muted/50 rounded-md">
-                <span className="text-muted-foreground">مدير الفرع</span>
-                <code className="text-accent">manager / 1234</code>
-              </div>
-              <div className="flex justify-between items-center p-2 bg-muted/50 rounded-md">
-                <span className="text-muted-foreground">المحامي عمر (رئيس القسم)</span>
-                <code className="text-accent">omar / 1234</code>
-              </div>
-              <div className="flex justify-between items-center p-2 bg-muted/50 rounded-md">
-                <span className="text-muted-foreground">الدعم الإداري</span>
-                <code className="text-accent">support / 1234</code>
-              </div>
-            </div>
-          </div>
         </CardContent>
       </Card>
     </div>
