@@ -49,16 +49,16 @@ export interface IStorage {
 
   // Hearings
   getAllHearings(): Promise<Hearing[]>;
-  getHearingById(id: string): Promise<Hearing | undefined>;
   getHearingsByCase(caseId: string): Promise<Hearing[]>;
+  getHearingById(id: string): Promise<Hearing | undefined>;
   createHearing(data: Partial<Hearing>): Promise<Hearing>;
   updateHearing(id: string, data: Partial<Hearing>): Promise<Hearing | undefined>;
   deleteHearing(id: string): Promise<boolean>;
 
   // Field Tasks
   getAllFieldTasks(): Promise<FieldTask[]>;
-  getFieldTaskById(id: string): Promise<FieldTask | undefined>;
   getFieldTasksByCase(caseId: string): Promise<FieldTask[]>;
+  getFieldTaskById(id: string): Promise<FieldTask | undefined>;
   createFieldTask(data: Partial<FieldTask>, assignedBy: string): Promise<FieldTask>;
   updateFieldTask(id: string, data: Partial<FieldTask>): Promise<FieldTask | undefined>;
   deleteFieldTask(id: string): Promise<boolean>;
@@ -122,8 +122,8 @@ export interface IStorage {
   deleteLegalDeadline(id: string): Promise<boolean>;
 
   // Delegations
-  getAllDelegations(): Promise<DelegationRecord[]>;
   getDelegation(id: string): Promise<DelegationRecord | undefined>;
+  getAllDelegations(): Promise<DelegationRecord[]>;
   getActiveDelegationsForUser(userId: string): Promise<DelegationRecord[]>;
   createDelegation(data: InsertDelegation): Promise<DelegationRecord>;
   updateDelegation(id: string, data: Partial<DelegationRecord>): Promise<DelegationRecord | undefined>;
@@ -674,14 +674,14 @@ export class DatabaseStorage implements IStorage {
     return result.map(mapDbHearing);
   }
 
-  async getHearingById(id: string): Promise<Hearing | undefined> {
-    const result = await db.select().from(hearings).where(eq(hearings.id, id));
-    return result[0] ? mapDbHearing(result[0]) : undefined;
-  }
-
   async getHearingsByCase(caseId: string): Promise<Hearing[]> {
     const result = await db.select().from(hearings).where(eq(hearings.caseId, caseId));
     return result.map(mapDbHearing);
+  }
+
+  async getHearingById(id: string): Promise<Hearing | undefined> {
+    const result = await db.select().from(hearings).where(eq(hearings.id, id));
+    return result[0] ? mapDbHearing(result[0]) : undefined;
   }
 
   async createHearing(data: Partial<Hearing>): Promise<Hearing> {
@@ -752,14 +752,14 @@ export class DatabaseStorage implements IStorage {
     return result.map(mapDbFieldTask);
   }
 
-  async getFieldTaskById(id: string): Promise<FieldTask | undefined> {
-    const result = await db.select().from(fieldTasks).where(eq(fieldTasks.id, id));
-    return result[0] ? mapDbFieldTask(result[0]) : undefined;
-  }
-
   async getFieldTasksByCase(caseId: string): Promise<FieldTask[]> {
     const result = await db.select().from(fieldTasks).where(eq(fieldTasks.caseId, caseId));
     return result.map(mapDbFieldTask);
+  }
+
+  async getFieldTaskById(id: string): Promise<FieldTask | undefined> {
+    const result = await db.select().from(fieldTasks).where(eq(fieldTasks.id, id));
+    return result[0] ? mapDbFieldTask(result[0]) : undefined;
   }
 
   async createFieldTask(data: Partial<FieldTask>, assignedBy: string): Promise<FieldTask> {
@@ -1208,14 +1208,15 @@ export class DatabaseStorage implements IStorage {
 
   // ==================== Delegations ====================
 
+  async getDelegation(id: string): Promise<DelegationRecord | undefined> {
+    const [delegation] = await db.select().from(delegationsTable)
+      .where(eq(delegationsTable.id, id));
+    return delegation;
+  }
+
   async getAllDelegations(): Promise<DelegationRecord[]> {
     return await db.select().from(delegationsTable)
       .orderBy(desc(delegationsTable.createdAt));
-  }
-
-  async getDelegation(id: string): Promise<DelegationRecord | undefined> {
-    const result = await db.select().from(delegationsTable).where(eq(delegationsTable.id, id));
-    return result[0] || undefined;
   }
 
   async getActiveDelegationsForUser(userId: string): Promise<DelegationRecord[]> {
@@ -1258,7 +1259,7 @@ export class DatabaseStorage implements IStorage {
 
   async initializeDefaultData(): Promise<void> {
     const existingUsers = await db.select().from(users);
-    
+
     // Fix any unhashed passwords in existing users
     for (const user of existingUsers) {
       if (user.password && !user.password.startsWith('$2b$') && !user.password.startsWith('$2a$')) {
@@ -1267,16 +1268,29 @@ export class DatabaseStorage implements IStorage {
         console.log(`Fixed unhashed password for user: ${user.username}`);
       }
     }
-    
-    // Ensure manager has the correct password
-    const managerUser = existingUsers.find(u => u.username === 'manager');
-    if (managerUser) {
-      const managerPassword = await hashPassword("hazim1234");
-      await db.update(users).set({ password: managerPassword, mustChangePassword: false }).where(eq(users.id, managerUser.id));
+
+    // Ensure departments exist
+    const existingDepartments = await db.select().from(departments);
+    if (existingDepartments.length === 0) {
+      const defaultDepartments = [
+        { id: "1", name: "عام", headId: "4" },
+        { id: "2", name: "تجاري", headId: null },
+        { id: "3", name: "عمالي", headId: null },
+        { id: "4", name: "إداري", headId: null },
+      ];
+      for (const dept of defaultDepartments) {
+        await db.insert(departments).values({ ...dept, createdAt: new Date() });
+      }
     }
 
-    // Add missing default users if some exist but not all
-    const defaultPassword = await hashPassword("Awn@2024!");
+    // Only create default users on first run (no existing users)
+    if (existingUsers.length > 0) {
+      return;
+    }
+
+    console.log("First run detected: creating default users...");
+    const defaultPw = process.env.DEFAULT_USER_PASSWORD || "Awn@2024!Secure";
+    const defaultPassword = await hashPassword(defaultPw);
     const existingUsernames = existingUsers.map(u => u.username);
     const allDefaultUsers = [
         { 
@@ -1422,23 +1436,6 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // Check if departments exist
-    const existingDepartments = await db.select().from(departments);
-    if (existingDepartments.length === 0) {
-      const defaultDepartments = [
-        { id: "1", name: "عام", headId: "4" },
-        { id: "2", name: "تجاري", headId: null },
-        { id: "3", name: "عمالي", headId: null },
-        { id: "4", name: "إداري", headId: null },
-      ];
-      
-      for (const dept of defaultDepartments) {
-        await db.insert(departments).values({
-          ...dept,
-          createdAt: new Date(),
-        });
-      }
-    }
   }
 }
 

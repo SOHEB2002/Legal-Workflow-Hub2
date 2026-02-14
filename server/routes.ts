@@ -83,6 +83,95 @@ function canModifyConsultation(user: { id: string; role: string; departmentId: s
   return false;
 }
 
+async function validateAssignedUsersActive(userIds: string[]): Promise<{ valid: boolean; inactiveUsers: string[] }> {
+  const inactiveUsers: string[] = [];
+  for (const id of userIds) {
+    if (!id) continue;
+    const user = await storage.getUser(id);
+    if (!user || !user.isActive) {
+      inactiveUsers.push(id);
+    }
+  }
+  return { valid: inactiveUsers.length === 0, inactiveUsers };
+}
+
+// ==================== Server-Side Stage Transition Validation ====================
+
+interface StageTransitionRule {
+  from: string;
+  to: string;
+  allowedRoles: string[];
+}
+
+const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
+  // Forward transitions
+  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["admin_support", "branch_manager"] },
+  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "branch_manager"] },
+  { from: "دراسة", to: "تحرير_المذكرة", allowedRoles: ["employee", "department_head", "branch_manager"] },
+  { from: "تحرير_المذكرة", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "تم_الرفع_للدائرة", allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: "الأخذ_بالملاحظات", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
+  { from: "تم_الرفع_للدائرة", to: "مقفلة", allowedRoles: ["admin_support", "branch_manager"] },
+  // Backward transitions
+  { from: "استكمال_البيانات", to: "استلام", allowedRoles: ["branch_manager"] },
+  { from: "دراسة", to: "استكمال_البيانات", allowedRoles: ["branch_manager"] },
+  { from: "تحرير_المذكرة", to: "دراسة", allowedRoles: ["branch_manager", "department_head"] },
+  { from: "إحالة_للجنة_المراجعة", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "cases_review_head"] },
+  { from: "الأخذ_بالملاحظات", to: "تحرير_المذكرة", allowedRoles: ["branch_manager"] },
+  { from: "تم_الرفع_للدائرة", to: "الأخذ_بالملاحظات", allowedRoles: ["branch_manager"] },
+];
+
+const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
+  // Forward transitions
+  { from: "استلام", to: "دراسة", allowedRoles: ["admin_support", "branch_manager"] },
+  { from: "دراسة", to: "إعداد_الرد", allowedRoles: ["department_head", "branch_manager"] },
+  { from: "إعداد_الرد", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
+  { from: "لجنة_المراجعة", to: "جاهز", allowedRoles: ["consultations_review_head", "branch_manager"] },
+  { from: "لجنة_المراجعة", to: "تعديلات", allowedRoles: ["consultations_review_head", "branch_manager"] },
+  { from: "تعديلات", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
+  { from: "جاهز", to: "مسلّم", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مسلّم", to: "مغلق", allowedRoles: ["admin_support", "branch_manager"] },
+  // Backward transitions
+  { from: "دراسة", to: "استلام", allowedRoles: ["branch_manager"] },
+  { from: "إعداد_الرد", to: "دراسة", allowedRoles: ["branch_manager", "department_head"] },
+  { from: "لجنة_المراجعة", to: "إعداد_الرد", allowedRoles: ["branch_manager", "consultations_review_head"] },
+  { from: "جاهز", to: "تعديلات", allowedRoles: ["branch_manager"] },
+];
+
+// Legacy stage name mapping
+const LEGACY_CASE_STAGE_MAP: Record<string, string> = {
+  "رفع_للدائرة": "تم_الرفع_للدائرة",
+};
+
+function validateStageTransition(
+  currentStage: string,
+  targetStage: string,
+  userRole: string,
+  entityType: "case" | "consultation"
+): { allowed: boolean; reason?: string } {
+  const normalizedCurrent = entityType === "case"
+    ? (LEGACY_CASE_STAGE_MAP[currentStage] || currentStage)
+    : currentStage;
+
+  if (normalizedCurrent === targetStage) {
+    return { allowed: false, reason: "العنصر في نفس المرحلة المطلوبة" };
+  }
+
+  const rules = entityType === "case" ? ALLOWED_CASE_TRANSITIONS : ALLOWED_CONSULTATION_TRANSITIONS;
+  const rule = rules.find(r => r.from === normalizedCurrent && r.to === targetStage);
+
+  if (!rule) {
+    return { allowed: false, reason: `لا يمكن الانتقال من "${normalizedCurrent}" إلى "${targetStage}"` };
+  }
+
+  if (!rule.allowedRoles.includes(userRole)) {
+    return { allowed: false, reason: "ليس لديك صلاحية لتنفيذ هذا الانتقال" };
+  }
+
+  return { allowed: true };
+}
+
 async function getActiveMemoCount(caseId: string): Promise<number> {
   const memos = await storage.getMemosByCase(caseId);
   return memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
@@ -251,6 +340,30 @@ export async function registerRoutes(
         }
         validatedData.password = await hashPassword(validatedData.password);
       }
+      // Warn about dependencies when deactivating a user
+      if (validatedData.isActive === false) {
+        const userId = String(req.params.id);
+        const warnings: string[] = [];
+        const allDepartments = await storage.getAllDepartments();
+        const headOf = allDepartments.filter(d => d.headId === userId);
+        if (headOf.length > 0) {
+          warnings.push(`رئيس ${headOf.length} قسم`);
+        }
+        const allDelegations = await storage.getAllDelegations();
+        const activeDel = allDelegations.filter(d =>
+          (d.fromUserId === userId || d.toUserId === userId) && d.status === "نشط"
+        );
+        if (activeDel.length > 0) {
+          warnings.push(`${activeDel.length} تفويض نشط`);
+        }
+        if (warnings.length > 0 && req.query.force !== "true") {
+          return res.status(400).json({
+            error: "تنبيه: هذا المستخدم لديه ارتباطات نشطة",
+            warnings,
+            hint: "أضف ?force=true لتأكيد التعطيل"
+          });
+        }
+      }
       const updated = await storage.updateUser(String(req.params.id), validatedData as any);
       if (!updated) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
@@ -303,6 +416,32 @@ export async function registerRoutes(
         dependencies.push(`${activeMemos.length} مذكرة نشطة`);
       }
 
+      // Check if user is a department head
+      const allDepartments = await storage.getAllDepartments();
+      const headOfDepartments = allDepartments.filter(d => d.headId === userId);
+      if (headOfDepartments.length > 0) {
+        dependencies.push(`رئيس ${headOfDepartments.length} قسم`);
+      }
+
+      // Check active delegations
+      const allDelegations = await storage.getAllDelegations();
+      const activeDelegations = allDelegations.filter(d =>
+        (d.fromUserId === userId || d.toUserId === userId) && d.status === "نشط"
+      );
+      if (activeDelegations.length > 0) {
+        dependencies.push(`${activeDelegations.length} تفويض نشط`);
+      }
+
+      // Check open support tickets
+      const allTickets = await storage.getAllSupportTickets();
+      const openTickets = allTickets.filter(t =>
+        t.assignedTo === userId && t.status !== "مغلقة"
+      );
+      if (openTickets.length > 0) {
+        dependencies.push(`${openTickets.length} تذكرة دعم مفتوحة`);
+      }
+
+      // Check dependencies before deletion
       if (dependencies.length > 0) {
         if (req.query.force === "true" && currentUser.role === "branch_manager") {
           await storage.updateUser(userId, { isActive: false } as any);
@@ -457,11 +596,42 @@ export async function registerRoutes(
   app.patch("/api/cases/:id", requireAuth, async (req, res) => {
     try {
       const existing = await storage.getCaseById(String(req.params.id));
+      if (!existing) {
+        return res.status(404).json({ error: "القضية غير موجودة" });
+      }
+      const user = (req as any).user;
+
+      // Validate stage transition if changing stage
+      if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
+        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case");
+        if (!stageCheck.allowed) {
+          return res.status(400).json({ error: stageCheck.reason });
+        }
+      }
+
+      // Validate assigned users are active
+      const usersToCheck: string[] = [];
+      if (req.body.primaryLawyerId) usersToCheck.push(req.body.primaryLawyerId);
+      if (req.body.responsibleLawyerId) usersToCheck.push(req.body.responsibleLawyerId);
+      if (Array.isArray(req.body.assignedLawyers)) usersToCheck.push(...req.body.assignedLawyers);
+      if (usersToCheck.length > 0) {
+        const check = await validateAssignedUsersActive(usersToCheck);
+        if (!check.valid) {
+          return res.status(400).json({ error: "لا يمكن إسناد العمل لمستخدم معطّل", inactiveUsers: check.inactiveUsers });
+        }
+      }
+
+      // Ensure lawyer consistency: primaryLawyerId must be in assignedLawyers
+      const finalAssignedLawyers = req.body.assignedLawyers || existing.assignedLawyers || [];
+      const finalPrimaryLawyer = req.body.primaryLawyerId || existing.primaryLawyerId;
+      if (finalPrimaryLawyer && Array.isArray(finalAssignedLawyers) && !finalAssignedLawyers.includes(finalPrimaryLawyer)) {
+        req.body.assignedLawyers = [...finalAssignedLawyers, finalPrimaryLawyer];
+      }
+
       const updated = await storage.updateCase(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
-      const user = (req as any).user;
       if (user && existing) {
         try {
           if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -484,6 +654,35 @@ export async function registerRoutes(
             });
           }
         } catch (e) {}
+      }
+      // Handle related entities when case is closed/archived
+      if (req.body.currentStage === "مقفلة" && existing.currentStage !== "مقفلة") {
+        const caseId = String(req.params.id);
+        try {
+          // Cancel upcoming hearings
+          const hearings = await storage.getHearingsByCase(caseId);
+          for (const h of hearings) {
+            if (h.status === "قادمة") {
+              await storage.updateHearing(h.id, { status: "ملغية" });
+            }
+          }
+          // Cancel active memos (not yet approved/submitted)
+          const memos = await storage.getMemosByCase(caseId);
+          for (const m of memos) {
+            if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
+              await storage.updateMemo(m.id, { status: "ملغاة" } as any);
+            }
+          }
+          // Cancel pending/in-progress field tasks
+          const caseFieldTasks = await storage.getFieldTasksByCase(caseId);
+          for (const t of caseFieldTasks) {
+            if (t.status === "قيد_التنفيذ" || t.status === "قيد_الانتظار") {
+              await storage.updateFieldTask(t.id, { status: "ملغي" } as any);
+            }
+          }
+        } catch (e) {
+          console.error("Error cleaning up related entities on case close:", e);
+        }
       }
       res.json(updated);
     } catch (error) {
@@ -621,6 +820,28 @@ export async function registerRoutes(
 
   app.patch("/api/consultations/:id", requireAuth, async (req, res) => {
     try {
+      const existing = await storage.getConsultationById(String(req.params.id));
+      if (!existing) {
+        return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      }
+      const user = (req as any).user;
+
+      // Validate stage transition if changing status
+      if (req.body.status && req.body.status !== existing.status) {
+        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation");
+        if (!stageCheck.allowed) {
+          return res.status(400).json({ error: stageCheck.reason });
+        }
+      }
+
+      // Validate assignedTo user is active if being changed
+      if (req.body.assignedTo) {
+        const { valid } = await validateAssignedUsersActive([req.body.assignedTo]);
+        if (!valid) {
+          return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
+        }
+      }
+
       const updated = await storage.updateConsultation(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
@@ -979,6 +1200,13 @@ export async function registerRoutes(
   app.post("/api/field-tasks", requireAuth, async (req, res) => {
     try {
       const validatedData = insertFieldTaskSchema.parse(req.body);
+      // Validate assignedTo user is active
+      if (validatedData.assignedTo) {
+        const { valid } = await validateAssignedUsersActive([validatedData.assignedTo]);
+        if (!valid) {
+          return res.status(400).json({ error: "الموظف المكلف غير نشط أو غير موجود" });
+        }
+      }
       const assignedBy = req.body.assignedBy || "unknown";
       const newTask = await storage.createFieldTask(validatedData, assignedBy);
       res.status(201).json(newTask);
@@ -992,6 +1220,13 @@ export async function registerRoutes(
 
   app.patch("/api/field-tasks/:id", requireAuth, async (req, res) => {
     try {
+      // Validate assignedTo user is active if being changed
+      if (req.body.assignedTo) {
+        const { valid } = await validateAssignedUsersActive([req.body.assignedTo]);
+        if (!valid) {
+          return res.status(400).json({ error: "الموظف المكلف غير نشط أو غير موجود" });
+        }
+      }
       const updated = await storage.updateFieldTask(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
@@ -1120,6 +1355,13 @@ export async function registerRoutes(
       }
 
       const validatedData = insertMemoSchema.parse(req.body);
+      // Validate assignedTo user is active
+      if (validatedData.assignedTo) {
+        const { valid, inactiveUsers } = await validateAssignedUsersActive([validatedData.assignedTo]);
+        if (!valid) {
+          return res.status(400).json({ error: "المحامي المكلف غير نشط أو غير موجود" });
+        }
+      }
       const memo = await storage.createMemo({
         ...validatedData,
         createdBy: user.id,
@@ -1165,6 +1407,13 @@ export async function registerRoutes(
 
       const validated = updateMemoSchema.parse(req.body);
       const updateData: any = { ...validated };
+      // Validate assignedTo user is active if being changed
+      if (updateData.assignedTo) {
+        const { valid } = await validateAssignedUsersActive([updateData.assignedTo]);
+        if (!valid) {
+          return res.status(400).json({ error: "المحامي المكلف غير نشط أو غير موجود" });
+        }
+      }
 
       if (updateData.status === MemoStatus.APPROVED || updateData.status === MemoStatus.REVISION_REQUIRED) {
         if (!canReviewMemos(user.role)) {
@@ -1460,6 +1709,12 @@ export async function registerRoutes(
         return res.status(403).json({ error: "غير مصرح بتعيين التذكرة" });
       }
       const { assignedTo } = req.body;
+      if (assignedTo) {
+        const check = await validateAssignedUsersActive([assignedTo]);
+        if (!check.valid) {
+          return res.status(400).json({ error: "لا يمكن تعيين التذكرة لمستخدم معطّل" });
+        }
+      }
       const ticket = await storage.updateSupportTicket(String(req.params.id), { assignedTo, status: "مفتوحة" });
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json(ticket);
@@ -1763,6 +2018,15 @@ export async function registerRoutes(
 
   app.post("/api/delegations/:id/approve", requireAuth, async (req: AuthRequest, res) => {
     const user = req.user!;
+    // Check the delegation exists first and validate users are active
+    const existingDelegation = await storage.getDelegation(String(req.params.id));
+    if (!existingDelegation) return res.status(404).json({ message: "تفويض غير موجود" });
+
+    // Validate both fromUser and toUser are active before approving
+    const { valid, inactiveUsers } = await validateAssignedUsersActive([existingDelegation.fromUserId, existingDelegation.toUserId]);
+    if (!valid) {
+      return res.status(400).json({ error: "لا يمكن اعتماد التفويض: أحد المستخدمين غير نشط" });
+    }
     const delegation = await storage.updateDelegation(String(req.params.id), {
       status: "نشط",
       approvedBy: user.id,
