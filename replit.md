@@ -64,6 +64,12 @@ The system features a formal and luxurious design.
         - Unupdated hearing alerts: 8h (lawyer+dept head+admin), 24h (branch manager escalation), 48h (final escalation).
         - Upcoming hearing reminders: 48h and 24h before hearing date.
         - Memo deadline reminders: 3 days, 1 day, and overdue alerts with `reminderSent*` flags to prevent duplicates.
+        - Legal deadline reminders: 7 days, 3 days, 1 day, and overdue with auto-status update and escalation.
+        - Delegation expiry: Auto-detection and notification when delegations expire.
+        - Contact follow-up: Overdue contact follow-up reminders.
+        - Weekly reports: Sunday 7am summary to managers (new/closed cases, hearings, overdue memos).
+        - Monthly reports: 1st of month summary to branch manager/review head.
+        - Auto-archive: Closed cases automatically archived after 6 months.
 - **Workflow Management System**:
     - **Workflow Board (`/workflow-board`)**: Kanban-style board for visualizing cases/consultations across stages with drag-like stage progression.
     - **Workload Dashboard (`/workload-dashboard`)**: Monitors employee workload distribution with overload alerts (>15 items), overdue counts, and bottleneck detection.
@@ -81,6 +87,18 @@ The system features a formal and luxurious design.
     - **Activity Log (`/activity-log`)**: Track all user actions with filtering by user, action type, entity type, and date range with CSV export.
     - **User Profile (`/user-profile/:id`)**: 6-tab comprehensive view (stats, cases, vacations, delegations, activity log, permissions).
     - **State Management**: UsersProvider context with localStorage persistence, supports 40+ methods for managing all user-related operations.
+
+- **Enhancement Features (Phase 2)**:
+    - **Lawyer Performance KPIs (`/kpis`)**: Server-side performance API with 5-star rating system, closure rate (30%), hearing update rate (25%), memo completion time (25%), win rate (20%).
+    - **Case Activity Logging**: Automatic activity logging on case create/update/stage changes, hearing results via `logCaseActivity()`. Timeline view in case details.
+    - **Internal Case Notes**: Confidential notes per case with importance marking, edit/delete capabilities.
+    - **Legal Deadline Tracking**: Per-case deadline management with types (legal, administrative, payment, contractual), auto-reminder scheduling, status tracking.
+    - **Delegations Management (`/delegations`)**: Full delegation CRUD with date ranges, permission types (full/partial), revocation.
+    - **Reports & Analytics (`/reports`)**: Court analytics, CSV export with Arabic BOM support, case/consultation statistics.
+    - **File Attachments**: Multer-based file uploads (max 10MB), restricted file types, unique filename storage in `./uploads`.
+    - **Smart Search**: Cross-entity search across cases, clients, consultations, hearings.
+    - **Database Tables**: `case_activity_log`, `case_notes`, `legal_deadlines`, `delegations_table`.
+    - **Token Key**: Standardized to `lawfirm_token` across all frontend components.
 
 ## External Dependencies
 - **PostgreSQL**: Integrated database for data persistence.

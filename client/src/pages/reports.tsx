@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, isWithinInterval, subMonths } from "date-fns";
 import { ar } from "date-fns/locale";
+import { useQuery } from "@tanstack/react-query";
 import {
   Briefcase,
   MessageSquare,
@@ -10,11 +11,19 @@ import {
   FileBarChart,
   AlertTriangle,
   CheckCircle,
+  Clock,
+  TrendingUp,
+  Scale,
+  FileDown,
+  Activity,
+  Target,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/lib/cases-context";
@@ -45,6 +54,18 @@ function downloadCSV(data: Record<string, string | number>[], filename: string) 
   URL.revokeObjectURL(link.href);
 }
 
+async function downloadExport(url: string, filename: string) {
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${localStorage.getItem("lawfirm_token")}` },
+  });
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 const CHART_COLORS = [
   "hsl(var(--accent))",
   "hsl(var(--primary))",
@@ -57,6 +78,331 @@ const CHART_COLORS = [
   "#dc2626",
   "#059669",
 ];
+
+function SmartDashboardSection() {
+  const { data, isLoading } = useQuery<{
+    greeting: string;
+    todayHearings: any[];
+    alerts: { type: string; priority: string; message: string; url: string; relatedId: string }[];
+    upcomingDeadlines: { title: string; deadlineDate: string; daysLeft: number; caseId: string }[];
+    performanceStats: {
+      activeCases: number;
+      closedThisMonth: number;
+      totalCases: number;
+      overdueMemos: number;
+      todayHearingsCount: number;
+      upcomingDeadlinesCount: number;
+      unreadNotifications: number;
+    };
+    comparison?: { newCasesChange: number; closedChange: number };
+  }>({
+    queryKey: ["/api/dashboard/smart"],
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-8 w-64" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map(i => (
+            <Skeleton key={i} className="h-28" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const stats = data.performanceStats;
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-lg font-semibold" data-testid="text-smart-greeting">{data.greeting}</h2>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-sm font-medium">القضايا النشطة</CardTitle>
+            <Briefcase className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold" data-testid="text-smart-active-cases">{stats.activeCases}</div>
+            <p className="text-xs text-muted-foreground">من إجمالي {stats.totalCases}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-sm font-medium">المغلقة هذا الشهر</CardTitle>
+            <CheckCircle className="h-4 w-4 text-green-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600 dark:text-green-400" data-testid="text-smart-closed-month">
+              {stats.closedThisMonth}
+            </div>
+            {data.comparison && data.comparison.newCasesChange !== 0 && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
+                <TrendingUp className="h-3 w-3" />
+                {data.comparison.newCasesChange > 0 ? "+" : ""}{data.comparison.newCasesChange}% عن الشهر الماضي
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-sm font-medium">المذكرات المتأخرة</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-destructive" />
+          </CardHeader>
+          <CardContent>
+            <div className={`text-2xl font-bold ${stats.overdueMemos > 0 ? "text-destructive" : ""}`} data-testid="text-smart-overdue-memos">
+              {stats.overdueMemos}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-sm font-medium">جلسات اليوم</CardTitle>
+            <Calendar className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold" data-testid="text-smart-today-hearings">{stats.todayHearingsCount}</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {data.upcomingDeadlines && data.upcomingDeadlines.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <Clock className="h-4 w-4" />
+              مواعيد نهائية قريبة
+            </CardTitle>
+            <Badge variant="secondary">{data.upcomingDeadlines.length}</Badge>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {data.upcomingDeadlines.slice(0, 5).map((deadline, idx) => (
+                <div key={idx} className="flex items-center justify-between gap-2 flex-wrap py-1" data-testid={`row-deadline-${idx}`}>
+                  <span className="text-sm font-medium">{deadline.title}</span>
+                  <Badge variant={deadline.daysLeft <= 2 ? "destructive" : "secondary"}>
+                    {deadline.daysLeft === 1 ? "غداً" : `${deadline.daysLeft} أيام`}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {data.alerts && data.alerts.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              تنبيهات
+            </CardTitle>
+            <Badge variant="destructive">{data.alerts.length}</Badge>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {data.alerts.slice(0, 5).map((alert, idx) => (
+                <div key={idx} className="flex items-center gap-2 flex-wrap py-1 text-sm" data-testid={`row-alert-${idx}`}>
+                  <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />
+                  <span>{alert.message}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function CourtAnalyticsSection() {
+  const { data, isLoading } = useQuery<{
+    byCourtType: Record<string, number>;
+    byResult: Record<string, { won: number; lost: number; partial: number }>;
+    avgDuration: Record<string, number>;
+  }>({
+    queryKey: ["/api/stats/court-analytics"],
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-48" />
+        <Skeleton className="h-48" />
+        <Skeleton className="h-48" />
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const courtTypeEntries = Object.entries(data.byCourtType).sort((a, b) => b[1] - a[1]);
+  const maxCourtCount = courtTypeEntries.length > 0 ? Math.max(...courtTypeEntries.map(([, v]) => v)) : 1;
+
+  const resultEntries = Object.entries(data.byResult);
+  const durationEntries = Object.entries(data.avgDuration);
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+            <Scale className="h-4 w-4" />
+            القضايا حسب نوع المحكمة
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {courtTypeEntries.length === 0 ? (
+            <p className="text-muted-foreground text-center py-6">لا توجد بيانات</p>
+          ) : (
+            <div className="space-y-3">
+              {courtTypeEntries.map(([court, count], idx) => (
+                <div key={court} className="space-y-1" data-testid={`court-type-${idx}`}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-sm font-medium">{court}</span>
+                    <Badge variant="secondary">{count}</Badge>
+                  </div>
+                  <Progress value={(count / maxCourtCount) * 100} className="h-2" />
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+            <Target className="h-4 w-4" />
+            نتائج الأحكام حسب نوع القضية
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {resultEntries.length === 0 ? (
+            <p className="text-muted-foreground text-center py-6">لا توجد أحكام مسجلة</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-right">نوع القضية</TableHead>
+                    <TableHead className="text-right">لصالحنا</TableHead>
+                    <TableHead className="text-right">ضدنا</TableHead>
+                    <TableHead className="text-right">جزئي</TableHead>
+                    <TableHead className="text-right">الإجمالي</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {resultEntries.map(([caseType, stats]) => {
+                    const total = stats.won + stats.lost + stats.partial;
+                    return (
+                      <TableRow key={caseType} data-testid={`row-result-${caseType}`}>
+                        <TableCell className="font-medium">{caseType}</TableCell>
+                        <TableCell>
+                          <span className="text-green-600 dark:text-green-400 font-medium">{stats.won}</span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-destructive font-medium">{stats.lost}</span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-muted-foreground">{stats.partial}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{total}</Badge>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+            <Activity className="h-4 w-4" />
+            متوسط مدة القضايا حسب النوع (بالأيام)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {durationEntries.length === 0 ? (
+            <p className="text-muted-foreground text-center py-6">لا توجد بيانات كافية</p>
+          ) : (
+            <div className="space-y-3">
+              {durationEntries.map(([caseType, days], idx) => (
+                <div key={caseType} className="flex items-center justify-between gap-3 flex-wrap py-1" data-testid={`duration-${idx}`}>
+                  <span className="text-sm font-medium">{caseType}</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-bold ${days > 90 ? "text-destructive" : days > 30 ? "text-muted-foreground" : "text-green-600 dark:text-green-400"}`}>
+                      {days} يوم
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ExportSection() {
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  const handleExportCases = async () => {
+    setExporting("cases");
+    try {
+      await downloadExport("/api/export/cases", `cases-export-${Date.now()}.csv`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleExportHearings = async () => {
+    setExporting("hearings");
+    try {
+      await downloadExport("/api/export/hearings", `hearings-export-${Date.now()}.csv`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleExportCases}
+        disabled={exporting === "cases"}
+        data-testid="button-export-all-cases"
+      >
+        <FileDown className="h-4 w-4 ml-1" />
+        {exporting === "cases" ? "جاري التصدير..." : "تصدير القضايا"}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleExportHearings}
+        disabled={exporting === "hearings"}
+        data-testid="button-export-all-hearings"
+      >
+        <FileDown className="h-4 w-4 ml-1" />
+        {exporting === "hearings" ? "جاري التصدير..." : "تصدير الجلسات"}
+      </Button>
+    </div>
+  );
+}
 
 function CasesSummarySection() {
   const { cases } = useCases();
@@ -76,7 +422,6 @@ function CasesSummarySection() {
     for (let i = 5; i >= 0; i--) {
       const d = subMonths(new Date(), i);
       const key = format(d, "yyyy-MM");
-      const label = format(d, "MMMM yyyy", { locale: ar });
       months[key] = 0;
     }
     cases.forEach(c => {
@@ -651,10 +996,17 @@ export default function ReportsPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-6" dir="rtl">
-      <div className="flex items-center gap-3">
-        <FileBarChart className="h-6 w-6 text-accent" />
-        <h1 className="text-2xl font-bold" data-testid="text-reports-title">التقارير</h1>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <FileBarChart className="h-6 w-6 text-accent" />
+          <h1 className="text-2xl font-bold" data-testid="text-reports-title">التقارير</h1>
+        </div>
+        <ExportSection />
       </div>
+
+      <SmartDashboardSection />
+
+      <CourtAnalyticsSection />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} dir="rtl">
         <TabsList className="grid grid-cols-4 w-full max-w-2xl">

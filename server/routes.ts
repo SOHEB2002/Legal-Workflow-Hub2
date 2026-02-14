@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { 
@@ -28,6 +28,18 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import { requireAuth, requireRole, generateToken, verifyTokenForRefresh, validatePassword, hashPassword, comparePassword } from "./auth";
 import rateLimit from "express-rate-limit";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
+interface AuthRequest extends Request {
+  user?: {
+    id: string;
+    role: string;
+    name: string;
+    departmentId: string | null;
+  };
+}
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -57,6 +69,32 @@ export async function registerRoutes(
 ): Promise<Server> {
   
   app.use("/api/", apiLimiter);
+
+  const uploadsDir = "./uploads";
+  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: uploadsDir,
+      filename: (req, file, cb) => {
+        const uniqueName = `${Date.now()}-${file.originalname}`;
+        cb(null, uniqueName);
+      }
+    }),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+      const allowed = ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "image/jpeg", "image/png", "image/gif", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
+      cb(null, allowed.includes(file.mimetype));
+    }
+  });
+
+  app.use("/uploads", requireAuth, (req, res, next) => {
+    const filePath = path.join(uploadsDir, req.path);
+    if (fs.existsSync(filePath)) {
+      return res.sendFile(path.resolve(filePath));
+    }
+    res.status(404).json({ message: "ملف غير موجود" });
+  });
 
   await storage.initializeDefaultData();
 
@@ -311,6 +349,16 @@ export async function registerRoutes(
         }
       }
 
+      try {
+        await storage.logCaseActivity({
+          caseId: newCase.id,
+          userId: createdBy,
+          userName: createdBy,
+          actionType: "case_created",
+          title: `تم إنشاء القضية ${newCase.caseNumber}`,
+        });
+      } catch (e) {}
+
       res.status(201).json({ ...newCase, autoCreated });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -322,9 +370,34 @@ export async function registerRoutes(
 
   app.patch("/api/cases/:id", requireAuth, async (req, res) => {
     try {
+      const existing = await storage.getCaseById(req.params.id);
       const updated = await storage.updateCase(req.params.id, req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
+      }
+      const user = (req as any).user;
+      if (user && existing) {
+        try {
+          if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
+            await storage.logCaseActivity({
+              caseId: req.params.id,
+              userId: user.id,
+              userName: user.name || user.id,
+              actionType: "stage_changed",
+              title: `تم تغيير المرحلة من ${existing.currentStage} إلى ${req.body.currentStage}`,
+              previousValue: existing.currentStage,
+              newValue: req.body.currentStage,
+            });
+          } else {
+            await storage.logCaseActivity({
+              caseId: req.params.id,
+              userId: user.id,
+              userName: user.name || user.id,
+              actionType: "case_updated",
+              title: "تم تحديث بيانات القضية",
+            });
+          }
+        } catch (e) {}
       }
       res.json(updated);
     } catch (error) {
@@ -508,6 +581,20 @@ export async function registerRoutes(
     try {
       const validatedData = insertHearingSchema.parse(req.body);
       const newHearing = await storage.createHearing(validatedData);
+      const user = (req as any).user;
+      if (user && validatedData.caseId) {
+        try {
+          await storage.logCaseActivity({
+            caseId: validatedData.caseId,
+            userId: user.id,
+            userName: user.name || user.id,
+            actionType: "hearing_added",
+            title: `تمت إضافة جلسة بتاريخ ${validatedData.hearingDate}`,
+            relatedEntityType: "hearing",
+            relatedEntityId: newHearing.id,
+          });
+        } catch (e) {}
+      }
       res.status(201).json(newHearing);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -583,6 +670,21 @@ export async function registerRoutes(
       }
 
       const updatedHearing = await storage.updateHearing(hearingId, updateData);
+
+      const reqUser = (req as any).user;
+      if (reqUser && effectiveCaseId) {
+        try {
+          await storage.logCaseActivity({
+            caseId: effectiveCaseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            actionType: "hearing_result_recorded",
+            title: `تم تسجيل نتيجة الجلسة: ${data.result}`,
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        } catch (e) {}
+      }
 
       const createdTasks: any[] = [];
       const createdMemos: any[] = [];
@@ -1345,6 +1447,589 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  // ==================== Lawyer Performance Stats ====================
+
+  app.get("/api/stats/lawyer-performance", requireAuth, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    let departmentFilter = req.query.departmentId as string | undefined;
+    const period = req.query.period as string || "all";
+
+    if (user.role === "employee" || user.role === "department_head") {
+      departmentFilter = user.departmentId || undefined;
+    }
+
+    const allCases = await storage.getAllCases();
+    const allHearings = await storage.getAllHearings();
+    const allMemos = await storage.getAllMemos();
+    const allUsers = await storage.getAllUsers();
+    const depts = await storage.getAllDepartments();
+
+    const now = new Date();
+    let periodStart = new Date(0);
+    if (period === "this_month") { periodStart = new Date(now.getFullYear(), now.getMonth(), 1); }
+    else if (period === "last_month") { periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1); }
+    else if (period === "last_3_months") { periodStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000); }
+    else if (period === "this_year") { periodStart = new Date(now.getFullYear(), 0, 1); }
+
+    const lawyers = allUsers.filter(u =>
+      (u.role === "employee" || u.role === "department_head") &&
+      u.isActive &&
+      (!departmentFilter || u.departmentId === departmentFilter)
+    );
+
+    const results = lawyers.map(lawyer => {
+      const lawyerCases = allCases.filter(c => c.responsibleLawyerId === lawyer.id);
+      const activeCases = lawyerCases.filter(c => c.currentStage !== "مقفلة" && c.currentStage !== "مغلق");
+      const closedCases = lawyerCases.filter(c =>
+        (c.currentStage === "مقفلة" || c.currentStage === "مغلق") &&
+        new Date(c.updatedAt) >= periodStart
+      );
+
+      const caseIds = lawyerCases.map(c => c.id);
+      const lawyerHearings = allHearings.filter(h => caseIds.includes(h.caseId));
+      const completedHearings = lawyerHearings.filter(h => h.status === "تمت");
+
+      const hearingsOnTime = completedHearings.filter(h => {
+        if (!h.updatedAt || !h.hearingDate) return false;
+        const hearingDate = new Date(h.hearingDate);
+        const updateDate = new Date(h.updatedAt);
+        return (updateDate.getTime() - hearingDate.getTime()) < 8 * 60 * 60 * 1000;
+      }).length;
+
+      const lawyerMemos = allMemos.filter(m => m.assignedTo === lawyer.id);
+      const completedMemos = lawyerMemos.filter(m => m.completedAt);
+      const avgMemoDays = completedMemos.length > 0
+        ? completedMemos.reduce((sum, m) => {
+            const created = new Date(m.createdAt);
+            const completed = new Date(m.completedAt!);
+            return sum + (completed.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
+          }, 0) / completedMemos.length
+        : 0;
+      const overdueMemos = lawyerMemos.filter(m =>
+        !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) &&
+        m.deadline && new Date(m.deadline) < now
+      ).length;
+
+      const judgmentHearings = lawyerHearings.filter(h => h.result === "حكم");
+      const wonCases = judgmentHearings.filter(h => h.judgmentSide === "لصالحنا").length;
+      const lostCases = judgmentHearings.filter(h => h.judgmentSide === "ضدنا").length;
+      const totalJudgments = wonCases + lostCases;
+      const winRate = totalJudgments > 0 ? (wonCases / totalJudgments) * 100 : 0;
+
+      const totalCases = activeCases.length + closedCases.length;
+      const closureRate = totalCases > 0 ? (closedCases.length / totalCases) * 100 : 0;
+      const hearingUpdateRate = completedHearings.length > 0 ? (hearingsOnTime / completedHearings.length) * 100 : 0;
+
+      const normalizedClosure = Math.min(closureRate, 100) / 100;
+      const normalizedHearing = Math.min(hearingUpdateRate, 100) / 100;
+      const normalizedMemo = avgMemoDays > 0 ? Math.max(0, 1 - (avgMemoDays / 30)) : 0.5;
+      const normalizedWin = Math.min(winRate, 100) / 100;
+      const overallScore = (normalizedClosure * 0.3 + normalizedHearing * 0.25 + normalizedMemo * 0.25 + normalizedWin * 0.2) * 5;
+
+      const dept = depts.find(d => d.id === lawyer.departmentId);
+
+      return {
+        userId: lawyer.id,
+        userName: lawyer.name,
+        departmentName: dept?.name || "غير محدد",
+        departmentId: lawyer.departmentId || "",
+        activeCases: activeCases.length,
+        closedCases: closedCases.length,
+        closureRate: Math.round(closureRate * 10) / 10,
+        hearingsOnTime,
+        totalHearings: completedHearings.length,
+        hearingUpdateRate: Math.round(hearingUpdateRate * 10) / 10,
+        avgMemoDays: Math.round(avgMemoDays * 10) / 10,
+        overdueMemos,
+        wonCases,
+        lostCases,
+        winRate: Math.round(winRate * 10) / 10,
+        overallScore: Math.round(overallScore * 10) / 10,
+      };
+    });
+
+    res.json(results);
+  });
+
+  // ==================== Case Activity Log ====================
+
+  app.get("/api/cases/:id/activity", requireAuth, async (req: AuthRequest, res) => {
+    const activities = await storage.getCaseActivities(req.params.id);
+    res.json(activities);
+  });
+
+  // ==================== Case Notes ====================
+
+  app.get("/api/cases/:id/notes", requireAuth, async (req: AuthRequest, res) => {
+    const notes = await storage.getCaseNotes(req.params.id);
+    res.json(notes);
+  });
+
+  app.post("/api/cases/:id/notes", requireAuth, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const note = await storage.createCaseNote({
+      ...req.body,
+      caseId: req.params.id,
+      userId: user.id,
+      userName: user.name,
+    });
+    await storage.logCaseActivity({
+      caseId: req.params.id,
+      userId: user.id,
+      userName: user.name,
+      actionType: "note_added",
+      title: "تمت إضافة ملاحظة داخلية",
+    });
+    res.json(note);
+  });
+
+  app.patch("/api/case-notes/:id", requireAuth, async (req: AuthRequest, res) => {
+    const note = await storage.updateCaseNote(req.params.id, { ...req.body, editedAt: new Date() });
+    if (!note) return res.status(404).json({ message: "ملاحظة غير موجودة" });
+    res.json(note);
+  });
+
+  app.delete("/api/case-notes/:id", requireAuth, async (req: AuthRequest, res) => {
+    await storage.deleteCaseNote(req.params.id);
+    res.json({ success: true });
+  });
+
+  // ==================== Legal Deadlines ====================
+
+  app.get("/api/legal-deadlines", requireAuth, async (req: AuthRequest, res) => {
+    const caseId = req.query.caseId as string;
+    if (caseId) {
+      const deadlines = await storage.getLegalDeadlinesByCase(caseId);
+      res.json(deadlines);
+    } else {
+      const deadlines = await storage.getAllLegalDeadlines();
+      res.json(deadlines);
+    }
+  });
+
+  app.post("/api/legal-deadlines", requireAuth, async (req: AuthRequest, res) => {
+    const deadline = await storage.createLegalDeadline(req.body);
+    if (req.body.caseId) {
+      const user = req.user!;
+      await storage.logCaseActivity({
+        caseId: req.body.caseId,
+        userId: user.id,
+        userName: user.name,
+        actionType: "case_updated",
+        title: `تم إضافة موعد نظامي: ${req.body.title}`,
+      });
+    }
+    res.json(deadline);
+  });
+
+  app.patch("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
+    const deadline = await storage.updateLegalDeadline(req.params.id, req.body);
+    if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
+    res.json(deadline);
+  });
+
+  app.delete("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
+    await storage.deleteLegalDeadline(req.params.id);
+    res.json({ success: true });
+  });
+
+  // ==================== Delegations ====================
+
+  app.get("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
+    const delegations = await storage.getAllDelegations();
+    res.json(delegations);
+  });
+
+  app.post("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const delegation = await storage.createDelegation({
+      ...req.body,
+      fromUserId: user.id,
+    });
+    const allUsers = await storage.getAllUsers();
+    const deptHead = allUsers.find(u => u.departmentId === user.departmentId && u.role === "department_head");
+    if (deptHead) {
+      await storage.createNotification({
+        type: "delegation_requested",
+        title: "طلب تفويض جديد",
+        message: `${user.name} يطلب تفويض قضاياه إلى محامي آخر من ${req.body.startDate} إلى ${req.body.endDate}`,
+        priority: "high",
+        status: "pending",
+        senderId: user.id,
+        senderName: user.name,
+        recipientId: deptHead.id,
+        relatedType: "task",
+        relatedId: delegation.id,
+        requiresResponse: true,
+      });
+    }
+    res.json(delegation);
+  });
+
+  app.patch("/api/delegations/:id", requireAuth, async (req: AuthRequest, res) => {
+    const delegation = await storage.updateDelegation(req.params.id, req.body);
+    if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
+    res.json(delegation);
+  });
+
+  app.post("/api/delegations/:id/approve", requireAuth, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const delegation = await storage.updateDelegation(req.params.id, {
+      status: "نشط",
+      approvedBy: user.id,
+      approvedAt: new Date(),
+    });
+    if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
+    const toUser = await storage.getUser(delegation.toUserId);
+    const fromUser = await storage.getUser(delegation.fromUserId);
+    if (toUser && fromUser) {
+      await storage.createNotification({
+        type: "delegation_approved",
+        title: "تم اعتماد التفويض",
+        message: `تم تفويضك على قضايا ${fromUser.name} من ${delegation.startDate} إلى ${delegation.endDate}`,
+        priority: "high",
+        status: "pending",
+        senderId: user.id,
+        senderName: user.name,
+        recipientId: toUser.id,
+      });
+      await storage.createNotification({
+        type: "delegation_approved",
+        title: "تم اعتماد التفويض",
+        message: `تمت الموافقة على تفويض قضاياك إلى ${toUser.name}`,
+        priority: "medium",
+        status: "pending",
+        senderId: user.id,
+        senderName: user.name,
+        recipientId: fromUser.id,
+      });
+    }
+    res.json(delegation);
+  });
+
+  // ==================== Smart Search ====================
+
+  app.get("/api/search", requireAuth, async (req: AuthRequest, res) => {
+    const q = String(req.query.q || "").trim().toLowerCase();
+    const type = req.query.type as string;
+    if (q.length < 2) return res.json({ results: [] });
+    const user = req.user!;
+    const results: any[] = [];
+
+    if (!type || type === "cases") {
+      let cases = await storage.getAllCases();
+      if (user.role === "employee") {
+        cases = cases.filter(c => c.responsibleLawyerId === user.id || c.departmentId === user.departmentId);
+      } else if (user.role === "department_head") {
+        cases = cases.filter(c => c.departmentId === user.departmentId);
+      }
+      cases.filter(c =>
+        c.caseNumber?.toLowerCase().includes(q) ||
+        c.opponentName?.toLowerCase().includes(q) ||
+        c.courtName?.toLowerCase().includes(q) ||
+        c.courtCaseNumber?.toLowerCase().includes(q)
+      ).slice(0, 10).forEach(c => results.push({
+        type: "case", id: c.id, title: `قضية ${c.caseNumber}`, subtitle: `${c.opponentName || ""} - ${c.courtName || ""}`, url: `/cases/${c.id}`, icon: "Scale",
+      }));
+    }
+
+    if (!type || type === "hearings") {
+      const hearingsList = await storage.getAllHearings();
+      hearingsList.filter(h =>
+        h.courtName?.toLowerCase().includes(q) ||
+        h.notes?.toLowerCase().includes(q) ||
+        h.resultDetails?.toLowerCase().includes(q)
+      ).slice(0, 10).forEach(h => results.push({
+        type: "hearing", id: h.id, title: `جلسة ${h.hearingDate}`, subtitle: `${h.courtName || ""} - ${h.status}`, url: `/hearings`, icon: "Gavel",
+      }));
+    }
+
+    if (!type || type === "memos") {
+      const memosList = await storage.getAllMemos();
+      memosList.filter(m =>
+        m.title?.toLowerCase().includes(q)
+      ).slice(0, 10).forEach(m => results.push({
+        type: "memo", id: m.id, title: m.title, subtitle: `${m.status} - ${m.deadline}`, url: `/cases/${m.caseId}`, icon: "FileText",
+      }));
+    }
+
+    if (!type || type === "clients") {
+      const clientsList = await storage.getAllClients();
+      clientsList.filter(c =>
+        c.individualName?.toLowerCase().includes(q) ||
+        c.companyName?.toLowerCase().includes(q) ||
+        c.phone?.includes(q) ||
+        c.nationalId?.includes(q)
+      ).slice(0, 10).forEach(c => results.push({
+        type: "client", id: c.id, title: c.individualName || c.companyName || "", subtitle: `${c.phone || ""}`, url: `/clients`, icon: "User",
+      }));
+    }
+
+    if (!type || type === "consultations") {
+      const consultationsList = await storage.getAllConsultations();
+      consultationsList.filter(c =>
+        c.consultationNumber?.toLowerCase().includes(q) ||
+        c.questionSummary?.toLowerCase().includes(q)
+      ).slice(0, 10).forEach(c => results.push({
+        type: "consultation", id: c.id, title: `استشارة ${c.consultationNumber}`, subtitle: c.status, url: `/consultations`, icon: "MessageSquare",
+      }));
+    }
+
+    res.json({ results });
+  });
+
+  // ==================== Court Analytics ====================
+
+  app.get("/api/stats/court-analytics", requireAuth, async (req: AuthRequest, res) => {
+    const cases = await storage.getAllCases();
+    const hearingsList = await storage.getAllHearings();
+
+    const byCourtType: Record<string, number> = {};
+    hearingsList.forEach(h => {
+      const court = h.courtName || "غير محدد";
+      byCourtType[court] = (byCourtType[court] || 0) + 1;
+    });
+
+    const byResult: Record<string, { won: number; lost: number; partial: number }> = {};
+    hearingsList.filter(h => h.result === "حكم").forEach(h => {
+      const caseInfo = cases.find(c => c.id === h.caseId);
+      const caseType = caseInfo?.caseType || "غير محدد";
+      if (!byResult[caseType]) byResult[caseType] = { won: 0, lost: 0, partial: 0 };
+      if (h.judgmentSide === "لصالحنا") byResult[caseType].won++;
+      else if (h.judgmentSide === "ضدنا") byResult[caseType].lost++;
+      else byResult[caseType].partial++;
+    });
+
+    const avgDuration: Record<string, number[]> = {};
+    cases.filter(c => c.currentStage === "مقفلة" || c.currentStage === "مغلق").forEach(c => {
+      const cType = c.caseType || "غير محدد";
+      const duration = (new Date(c.updatedAt).getTime() - new Date(c.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+      if (!avgDuration[cType]) avgDuration[cType] = [];
+      avgDuration[cType].push(duration);
+    });
+
+    const avgDurationResult: Record<string, number> = {};
+    Object.entries(avgDuration).forEach(([cType, durations]) => {
+      avgDurationResult[cType] = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
+    });
+
+    res.json({ byCourtType, byResult, avgDuration: avgDurationResult });
+  });
+
+  // ==================== Smart Dashboard ====================
+
+  app.get("/api/dashboard/smart", requireAuth, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    const now = new Date();
+    const todayStr = now.toISOString().split("T")[0];
+
+    const hour = now.getHours();
+    const greeting = hour < 12 ? `صباح الخير ${user.name}` : `مساء الخير ${user.name}`;
+
+    const allCases = await storage.getAllCases();
+    const allHearings = await storage.getAllHearings();
+    const allMemos = await storage.getAllMemos();
+    const allNotifications = await storage.getAllNotifications();
+
+    let userCases = allCases;
+    if (user.role === "employee") {
+      userCases = allCases.filter(c => c.responsibleLawyerId === user.id);
+    } else if (user.role === "department_head") {
+      userCases = allCases.filter(c => c.departmentId === user.departmentId);
+    }
+
+    const caseIds = userCases.map(c => c.id);
+
+    const todayHearings = allHearings.filter(h => h.hearingDate === todayStr && caseIds.includes(h.caseId));
+
+    const alerts: any[] = [];
+
+    allHearings.filter(h => {
+      if (h.status !== "قادمة") return false;
+      if (!caseIds.includes(h.caseId)) return false;
+      const hDate = new Date(h.hearingDate);
+      return hDate < now;
+    }).forEach(h => {
+      const caseInfo = userCases.find(c => c.id === h.caseId);
+      alerts.push({
+        type: "overdue_hearing",
+        priority: "urgent",
+        message: `جلسة بتاريخ ${h.hearingDate} لم تُحدَّث (${caseInfo?.caseNumber || ""})`,
+        url: `/hearings`,
+        relatedId: h.id,
+      });
+    });
+
+    const userMemos = user.role === "employee"
+      ? allMemos.filter(m => m.assignedTo === user.id)
+      : allMemos.filter(m => caseIds.includes(m.caseId));
+    userMemos.filter(m =>
+      !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) &&
+      m.deadline && new Date(m.deadline) < now
+    ).forEach(m => {
+      alerts.push({
+        type: "overdue_memo",
+        priority: "high",
+        message: `مذكرة "${m.title}" متأخرة عن الموعد`,
+        url: `/cases/${m.caseId}`,
+        relatedId: m.id,
+      });
+    });
+
+    let deadlines = await storage.getAllLegalDeadlines();
+    deadlines = deadlines.filter(d => d.status === "نشط" && caseIds.includes(d.caseId));
+    const upcomingDeadlines = deadlines.filter(d => {
+      const dDate = new Date(d.deadlineDate);
+      const daysLeft = (dDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+      return daysLeft > 0 && daysLeft <= 7;
+    }).map(d => {
+      const dDate = new Date(d.deadlineDate);
+      const daysLeft = Math.ceil((dDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      return { ...d, daysLeft };
+    });
+
+    const unreadNotifications = allNotifications.filter(n => n.recipientId === user.id && !n.isRead).length;
+
+    const activeCases = userCases.filter(c => c.currentStage !== "مقفلة" && c.currentStage !== "مغلق" && !(c as any).isArchived);
+    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const closedThisMonth = userCases.filter(c =>
+      (c.currentStage === "مقفلة" || c.currentStage === "مغلق") &&
+      new Date(c.updatedAt) >= thisMonth
+    );
+
+    const performanceStats = {
+      activeCases: activeCases.length,
+      closedThisMonth: closedThisMonth.length,
+      totalCases: userCases.length,
+      overdueMemos: userMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) && m.deadline && new Date(m.deadline) < now).length,
+      todayHearingsCount: todayHearings.length,
+      upcomingDeadlinesCount: upcomingDeadlines.length,
+      unreadNotifications,
+    };
+
+    let comparison;
+    if (user.role === "branch_manager" || user.role === "cases_review_head") {
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+      const newThisMonth = allCases.filter(c => new Date(c.createdAt) >= thisMonth).length;
+      const newLastMonth = allCases.filter(c => new Date(c.createdAt) >= lastMonth && new Date(c.createdAt) <= lastMonthEnd).length;
+      comparison = {
+        newCasesChange: newLastMonth > 0 ? Math.round(((newThisMonth - newLastMonth) / newLastMonth) * 100) : 0,
+        closedChange: 0,
+      };
+    }
+
+    res.json({
+      greeting,
+      todayHearings,
+      alerts: alerts.sort((a, b) => (a.priority === "urgent" ? -1 : 1)),
+      overdueItems: alerts,
+      upcomingDeadlines,
+      performanceStats,
+      comparison,
+    });
+  });
+
+  // ==================== Export ====================
+
+  function generateCSV(data: any[], headers: string[], keys: string[]): string {
+    const header = headers.join(",");
+    const rows = data.map(item =>
+      keys.map(key => {
+        const val = item[key] || "";
+        return `"${String(val).replace(/"/g, '""')}"`;
+      }).join(",")
+    );
+    return [header, ...rows].join("\n");
+  }
+
+  app.get("/api/export/cases", requireAuth, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    if (!["branch_manager", "cases_review_head", "department_head"].includes(user.role)) {
+      return res.status(403).json({ message: "غير مصرح" });
+    }
+    let cases = await storage.getAllCases();
+    const { departmentId, status, dateFrom, dateTo } = req.query;
+    if (departmentId) cases = cases.filter(c => c.departmentId === departmentId);
+    if (status) cases = cases.filter(c => c.currentStage === status);
+    if (dateFrom) cases = cases.filter(c => new Date(c.createdAt) >= new Date(String(dateFrom)));
+    if (dateTo) cases = cases.filter(c => new Date(c.createdAt) <= new Date(String(dateTo)));
+
+    const allUsers = await storage.getAllUsers();
+    const depts = await storage.getAllDepartments();
+
+    const exportData = cases.map(c => ({
+      caseNumber: c.caseNumber,
+      caseType: c.caseType,
+      opponentName: c.opponentName,
+      courtName: c.courtName,
+      currentStage: c.currentStage,
+      lawyer: allUsers.find(u => u.id === c.responsibleLawyerId)?.name || "",
+      department: depts.find(d => d.id === c.departmentId)?.name || "",
+      createdAt: c.createdAt,
+      priority: c.priority,
+    }));
+
+    const csv = generateCSV(exportData,
+      ["رقم القضية", "نوع القضية", "الخصم", "المحكمة", "المرحلة", "المحامي", "القسم", "تاريخ الإنشاء", "الأولوية"],
+      ["caseNumber", "caseType", "opponentName", "courtName", "currentStage", "lawyer", "department", "createdAt", "priority"]
+    );
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=cases-${Date.now()}.csv`);
+    res.send("\uFEFF" + csv);
+  });
+
+  app.get("/api/export/hearings", requireAuth, async (req: AuthRequest, res) => {
+    const user = req.user!;
+    if (!["branch_manager", "cases_review_head", "department_head"].includes(user.role)) {
+      return res.status(403).json({ message: "غير مصرح" });
+    }
+    const hearingsList = await storage.getAllHearings();
+    const exportData = hearingsList.map(h => ({
+      hearingDate: h.hearingDate, hearingTime: h.hearingTime, courtName: h.courtName, courtRoom: h.courtRoom, status: h.status, result: h.result || "", resultDetails: h.resultDetails || "",
+    }));
+    const csv = generateCSV(exportData, ["التاريخ", "الوقت", "المحكمة", "القاعة", "الحالة", "النتيجة", "تفاصيل النتيجة"], ["hearingDate", "hearingTime", "courtName", "courtRoom", "status", "result", "resultDetails"]);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=hearings-${Date.now()}.csv`);
+    res.send("\uFEFF" + csv);
+  });
+
+  // ==================== File Upload/Download ====================
+
+  app.post("/api/attachments/upload", requireAuth, upload.single("file"), async (req: AuthRequest, res) => {
+    if (!req.file) return res.status(400).json({ message: "لم يتم رفع ملف" });
+    const user = req.user!;
+    const attachment = await storage.createAttachment({
+      entityType: req.body.entityType || "case",
+      entityId: req.body.entityId,
+      fileName: req.file.originalname,
+      fileUrl: `/uploads/${req.file.filename}`,
+      fileType: req.file.mimetype,
+      fileSize: req.file.size,
+      uploadedBy: user.id,
+    });
+    if (req.body.entityType === "case" && req.body.entityId) {
+      await storage.logCaseActivity({
+        caseId: req.body.entityId,
+        userId: user.id,
+        userName: user.name,
+        actionType: "attachment_added",
+        title: `تم إرفاق ملف: ${req.file.originalname}`,
+        relatedEntityType: "attachment",
+        relatedEntityId: attachment.id,
+      });
+    }
+    res.json(attachment);
+  });
+
+  app.get("/api/attachments/:id/download", requireAuth, async (req: AuthRequest, res) => {
+    const filePath = path.join(uploadsDir, req.params.id);
+    if (fs.existsSync(filePath)) {
+      return res.download(filePath);
+    }
+    res.status(404).json({ message: "ملف غير موجود" });
   });
 
   return httpServer;

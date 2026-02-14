@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { format } from "date-fns";
 import { ar } from "date-fns/locale";
 import {
@@ -1017,12 +1018,15 @@ export default function CasesPage() {
               </div>
 
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="grid w-full grid-cols-5">
+                <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
                   <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
                   <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
                   <TabsTrigger value="attachments" data-testid="tab-attachments">المرفقات</TabsTrigger>
                   <TabsTrigger value="comments" data-testid="tab-comments">التعليقات</TabsTrigger>
+                  <TabsTrigger value="activity" data-testid="tab-activity">النشاط</TabsTrigger>
+                  <TabsTrigger value="notes" data-testid="tab-notes">ملاحظات</TabsTrigger>
+                  <TabsTrigger value="deadlines" data-testid="tab-deadlines">مواعيد</TabsTrigger>
                 </TabsList>
                 
                 <TabsContent value="info" className="space-y-4 mt-4">
@@ -1287,6 +1291,18 @@ export default function CasesPage() {
                       );
                     })()}
                   </div>
+                </TabsContent>
+
+                <TabsContent value="activity" className="mt-4">
+                  <CaseActivityTab caseId={selectedCase?.id || ""} />
+                </TabsContent>
+
+                <TabsContent value="notes" className="mt-4">
+                  <CaseNotesTab caseId={selectedCase?.id || ""} />
+                </TabsContent>
+
+                <TabsContent value="deadlines" className="mt-4">
+                  <CaseDeadlinesTab caseId={selectedCase?.id || ""} />
                 </TabsContent>
               </Tabs>
             </div>

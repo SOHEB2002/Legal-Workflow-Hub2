@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, differenceInDays, subMonths, startOfYear, endOfYear } from "date-fns";
+import { useQuery } from "@tanstack/react-query";
+import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, subMonths, startOfYear, endOfYear } from "date-fns";
 import { ar } from "date-fns/locale";
 import { 
   TrendingUp, 
@@ -18,12 +19,14 @@ import {
   Medal,
   Award,
   Filter,
+  Star,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
 import { useHearings } from "@/lib/hearings-context";
@@ -110,6 +113,19 @@ function ProgressCard({ title, value, max, description, icon }: ProgressCardProp
   );
 }
 
+function StarRating({ score }: { score: number }) {
+  const fullStars = Math.floor(score);
+  const hasHalf = score - fullStars >= 0.5;
+  return (
+    <div className="flex items-center gap-0.5">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <Star key={i} className={`h-4 w-4 ${i < fullStars ? "text-yellow-500 fill-yellow-500" : i === fullStars && hasHalf ? "text-yellow-500 fill-yellow-500/50" : "text-muted-foreground"}`} />
+      ))}
+      <span className="text-sm mr-1">{score.toFixed(1)}</span>
+    </div>
+  );
+}
+
 type PeriodType = "this_month" | "last_month" | "this_year" | "all_time";
 
 const periodLabels: Record<PeriodType, string> = {
@@ -129,23 +145,21 @@ export default function KPIsPage() {
   const { departments } = useDepartments();
   
   const [selectedPeriod, setSelectedPeriod] = useState<PeriodType>("this_month");
+  const [selectedDepartment, setSelectedDepartment] = useState<string>("all");
 
-  const periodRange = useMemo(() => {
-    const now = new Date();
-    switch (selectedPeriod) {
-      case "this_month":
-        return { start: startOfMonth(now), end: endOfMonth(now) };
-      case "last_month":
-        const lastMonth = subMonths(now, 1);
-        return { start: startOfMonth(lastMonth), end: endOfMonth(lastMonth) };
-      case "this_year":
-        return { start: startOfYear(now), end: endOfYear(now) };
-      case "all_time":
-        return { start: new Date(2000, 0, 1), end: now };
-      default:
-        return { start: startOfMonth(now), end: endOfMonth(now) };
+  const { data: lawyerPerformance = [], isLoading: loadingPerformance } = useQuery<any[]>({
+    queryKey: ['/api/stats/lawyer-performance', selectedPeriod, selectedDepartment],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (selectedPeriod !== "all_time") params.set("period", selectedPeriod === "this_month" ? "this_month" : selectedPeriod === "last_month" ? "last_month" : selectedPeriod === "this_year" ? "this_year" : "all");
+      if (selectedDepartment && selectedDepartment !== "all") params.set("departmentId", selectedDepartment);
+      const res = await fetch(`/api/stats/lawyer-performance?${params}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("lawfirm_token")}` }
+      });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
     }
-  }, [selectedPeriod]);
+  });
 
   const currentMonth = useMemo(() => {
     const now = new Date();
@@ -289,57 +303,6 @@ export default function KPIsPage() {
     };
   }, [users]);
 
-  const employeePerformance = useMemo(() => {
-    const lawyers = users.filter(u => 
-      u.role === "department_head" || u.role === "employee"
-    );
-
-    const performance = lawyers.map(lawyer => {
-      const lawyerCases = cases.filter(c => c.responsibleLawyerId === lawyer.id);
-      const periodCases = lawyerCases.filter(c => {
-        try {
-          const createdDate = parseISO(c.createdAt);
-          return isWithinInterval(createdDate, periodRange);
-        } catch {
-          return selectedPeriod === "all_time";
-        }
-      });
-
-      const closedCases = periodCases.filter(c => c.status === CaseStatus.CLOSED);
-      const totalCasesCount = periodCases.length;
-      const closedCount = closedCases.length;
-      
-      const avgDuration = closedCases.length > 0 
-        ? Math.round(closedCases.reduce((acc, c) => {
-            try {
-              const start = parseISO(c.createdAt);
-              const end = c.closedAt ? parseISO(c.closedAt) : new Date();
-              return acc + differenceInDays(end, start);
-            } catch {
-              return acc;
-            }
-          }, 0) / closedCases.length)
-        : 0;
-
-      const closureRate = totalCasesCount > 0 
-        ? Math.round((closedCount / totalCasesCount) * 100) 
-        : 0;
-
-      return {
-        id: lawyer.id,
-        name: lawyer.name,
-        role: lawyer.role,
-        totalCases: totalCasesCount,
-        closedCases: closedCount,
-        closureRate,
-        avgDuration,
-        score: closureRate + (avgDuration > 0 ? Math.max(0, 100 - avgDuration) : 0),
-      };
-    });
-
-    return performance.sort((a, b) => b.score - a.score);
-  }, [users, cases, periodRange, selectedPeriod]);
-
   const getRankIcon = (index: number) => {
     switch (index) {
       case 0:
@@ -353,6 +316,8 @@ export default function KPIsPage() {
     }
   };
 
+  const topPerformers = lawyerPerformance.slice(0, 3);
+
   return (
     <div className="container mx-auto p-6 space-y-6" dir="rtl">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -365,7 +330,7 @@ export default function KPIsPage() {
             تحليل شامل لأداء مكتب المحاماة - {format(new Date(), "MMMM yyyy", { locale: ar })}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Filter className="h-4 w-4 text-muted-foreground" />
           <Select value={selectedPeriod} onValueChange={(v) => setSelectedPeriod(v as PeriodType)}>
             <SelectTrigger className="w-40" data-testid="select-period">
@@ -375,6 +340,19 @@ export default function KPIsPage() {
               {Object.entries(periodLabels).map(([value, label]) => (
                 <SelectItem key={value} value={value} data-testid={`period-${value}`}>
                   {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={selectedDepartment} onValueChange={setSelectedDepartment}>
+            <SelectTrigger className="w-40" data-testid="select-department">
+              <SelectValue placeholder="اختر القسم" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="department-all">جميع الأقسام</SelectItem>
+              {departments.map((dept) => (
+                <SelectItem key={dept.id} value={dept.id} data-testid={`department-${dept.id}`}>
+                  {dept.name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -527,57 +505,132 @@ export default function KPIsPage() {
         </CardContent>
       </Card>
 
+      {loadingPerformance ? (
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-32 mt-2" />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-4">
+                <Skeleton className="h-12 w-12 rounded-full" />
+                <div className="space-y-2 flex-1">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-3 w-24" />
+                </div>
+                <Skeleton className="h-4 w-20" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : topPerformers.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-yellow-500" />
+              أفضل 3 محامين
+            </CardTitle>
+            <CardDescription>المحامون الأعلى تقييماً - {periodLabels[selectedPeriod]}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {topPerformers.map((lawyer: any, index: number) => (
+                <div key={lawyer.lawyerId} className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg" data-testid={`top-performer-${lawyer.lawyerId}`}>
+                  <div className="flex-shrink-0">
+                    {getRankIcon(index)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{lawyer.lawyerName}</div>
+                    <div className="text-xs text-muted-foreground">{lawyer.departmentName}</div>
+                    <div className="mt-1">
+                      <StarRating score={lawyer.overallScore ?? 0} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Users className="h-5 w-5" />
-            أداء الموظفين
+            أداء المحامين
           </CardTitle>
-          <CardDescription>تفاصيل أداء المحامين والموظفين - {periodLabels[selectedPeriod]}</CardDescription>
+          <CardDescription>تفاصيل أداء المحامين - {periodLabels[selectedPeriod]}</CardDescription>
         </CardHeader>
         <CardContent>
-          {employeePerformance.length === 0 ? (
+          {loadingPerformance ? (
+            <div className="space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : lawyerPerformance.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              لا يوجد موظفين لعرض أدائهم
+              لا يوجد محامين لعرض أدائهم
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-right w-16">الترتيب</TableHead>
-                  <TableHead className="text-right">الموظف</TableHead>
-                  <TableHead className="text-center">القضايا</TableHead>
-                  <TableHead className="text-center">المغلقة</TableHead>
-                  <TableHead className="text-center">معدل الإغلاق</TableHead>
-                  <TableHead className="text-center">متوسط المدة</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {employeePerformance.map((employee, index) => (
-                  <TableRow key={employee.id} data-testid={`employee-row-${employee.id}`}>
-                    <TableCell className="text-center">
-                      {getRankIcon(index)}
-                    </TableCell>
-                    <TableCell className="font-medium">{employee.name}</TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="outline">{employee.totalCases}</Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="secondary">{employee.closedCases}</Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <Progress value={employee.closureRate} className="w-16 h-2" />
-                        <span className="text-sm">{employee.closureRate}%</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-center text-muted-foreground">
-                      {employee.avgDuration > 0 ? `${employee.avgDuration} يوم` : "-"}
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-right w-16">الترتيب</TableHead>
+                    <TableHead className="text-right">المحامي</TableHead>
+                    <TableHead className="text-right">القسم</TableHead>
+                    <TableHead className="text-center">القضايا النشطة</TableHead>
+                    <TableHead className="text-center">المغلقة</TableHead>
+                    <TableHead className="text-center">معدل الإغلاق</TableHead>
+                    <TableHead className="text-center">تحديث الجلسات</TableHead>
+                    <TableHead className="text-center">مذكرات متأخرة</TableHead>
+                    <TableHead className="text-center">نسبة الكسب</TableHead>
+                    <TableHead className="text-center">التقييم</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {lawyerPerformance.map((lawyer: any, index: number) => (
+                    <TableRow key={lawyer.lawyerId} data-testid={`employee-row-${lawyer.lawyerId}`}>
+                      <TableCell className="text-center">
+                        {getRankIcon(index)}
+                      </TableCell>
+                      <TableCell className="font-medium">{lawyer.lawyerName}</TableCell>
+                      <TableCell className="text-muted-foreground">{lawyer.departmentName}</TableCell>
+                      <TableCell className="text-center">
+                        <Badge variant="outline">{lawyer.activeCases ?? 0}</Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Badge variant="secondary">{lawyer.closedCases ?? 0}</Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <Progress value={lawyer.closureRate ?? 0} className="w-16 h-2" />
+                          <span className="text-sm">{lawyer.closureRate ?? 0}%</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className={`text-sm font-medium ${(lawyer.hearingUpdateRate ?? 0) >= 80 ? "text-green-600" : (lawyer.hearingUpdateRate ?? 0) >= 50 ? "text-yellow-600" : "text-red-600"}`}>
+                          {lawyer.hearingUpdateRate ?? 0}%
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className={`text-sm font-medium ${(lawyer.overdueMemos ?? 0) > 0 ? "text-red-600" : "text-muted-foreground"}`}>
+                          {lawyer.overdueMemos ?? 0}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className="text-sm">{lawyer.winRate ?? 0}%</span>
+                      </TableCell>
+                      <TableCell>
+                        <StarRating score={lawyer.overallScore ?? 0} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

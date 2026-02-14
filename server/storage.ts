@@ -2,12 +2,18 @@ import {
   type User, type LawCase, type Client, type Consultation, type Hearing, 
   type FieldTask, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
   type SupportTicket,
+  type CaseActivity, type InsertCaseActivity,
+  type CaseNote, type InsertCaseNote,
+  type LegalDeadline, type InsertLegalDeadline,
+  type DelegationRecord, type InsertDelegation,
   CaseStatus, CaseStage,
-  users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets
+  users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
+  caseActivityLog, caseNotes, legalDeadlines, delegationsTable
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc, lte, gte } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
 
 export interface IStorage {
@@ -94,6 +100,30 @@ export interface IStorage {
   updateSupportTicket(id: string, data: Partial<SupportTicket>): Promise<SupportTicket | undefined>;
   deleteSupportTicket(id: string): Promise<boolean>;
   getNextTicketNumber(): Promise<string>;
+
+  // Case Activity Log
+  logCaseActivity(data: InsertCaseActivity): Promise<CaseActivity>;
+  getCaseActivities(caseId: string): Promise<CaseActivity[]>;
+
+  // Case Notes
+  getCaseNotes(caseId: string): Promise<CaseNote[]>;
+  createCaseNote(data: InsertCaseNote): Promise<CaseNote>;
+  updateCaseNote(id: string, data: Partial<CaseNote>): Promise<CaseNote | undefined>;
+  deleteCaseNote(id: string): Promise<boolean>;
+
+  // Legal Deadlines
+  getAllLegalDeadlines(): Promise<LegalDeadline[]>;
+  getLegalDeadlinesByCase(caseId: string): Promise<LegalDeadline[]>;
+  createLegalDeadline(data: InsertLegalDeadline): Promise<LegalDeadline>;
+  updateLegalDeadline(id: string, data: Partial<LegalDeadline>): Promise<LegalDeadline | undefined>;
+  deleteLegalDeadline(id: string): Promise<boolean>;
+
+  // Delegations
+  getAllDelegations(): Promise<DelegationRecord[]>;
+  getActiveDelegationsForUser(userId: string): Promise<DelegationRecord[]>;
+  createDelegation(data: InsertDelegation): Promise<DelegationRecord>;
+  updateDelegation(id: string, data: Partial<DelegationRecord>): Promise<DelegationRecord | undefined>;
+  deleteDelegation(id: string): Promise<boolean>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -1062,6 +1092,134 @@ export class DatabaseStorage implements IStorage {
       return isNaN(num) ? max : Math.max(max, num);
     }, 0);
     return `TK-${String(maxNum + 1).padStart(4, "0")}`;
+  }
+
+  // ==================== Case Activity Log ====================
+
+  async logCaseActivity(data: InsertCaseActivity): Promise<CaseActivity> {
+    const id = nanoid();
+    const [activity] = await db.insert(caseActivityLog).values({
+      ...data,
+      id,
+      createdAt: new Date(),
+    } as any).returning();
+    return activity;
+  }
+
+  async getCaseActivities(caseId: string): Promise<CaseActivity[]> {
+    return await db.select().from(caseActivityLog)
+      .where(eq(caseActivityLog.caseId, caseId))
+      .orderBy(desc(caseActivityLog.createdAt));
+  }
+
+  // ==================== Case Notes ====================
+
+  async getCaseNotes(caseId: string): Promise<CaseNote[]> {
+    return await db.select().from(caseNotes)
+      .where(eq(caseNotes.caseId, caseId))
+      .orderBy(desc(caseNotes.isPinned), desc(caseNotes.createdAt));
+  }
+
+  async createCaseNote(data: InsertCaseNote): Promise<CaseNote> {
+    const id = nanoid();
+    const [note] = await db.insert(caseNotes).values({
+      ...data,
+      id,
+      createdAt: new Date(),
+    } as any).returning();
+    return note;
+  }
+
+  async updateCaseNote(id: string, data: Partial<CaseNote>): Promise<CaseNote | undefined> {
+    const [note] = await db.update(caseNotes)
+      .set({ ...data, editedAt: new Date() } as any)
+      .where(eq(caseNotes.id, id))
+      .returning();
+    return note;
+  }
+
+  async deleteCaseNote(id: string): Promise<boolean> {
+    const result = await db.delete(caseNotes).where(eq(caseNotes.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // ==================== Legal Deadlines ====================
+
+  async getAllLegalDeadlines(): Promise<LegalDeadline[]> {
+    return await db.select().from(legalDeadlines)
+      .orderBy(legalDeadlines.deadlineDate);
+  }
+
+  async getLegalDeadlinesByCase(caseId: string): Promise<LegalDeadline[]> {
+    return await db.select().from(legalDeadlines)
+      .where(eq(legalDeadlines.caseId, caseId))
+      .orderBy(legalDeadlines.deadlineDate);
+  }
+
+  async createLegalDeadline(data: InsertLegalDeadline): Promise<LegalDeadline> {
+    const id = nanoid();
+    const [deadline] = await db.insert(legalDeadlines).values({
+      ...data,
+      id,
+      createdAt: new Date(),
+    } as any).returning();
+    return deadline;
+  }
+
+  async updateLegalDeadline(id: string, data: Partial<LegalDeadline>): Promise<LegalDeadline | undefined> {
+    const [deadline] = await db.update(legalDeadlines)
+      .set(data as any)
+      .where(eq(legalDeadlines.id, id))
+      .returning();
+    return deadline;
+  }
+
+  async deleteLegalDeadline(id: string): Promise<boolean> {
+    const result = await db.delete(legalDeadlines).where(eq(legalDeadlines.id, id)).returning();
+    return result.length > 0;
+  }
+
+  // ==================== Delegations ====================
+
+  async getAllDelegations(): Promise<DelegationRecord[]> {
+    return await db.select().from(delegationsTable)
+      .orderBy(desc(delegationsTable.createdAt));
+  }
+
+  async getActiveDelegationsForUser(userId: string): Promise<DelegationRecord[]> {
+    const today = new Date().toISOString().split("T")[0];
+    return await db.select().from(delegationsTable)
+      .where(
+        and(
+          eq(delegationsTable.toUserId, userId),
+          eq(delegationsTable.status, "نشط"),
+          lte(delegationsTable.startDate, today),
+          gte(delegationsTable.endDate, today)
+        )
+      );
+  }
+
+  async createDelegation(data: InsertDelegation): Promise<DelegationRecord> {
+    const id = nanoid();
+    const [delegation] = await db.insert(delegationsTable).values({
+      ...data,
+      id,
+      createdAt: new Date(),
+    } as any).returning();
+    return delegation;
+  }
+
+  async updateDelegation(id: string, data: Partial<DelegationRecord>): Promise<DelegationRecord | undefined> {
+    const [delegation] = await db.update(delegationsTable)
+      .set(data as any)
+      .where(eq(delegationsTable.id, id))
+      .returning();
+    return delegation;
+  }
+
+  async deleteDelegation(id: string): Promise<boolean> {
+    const result = await db.delete(delegationsTable).where(eq(delegationsTable.id, id)).returning();
+    return result.length > 0;
   }
 
   // ==================== Initialize Default Data ====================

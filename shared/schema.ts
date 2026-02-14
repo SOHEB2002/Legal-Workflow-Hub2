@@ -81,6 +81,11 @@ export const lawCases = pgTable("law_cases", {
   previousHearingsCount: integer("previous_hearings_count").default(0),
   currentSituation: text("current_situation").default(""),
   responseDeadline: varchar("response_deadline", { length: 50 }),
+  isArchived: boolean("is_archived").default(false),
+  archivedAt: timestamp("archived_at"),
+  archivedBy: varchar("archived_by", { length: 255 }),
+  archiveReason: varchar("archive_reason", { length: 50 }),
+  autoArchiveDate: varchar("auto_archive_date", { length: 50 }),
 });
 
 export const consultations = pgTable("consultations", {
@@ -168,6 +173,13 @@ export const contactLogs = pgTable("contact_logs", {
   nextFollowUpDate: varchar("next_follow_up_date", { length: 50 }),
   followUpStatus: varchar("follow_up_status", { length: 50 }).notNull(),
   notes: text("notes").default(""),
+  communicationType: varchar("communication_type", { length: 50 }),
+  duration: varchar("duration", { length: 50 }),
+  followUpRequired: boolean("follow_up_required").default(false),
+  followUpDate: varchar("follow_up_date", { length: 50 }),
+  followUpNotes: text("follow_up_notes"),
+  followUpCompleted: boolean("follow_up_completed").default(false),
+  caseId: varchar("case_id", { length: 255 }),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -248,6 +260,68 @@ export const memos = pgTable("memos", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const caseActivityLog = pgTable("case_activity_log", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  caseId: varchar("case_id", { length: 255 }).notNull(),
+  userId: varchar("user_id", { length: 255 }).notNull(),
+  userName: varchar("user_name", { length: 255 }).notNull(),
+  actionType: varchar("action_type", { length: 50 }).notNull(),
+  title: varchar("title", { length: 500 }).notNull(),
+  details: text("details"),
+  previousValue: text("previous_value"),
+  newValue: text("new_value"),
+  relatedEntityType: varchar("related_entity_type", { length: 50 }),
+  relatedEntityId: varchar("related_entity_id", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const caseNotes = pgTable("case_notes", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  caseId: varchar("case_id", { length: 255 }).notNull(),
+  userId: varchar("user_id", { length: 255 }).notNull(),
+  userName: varchar("user_name", { length: 255 }).notNull(),
+  content: text("content").notNull(),
+  isPinned: boolean("is_pinned").default(false),
+  isImportant: boolean("is_important").default(false),
+  category: varchar("category", { length: 50 }).default("عام"),
+  editedAt: timestamp("edited_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const legalDeadlines = pgTable("legal_deadlines", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  caseId: varchar("case_id", { length: 255 }).notNull(),
+  hearingId: varchar("hearing_id", { length: 255 }),
+  deadlineType: varchar("deadline_type", { length: 50 }).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  startDate: varchar("start_date", { length: 50 }).notNull(),
+  durationDays: integer("duration_days").notNull(),
+  deadlineDate: varchar("deadline_date", { length: 50 }).notNull(),
+  status: varchar("status", { length: 50 }).notNull().default("نشط"),
+  reminder7daysSent: boolean("reminder_7_days_sent").default(false),
+  reminder3daysSent: boolean("reminder_3_days_sent").default(false),
+  reminder1daySent: boolean("reminder_1_day_sent").default(false),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const delegationsTable = pgTable("delegations_table", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  fromUserId: varchar("from_user_id", { length: 255 }).notNull(),
+  toUserId: varchar("to_user_id", { length: 255 }).notNull(),
+  reason: varchar("reason", { length: 50 }).notNull(),
+  reasonDetails: text("reason_details"),
+  startDate: varchar("start_date", { length: 50 }).notNull(),
+  endDate: varchar("end_date", { length: 50 }).notNull(),
+  status: varchar("status", { length: 50 }).notNull().default("نشط"),
+  scope: varchar("scope", { length: 50 }).notNull().default("all_cases"),
+  specificCaseIds: jsonb("specific_case_ids"),
+  approvedBy: varchar("approved_by", { length: 255 }),
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const supportTickets = pgTable("support_tickets", {
   id: varchar("id", { length: 255 }).primaryKey(),
   ticketNumber: varchar("ticket_number", { length: 50 }).notNull().unique(),
@@ -281,6 +355,10 @@ export const insertContactLogDbSchema = createInsertSchema(contactLogs).omit({ c
 export const insertNotificationDbSchema = createInsertSchema(notifications).omit({ createdAt: true, updatedAt: true });
 export const insertAttachmentDbSchema = createInsertSchema(attachments).omit({ createdAt: true });
 export const insertMemoDbSchema = createInsertSchema(memos).omit({ createdAt: true, updatedAt: true });
+export const insertCaseActivityLogDbSchema = createInsertSchema(caseActivityLog).omit({ createdAt: true });
+export const insertCaseNoteDbSchema = createInsertSchema(caseNotes).omit({ createdAt: true });
+export const insertLegalDeadlineDbSchema = createInsertSchema(legalDeadlines).omit({ createdAt: true });
+export const insertDelegationDbSchema = createInsertSchema(delegationsTable).omit({ createdAt: true });
 
 // ==================== Select Types ====================
 
@@ -295,6 +373,10 @@ export type DbNotification = typeof notifications.$inferSelect;
 export type DbDepartment = typeof departments.$inferSelect;
 export type DbAttachment = typeof attachments.$inferSelect;
 export type DbMemo = typeof memos.$inferSelect;
+export type DbCaseActivityLog = typeof caseActivityLog.$inferSelect;
+export type DbCaseNote = typeof caseNotes.$inferSelect;
+export type DbLegalDeadline = typeof legalDeadlines.$inferSelect;
+export type DbDelegation = typeof delegationsTable.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
 export const UserRole = {
@@ -1397,6 +1479,28 @@ export const NotificationType = {
   TICKET_REPLY: "ticket_reply",
   TICKET_STATUS_CHANGED: "ticket_status_changed",
   TICKET_RESOLVED: "ticket_resolved",
+
+  // إشعارات التقارير
+  WEEKLY_REPORT: "weekly_report",
+  MONTHLY_REPORT: "monthly_report",
+
+  // إشعارات المواعيد النظامية
+  LEGAL_DEADLINE_7DAYS: "legal_deadline_7_days",
+  LEGAL_DEADLINE_3DAYS: "legal_deadline_3_days",
+  LEGAL_DEADLINE_1DAY: "legal_deadline_1_day",
+  LEGAL_DEADLINE_OVERDUE: "legal_deadline_overdue",
+
+  // إشعارات التفويض
+  DELEGATION_REQUESTED: "delegation_requested",
+  DELEGATION_APPROVED: "delegation_approved",
+  DELEGATION_EXPIRED: "delegation_expired",
+
+  // متابعة التواصل
+  CONTACT_FOLLOWUP_OVERDUE: "contact_followup_overdue",
+
+  // تنبيه جلسة متأخرة
+  HEARING_UPDATE_OVERDUE: "hearing_update_overdue",
+  HEARING_REMINDER: "hearing_reminder",
 } as const;
 
 export type NotificationTypeValue = typeof NotificationType[keyof typeof NotificationType];
@@ -1447,6 +1551,18 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   ticket_reply: "رد على تذكرة",
   ticket_status_changed: "تغيير حالة تذكرة",
   ticket_resolved: "تم حل تذكرة",
+  weekly_report: "تقرير أسبوعي",
+  monthly_report: "تقرير شهري",
+  legal_deadline_7_days: "موعد نظامي - 7 أيام",
+  legal_deadline_3_days: "موعد نظامي - 3 أيام",
+  legal_deadline_1_day: "موعد نظامي - يوم واحد",
+  legal_deadline_overdue: "موعد نظامي فائت",
+  delegation_requested: "طلب تفويض",
+  delegation_approved: "تم اعتماد التفويض",
+  delegation_expired: "انتهاء التفويض",
+  contact_followup_overdue: "متابعة تواصل متأخرة",
+  hearing_update_overdue: "جلسة متأخرة التحديث",
+  hearing_reminder: "تذكير بجلسة",
 };
 
 export const NotificationPriority = {
@@ -1665,6 +1781,151 @@ export const insertTicketSchema = z.object({
 
 export type InsertTicket = z.infer<typeof insertTicketSchema>;
 export type SupportTicket = typeof supportTickets.$inferSelect;
+
+export const insertCaseActivitySchema = z.object({
+  caseId: z.string().min(1),
+  userId: z.string().min(1),
+  userName: z.string().min(1),
+  actionType: z.string().min(1),
+  title: z.string().min(1),
+  details: z.string().optional(),
+  previousValue: z.string().optional(),
+  newValue: z.string().optional(),
+  relatedEntityType: z.string().optional(),
+  relatedEntityId: z.string().optional(),
+});
+
+export type InsertCaseActivity = z.infer<typeof insertCaseActivitySchema>;
+export type CaseActivity = typeof caseActivityLog.$inferSelect;
+
+export const insertCaseNoteSchema = z.object({
+  caseId: z.string().min(1),
+  userId: z.string().min(1),
+  userName: z.string().min(1),
+  content: z.string().min(1, "محتوى الملاحظة مطلوب"),
+  isPinned: z.boolean().optional().default(false),
+  isImportant: z.boolean().optional().default(false),
+  category: z.enum(["عام", "ملاحظة_على_القاضي", "ملاحظة_على_الخصم", "ملاحظة_على_العميل", "استراتيجية", "تحذير"]).optional().default("عام"),
+});
+
+export type InsertCaseNote = z.infer<typeof insertCaseNoteSchema>;
+export type CaseNote = typeof caseNotes.$inferSelect;
+
+export const insertLegalDeadlineSchema = z.object({
+  caseId: z.string().min(1),
+  hearingId: z.string().optional(),
+  deadlineType: z.enum(["objection", "cassation", "response", "appeal", "execution", "custom"]),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  startDate: z.string().min(1),
+  durationDays: z.number().min(1),
+  deadlineDate: z.string().min(1),
+  status: z.string().optional().default("نشط"),
+});
+
+export type InsertLegalDeadline = z.infer<typeof insertLegalDeadlineSchema>;
+export type LegalDeadline = typeof legalDeadlines.$inferSelect;
+
+export const insertDelegationSchema = z.object({
+  fromUserId: z.string().min(1),
+  toUserId: z.string().min(1),
+  reason: z.enum(["إجازة", "مرض", "مهمة_خارجية", "تدريب", "أخرى"]),
+  reasonDetails: z.string().optional(),
+  startDate: z.string().min(1),
+  endDate: z.string().min(1),
+  scope: z.enum(["all_cases", "specific_cases"]).optional().default("all_cases"),
+  specificCaseIds: z.array(z.string()).optional(),
+});
+
+export type InsertDelegation = z.infer<typeof insertDelegationSchema>;
+export type DelegationRecord = typeof delegationsTable.$inferSelect;
+
+export const DeadlineTypeLabels: Record<string, string> = {
+  objection: "مهلة الاعتراض",
+  cassation: "مهلة النقض",
+  response: "مهلة الرد",
+  appeal: "مهلة الاستئناف",
+  execution: "مهلة التنفيذ",
+  custom: "مهلة مخصصة",
+};
+
+export const DelegationReasonLabels: Record<string, string> = {
+  "إجازة": "إجازة",
+  "مرض": "مرض",
+  "مهمة_خارجية": "مهمة خارجية",
+  "تدريب": "تدريب",
+  "أخرى": "أخرى",
+};
+
+export const CaseActivityActionLabels: Record<string, string> = {
+  case_created: "إنشاء قضية",
+  case_updated: "تعديل بيانات القضية",
+  stage_changed: "تغيير مرحلة",
+  case_assigned: "إسناد قضية",
+  case_archived: "أرشفة قضية",
+  hearing_added: "إضافة جلسة",
+  hearing_result_recorded: "تسجيل نتيجة جلسة",
+  hearing_closed: "إغلاق جلسة",
+  memo_created: "إنشاء مذكرة",
+  memo_submitted: "تقديم مذكرة",
+  memo_approved: "اعتماد مذكرة",
+  memo_returned: "إرجاع مذكرة",
+  attachment_added: "إضافة مرفق",
+  attachment_deleted: "حذف مرفق",
+  note_added: "إضافة ملاحظة",
+  note_edited: "تعديل ملاحظة",
+  contact_log_added: "تسجيل تواصل",
+  sent_to_review: "إحالة للمراجعة",
+  returned_from_review: "إرجاع من المراجعة",
+  approved_by_review: "اعتماد من المراجعة",
+};
+
+export const CaseNoteCategoryLabels: Record<string, string> = {
+  "عام": "عام",
+  "ملاحظة_على_القاضي": "ملاحظة على القاضي",
+  "ملاحظة_على_الخصم": "ملاحظة على الخصم",
+  "ملاحظة_على_العميل": "ملاحظة على العميل",
+  "استراتيجية": "استراتيجية",
+  "تحذير": "تحذير",
+};
+
+export interface LawyerPerformance {
+  userId: string;
+  userName: string;
+  departmentName: string;
+  departmentId: string;
+  activeCases: number;
+  closedCases: number;
+  closureRate: number;
+  hearingsOnTime: number;
+  totalHearings: number;
+  hearingUpdateRate: number;
+  avgMemoDays: number;
+  overdueMemos: number;
+  wonCases: number;
+  lostCases: number;
+  winRate: number;
+  overallScore: number;
+}
+
+export interface SearchResult {
+  type: "case" | "hearing" | "memo" | "client" | "consultation";
+  id: string;
+  title: string;
+  subtitle: string;
+  url: string;
+  icon: string;
+}
+
+export interface SmartDashboardData {
+  greeting: string;
+  todayHearings: any[];
+  alerts: any[];
+  overdueItems: any[];
+  upcomingDeadlines: any[];
+  performanceStats: any;
+  comparison?: any;
+}
 
 export function canManageSupportTickets(role: string): boolean {
   return ["branch_manager", "cases_review_head", "technical_support"].includes(role);

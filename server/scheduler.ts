@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 
 export function startScheduler() {
-  console.log("Scheduler started - automated hearing/memo checks active");
+  console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
 
   cron.schedule("0 * * * *", async () => {
     console.log("Running hourly hearing checks...");
@@ -13,6 +13,28 @@ export function startScheduler() {
   cron.schedule("0 */6 * * *", async () => {
     console.log("Running memo deadline checks...");
     await checkMemoDeadlines();
+  });
+
+  cron.schedule("0 8 * * *", async () => {
+    console.log("Running daily legal deadline checks...");
+    await checkLegalDeadlines();
+    await checkDelegationExpiry();
+    await checkContactFollowUps();
+  });
+
+  cron.schedule("0 7 * * 0", async () => {
+    console.log("Running weekly report generation...");
+    await generateWeeklyReport();
+  });
+
+  cron.schedule("0 7 1 * *", async () => {
+    console.log("Running monthly report generation...");
+    await generateMonthlyReport();
+  });
+
+  cron.schedule("0 2 * * *", async () => {
+    console.log("Running auto-archive check...");
+    await autoArchiveClosedCases();
   });
 }
 
@@ -306,5 +328,299 @@ async function checkMemoDeadlines() {
     }
   } catch (error) {
     console.error("Error checking memo deadlines:", error);
+  }
+}
+
+async function checkLegalDeadlines() {
+  try {
+    const deadlines = await storage.getAllLegalDeadlines();
+    const now = new Date();
+
+    for (const deadline of deadlines) {
+      if (deadline.status !== "نشط") continue;
+
+      const deadlineDate = new Date(deadline.deadlineDate);
+      if (isNaN(deadlineDate.getTime())) continue;
+
+      const daysLeft = (deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+      const caseInfo = await storage.getCaseById(deadline.caseId);
+      const recipientId = caseInfo?.responsibleLawyerId;
+      if (!recipientId) continue;
+
+      if (daysLeft > 6 && daysLeft <= 7) {
+        const exists = await hasExistingNotification(deadline.id, "موعد نظامي بعد 7 أيام", recipientId);
+        if (!exists) {
+          await storage.createNotification({
+            type: "legal_deadline_7_days",
+            title: "تنبيه: موعد نظامي بعد 7 أيام",
+            message: `الموعد النظامي "${deadline.title}" للقضية ${caseInfo?.caseNumber || ""} ينتهي بعد 7 أيام (${deadline.deadlineDate}).`,
+            priority: "high",
+            status: "pending",
+            senderId: "system",
+            senderName: "النظام التلقائي",
+            recipientId,
+            relatedType: "case",
+            relatedId: deadline.caseId,
+          });
+        }
+      }
+
+      if (daysLeft > 2 && daysLeft <= 3) {
+        const exists = await hasExistingNotification(deadline.id, "موعد نظامي بعد 3 أيام", recipientId);
+        if (!exists) {
+          await storage.createNotification({
+            type: "legal_deadline_3_days",
+            title: "عاجل: موعد نظامي بعد 3 أيام",
+            message: `الموعد النظامي "${deadline.title}" للقضية ${caseInfo?.caseNumber || ""} ينتهي بعد 3 أيام (${deadline.deadlineDate}).`,
+            priority: "urgent",
+            status: "pending",
+            senderId: "system",
+            senderName: "النظام التلقائي",
+            recipientId,
+            relatedType: "case",
+            relatedId: deadline.caseId,
+          });
+        }
+      }
+
+      if (daysLeft > 0 && daysLeft <= 1) {
+        const exists = await hasExistingNotification(deadline.id, "موعد نظامي غداً", recipientId);
+        if (!exists) {
+          await storage.createNotification({
+            type: "legal_deadline_1_day",
+            title: "عاجل جداً: موعد نظامي غداً",
+            message: `الموعد النظامي "${deadline.title}" للقضية ${caseInfo?.caseNumber || ""} ينتهي غداً!`,
+            priority: "urgent",
+            status: "pending",
+            senderId: "system",
+            senderName: "النظام التلقائي",
+            recipientId,
+            relatedType: "case",
+            relatedId: deadline.caseId,
+            requiresResponse: true,
+          });
+        }
+      }
+
+      if (daysLeft < 0) {
+        const exists = await hasExistingNotification(deadline.id, "موعد نظامي فائت", recipientId);
+        if (!exists) {
+          await storage.updateLegalDeadline(deadline.id, { status: "فائت" });
+
+          const allUsers = await storage.getAllUsers();
+          const recipients = [recipientId];
+          if (caseInfo?.departmentId) {
+            const deptHead = allUsers.find(u => u.departmentId === caseInfo.departmentId && u.role === "department_head");
+            if (deptHead) recipients.push(deptHead.id);
+          }
+          const branchManager = allUsers.find(u => u.role === "branch_manager");
+          if (branchManager) recipients.push(branchManager.id);
+
+          for (const rid of [...new Set(recipients)]) {
+            await storage.createNotification({
+              type: "legal_deadline_overdue",
+              title: "تنبيه خطير: موعد نظامي فائت",
+              message: `الموعد النظامي "${deadline.title}" للقضية ${caseInfo?.caseNumber || ""} قد فات! يرجى اتخاذ إجراء فوري.`,
+              priority: "urgent",
+              status: "pending",
+              senderId: "system",
+              senderName: "النظام التلقائي",
+              recipientId: rid,
+              relatedType: "case",
+              relatedId: deadline.caseId,
+              requiresResponse: true,
+            });
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error checking legal deadlines:", error);
+  }
+}
+
+async function checkDelegationExpiry() {
+  try {
+    const delegations = await storage.getAllDelegations();
+    const now = new Date();
+    const todayStr = now.toISOString().split("T")[0];
+
+    for (const delegation of delegations) {
+      if (delegation.status !== "نشط") continue;
+
+      if (delegation.endDate && delegation.endDate < todayStr) {
+        await storage.updateDelegation(delegation.id, { status: "منتهي" });
+
+        const fromUser = await storage.getUser(delegation.fromUserId);
+        const toUser = await storage.getUser(delegation.toUserId);
+
+        if (fromUser) {
+          await storage.createNotification({
+            type: "delegation_expired",
+            title: "انتهاء تفويض",
+            message: `انتهت صلاحية تفويض قضاياك إلى ${toUser?.name || "محامي آخر"}. تم إرجاع جميع القضايا إليك.`,
+            priority: "medium",
+            status: "pending",
+            senderId: "system",
+            senderName: "النظام التلقائي",
+            recipientId: fromUser.id,
+          });
+        }
+
+        if (toUser) {
+          await storage.createNotification({
+            type: "delegation_expired",
+            title: "انتهاء تفويض",
+            message: `انتهت صلاحية تفويض قضايا ${fromUser?.name || "محامي آخر"} إليك.`,
+            priority: "medium",
+            status: "pending",
+            senderId: "system",
+            senderName: "النظام التلقائي",
+            recipientId: toUser.id,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error checking delegation expiry:", error);
+  }
+}
+
+async function checkContactFollowUps() {
+  try {
+    const allClients = await storage.getAllClients();
+    const now = new Date();
+    const todayStr = now.toISOString().split("T")[0];
+
+    for (const client of allClients) {
+      const contactLogs = await storage.getContactLogs(client.id);
+
+      for (const log of contactLogs) {
+        if (log.followUpRequired && !log.followUpCompleted && log.followUpDate) {
+          if (log.followUpDate < todayStr) {
+            const exists = await hasExistingNotification(log.id, "متابعة تواصل متأخرة", log.createdBy);
+            if (!exists) {
+              await storage.createNotification({
+                type: "contact_followup_overdue",
+                title: "متابعة تواصل متأخرة",
+                message: `متابعة العميل ${client.individualName || client.companyName || ""} متأخرة عن الموعد (${log.followUpDate}). يرجى المتابعة.`,
+                priority: "high",
+                status: "pending",
+                senderId: "system",
+                senderName: "النظام التلقائي",
+                recipientId: log.createdBy,
+                relatedType: "client",
+                relatedId: client.id,
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error checking contact follow-ups:", error);
+  }
+}
+
+async function generateWeeklyReport() {
+  try {
+    const allCases = await storage.getAllCases();
+    const allHearings = await storage.getAllHearings();
+    const allMemos = await storage.getAllMemos();
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const newCases = allCases.filter(c => new Date(c.createdAt) >= weekAgo).length;
+    const closedCases = allCases.filter(c => 
+      (c.currentStage === "مقفلة" || c.currentStage === "مغلق") && 
+      new Date(c.updatedAt) >= weekAgo
+    ).length;
+    const completedHearings = allHearings.filter(h => h.status === "تمت" && h.updatedAt && new Date(h.updatedAt) >= weekAgo).length;
+    const overdueMemos = allMemos.filter(m => 
+      !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) && 
+      m.deadline && new Date(m.deadline) < now
+    ).length;
+
+    const allUsers = await storage.getAllUsers();
+    const managers = allUsers.filter(u => 
+      u.role === "branch_manager" || u.role === "cases_review_head" || u.role === "department_head"
+    );
+
+    for (const manager of managers) {
+      await storage.createNotification({
+        type: "weekly_report",
+        title: "التقرير الأسبوعي",
+        message: `ملخص الأسبوع: ${newCases} قضية جديدة، ${closedCases} قضية مغلقة، ${completedHearings} جلسة منجزة، ${overdueMemos} مذكرة متأخرة.`,
+        priority: "low",
+        status: "pending",
+        senderId: "system",
+        senderName: "النظام التلقائي",
+        recipientId: manager.id,
+      });
+    }
+  } catch (error) {
+    console.error("Error generating weekly report:", error);
+  }
+}
+
+async function generateMonthlyReport() {
+  try {
+    const allCases = await storage.getAllCases();
+    const allHearings = await storage.getAllHearings();
+    const now = new Date();
+    const monthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+
+    const newCases = allCases.filter(c => new Date(c.createdAt) >= monthAgo).length;
+    const closedCases = allCases.filter(c => 
+      (c.currentStage === "مقفلة" || c.currentStage === "مغلق") && 
+      new Date(c.updatedAt) >= monthAgo
+    ).length;
+    const totalActive = allCases.filter(c => c.currentStage !== "مقفلة" && c.currentStage !== "مغلق" && !c.isArchived).length;
+
+    const judgments = allHearings.filter(h => h.result === "حكم" && h.updatedAt && new Date(h.updatedAt) >= monthAgo);
+    const won = judgments.filter(h => h.judgmentSide === "لصالحنا").length;
+    const lost = judgments.filter(h => h.judgmentSide === "ضدنا").length;
+
+    const allUsers = await storage.getAllUsers();
+    const managers = allUsers.filter(u => u.role === "branch_manager" || u.role === "cases_review_head");
+
+    for (const manager of managers) {
+      await storage.createNotification({
+        type: "monthly_report",
+        title: "التقرير الشهري",
+        message: `ملخص الشهر: ${newCases} قضية جديدة، ${closedCases} مغلقة، ${totalActive} نشطة حالياً. الأحكام: ${won} لصالحنا، ${lost} ضدنا.`,
+        priority: "low",
+        status: "pending",
+        senderId: "system",
+        senderName: "النظام التلقائي",
+        recipientId: manager.id,
+      });
+    }
+  } catch (error) {
+    console.error("Error generating monthly report:", error);
+  }
+}
+
+async function autoArchiveClosedCases() {
+  try {
+    const allCases = await storage.getAllCases();
+    const now = new Date();
+    const sixMonthsAgo = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000);
+
+    for (const caseItem of allCases) {
+      if (caseItem.isArchived) continue;
+      if (caseItem.currentStage !== "مقفلة" && caseItem.currentStage !== "مغلق") continue;
+
+      const closedDate = new Date(caseItem.updatedAt);
+      if (closedDate <= sixMonthsAgo) {
+        await storage.updateCase(caseItem.id, {
+          isArchived: true,
+          archivedAt: now.toISOString(),
+          archiveReason: "أرشفة تلقائية - مضى 6 أشهر على الإغلاق",
+        } as any);
+      }
+    }
+  } catch (error) {
+    console.error("Error auto-archiving cases:", error);
   }
 }

@@ -56,6 +56,7 @@ import { UsersProvider } from "@/lib/users-context";
 import { MemosProvider } from "@/lib/memos-context";
 import MemosPage from "@/pages/memos";
 import SupportPage from "@/pages/support";
+import DelegationsPage from "@/pages/delegations";
 
 function Router() {
   return (
@@ -83,6 +84,7 @@ function Router() {
       <Route path="/reports" component={ReportsPage} />
       <Route path="/memos" component={MemosPage} />
       <Route path="/support" component={SupportPage} />
+      <Route path="/delegations" component={DelegationsPage} />
       <Route component={NotFound} />
     </Switch>
   );
