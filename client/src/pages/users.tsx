@@ -281,7 +281,7 @@ export default function UsersPage() {
     setUserToAction(null);
   };
 
-  const handleResetPassword = () => {
+  const handleResetPassword = async () => {
     if (!userToAction || !newPassword) {
       toast({
         variant: "destructive",
@@ -291,20 +291,46 @@ export default function UsersPage() {
       return;
     }
 
-    if (newPassword.length < 4) {
+    if (newPassword.length < 8) {
       toast({
         variant: "destructive",
         title: "خطأ",
-        description: "كلمة المرور يجب أن تكون 4 أحرف على الأقل",
+        description: "كلمة المرور يجب أن تكون 8 أحرف على الأقل",
       });
       return;
     }
 
-    resetPassword(userToAction.id, newPassword);
-    toast({ title: "تم إعادة تعيين كلمة المرور بنجاح" });
-    setShowResetPasswordDialog(false);
-    setNewPassword("");
-    setUserToAction(null);
+    if (!/[A-Za-z]/.test(newPassword)) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "كلمة المرور يجب أن تحتوي على حروف",
+      });
+      return;
+    }
+
+    if (!/[0-9]/.test(newPassword)) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "كلمة المرور يجب أن تحتوي على أرقام",
+      });
+      return;
+    }
+
+    try {
+      await resetPassword(userToAction.id, newPassword);
+      toast({ title: "تم إعادة تعيين كلمة المرور بنجاح" });
+      setShowResetPasswordDialog(false);
+      setNewPassword("");
+      setUserToAction(null);
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "فشل تغيير كلمة المرور",
+        description: error?.message || "حدث خطأ أثناء تغيير كلمة المرور",
+      });
+    }
   };
 
   const handleToggleStatus = (userToToggle: UserType) => {

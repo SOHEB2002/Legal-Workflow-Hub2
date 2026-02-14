@@ -255,12 +255,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resetPassword = async (id: string, newPassword: string) => {
-    try {
-      await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword });
-      await refetchUsers();
-    } catch (error) {
-      console.error("Error resetting password:", error);
+    const res = await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword, mustChangePassword: true });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || "فشل تغيير كلمة المرور");
     }
+    await refetchUsers();
   };
 
   const toggleUserStatus = async (id: string) => {

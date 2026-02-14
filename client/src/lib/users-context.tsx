@@ -276,7 +276,11 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   }, [extendedUsers, refetchUsers]);
 
   const resetPassword = useCallback(async (id: string, newPassword: string) => {
-    await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword });
+    const res = await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword, mustChangePassword: true });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || "فشل تغيير كلمة المرور");
+    }
     await refetchUsers();
   }, [refetchUsers]);
 
