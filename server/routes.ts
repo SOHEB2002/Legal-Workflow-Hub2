@@ -77,8 +77,9 @@ export async function registerRoutes(
     storage: multer.diskStorage({
       destination: uploadsDir,
       filename: (req, file, cb) => {
-        const uniqueName = `${Date.now()}-${file.originalname}`;
-        cb(null, uniqueName);
+        const ext = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, '');
+        const safeName = `${Date.now()}-${randomUUID()}${ext}`;
+        cb(null, safeName);
       }
     }),
     limits: { fileSize: 10 * 1024 * 1024 },
@@ -89,9 +90,14 @@ export async function registerRoutes(
   });
 
   app.use("/uploads", requireAuth, (req, res, next) => {
-    const filePath = path.join(uploadsDir, req.path);
+    const requestedPath = path.normalize(req.path).replace(/^(\.\.(\/|\\|$))+/, '');
+    const filePath = path.resolve(uploadsDir, requestedPath);
+    const resolvedUploads = path.resolve(uploadsDir);
+    if (!filePath.startsWith(resolvedUploads)) {
+      return res.status(403).json({ message: "وصول مرفوض" });
+    }
     if (fs.existsSync(filePath)) {
-      return res.sendFile(path.resolve(filePath));
+      return res.sendFile(filePath);
     }
     res.status(404).json({ message: "ملف غير موجود" });
   });
