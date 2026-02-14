@@ -286,6 +286,42 @@
     unicode-bidi: plaintext;
     direction: rtl;
   }
+
+  .bidi-auto {
+    unicode-bidi: plaintext;
+    direction: rtl;
+  }
+
+  .ltr-inline {
+    unicode-bidi: embed;
+    direction: ltr;
+    display: inline-block;
+  }
+
+  .input-bidi {
+    unicode-bidi: plaintext;
+    text-align: right;
+  }
+
+  .input-numeric {
+    direction: ltr;
+    text-align: right;
+  }
+
+  .cell-code {
+    direction: ltr;
+    text-align: right;
+    unicode-bidi: embed;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .text-truncate-rtl {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: right;
+  }
 }
 
 @layer base {
