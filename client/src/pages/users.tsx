@@ -224,7 +224,7 @@ export default function UsersPage() {
     setShowEditDialog(true);
   };
 
-  const handleUpdateUser = () => {
+  const handleUpdateUser = async () => {
     if (!userToAction) return;
 
     if (!editFormData.name || !editFormData.username) {
@@ -246,21 +246,28 @@ export default function UsersPage() {
       return;
     }
 
-    updateUser(userToAction.id, {
-      name: editFormData.name,
-      username: editFormData.username,
-      email: editFormData.email,
-      phone: editFormData.phone,
-      role: editFormData.role,
-      departmentId: editFormData.departmentId || null,
-      isActive: editFormData.isActive,
-      canBeAssignedCases: editFormData.canBeAssignedCases,
-      canBeAssignedConsultations: editFormData.canBeAssignedConsultations,
-    });
-
-    toast({ title: "تم تحديث بيانات المستخدم بنجاح" });
-    setShowEditDialog(false);
-    setUserToAction(null);
+    try {
+      await updateUser(userToAction.id, {
+        name: editFormData.name,
+        username: editFormData.username,
+        email: editFormData.email,
+        phone: editFormData.phone,
+        role: editFormData.role,
+        departmentId: editFormData.departmentId || null,
+        isActive: editFormData.isActive,
+        canBeAssignedCases: editFormData.canBeAssignedCases,
+        canBeAssignedConsultations: editFormData.canBeAssignedConsultations,
+      });
+      toast({ title: "تم تحديث بيانات المستخدم بنجاح" });
+      setShowEditDialog(false);
+      setUserToAction(null);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "فشل تحديث بيانات المستخدم",
+      });
+    }
   };
 
   const handleDeleteUser = async () => {
