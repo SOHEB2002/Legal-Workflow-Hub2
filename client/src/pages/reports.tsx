@@ -897,7 +897,7 @@ function HearingsReportSection() {
       .filter(h => {
         try {
           const hearingDate = parseISO(h.hearingDate);
-          return hearingDate >= now && h.status !== "completed" && h.status !== "مكتملة" && h.status !== "ملغية";
+          return hearingDate >= now && h.status !== "تمت" && h.status !== "ملغية";
         } catch { return false; }
       })
       .sort((a, b) => {

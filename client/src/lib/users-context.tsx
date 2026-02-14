@@ -119,7 +119,7 @@ export function UsersProvider({ children }: { children: ReactNode }) {
         activeDelegations: [],
         customPermissions: null,
         stats: defaultStats,
-      } as ExtendedUser;
+      } as unknown as ExtendedUser;
     });
   }, [authUsers, localExtensions]);
   

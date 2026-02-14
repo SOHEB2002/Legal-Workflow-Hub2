@@ -1360,7 +1360,7 @@ export default function CasesPage() {
                 <Label>المستلم</Label>
                 <Input
                   disabled
-                  value={users.find(u => u.id === reminderData.recipientId)?.fullName || "المحامي المسؤول"}
+                  value={users.find(u => u.id === reminderData.recipientId)?.name || "المحامي المسؤول"}
                   data-testid="input-reminder-recipient-display"
                 />
               </div>
@@ -1377,7 +1377,7 @@ export default function CasesPage() {
                   </SelectTrigger>
                   <SelectContent>
                     {reminderDeptLawyers.map(l => (
-                      <SelectItem key={l.id} value={l.id}>{l.fullName}</SelectItem>
+                      <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

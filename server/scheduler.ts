@@ -134,7 +134,7 @@ async function sendUnupdatedHearingAlert(hearing: any) {
   );
   admins.forEach((a) => recipientIds.push(a.id));
 
-  const uniqueRecipients = [...new Set(recipientIds)];
+  const uniqueRecipients = Array.from(new Set(recipientIds));
   for (const recipientId of uniqueRecipients) {
     await storage.createNotification({
       type: "hearing_update_overdue",
@@ -416,7 +416,7 @@ async function checkLegalDeadlines() {
           const branchManager = allUsers.find(u => u.role === "branch_manager");
           if (branchManager) recipients.push(branchManager.id);
 
-          for (const rid of [...new Set(recipients)]) {
+          for (const rid of Array.from(new Set(recipients))) {
             await storage.createNotification({
               type: "legal_deadline_overdue",
               title: "تنبيه خطير: موعد نظامي فائت",
@@ -493,23 +493,23 @@ async function checkContactFollowUps() {
     const todayStr = now.toISOString().split("T")[0];
 
     for (const client of allClients) {
-      const contactLogs = await storage.getContactLogs(client.id);
+      const contactLogs = await storage.getContactLogsByClient(client.id);
 
       for (const log of contactLogs) {
-        if (log.followUpRequired && !log.followUpCompleted && log.followUpDate) {
-          if (log.followUpDate < todayStr) {
+        if (log.nextFollowUpDate && (log.followUpStatus as string) !== "تمت_المتابعة") {
+          if (log.nextFollowUpDate < todayStr) {
             const exists = await hasExistingNotification(log.id, "متابعة تواصل متأخرة", log.createdBy);
             if (!exists) {
               await storage.createNotification({
                 type: "contact_followup_overdue",
                 title: "متابعة تواصل متأخرة",
-                message: `متابعة العميل ${client.individualName || client.companyName || ""} متأخرة عن الموعد (${log.followUpDate}). يرجى المتابعة.`,
+                message: `متابعة العميل ${client.individualName || client.companyName || ""} متأخرة عن الموعد (${log.nextFollowUpDate}). يرجى المتابعة.`,
                 priority: "high",
                 status: "pending",
                 senderId: "system",
                 senderName: "النظام التلقائي",
                 recipientId: log.createdBy,
-                relatedType: "client",
+                relatedType: "case" as any,
                 relatedId: client.id,
               });
             }
@@ -532,7 +532,7 @@ async function generateWeeklyReport() {
 
     const newCases = allCases.filter(c => new Date(c.createdAt) >= weekAgo).length;
     const closedCases = allCases.filter(c => 
-      (c.currentStage === "مقفلة" || c.currentStage === "مغلق") && 
+      (c.currentStage as string) === "مقفلة" && 
       new Date(c.updatedAt) >= weekAgo
     ).length;
     const completedHearings = allHearings.filter(h => h.status === "تمت" && h.updatedAt && new Date(h.updatedAt) >= weekAgo).length;
@@ -572,10 +572,10 @@ async function generateMonthlyReport() {
 
     const newCases = allCases.filter(c => new Date(c.createdAt) >= monthAgo).length;
     const closedCases = allCases.filter(c => 
-      (c.currentStage === "مقفلة" || c.currentStage === "مغلق") && 
+      (c.currentStage as string) === "مقفلة" && 
       new Date(c.updatedAt) >= monthAgo
     ).length;
-    const totalActive = allCases.filter(c => c.currentStage !== "مقفلة" && c.currentStage !== "مغلق" && !c.isArchived).length;
+    const totalActive = allCases.filter(c => (c.currentStage as string) !== "مقفلة" && !c.isArchived).length;
 
     const judgments = allHearings.filter(h => h.result === "حكم" && h.updatedAt && new Date(h.updatedAt) >= monthAgo);
     const won = judgments.filter(h => h.judgmentSide === "لصالحنا").length;
@@ -609,7 +609,7 @@ async function autoArchiveClosedCases() {
 
     for (const caseItem of allCases) {
       if (caseItem.isArchived) continue;
-      if (caseItem.currentStage !== "مقفلة" && caseItem.currentStage !== "مغلق") continue;
+      if ((caseItem.currentStage as string) !== "مقفلة") continue;
 
       const closedDate = new Date(caseItem.updatedAt);
       if (closedDate <= sixMonthsAgo) {

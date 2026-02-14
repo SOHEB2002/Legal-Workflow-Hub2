@@ -200,6 +200,7 @@ export default function UsersPage() {
       isActive: formData.isActive,
       canBeAssignedCases: formData.canBeAssignedCases,
       canBeAssignedConsultations: formData.canBeAssignedConsultations,
+      mustChangePassword: true,
     });
 
     toast({ title: "تم إضافة المستخدم بنجاح" });

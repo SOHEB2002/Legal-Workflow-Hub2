@@ -33,6 +33,8 @@ const entityTypeLabels: Record<ActivityLogEntityTypeValue, string> = {
   team: "فريق",
   delegation: "تفويض",
   vacation: "إجازة",
+  hearing: "جلسة",
+  memo: "مذكرة",
 };
 
 export default function ActivityLogPage() {

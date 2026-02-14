@@ -490,11 +490,11 @@ export function canUserAdvanceCaseStage(
     if (rule.allowedRoles.includes(userRole)) return true;
   }
 
-  if (isAssignedLawyer && [CaseStage.STUDY, CaseStage.DRAFTING, CaseStage.AMENDMENTS].includes(normalizedCurrent as typeof CaseStage[keyof typeof CaseStage])) {
+  if (isAssignedLawyer && [CaseStage.STUDY, CaseStage.DRAFTING, CaseStage.AMENDMENTS].includes(normalizedCurrent as any)) {
     return true;
   }
 
-  if (isDepartmentHead && [CaseStage.DATA_COMPLETION, CaseStage.STUDY, CaseStage.DRAFTING, CaseStage.AMENDMENTS].includes(normalizedCurrent as typeof CaseStage[keyof typeof CaseStage])) {
+  if (isDepartmentHead && [CaseStage.DATA_COMPLETION, CaseStage.STUDY, CaseStage.DRAFTING, CaseStage.AMENDMENTS].includes(normalizedCurrent as any)) {
     return true;
   }
 
@@ -513,7 +513,7 @@ export function canUserAdvanceConsultation(
     if (rule.allowedRoles.includes(userRole)) return true;
   }
 
-  if (isAssignedEmployee && [ConsultationStatus.PREPARING_RESPONSE, ConsultationStatus.AMENDMENTS].includes(currentStatus as typeof ConsultationStatus[keyof typeof ConsultationStatus])) {
+  if (isAssignedEmployee && [ConsultationStatus.PREPARING_RESPONSE, ConsultationStatus.AMENDMENTS].includes(currentStatus as any)) {
     return true;
   }
 

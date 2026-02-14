@@ -42,6 +42,9 @@ export function checkHearingReminders(
           requiresResponse: false,
           scheduledAt: null,
           autoEscalateAfterHours: 0,
+          isAutomatic: true,
+          relatedStage: null,
+          workflowTriggerId: null,
         });
       }
     }
@@ -81,6 +84,9 @@ export function checkOverdueTasks(
             requiresResponse: true,
             scheduledAt: null,
             autoEscalateAfterHours: 24,
+            isAutomatic: true,
+            relatedStage: null,
+            workflowTriggerId: null,
           });
         }
       }
@@ -98,7 +104,7 @@ export function checkStaleCases(
   const staleThreshold = new Date(now.getTime() - staleDays * 24 * 60 * 60 * 1000);
 
   cases.forEach(lawCase => {
-    if (lawCase.status !== "مغلق") {
+    if ((lawCase.status as string) !== "مقفلة") {
       const lastUpdate = new Date(lawCase.updatedAt);
       
       if (lastUpdate < staleThreshold) {
@@ -123,6 +129,9 @@ export function checkStaleCases(
             requiresResponse: true,
             scheduledAt: null,
             autoEscalateAfterHours: 48,
+            isAutomatic: true,
+            relatedStage: null,
+            workflowTriggerId: null,
           });
         }
       }
@@ -165,6 +174,9 @@ export function checkStaleConsultations(
             requiresResponse: true,
             scheduledAt: null,
             autoEscalateAfterHours: 24,
+            isAutomatic: true,
+            relatedStage: null,
+            workflowTriggerId: null,
           });
         }
       }

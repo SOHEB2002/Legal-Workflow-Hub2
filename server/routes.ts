@@ -179,7 +179,7 @@ export async function registerRoutes(
 
   app.get("/api/users/:id", requireAuth, async (req, res) => {
     try {
-      const user = await storage.getUser(req.params.id);
+      const user = await storage.getUser(String(req.params.id));
       if (!user) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
@@ -217,7 +217,7 @@ export async function registerRoutes(
         }
         updateData.password = await hashPassword(updateData.password);
       }
-      const updated = await storage.updateUser(req.params.id, updateData);
+      const updated = await storage.updateUser(String(req.params.id), updateData);
       if (!updated) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
@@ -229,7 +229,7 @@ export async function registerRoutes(
 
   app.delete("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
-      await storage.deleteUser(req.params.id);
+      await storage.deleteUser(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف المستخدم" });
@@ -274,7 +274,7 @@ export async function registerRoutes(
 
   app.get("/api/cases/:id", requireAuth, async (req, res) => {
     try {
-      const caseItem = await storage.getCaseById(req.params.id);
+      const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
@@ -288,7 +288,7 @@ export async function registerRoutes(
     try {
       const validatedData = insertCaseSchema.parse(req.body);
       const createdBy = req.body.createdBy || "unknown";
-      const newCase = await storage.createCase(validatedData, createdBy);
+      const newCase = await storage.createCase(validatedData as any, createdBy);
 
       const autoCreated: any[] = [];
       const classification = validatedData.caseClassification || "مدعي_قضية_جديدة";
@@ -332,8 +332,8 @@ export async function registerRoutes(
 
         try {
           await storage.createNotification({
-            type: "DEFENDANT_CASE_CREATED",
-            priority: "عاجل",
+            type: "case_assigned" as any,
+            priority: "urgent",
             status: "pending",
             title: "قضية جديدة - مدعى عليه",
             message: `وردت قضية جديدة نحن فيها مدعى عليهم - ${newCase.caseNumber} - المهلة: ${validatedData.responseDeadline || "15 يوم"}`,
@@ -370,8 +370,8 @@ export async function registerRoutes(
 
   app.patch("/api/cases/:id", requireAuth, async (req, res) => {
     try {
-      const existing = await storage.getCaseById(req.params.id);
-      const updated = await storage.updateCase(req.params.id, req.body);
+      const existing = await storage.getCaseById(String(req.params.id));
+      const updated = await storage.updateCase(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
@@ -380,7 +380,7 @@ export async function registerRoutes(
         try {
           if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
             await storage.logCaseActivity({
-              caseId: req.params.id,
+              caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
               actionType: "stage_changed",
@@ -390,7 +390,7 @@ export async function registerRoutes(
             });
           } else {
             await storage.logCaseActivity({
-              caseId: req.params.id,
+              caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
               actionType: "case_updated",
@@ -407,7 +407,7 @@ export async function registerRoutes(
 
   app.delete("/api/cases/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      const deleted = await storage.deleteCase(req.params.id);
+      const deleted = await storage.deleteCase(String(req.params.id));
       if (!deleted) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
@@ -430,7 +430,7 @@ export async function registerRoutes(
 
   app.get("/api/clients/:id", requireAuth, async (req, res) => {
     try {
-      const client = await storage.getClientById(req.params.id);
+      const client = await storage.getClientById(String(req.params.id));
       if (!client) {
         return res.status(404).json({ error: "العميل غير موجود" });
       }
@@ -456,7 +456,7 @@ export async function registerRoutes(
 
   app.patch("/api/clients/:id", requireAuth, async (req, res) => {
     try {
-      const updated = await storage.updateClient(req.params.id, req.body);
+      const updated = await storage.updateClient(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "العميل غير موجود" });
       }
@@ -468,7 +468,7 @@ export async function registerRoutes(
 
   app.delete("/api/clients/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      await storage.deleteClient(req.params.id);
+      await storage.deleteClient(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف العميل" });
@@ -509,7 +509,7 @@ export async function registerRoutes(
 
   app.get("/api/consultations/:id", requireAuth, async (req, res) => {
     try {
-      const consultation = await storage.getConsultationById(req.params.id);
+      const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
@@ -535,7 +535,7 @@ export async function registerRoutes(
 
   app.patch("/api/consultations/:id", requireAuth, async (req, res) => {
     try {
-      const updated = await storage.updateConsultation(req.params.id, req.body);
+      const updated = await storage.updateConsultation(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
@@ -547,7 +547,7 @@ export async function registerRoutes(
 
   app.delete("/api/consultations/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      await storage.deleteConsultation(req.params.id);
+      await storage.deleteConsultation(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الاستشارة" });
@@ -567,7 +567,7 @@ export async function registerRoutes(
 
   app.get("/api/hearings/:id", requireAuth, async (req, res) => {
     try {
-      const hearing = await storage.getHearingById(req.params.id);
+      const hearing = await storage.getHearingById(String(req.params.id));
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
@@ -606,7 +606,7 @@ export async function registerRoutes(
 
   app.patch("/api/hearings/:id", requireAuth, async (req, res) => {
     try {
-      const updated = await storage.updateHearing(req.params.id, req.body);
+      const updated = await storage.updateHearing(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
@@ -618,7 +618,7 @@ export async function registerRoutes(
 
   app.delete("/api/hearings/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      await storage.deleteHearing(req.params.id);
+      await storage.deleteHearing(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الجلسة" });
@@ -629,7 +629,7 @@ export async function registerRoutes(
 
   app.post("/api/hearings/:id/result", requireAuth, async (req, res) => {
     try {
-      const hearingId = req.params.id;
+      const hearingId = String(req.params.id);
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
@@ -813,7 +813,7 @@ export async function registerRoutes(
 
   app.post("/api/hearings/:id/report", requireAuth, async (req, res) => {
     try {
-      const hearingId = req.params.id;
+      const hearingId = String(req.params.id);
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
@@ -844,7 +844,7 @@ export async function registerRoutes(
 
   app.post("/api/hearings/:id/close", requireAuth, async (req, res) => {
     try {
-      const hearingId = req.params.id;
+      const hearingId = String(req.params.id);
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
@@ -880,7 +880,7 @@ export async function registerRoutes(
 
   app.get("/api/field-tasks/:id", requireAuth, async (req, res) => {
     try {
-      const task = await storage.getFieldTaskById(req.params.id);
+      const task = await storage.getFieldTaskById(String(req.params.id));
       if (!task) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
       }
@@ -906,7 +906,7 @@ export async function registerRoutes(
 
   app.patch("/api/field-tasks/:id", requireAuth, async (req, res) => {
     try {
-      const updated = await storage.updateFieldTask(req.params.id, req.body);
+      const updated = await storage.updateFieldTask(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
       }
@@ -918,7 +918,7 @@ export async function registerRoutes(
 
   app.delete("/api/field-tasks/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      await storage.deleteFieldTask(req.params.id);
+      await storage.deleteFieldTask(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف المهمة" });
@@ -938,7 +938,7 @@ export async function registerRoutes(
 
   app.get("/api/contact-logs/client/:clientId", requireAuth, async (req, res) => {
     try {
-      const logs = await storage.getContactLogsByClient(req.params.clientId);
+      const logs = await storage.getContactLogsByClient(String(req.params.clientId));
       res.json(logs);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب سجلات التواصل" });
@@ -957,7 +957,7 @@ export async function registerRoutes(
 
   app.patch("/api/contact-logs/:id", requireAuth, async (req, res) => {
     try {
-      const updated = await storage.updateContactLog(req.params.id, req.body);
+      const updated = await storage.updateContactLog(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "سجل التواصل غير موجود" });
       }
@@ -969,7 +969,7 @@ export async function registerRoutes(
 
   app.delete("/api/contact-logs/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      await storage.deleteContactLog(req.params.id);
+      await storage.deleteContactLog(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف سجل التواصل" });
@@ -993,7 +993,7 @@ export async function registerRoutes(
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
-      const memo = await storage.getMemoById(req.params.id);
+      const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) {
         return res.status(404).json({ error: "المذكرة غير موجودة" });
       }
@@ -1007,7 +1007,7 @@ export async function registerRoutes(
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
-      const caseMemos = await storage.getMemosByCase(req.params.caseId);
+      const caseMemos = await storage.getMemosByCase(String(req.params.caseId));
       res.json(caseMemos);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب مذكرات القضية" });
@@ -1018,7 +1018,7 @@ export async function registerRoutes(
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
-      const hearingMemos = await storage.getMemosByHearing(req.params.hearingId);
+      const hearingMemos = await storage.getMemosByHearing(String(req.params.hearingId));
       res.json(hearingMemos);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب مذكرات الجلسة" });
@@ -1072,7 +1072,7 @@ export async function registerRoutes(
       const user = (req as any).user;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
 
-      const memo = await storage.getMemoById(req.params.id);
+      const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) {
         return res.status(404).json({ error: "المذكرة غير موجودة" });
       }
@@ -1106,7 +1106,7 @@ export async function registerRoutes(
         }
       }
 
-      const updated = await storage.updateMemo(req.params.id, updateData);
+      const updated = await storage.updateMemo(String(req.params.id), updateData);
 
       if (memo.caseId) {
         const activeCount = await getActiveMemoCount(memo.caseId);
@@ -1131,12 +1131,12 @@ export async function registerRoutes(
         return res.status(403).json({ error: "ليس لديك صلاحية لحذف المذكرات" });
       }
 
-      const memo = await storage.getMemoById(req.params.id);
+      const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) {
         return res.status(404).json({ error: "المذكرة غير موجودة" });
       }
 
-      await storage.deleteMemo(req.params.id);
+      await storage.deleteMemo(String(req.params.id));
 
       if (memo.caseId) {
         const activeCount = await getActiveMemoCount(memo.caseId);
@@ -1162,7 +1162,7 @@ export async function registerRoutes(
 
   app.get("/api/notifications/user/:userId", requireAuth, async (req, res) => {
     try {
-      const notifications = await storage.getNotificationsByRecipient(req.params.userId);
+      const notifications = await storage.getNotificationsByRecipient(String(req.params.userId));
       res.json(notifications);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الإشعارات" });
@@ -1180,7 +1180,7 @@ export async function registerRoutes(
 
   app.patch("/api/notifications/:id", requireAuth, async (req, res) => {
     try {
-      const updated = await storage.updateNotification(req.params.id, req.body);
+      const updated = await storage.updateNotification(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الإشعار غير موجود" });
       }
@@ -1192,7 +1192,7 @@ export async function registerRoutes(
 
   app.delete("/api/notifications/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      await storage.deleteNotification(req.params.id);
+      await storage.deleteNotification(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الإشعار" });
@@ -1237,7 +1237,7 @@ export async function registerRoutes(
 
   app.get("/api/departments/:id", requireAuth, async (req, res) => {
     try {
-      const department = await storage.getDepartmentById(req.params.id);
+      const department = await storage.getDepartmentById(String(req.params.id));
       if (!department) {
         return res.status(404).json({ error: "القسم غير موجود" });
       }
@@ -1264,7 +1264,8 @@ export async function registerRoutes(
 
   app.get("/api/attachments/:entityType/:entityId", requireAuth, async (req, res) => {
     try {
-      const { entityType, entityId } = req.params;
+      const entityType = String(req.params.entityType);
+      const entityId = String(req.params.entityId);
       const list = await storage.getAttachmentsByEntity(entityType, entityId);
       res.json(list);
     } catch (error) {
@@ -1274,7 +1275,7 @@ export async function registerRoutes(
 
   app.delete("/api/attachments/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      const deleted = await storage.deleteAttachment(req.params.id);
+      const deleted = await storage.deleteAttachment(String(req.params.id));
       if (!deleted) {
         return res.status(404).json({ error: "المرفق غير موجود" });
       }
@@ -1323,7 +1324,7 @@ export async function registerRoutes(
 
   app.get("/api/support/tickets/:id", requireAuth, async (req, res) => {
     try {
-      const ticket = await storage.getSupportTicketById(req.params.id);
+      const ticket = await storage.getSupportTicketById(String(req.params.id));
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json(ticket);
     } catch (error: any) {
@@ -1358,7 +1359,7 @@ export async function registerRoutes(
       const updates: any = { status };
       if (status === "تم_الحل") updates.resolvedAt = new Date();
       if (status === "مغلقة") updates.closedAt = new Date();
-      const ticket = await storage.updateSupportTicket(req.params.id, updates);
+      const ticket = await storage.updateSupportTicket(String(req.params.id), updates);
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json(ticket);
     } catch (error: any) {
@@ -1373,7 +1374,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "غير مصرح بتعيين التذكرة" });
       }
       const { assignedTo } = req.body;
-      const ticket = await storage.updateSupportTicket(req.params.id, { assignedTo, status: "مفتوحة" });
+      const ticket = await storage.updateSupportTicket(String(req.params.id), { assignedTo, status: "مفتوحة" });
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json(ticket);
     } catch (error: any) {
@@ -1388,7 +1389,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "غير مصرح بتغيير الأولوية" });
       }
       const { priority } = req.body;
-      const ticket = await storage.updateSupportTicket(req.params.id, { priority });
+      const ticket = await storage.updateSupportTicket(String(req.params.id), { priority });
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json(ticket);
     } catch (error: any) {
@@ -1399,7 +1400,7 @@ export async function registerRoutes(
   app.post("/api/support/tickets/:id/comment", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
-      const ticket = await storage.getSupportTicketById(req.params.id);
+      const ticket = await storage.getSupportTicketById(String(req.params.id));
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
 
       const dbUser = await storage.getUser(reqUser.id);
@@ -1417,7 +1418,7 @@ export async function registerRoutes(
         isInternal: isInternal || false,
         createdAt: new Date().toISOString(),
       });
-      const updated = await storage.updateSupportTicket(req.params.id, { comments });
+      const updated = await storage.updateSupportTicket(String(req.params.id), { comments });
       res.json(updated);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1427,7 +1428,7 @@ export async function registerRoutes(
   app.post("/api/support/tickets/:id/rate", requireAuth, async (req, res) => {
     try {
       const { rating, ratingComment } = req.body;
-      const ticket = await storage.updateSupportTicket(req.params.id, { rating, ratingComment: ratingComment || "" });
+      const ticket = await storage.updateSupportTicket(String(req.params.id), { rating, ratingComment: ratingComment || "" });
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json(ticket);
     } catch (error: any) {
@@ -1441,7 +1442,7 @@ export async function registerRoutes(
       if (!reqUser || reqUser.role !== "branch_manager") {
         return res.status(403).json({ error: "غير مصرح بالحذف" });
       }
-      const success = await storage.deleteSupportTicket(req.params.id);
+      const success = await storage.deleteSupportTicket(String(req.params.id));
       if (!success) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json({ success: true });
     } catch (error: any) {
@@ -1481,9 +1482,9 @@ export async function registerRoutes(
 
     const results = lawyers.map(lawyer => {
       const lawyerCases = allCases.filter(c => c.responsibleLawyerId === lawyer.id);
-      const activeCases = lawyerCases.filter(c => c.currentStage !== "مقفلة" && c.currentStage !== "مغلق");
+      const activeCases = lawyerCases.filter(c => (c.currentStage as string) !== "مقفلة" && (c.currentStage as string) !== "مغلق");
       const closedCases = lawyerCases.filter(c =>
-        (c.currentStage === "مقفلة" || c.currentStage === "مغلق") &&
+        ((c.currentStage as string) === "مقفلة" || (c.currentStage as string) === "مغلق") &&
         new Date(c.updatedAt) >= periodStart
       );
 
@@ -1556,14 +1557,14 @@ export async function registerRoutes(
   // ==================== Case Activity Log ====================
 
   app.get("/api/cases/:id/activity", requireAuth, async (req: AuthRequest, res) => {
-    const activities = await storage.getCaseActivities(req.params.id);
+    const activities = await storage.getCaseActivities(String(req.params.id));
     res.json(activities);
   });
 
   // ==================== Case Notes ====================
 
   app.get("/api/cases/:id/notes", requireAuth, async (req: AuthRequest, res) => {
-    const notes = await storage.getCaseNotes(req.params.id);
+    const notes = await storage.getCaseNotes(String(req.params.id));
     res.json(notes);
   });
 
@@ -1571,12 +1572,12 @@ export async function registerRoutes(
     const user = req.user!;
     const note = await storage.createCaseNote({
       ...req.body,
-      caseId: req.params.id,
+      caseId: String(req.params.id),
       userId: user.id,
       userName: user.name,
     });
     await storage.logCaseActivity({
-      caseId: req.params.id,
+      caseId: String(req.params.id),
       userId: user.id,
       userName: user.name,
       actionType: "note_added",
@@ -1586,13 +1587,13 @@ export async function registerRoutes(
   });
 
   app.patch("/api/case-notes/:id", requireAuth, async (req: AuthRequest, res) => {
-    const note = await storage.updateCaseNote(req.params.id, { ...req.body, editedAt: new Date() });
+    const note = await storage.updateCaseNote(String(req.params.id), { ...req.body, editedAt: new Date() });
     if (!note) return res.status(404).json({ message: "ملاحظة غير موجودة" });
     res.json(note);
   });
 
   app.delete("/api/case-notes/:id", requireAuth, async (req: AuthRequest, res) => {
-    await storage.deleteCaseNote(req.params.id);
+    await storage.deleteCaseNote(String(req.params.id));
     res.json({ success: true });
   });
 
@@ -1625,13 +1626,13 @@ export async function registerRoutes(
   });
 
   app.patch("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
-    const deadline = await storage.updateLegalDeadline(req.params.id, req.body);
+    const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
     if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
     res.json(deadline);
   });
 
   app.delete("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
-    await storage.deleteLegalDeadline(req.params.id);
+    await storage.deleteLegalDeadline(String(req.params.id));
     res.json({ success: true });
   });
 
@@ -1669,14 +1670,14 @@ export async function registerRoutes(
   });
 
   app.patch("/api/delegations/:id", requireAuth, async (req: AuthRequest, res) => {
-    const delegation = await storage.updateDelegation(req.params.id, req.body);
+    const delegation = await storage.updateDelegation(String(req.params.id), req.body);
     if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
     res.json(delegation);
   });
 
   app.post("/api/delegations/:id/approve", requireAuth, async (req: AuthRequest, res) => {
     const user = req.user!;
-    const delegation = await storage.updateDelegation(req.params.id, {
+    const delegation = await storage.updateDelegation(String(req.params.id), {
       status: "نشط",
       approvedBy: user.id,
       approvedAt: new Date(),
@@ -1803,7 +1804,7 @@ export async function registerRoutes(
     });
 
     const avgDuration: Record<string, number[]> = {};
-    cases.filter(c => c.currentStage === "مقفلة" || c.currentStage === "مغلق").forEach(c => {
+    cases.filter(c => (c.currentStage as string) === "مقفلة" || (c.currentStage as string) === "مغلق").forEach(c => {
       const cType = c.caseType || "غير محدد";
       const duration = (new Date(c.updatedAt).getTime() - new Date(c.createdAt).getTime()) / (1000 * 60 * 60 * 24);
       if (!avgDuration[cType]) avgDuration[cType] = [];
@@ -1892,10 +1893,10 @@ export async function registerRoutes(
 
     const unreadNotifications = allNotifications.filter(n => n.recipientId === user.id && !n.isRead).length;
 
-    const activeCases = userCases.filter(c => c.currentStage !== "مقفلة" && c.currentStage !== "مغلق" && !(c as any).isArchived);
+    const activeCases = userCases.filter(c => (c.currentStage as string) !== "مقفلة" && (c.currentStage as string) !== "مغلق" && !(c as any).isArchived);
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const closedThisMonth = userCases.filter(c =>
-      (c.currentStage === "مقفلة" || c.currentStage === "مغلق") &&
+      ((c.currentStage as string) === "مقفلة" || (c.currentStage as string) === "مغلق") &&
       new Date(c.updatedAt) >= thisMonth
     );
 
@@ -1952,8 +1953,8 @@ export async function registerRoutes(
     }
     let cases = await storage.getAllCases();
     const { departmentId, status, dateFrom, dateTo } = req.query;
-    if (departmentId) cases = cases.filter(c => c.departmentId === departmentId);
-    if (status) cases = cases.filter(c => c.currentStage === status);
+    if (departmentId) cases = cases.filter(c => c.departmentId === String(departmentId));
+    if (status) cases = cases.filter(c => c.currentStage === String(status));
     if (dateFrom) cases = cases.filter(c => new Date(c.createdAt) >= new Date(String(dateFrom)));
     if (dateTo) cases = cases.filter(c => new Date(c.createdAt) <= new Date(String(dateTo)));
 
@@ -2025,7 +2026,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/attachments/:id/download", requireAuth, async (req: AuthRequest, res) => {
-    const filePath = path.join(uploadsDir, req.params.id);
+    const filePath = path.join(uploadsDir, String(req.params.id));
     if (fs.existsSync(filePath)) {
       return res.download(filePath);
     }

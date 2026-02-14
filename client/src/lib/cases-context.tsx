@@ -305,7 +305,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       stageHistory: [...lawCase.stageHistory, newTransition],
     });
 
-    if (prevStage === CaseStage.REVIEW_NOTES) {
+    if (prevStage === CaseStage.AMENDMENTS) {
       const responsibleId = lawCase.responsibleLawyerId || lawCase.primaryLawyerId;
       if (responsibleId) {
         notifyCaseReturnedForRevision(lawCase.id, lawCase.caseNumber, responsibleId, notes).catch(err =>

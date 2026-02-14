@@ -142,6 +142,9 @@ export function SendNotificationDialog({
       requiresResponse,
       scheduledAt: enableSchedule && scheduledDate ? `${scheduledDate.toISOString().split('T')[0]}T${scheduledTime}` : null,
       autoEscalateAfterHours: enableAutoEscalate ? parseInt(autoEscalateHours) : 0,
+      isAutomatic: false,
+      relatedStage: null,
+      workflowTriggerId: null,
     };
 
     try {

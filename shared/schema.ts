@@ -878,6 +878,11 @@ export interface LawCase {
   currentSituation: string;
   responseDeadline: string | null;
   najizNumber: string;
+  isArchived: boolean;
+  archivedAt: string | null;
+  archivedBy: string | null;
+  archiveReason: string | null;
+  autoArchiveDate: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
