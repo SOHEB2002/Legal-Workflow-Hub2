@@ -43,7 +43,7 @@ interface AuthRequest extends Request {
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 30,
   message: { error: "محاولات كثيرة. حاول بعد 15 دقيقة" },
   standardHeaders: true,
 });
