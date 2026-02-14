@@ -1234,9 +1234,27 @@ export class DatabaseStorage implements IStorage {
 
   async initializeDefaultData(): Promise<void> {
     const existingUsers = await db.select().from(users);
-    if (existingUsers.length === 0) {
-      const defaultPassword = await hashPassword("Awn@2024!");
-      const defaultUsers = [
+    
+    // Fix any unhashed passwords in existing users
+    for (const user of existingUsers) {
+      if (user.password && !user.password.startsWith('$2b$') && !user.password.startsWith('$2a$')) {
+        const hashed = await hashPassword(user.password);
+        await db.update(users).set({ password: hashed }).where(eq(users.id, user.id));
+        console.log(`Fixed unhashed password for user: ${user.username}`);
+      }
+    }
+    
+    // Ensure manager has the correct password
+    const managerUser = existingUsers.find(u => u.username === 'manager');
+    if (managerUser) {
+      const managerPassword = await hashPassword("hazim1234");
+      await db.update(users).set({ password: managerPassword, mustChangePassword: false }).where(eq(users.id, managerUser.id));
+    }
+
+    // Add missing default users if some exist but not all
+    const defaultPassword = await hashPassword("Awn@2024!");
+    const existingUsernames = existingUsers.map(u => u.username);
+    const allDefaultUsers = [
         { 
           id: "1", 
           username: "manager", 
@@ -1363,14 +1381,20 @@ export class DatabaseStorage implements IStorage {
           canBeAssignedConsultations: false,
           mustChangePassword: true,
         },
-      ];
-      
-      for (const user of defaultUsers) {
-        await db.insert(users).values({
-          ...user,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
+    ];
+    
+    for (const user of allDefaultUsers) {
+      if (!existingUsernames.includes(user.username)) {
+        try {
+          await db.insert(users).values({
+            ...user,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+          console.log(`Added missing user: ${user.username}`);
+        } catch (e) {
+          console.log(`User ${user.username} already exists, skipping`);
+        }
       }
     }
 
