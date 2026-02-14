@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback } from "rea
 import type { Client, ClientTypeValue } from "@shared/schema";
 import { ClientType } from "@shared/schema";
 import { apiRequest } from "./queryClient";
+import { useAuth } from "./auth-context";
 
 interface ClientsContextType {
   clients: Client[];
@@ -20,13 +21,14 @@ const ClientsContext = createContext<ClientsContextType | undefined>(undefined);
 export function ClientsProvider({ children }: { children: React.ReactNode }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { user } = useAuth();
 
   const fetchClients = useCallback(async () => {
+    const token = localStorage.getItem("lawfirm_token");
+    if (!token) { setIsLoading(false); return; }
     try {
       setIsLoading(true);
-      const token = localStorage.getItem("lawfirm_token");
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const headers: Record<string, string> = { "Authorization": `Bearer ${token}` };
       const response = await fetch("/api/clients", { headers });
       if (response.ok) {
         const data = await response.json();
@@ -40,8 +42,9 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchClients();
-  }, [fetchClients]);
+    if (user) fetchClients();
+    else { setClients([]); setIsLoading(false); }
+  }, [user, fetchClients]);
 
   const addClient = async (data: Partial<Client>, createdBy: string): Promise<Client> => {
     const clientData = {

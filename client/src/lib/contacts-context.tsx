@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { ContactLog, FollowUpStatus } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "./auth-context";
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("lawfirm_token");
@@ -26,8 +27,11 @@ const ContactsContext = createContext<ContactsContextType | undefined>(undefined
 export function ContactsProvider({ children }: { children: ReactNode }) {
   const [contacts, setContacts] = useState<ContactLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { user } = useAuth();
 
   const fetchContacts = useCallback(async () => {
+    const token = localStorage.getItem("lawfirm_token");
+    if (!token) { setIsLoading(false); return; }
     try {
       const res = await fetch("/api/contact-logs", {
         credentials: "include",
@@ -45,8 +49,9 @@ export function ContactsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchContacts();
-  }, [fetchContacts]);
+    if (user) fetchContacts();
+    else { setContacts([]); setIsLoading(false); }
+  }, [user, fetchContacts]);
 
   const addContact = async (contactData: Omit<ContactLog, "id" | "createdAt" | "updatedAt">): Promise<ContactLog> => {
     const res = await apiRequest("POST", "/api/contact-logs", contactData);

@@ -3,6 +3,7 @@ import type { FieldTask } from "@shared/schema";
 import { FieldTaskStatus } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { notifyFieldTaskAssigned } from "@/lib/notification-triggers";
+import { useAuth } from "./auth-context";
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("lawfirm_token");
@@ -31,8 +32,11 @@ const FieldTasksContext = createContext<FieldTasksContextType | undefined>(undef
 export function FieldTasksProvider({ children }: { children: React.ReactNode }) {
   const [fieldTasks, setFieldTasks] = useState<FieldTask[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { user } = useAuth();
 
   const fetchFieldTasks = useCallback(async () => {
+    const token = localStorage.getItem("lawfirm_token");
+    if (!token) { setIsLoading(false); return; }
     try {
       const res = await fetch("/api/field-tasks", {
         credentials: "include",
@@ -50,8 +54,9 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   useEffect(() => {
-    fetchFieldTasks();
-  }, [fetchFieldTasks]);
+    if (user) fetchFieldTasks();
+    else { setFieldTasks([]); setIsLoading(false); }
+  }, [user, fetchFieldTasks]);
 
   const addFieldTask = async (data: Partial<FieldTask>): Promise<FieldTask> => {
     const res = await apiRequest("POST", "/api/field-tasks", {

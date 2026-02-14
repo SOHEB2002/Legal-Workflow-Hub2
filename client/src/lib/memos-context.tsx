@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Memo, MemoStatusValue, InsertMemo } from "@shared/schema";
+import { useAuth } from "./auth-context";
 
 interface MemosContextType {
   memos: Memo[];
@@ -21,8 +22,10 @@ interface MemosContextType {
 const MemosContext = createContext<MemosContextType | undefined>(undefined);
 
 export function MemosProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const { data: memos = [], isLoading } = useQuery<Memo[]>({
     queryKey: ["/api/memos"],
+    enabled: !!user,
   });
 
   const invalidate = () => {

@@ -22,7 +22,6 @@ class RetryableAuthError extends Error {
 
 async function throwIfResNotOk(res: Response) {
   if (res.status === 401) {
-    // Try to refresh the token
     const token = localStorage.getItem("lawfirm_token");
     if (token) {
       try {
@@ -41,19 +40,17 @@ async function throwIfResNotOk(res: Response) {
               localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
             }
           }
-          // Signal caller to retry
           throw new RetryableAuthError("Token refreshed, retry request");
         }
       } catch (e) {
         if (e instanceof RetryableAuthError) throw e;
       }
+      localStorage.removeItem("lawfirm_token");
+      localStorage.removeItem("lawfirm_csrf_token");
+      localStorage.removeItem("lawfirm_user");
+      window.location.reload();
     }
-    // Token refresh failed, redirect to login
-    localStorage.removeItem("lawfirm_token");
-    localStorage.removeItem("lawfirm_csrf_token");
-    localStorage.removeItem("lawfirm_user");
-    window.location.reload();
-    throw new Error("401: جلسة منتهية");
+    throw new Error("401: غير مصرح");
   }
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;

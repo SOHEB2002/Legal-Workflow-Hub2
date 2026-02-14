@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Hearing, HearingResultValue } from "@shared/schema";
 import { HearingStatus } from "@shared/schema";
+import { useAuth } from "./auth-context";
 
 interface HearingResultData {
   result: HearingResultValue;
@@ -43,8 +44,10 @@ interface HearingsContextType {
 const HearingsContext = createContext<HearingsContextType | undefined>(undefined);
 
 export function HearingsProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const { data: hearings = [], isLoading } = useQuery<Hearing[]>({
     queryKey: ["/api/hearings"],
+    enabled: !!user,
   });
 
   const invalidate = () => {
