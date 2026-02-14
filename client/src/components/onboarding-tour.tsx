@@ -1,5 +1,6 @@
 import { useState, useEffect, createContext, useContext } from "react";
 import { useLocation } from "wouter";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
@@ -112,8 +113,10 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [showTourOnFirstLogin, setShowTourOnFirstLogin] = useState(true);
   const [, setLocation] = useLocation();
+  const { user, mustChangePassword } = useAuth();
 
   useEffect(() => {
+    if (!user || mustChangePassword) return;
     const hasSeenTour = localStorage.getItem("lawfirm_tour_completed");
     if (!hasSeenTour && showTourOnFirstLogin) {
       const timer = setTimeout(() => {
@@ -121,7 +124,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [showTourOnFirstLogin]);
+  }, [showTourOnFirstLogin, user, mustChangePassword]);
 
   const startTour = () => {
     setCurrentStep(0);
