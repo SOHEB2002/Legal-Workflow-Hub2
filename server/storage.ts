@@ -1289,11 +1289,11 @@ export class DatabaseStorage implements IStorage {
       if (managerUser) {
         const { comparePassword } = await import("./auth");
         const canLoginWithDefault = await comparePassword("123456", managerUser.password);
-        if (!canLoginWithDefault && managerUser.mustChangePassword) {
+        if (!canLoginWithDefault) {
           console.log("[INIT] Fixing manager default password...");
           const fixedPassword = await hashPassword("123456");
           await db.update(users).set({ password: fixedPassword, mustChangePassword: true }).where(eq(users.id, managerUser.id));
-          console.log("[INIT] Manager password reset to default");
+          console.log("[INIT] Manager password reset to default successfully");
         }
       }
       return;
