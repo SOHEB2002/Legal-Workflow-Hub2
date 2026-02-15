@@ -1044,7 +1044,7 @@ export default function UsersPage() {
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="كلمة المرور الجديدة (4 أحرف على الأقل)"
+                placeholder="كلمة المرور الجديدة (8 أحرف على الأقل)"
               />
             </div>
           </div>
