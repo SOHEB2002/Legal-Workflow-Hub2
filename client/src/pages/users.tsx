@@ -169,7 +169,7 @@ export default function UsersPage() {
     });
   };
 
-  const handleAddUser = () => {
+  const handleAddUser = async () => {
     if (!formData.name || !formData.username || !formData.password) {
       toast({
         variant: "destructive",
@@ -189,23 +189,30 @@ export default function UsersPage() {
       return;
     }
 
-    addUser({
-      name: formData.name,
-      username: formData.username,
-      password: formData.password,
-      email: formData.email,
-      phone: formData.phone,
-      role: formData.role,
-      departmentId: formData.departmentId || null,
-      isActive: formData.isActive,
-      canBeAssignedCases: formData.canBeAssignedCases,
-      canBeAssignedConsultations: formData.canBeAssignedConsultations,
-      mustChangePassword: true,
-    });
-
-    toast({ title: "تم إضافة المستخدم بنجاح" });
-    setShowAddDialog(false);
-    resetForm();
+    try {
+      await addUser({
+        name: formData.name,
+        username: formData.username,
+        password: formData.password,
+        email: formData.email,
+        phone: formData.phone,
+        role: formData.role,
+        departmentId: formData.departmentId || null,
+        isActive: formData.isActive,
+        canBeAssignedCases: formData.canBeAssignedCases,
+        canBeAssignedConsultations: formData.canBeAssignedConsultations,
+        mustChangePassword: true,
+      });
+      toast({ title: "تم إضافة المستخدم بنجاح" });
+      setShowAddDialog(false);
+      resetForm();
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "خطأ",
+        description: "فشل إضافة المستخدم، تحقق من البيانات المدخلة",
+      });
+    }
   };
 
   const handleOpenEdit = (userToEdit: UserType) => {

@@ -1118,7 +1118,7 @@ export const insertUserSchema = z.object({
     .min(8, "كلمة المرور يجب أن تكون 8 أحرف على الأقل")
     .max(128, "كلمة المرور طويلة جداً"),
   name: z.string().min(2, "الاسم مطلوب"),
-  email: z.string().email("البريد الإلكتروني غير صحيح").optional().default(""),
+  email: z.union([z.string().email("البريد الإلكتروني غير صحيح"), z.literal("")]).optional().default(""),
   phone: z.string().optional().default(""),
   role: z.enum([
     "branch_manager",
@@ -1141,7 +1141,7 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export const updateUserSchema = z.object({
   name: z.string().min(2, "الاسم مطلوب").optional(),
   username: z.string().min(3, "اسم المستخدم مطلوب").optional(),
-  email: z.string().email("البريد الإلكتروني غير صحيح").optional(),
+  email: z.union([z.string().email("البريد الإلكتروني غير صحيح"), z.literal("")]).optional(),
   phone: z.string().optional(),
   role: z.enum([
     "branch_manager",
