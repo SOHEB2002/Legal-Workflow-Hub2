@@ -1318,7 +1318,7 @@ export function canManageAllConsultations(role: UserRoleType): boolean {
 }
 
 export function canManageDepartment(role: UserRoleType): boolean {
-  return ["branch_manager", "admin_support"].includes(role);
+  return ["branch_manager", "department_head"].includes(role);
 }
 
 export function canAddCasesAndConsultations(role: UserRoleType): boolean {
@@ -1334,7 +1334,7 @@ export function canReviewConsultations(role: UserRoleType): boolean {
 }
 
 export function canManageUsers(role: UserRoleType): boolean {
-  return ["branch_manager", "department_head"].includes(role);
+  return ["branch_manager", "admin_support"].includes(role);
 }
 
 export function canAccessHR(role: UserRoleType): boolean {

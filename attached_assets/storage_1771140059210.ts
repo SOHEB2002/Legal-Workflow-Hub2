@@ -1266,7 +1266,6 @@ export class DatabaseStorage implements IStorage {
 
   async initializeDefaultData(): Promise<void> {
     const existingUsers = await db.select().from(users);
-
     console.log(`[INIT] Found ${existingUsers.length} existing users`);
 
     // Ensure departments exist

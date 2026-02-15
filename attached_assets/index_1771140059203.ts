@@ -28,9 +28,11 @@ app.use(express.urlencoded({ extended: false }));
 app.use(authMiddleware);
 app.use(csrfProtection);
 
+// Check if authenticated user is still active in DB on every API request
 app.use(async (req: Request, res: Response, next: NextFunction) => {
   const user = (req as any).user;
   if (!user || !req.path.startsWith("/api/")) return next();
+  // Skip auth endpoints
   if (["/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/emergency-reset"].includes(req.path)) return next();
   const dbUser = await storage.getUser(user.id);
   if (!dbUser || !dbUser.isActive) {
