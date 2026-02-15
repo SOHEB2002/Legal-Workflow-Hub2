@@ -229,7 +229,9 @@ export async function registerRoutes(
         return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       }
 
+      console.log(`[LOGIN] username="${data.username.trim()}" | found=true | hash_start="${user.password.substring(0, 15)}" | hash_len=${user.password.length} | input_len=${data.password.length}`);
       const isValid = await comparePassword(data.password, user.password);
+      console.log(`[LOGIN] compare_result=${isValid}`);
       if (!isValid) {
         return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       }

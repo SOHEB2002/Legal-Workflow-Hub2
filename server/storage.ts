@@ -1268,20 +1268,14 @@ export class DatabaseStorage implements IStorage {
     const existingUsers = await db.select().from(users);
 
     const defaultPw = "Awn@2024!";
-    const bcryptjsHash = await hashPassword(defaultPw);
+    const freshHash = await hashPassword(defaultPw);
     for (const user of existingUsers) {
-      if (user.password && !user.password.startsWith('$2b$') && !user.password.startsWith('$2a$')) {
-        await db.update(users).set({ password: bcryptjsHash, mustChangePassword: true }).where(eq(users.id, user.id));
-        console.log(`Fixed unhashed password for user: ${user.username}`);
-      } else if (user.mustChangePassword && user.password) {
-        const bcryptjs = await import('bcryptjs');
-        const matches = await bcryptjs.default.compare(defaultPw, user.password);
-        if (!matches) {
-          await db.update(users).set({ password: bcryptjsHash }).where(eq(users.id, user.id));
-          console.log(`Re-hashed password for user: ${user.username}`);
-        }
+      if (user.mustChangePassword) {
+        await db.update(users).set({ password: freshHash }).where(eq(users.id, user.id));
+        console.log(`[INIT] Reset default password for user: ${user.username}`);
       }
     }
+    console.log(`[INIT] Password check complete for ${existingUsers.length} users`);
 
     // Ensure departments exist
     const existingDepartments = await db.select().from(departments);

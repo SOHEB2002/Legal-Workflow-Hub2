@@ -9,7 +9,7 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
-const SALT_ROUNDS = 12;
+const SALT_ROUNDS = 10;
 const TOKEN_EXPIRY = "2h";
 
 export async function hashPassword(password: string): Promise<string> {
