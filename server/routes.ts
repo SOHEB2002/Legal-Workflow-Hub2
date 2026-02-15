@@ -229,9 +229,7 @@ export async function registerRoutes(
         return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       }
 
-      console.log(`[LOGIN DEBUG] user: ${data.username}, hash_prefix: ${user.password.substring(0, 20)}, input_len: ${data.password.length}, input_chars: ${JSON.stringify(data.password)}`);
       const isValid = await comparePassword(data.password, user.password);
-      console.log(`[LOGIN DEBUG] compare result: ${isValid}`);
       if (!isValid) {
         return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       }

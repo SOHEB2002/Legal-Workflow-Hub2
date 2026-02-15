@@ -1267,12 +1267,19 @@ export class DatabaseStorage implements IStorage {
   async initializeDefaultData(): Promise<void> {
     const existingUsers = await db.select().from(users);
 
-    // Fix any unhashed passwords in existing users
+    const defaultPw = "Awn@2024!";
+    const bcryptjsHash = await hashPassword(defaultPw);
     for (const user of existingUsers) {
       if (user.password && !user.password.startsWith('$2b$') && !user.password.startsWith('$2a$')) {
-        const hashed = await hashPassword(user.password);
-        await db.update(users).set({ password: hashed }).where(eq(users.id, user.id));
+        await db.update(users).set({ password: bcryptjsHash, mustChangePassword: true }).where(eq(users.id, user.id));
         console.log(`Fixed unhashed password for user: ${user.username}`);
+      } else if (user.mustChangePassword && user.password) {
+        const bcryptjs = await import('bcryptjs');
+        const matches = await bcryptjs.default.compare(defaultPw, user.password);
+        if (!matches) {
+          await db.update(users).set({ password: bcryptjsHash }).where(eq(users.id, user.id));
+          console.log(`Re-hashed password for user: ${user.username}`);
+        }
       }
     }
 
@@ -1296,8 +1303,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     console.log("First run detected: creating default users...");
-    const defaultPw = process.env.DEFAULT_USER_PASSWORD || "Awn@2024!Secure";
-    const defaultPassword = await hashPassword(defaultPw);
+    const defaultPassword = bcryptjsHash;
     const existingUsernames = existingUsers.map(u => u.username);
     const allDefaultUsers = [
         { 
