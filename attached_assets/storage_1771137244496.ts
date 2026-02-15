@@ -1267,16 +1267,14 @@ export class DatabaseStorage implements IStorage {
   async initializeDefaultData(): Promise<void> {
     const existingUsers = await db.select().from(users);
 
-    const defaultPw = "123456";
-    const freshHash = await hashPassword(defaultPw);
-    console.log(`[INIT] Generated fresh hash: ${freshHash.substring(0, 15)}... (len=${freshHash.length})`);
+    // Fix any unhashed passwords in existing users
     for (const user of existingUsers) {
-      if (user.mustChangePassword) {
-        await db.update(users).set({ password: freshHash }).where(eq(users.id, user.id));
-        console.log(`[INIT] Reset password for: ${user.username}`);
+      if (user.password && !user.password.startsWith('$2b$') && !user.password.startsWith('$2a$')) {
+        const hashed = await hashPassword(user.password);
+        await db.update(users).set({ password: hashed }).where(eq(users.id, user.id));
+        console.log(`Fixed unhashed password for user: ${user.username}`);
       }
     }
-    console.log(`[INIT] Password check complete for ${existingUsers.length} users`);
 
     // Ensure departments exist
     const existingDepartments = await db.select().from(departments);
@@ -1298,7 +1296,8 @@ export class DatabaseStorage implements IStorage {
     }
 
     console.log("First run detected: creating default users...");
-    const defaultPassword = freshHash;
+    const defaultPw = process.env.DEFAULT_USER_PASSWORD || "123456";
+    const defaultPassword = await hashPassword(defaultPw);
     const existingUsernames = existingUsers.map(u => u.username);
     const allDefaultUsers = [
         { 

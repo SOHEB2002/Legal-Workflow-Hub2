@@ -292,9 +292,32 @@ export async function registerRoutes(
   });
 
   app.post("/api/auth/logout", async (req, res) => {
-    // Server-side logout - in a JWT system, the client discards the token.
-    // This endpoint exists for audit logging and future token blacklisting.
     res.json({ success: true });
+  });
+
+  app.post("/api/auth/emergency-reset", async (req, res) => {
+    try {
+      const { username, secret } = req.body;
+      const serverSecret = process.env.SESSION_SECRET;
+      if (!secret || secret !== serverSecret) {
+        return res.status(403).json({ error: "غير مصرح" });
+      }
+      if (!username) {
+        return res.status(400).json({ error: "اسم المستخدم مطلوب" });
+      }
+      const user = await storage.getUserByUsername(username);
+      if (!user) {
+        return res.status(404).json({ error: "المستخدم غير موجود" });
+      }
+      const newPassword = "123456";
+      const hashed = await hashPassword(newPassword);
+      await storage.updateUser(user.id, { password: hashed, mustChangePassword: true } as any);
+      console.log(`[EMERGENCY-RESET] Password reset for user: ${username}`);
+      res.json({ success: true, message: `تم إعادة تعيين كلمة مرور ${username} إلى ${newPassword}` });
+    } catch (error) {
+      console.error("[EMERGENCY-RESET] Error:", error);
+      res.status(500).json({ error: "حدث خطأ" });
+    }
   });
 
   // ==================== Users ====================

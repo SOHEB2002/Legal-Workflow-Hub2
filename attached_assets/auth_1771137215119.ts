@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { randomBytes, createHmac } from "crypto";
 
@@ -9,7 +9,7 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
-const SALT_ROUNDS = 10;
+const SALT_ROUNDS = 12;
 const TOKEN_EXPIRY = "2h";
 
 export async function hashPassword(password: string): Promise<string> {
@@ -24,6 +24,7 @@ export async function comparePassword(
     if (hash.startsWith("$2b$") || hash.startsWith("$2a$")) {
       return await bcrypt.compare(password, hash);
     }
+    // Reject non-bcrypt hashes - never compare plain text
     return false;
   } catch {
     return false;
@@ -158,6 +159,7 @@ export function verifyCsrfToken(token: string, userId: string): boolean {
     if (parts.length !== 4) return false;
     const [tokenUserId, timestamp, random, signature] = parts;
     if (tokenUserId !== userId) return false;
+    // Token valid for 4 hours
     const age = Date.now() - parseInt(timestamp, 10);
     if (age > 4 * 60 * 60 * 1000) return false;
     const expectedSig = createHmac("sha256", JWT_SECRET!)
@@ -170,19 +172,22 @@ export function verifyCsrfToken(token: string, userId: string): boolean {
 }
 
 export function csrfProtection(req: Request, res: Response, next: NextFunction): void {
+  // Only protect state-changing methods
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
     return next();
   }
+  // Skip CSRF for login and refresh (no session yet)
   if (req.path === "/api/auth/login" || req.path === "/api/auth/refresh" || req.path === "/api/auth/logout" || req.path === "/api/auth/emergency-reset") {
     return next();
   }
+  // Skip non-API routes
   if (!req.path.startsWith("/api/")) {
     return next();
   }
 
   const user = (req as any).user;
   if (!user) {
-    return next();
+    return next(); // requireAuth will handle unauthorized
   }
 
   const csrfToken = req.headers["x-csrf-token"] as string;
