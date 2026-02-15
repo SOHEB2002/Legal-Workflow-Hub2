@@ -1021,7 +1021,7 @@ export default function UsersPage() {
             <Button 
               data-testid="button-confirm-reset-password" 
               onClick={handleResetPassword}
-              disabled={!newPassword || newPassword.length < 4}
+              disabled={!newPassword || newPassword.length < 6}
             >
               إعادة تعيين
             </Button>
