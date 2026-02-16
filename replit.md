@@ -6,6 +6,11 @@ This is an integrated law firm management system with an Arabic RTL interface. I
 ## User Preferences
 I prefer clear and concise communication. For any proposed changes, please provide a high-level overview first. I value iterative development and prefer to review major architectural decisions before implementation. Ensure all output is in Arabic.
 
+### Future Mobile App Requirement
+- **All future modifications must consider mobile app conversion.** The system is planned to be converted to a native mobile app (App Store / Google Play) using PWA + Capacitor or similar wrapper technology.
+- **Design Guidelines for Mobile Readiness**: Use responsive design patterns, avoid desktop-only interactions, ensure touch-friendly UI elements, keep API-first architecture, avoid browser-specific features that won't work in a native app wrapper.
+- **Current Status**: Planned for future implementation. PWA setup (manifest.json, Service Worker) will be added later.
+
 ## System Architecture
 
 ### UI/UX Decisions
