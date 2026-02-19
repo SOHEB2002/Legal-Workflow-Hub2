@@ -33,18 +33,11 @@ export default function LoginPage() {
     try {
       const result = await login(data.username, data.password);
       if (result.success) {
-        if (result.mustChangePassword) {
-          toast({
-            title: "يجب تغيير كلمة المرور",
-            description: "يرجى تعيين كلمة مرور جديدة للمتابعة",
-          });
-        } else {
-          toast({
-            title: "تم تسجيل الدخول بنجاح",
-            description: "مرحباً بك في نظام شركة عون للمحاماة",
-          });
-          setLocation("/");
-        }
+        toast({
+          title: "تم تسجيل الدخول بنجاح",
+          description: "مرحباً بك في نظام شركة عون للمحاماة",
+        });
+        setLocation("/");
       } else {
         toast({
           variant: "destructive",
