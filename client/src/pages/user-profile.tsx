@@ -3,6 +3,7 @@ import { useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
@@ -19,6 +20,7 @@ import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
+import { useToast } from "@/hooks/use-toast";
 import {
   User as UserIcon,
   Mail,
@@ -35,6 +37,9 @@ import {
   UserCheck,
   Shield,
   ArrowRight,
+  Lock,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { UserRoleLabels, UserStatusLabels, VacationStatusLabels, DelegationTypeLabels } from "@shared/schema";
 import type { UserRoleType, UserStatusValue, VacationStatusValue, DelegationTypeValue } from "@shared/schema";
@@ -45,7 +50,8 @@ export default function UserProfilePage() {
   const [, params] = useRoute("/user-profile/:id");
   const userId = params?.id;
 
-  const { users } = useAuth();
+  const { user: currentUser, users, changePassword } = useAuth();
+  const { toast } = useToast();
   const { getDepartmentName } = useDepartments();
   const { 
     extendedUsers, 
@@ -61,6 +67,40 @@ export default function UserProfilePage() {
 
   const [showVacationDialog, setShowVacationDialog] = useState(false);
   const [showDelegationDialog, setShowDelegationDialog] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  const isOwnProfile = currentUser?.id === userId;
+
+  const handleChangePassword = async () => {
+    if (!newPassword || !currentPassword) {
+      toast({ variant: "destructive", title: "يرجى تعبئة جميع الحقول" });
+      return;
+    }
+    if (newPassword.length < 6) {
+      toast({ variant: "destructive", title: "كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ variant: "destructive", title: "كلمة المرور الجديدة وتأكيدها غير متطابقتين" });
+      return;
+    }
+    setChangingPassword(true);
+    const result = await changePassword(currentPassword, newPassword);
+    setChangingPassword(false);
+    if (result.success) {
+      toast({ title: "تم تغيير كلمة المرور بنجاح" });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } else {
+      toast({ variant: "destructive", title: "فشل تغيير كلمة المرور", description: result.error });
+    }
+  };
 
   const user = users.find(u => u.id === userId);
   const extendedUser = extendedUsers.find(eu => eu.id === userId);
@@ -175,13 +215,14 @@ export default function UserProfilePage() {
       </Card>
 
       <Tabs defaultValue="stats" className="w-full">
-        <TabsList className="grid w-full grid-cols-6">
-          <TabsTrigger value="stats">الإحصائيات</TabsTrigger>
-          <TabsTrigger value="cases">القضايا</TabsTrigger>
-          <TabsTrigger value="vacations">الإجازات</TabsTrigger>
-          <TabsTrigger value="delegations">التفويضات</TabsTrigger>
-          <TabsTrigger value="activity">سجل النشاط</TabsTrigger>
-          <TabsTrigger value="permissions">الصلاحيات</TabsTrigger>
+        <TabsList className={`grid w-full ${isOwnProfile ? "grid-cols-7" : "grid-cols-6"}`}>
+          <TabsTrigger value="stats" data-testid="tab-stats">الإحصائيات</TabsTrigger>
+          <TabsTrigger value="cases" data-testid="tab-cases">القضايا</TabsTrigger>
+          <TabsTrigger value="vacations" data-testid="tab-vacations">الإجازات</TabsTrigger>
+          <TabsTrigger value="delegations" data-testid="tab-delegations">التفويضات</TabsTrigger>
+          <TabsTrigger value="activity" data-testid="tab-activity">سجل النشاط</TabsTrigger>
+          <TabsTrigger value="permissions" data-testid="tab-permissions">الصلاحيات</TabsTrigger>
+          {isOwnProfile && <TabsTrigger value="security" data-testid="tab-security">الأمان</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="stats" className="mt-4">
@@ -419,6 +460,87 @@ export default function UserProfilePage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {isOwnProfile && (
+          <TabsContent value="security" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Lock className="w-4 h-4" />
+                  تغيير كلمة المرور
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="max-w-md space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">كلمة المرور الحالية</label>
+                    <div className="relative">
+                      <Input
+                        data-testid="input-current-password"
+                        type={showCurrentPw ? "text" : "password"}
+                        value={currentPassword}
+                        onChange={e => setCurrentPassword(e.target.value)}
+                        placeholder="أدخل كلمة المرور الحالية"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute left-1 top-1/2 -translate-y-1/2"
+                        onClick={() => setShowCurrentPw(!showCurrentPw)}
+                        data-testid="button-toggle-current-pw"
+                      >
+                        {showCurrentPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">كلمة المرور الجديدة</label>
+                    <div className="relative">
+                      <Input
+                        data-testid="input-new-password"
+                        type={showNewPw ? "text" : "password"}
+                        value={newPassword}
+                        onChange={e => setNewPassword(e.target.value)}
+                        placeholder="أدخل كلمة المرور الجديدة"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute left-1 top-1/2 -translate-y-1/2"
+                        onClick={() => setShowNewPw(!showNewPw)}
+                        data-testid="button-toggle-new-pw"
+                      >
+                        {showNewPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">6 أحرف على الأقل</p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">تأكيد كلمة المرور الجديدة</label>
+                    <Input
+                      data-testid="input-confirm-password"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={e => setConfirmPassword(e.target.value)}
+                      placeholder="أعد إدخال كلمة المرور الجديدة"
+                    />
+                  </div>
+                  <Button
+                    data-testid="button-save-password"
+                    onClick={handleChangePassword}
+                    disabled={changingPassword}
+                    className="w-full"
+                  >
+                    <Lock className="w-4 h-4 ml-2" />
+                    {changingPassword ? "جاري التغيير..." : "حفظ كلمة المرور الجديدة"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
 
       <VacationDialog

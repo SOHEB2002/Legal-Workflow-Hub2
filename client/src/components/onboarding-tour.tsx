@@ -113,10 +113,10 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [showTourOnFirstLogin, setShowTourOnFirstLogin] = useState(true);
   const [, setLocation] = useLocation();
-  const { user, mustChangePassword } = useAuth();
+  const { user } = useAuth();
 
   useEffect(() => {
-    if (!user || mustChangePassword) return;
+    if (!user) return;
     const hasSeenTour = localStorage.getItem("lawfirm_tour_completed");
     if (!hasSeenTour && showTourOnFirstLogin) {
       const timer = setTimeout(() => {
@@ -124,7 +124,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [showTourOnFirstLogin, user, mustChangePassword]);
+  }, [showTourOnFirstLogin, user]);
 
   const startTour = () => {
     setCurrentStep(0);

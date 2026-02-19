@@ -263,7 +263,7 @@ export function AppSidebar() {
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
         <div className="flex items-center justify-between gap-2 mb-4 group-data-[collapsible=icon]:justify-center">
-          <div className="flex items-center gap-3 min-w-0 group-data-[collapsible=icon]:hidden">
+          <Link href={`/user-profile/${user?.id}`} className="flex items-center gap-3 min-w-0 group-data-[collapsible=icon]:hidden hover-elevate rounded-md p-1 -m-1" data-testid="link-my-profile">
             <Avatar className="w-9 h-9 flex-shrink-0 bg-accent">
               <AvatarFallback className="bg-accent text-accent-foreground text-sm font-semibold">
                 {getInitials(user?.name || "م")}
@@ -275,7 +275,7 @@ export function AppSidebar() {
                 {user?.role ? UserRoleLabels[user.role] : ""}
               </p>
             </div>
-          </div>
+          </Link>
           <Button
             size="icon"
             variant="ghost"

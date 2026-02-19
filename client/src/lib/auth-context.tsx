@@ -18,8 +18,7 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface AuthContextType {
   user: User | null;
-  mustChangePassword: boolean;
-  login: (username: string, password: string) => Promise<{ success: boolean; mustChangePassword?: boolean; error?: string }>;
+  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   permissions: {
@@ -80,10 +79,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return stored ? JSON.parse(stored) : null;
   });
 
-  const [mustChangePassword, setMustChangePassword] = useState<boolean>(() => {
-    return localStorage.getItem("lawfirm_must_change_password") === "true";
-  });
-
   const [users, setUsers] = useState<User[]>([]);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -100,11 +95,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
     } catch {} // Ignore errors - we're logging out anyway
     setUser(null);
-    setMustChangePassword(false);
     localStorage.removeItem("lawfirm_token");
     localStorage.removeItem("lawfirm_csrf_token");
     localStorage.removeItem("lawfirm_user");
-    localStorage.removeItem("lawfirm_must_change_password");
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);
       refreshTimerRef.current = null;
@@ -200,7 +193,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [user, refreshToken]);
 
-  const login = async (username: string, password: string): Promise<{ success: boolean; mustChangePassword?: boolean; error?: string }> => {
+  const login = async (username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
@@ -220,13 +213,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (data.csrfToken) {
           localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
         }
-        if (data.mustChangePassword) {
-          setMustChangePassword(true);
-          localStorage.setItem("lawfirm_must_change_password", "true");
-          return { success: true, mustChangePassword: true };
-        }
-        setMustChangePassword(false);
-        localStorage.removeItem("lawfirm_must_change_password");
         return { success: true };
       }
       return { success: false, error: "حدث خطأ غير متوقع" };
@@ -256,8 +242,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (data.csrfToken) {
         localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
       }
-      setMustChangePassword(false);
-      localStorage.removeItem("lawfirm_must_change_password");
       return { success: true };
     } catch (error) {
       console.error("Change password error:", error);
@@ -356,7 +340,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, mustChangePassword, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
+    <AuthContext.Provider value={{ user, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
       {children}
     </AuthContext.Provider>
   );
