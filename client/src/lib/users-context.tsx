@@ -38,7 +38,7 @@ interface UsersContextType {
   sessions: UserSession[];
   
   addUser: (userData: Partial<ExtendedUser>) => Promise<ExtendedUser>;
-  updateUser: (id: string, userData: Partial<ExtendedUser>) => Promise<void>;
+  updateUser: (id: string, userData: Partial<ExtendedUser>) => Promise<{ success: boolean; error?: string }>;
   deleteUser: (id: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (id: string, newPassword: string) => Promise<void>;
   toggleUserStatus: (id: string, status: UserStatusValue) => Promise<void>;
@@ -226,25 +226,31 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     } as ExtendedUser;
   }, [refetchUsers]);
 
-  const updateUser = useCallback(async (id: string, userData: Partial<ExtendedUser>) => {
-    const { status, hireDate, lastLoginAt, teamId, currentVacation, activeDelegations, customPermissions: cp, stats, ...apiFields } = userData as any;
+  const updateUser = useCallback(async (id: string, userData: Partial<ExtendedUser>): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { status, hireDate, lastLoginAt, teamId, currentVacation, activeDelegations, customPermissions: cp, stats, ...apiFields } = userData as any;
 
-    if (Object.keys(apiFields).length > 0) {
-      await apiRequest("PATCH", `/api/users/${id}`, apiFields);
-      await refetchUsers();
-    }
+      if (Object.keys(apiFields).length > 0) {
+        await apiRequest("PATCH", `/api/users/${id}`, apiFields);
+        await refetchUsers();
+      }
 
-    if (status !== undefined || hireDate !== undefined || lastLoginAt !== undefined || teamId !== undefined) {
-      setLocalExtensions(prev => ({
-        ...prev,
-        [id]: {
-          ...(prev[id] || {}),
-          ...(status !== undefined ? { status } : {}),
-          ...(hireDate !== undefined ? { hireDate } : {}),
-          ...(lastLoginAt !== undefined ? { lastLoginAt } : {}),
-          ...(teamId !== undefined ? { teamId } : {}),
-        },
-      }));
+      if (status !== undefined || hireDate !== undefined || lastLoginAt !== undefined || teamId !== undefined) {
+        setLocalExtensions(prev => ({
+          ...prev,
+          [id]: {
+            ...(prev[id] || {}),
+            ...(status !== undefined ? { status } : {}),
+            ...(hireDate !== undefined ? { hireDate } : {}),
+            ...(lastLoginAt !== undefined ? { lastLoginAt } : {}),
+            ...(teamId !== undefined ? { teamId } : {}),
+          },
+        }));
+      }
+      return { success: true };
+    } catch (error: any) {
+      const message = error?.message || "حدث خطأ في تحديث المستخدم";
+      return { success: false, error: message };
     }
   }, [refetchUsers]);
 

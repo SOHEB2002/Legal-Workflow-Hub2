@@ -372,6 +372,13 @@ export async function registerRoutes(
   app.patch("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
       const validatedData = updateUserSchema.parse(req.body);
+      if (validatedData.username) {
+        const allUsers = await storage.getAllUsers();
+        const duplicate = allUsers.find(u => u.username === validatedData.username && String(u.id) !== String(req.params.id));
+        if (duplicate) {
+          return res.status(400).json({ error: "اسم المستخدم موجود مسبقاً" });
+        }
+      }
       if (validatedData.password) {
         const pwValidation = validatePassword(validatedData.password);
         if (!pwValidation.valid) {
