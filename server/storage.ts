@@ -1283,19 +1283,8 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // If users exist, ensure manager account has a working password
     if (existingUsers.length > 0) {
-      const managerUser = existingUsers.find(u => u.username === 'manager');
-      if (managerUser) {
-        const { comparePassword } = await import("./auth");
-        const canLoginWithDefault = await comparePassword("123456", managerUser.password);
-        if (!canLoginWithDefault) {
-          console.log("[INIT] Fixing manager default password...");
-          const fixedPassword = await hashPassword("123456");
-          await db.update(users).set({ password: fixedPassword, mustChangePassword: true }).where(eq(users.id, managerUser.id));
-          console.log("[INIT] Manager password reset to default successfully");
-        }
-      }
+      console.log("[INIT] Users already exist, skipping initialization to preserve user data.");
       return;
     }
 
