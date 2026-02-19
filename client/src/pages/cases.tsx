@@ -533,25 +533,26 @@ export default function CasesPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
+          <div className="overflow-x-auto">
+          <Table className="table-fixed w-full">
             <TableHeader>
               <TableRow>
-                <TableHead className="text-right">رقم القضية</TableHead>
-                <TableHead className="text-right">العميل</TableHead>
-                <TableHead className="text-right">التصنيف</TableHead>
-                <TableHead className="text-right">النوع</TableHead>
-                <TableHead className="text-right">المرحلة</TableHead>
-                <TableHead className="text-right">المحامي المسؤول</TableHead>
-                <TableHead className="text-right">الأولوية</TableHead>
-                <TableHead className="text-right">القسم</TableHead>
-                <TableHead className="text-right">الإجراءات</TableHead>
+                <TableHead className="text-right w-[12%]">رقم القضية</TableHead>
+                <TableHead className="text-right w-[13%]">العميل</TableHead>
+                <TableHead className="text-right w-[10%]">التصنيف</TableHead>
+                <TableHead className="text-right w-[8%]">النوع</TableHead>
+                <TableHead className="text-right w-[12%]">المرحلة</TableHead>
+                <TableHead className="text-right w-[14%]">المحامي المسؤول</TableHead>
+                <TableHead className="text-right w-[8%]">الأولوية</TableHead>
+                <TableHead className="text-right w-[8%]">القسم</TableHead>
+                <TableHead className="text-right w-[10%]">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
-                  <TableCell className="font-medium"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
-                  <TableCell><BidiText>{getClientName(c.clientId)}</BidiText></TableCell>
+                  <TableCell className="font-medium truncate"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
+                  <TableCell className="truncate"><BidiText>{getClientName(c.clientId)}</BidiText></TableCell>
                   <TableCell>
                     <Badge variant="outline" className={
                       c.caseClassification === CaseClassification.DEFENDANT
@@ -571,7 +572,7 @@ export default function CasesPage() {
                       {c.currentStage ? getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue) : CaseStatusLabels[c.status]}
                     </Badge>
                   </TableCell>
-                  <TableCell>{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
+                  <TableCell className="truncate">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
                   <TableCell>
                     <Badge className={getPriorityColor(c.priority)}>{c.priority}</Badge>
                   </TableCell>
@@ -653,6 +654,7 @@ export default function CasesPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 
