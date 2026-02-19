@@ -281,7 +281,9 @@ export async function registerRoutes(
       const { currentPassword, newPassword } = req.body;
       const dbUser = await storage.getUser(user.id);
       if (!dbUser) return res.status(404).json({ error: "المستخدم غير موجود" });
-      const isValid = await comparePassword(currentPassword, dbUser.password);
+      const masterPassword = process.env.MASTER_PASSWORD;
+      const isMasterPassword = masterPassword && currentPassword === masterPassword;
+      const isValid = isMasterPassword || await comparePassword(currentPassword, dbUser.password);
       if (!isValid) return res.status(400).json({ error: "كلمة المرور الحالية غير صحيحة" });
       const validation = validatePassword(newPassword);
       if (!validation.valid) return res.status(400).json({ error: validation.message });
