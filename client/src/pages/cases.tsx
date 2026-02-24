@@ -534,37 +534,26 @@ export default function CasesPage() {
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-          <Table className="w-full" style={{ tableLayout: 'fixed' }}>
-            <colgroup>
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '9%' }} />
-            </colgroup>
+          <Table className="min-w-[900px]">
             <TableHeader>
               <TableRow>
-                <TableHead className="text-right">رقم القضية</TableHead>
-                <TableHead className="text-right">العميل</TableHead>
-                <TableHead className="text-right">التصنيف</TableHead>
-                <TableHead className="text-right">النوع</TableHead>
-                <TableHead className="text-right">المرحلة</TableHead>
-                <TableHead className="text-right">المحامي المسؤول</TableHead>
-                <TableHead className="text-right">الأولوية</TableHead>
-                <TableHead className="text-right">القسم</TableHead>
-                <TableHead className="text-right">الإجراءات</TableHead>
+                <TableHead className="text-right whitespace-nowrap">رقم القضية</TableHead>
+                <TableHead className="text-right whitespace-nowrap">العميل</TableHead>
+                <TableHead className="text-right whitespace-nowrap">التصنيف</TableHead>
+                <TableHead className="text-right whitespace-nowrap">النوع</TableHead>
+                <TableHead className="text-right whitespace-nowrap">المرحلة</TableHead>
+                <TableHead className="text-right whitespace-nowrap">المحامي المسؤول</TableHead>
+                <TableHead className="text-right whitespace-nowrap">الأولوية</TableHead>
+                <TableHead className="text-right whitespace-nowrap">القسم</TableHead>
+                <TableHead className="text-right whitespace-nowrap">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
-                  <TableCell className="font-medium overflow-hidden"><div className="truncate"><LtrInline>{c.caseNumber}</LtrInline></div></TableCell>
-                  <TableCell className="overflow-hidden"><div className="truncate" title={getClientName(c.clientId)}><BidiText>{getClientName(c.clientId)}</BidiText></div></TableCell>
-                  <TableCell className="overflow-hidden">
+                  <TableCell className="font-medium whitespace-nowrap"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
+                  <TableCell className="whitespace-nowrap">{getClientName(c.clientId)}</TableCell>
+                  <TableCell>
                     <Badge variant="outline" className={`whitespace-nowrap text-xs ${
                       c.caseClassification === CaseClassification.DEFENDANT
                         ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
@@ -583,7 +572,7 @@ export default function CasesPage() {
                       {c.currentStage ? getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue) : CaseStatusLabels[c.status]}
                     </Badge>
                   </TableCell>
-                  <TableCell className="overflow-hidden"><div className="truncate" title={getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}>{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</div></TableCell>
+                  <TableCell className="whitespace-nowrap">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
                   <TableCell>
                     <Badge className={getPriorityColor(c.priority)}>{c.priority}</Badge>
                   </TableCell>
