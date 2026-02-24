@@ -328,6 +328,29 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/users/:id/reset-password", requireAuth, requireRole("branch_manager"), async (req, res) => {
+    try {
+      const userId = String(req.params.id);
+      const { newPassword } = req.body;
+      if (!newPassword) {
+        return res.status(400).json({ error: "كلمة المرور الجديدة مطلوبة" });
+      }
+      const pwValidation = validatePassword(newPassword);
+      if (!pwValidation.valid) {
+        return res.status(400).json({ error: pwValidation.message });
+      }
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ error: "المستخدم غير موجود" });
+      }
+      const hashed = await hashPassword(newPassword);
+      await storage.updateUser(userId, { password: hashed } as any);
+      res.json({ success: true, message: `تم إعادة تعيين كلمة مرور ${user.username}` });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في إعادة تعيين كلمة المرور" });
+    }
+  });
+
   // ==================== Users ====================
 
   app.get("/api/users", requireAuth, async (req, res) => {
