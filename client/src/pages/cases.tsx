@@ -534,18 +534,18 @@ export default function CasesPage() {
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-          <Table className="min-w-[900px]">
+          <Table className="w-full">
             <TableHeader>
               <TableRow>
-                <TableHead className="text-right whitespace-nowrap">رقم القضية</TableHead>
-                <TableHead className="text-right whitespace-nowrap">العميل</TableHead>
-                <TableHead className="text-right whitespace-nowrap">التصنيف</TableHead>
-                <TableHead className="text-right whitespace-nowrap">النوع</TableHead>
-                <TableHead className="text-right whitespace-nowrap">المرحلة</TableHead>
-                <TableHead className="text-right whitespace-nowrap">المحامي المسؤول</TableHead>
-                <TableHead className="text-right whitespace-nowrap">الأولوية</TableHead>
-                <TableHead className="text-right whitespace-nowrap">القسم</TableHead>
-                <TableHead className="text-right whitespace-nowrap">الإجراءات</TableHead>
+                <TableHead className="text-right">رقم القضية</TableHead>
+                <TableHead className="text-right">العميل</TableHead>
+                <TableHead className="text-right">التصنيف</TableHead>
+                <TableHead className="text-right">النوع</TableHead>
+                <TableHead className="text-right">المرحلة</TableHead>
+                <TableHead className="text-right">المحامي المسؤول</TableHead>
+                <TableHead className="text-right">الأولوية</TableHead>
+                <TableHead className="text-right">القسم</TableHead>
+                <TableHead className="text-right">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
