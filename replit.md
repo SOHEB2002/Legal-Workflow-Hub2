@@ -12,6 +12,14 @@ I prefer clear and concise communication. For any proposed changes, please provi
 - **Server initialization** must detect existing data and skip seeding/resetting. Never overwrite user passwords or reset user records on restart.
 - **This rule applies to every single change** - whether it's a UI fix, feature addition, or bug fix. Data integrity is the top priority.
 
+### CRITICAL: Development & Production Database Sync Rule
+- **Development and Production databases are SEPARATE.** Any direct database changes (SQL queries, password resets, user additions) MUST be applied to BOTH databases.
+- **When resetting passwords via SQL**: Execute the query on both `environment: development` AND `environment: production`.
+- **When adding/modifying users via SQL**: Apply to both databases.
+- **Preferred approach**: Make user management changes through the app's UI on the published site (which writes directly to the production database), or apply SQL changes to both environments.
+- **Always verify both databases** after any direct database modification to confirm sync.
+- **This rule applies to every direct database operation** - never assume a change in one database affects the other.
+
 ### Future Mobile App Requirement
 - **All future modifications must consider mobile app conversion.** The system is planned to be converted to a native mobile app (App Store / Google Play) using PWA + Capacitor or similar wrapper technology.
 - **Design Guidelines for Mobile Readiness**: Use responsive design patterns, avoid desktop-only interactions, ensure touch-friendly UI elements, keep API-first architecture, avoid browser-specific features that won't work in a native app wrapper.
