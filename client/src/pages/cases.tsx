@@ -534,7 +534,18 @@ export default function CasesPage() {
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-          <Table className="w-full">
+          <Table className="w-full" style={{ tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '15%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '8%' }} />
+            </colgroup>
             <TableHeader>
               <TableRow>
                 <TableHead className="text-right">رقم القضية</TableHead>
@@ -551,9 +562,9 @@ export default function CasesPage() {
             <TableBody>
               {filteredCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
-                  <TableCell className="font-medium whitespace-nowrap"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
-                  <TableCell className="whitespace-nowrap">{getClientName(c.clientId)}</TableCell>
-                  <TableCell>
+                  <TableCell className="font-medium overflow-hidden"><div className="truncate"><LtrInline>{c.caseNumber}</LtrInline></div></TableCell>
+                  <TableCell className="overflow-hidden"><div className="truncate" title={getClientName(c.clientId)}>{getClientName(c.clientId)}</div></TableCell>
+                  <TableCell className="overflow-hidden">
                     <Badge variant="outline" className={`whitespace-nowrap text-xs ${
                       c.caseClassification === CaseClassification.DEFENDANT
                         ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
@@ -564,15 +575,15 @@ export default function CasesPage() {
                       {CaseClassificationLabels[c.caseClassification as CaseClassificationValue] || "مدعي - جديدة"}
                     </Badge>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="overflow-hidden">
                     <Badge variant="outline">{c.caseType === "أخرى" ? (c.caseTypeOther || "أخرى") : c.caseType}</Badge>
                   </TableCell>
-                  <TableCell>
-                    <Badge className="bg-accent/20 text-accent border-accent/30">
+                  <TableCell className="overflow-hidden">
+                    <Badge className="bg-accent/20 text-accent border-accent/30 whitespace-nowrap">
                       {c.currentStage ? getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue) : CaseStatusLabels[c.status]}
                     </Badge>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
+                  <TableCell className="overflow-hidden"><div className="truncate">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</div></TableCell>
                   <TableCell>
                     <Badge className={getPriorityColor(c.priority)}>{c.priority}</Badge>
                   </TableCell>
