@@ -6,6 +6,12 @@ This is an integrated law firm management system with an Arabic RTL interface. I
 ## User Preferences
 I prefer clear and concise communication. For any proposed changes, please provide a high-level overview first. I value iterative development and prefer to review major architectural decisions before implementation. Ensure all output is in Arabic.
 
+### CRITICAL: Data Preservation Rule
+- **All modifications MUST preserve existing data.** No changes should ever delete, reset, modify, or affect any stored data (cases, clients, users, consultations, hearings, passwords, etc.).
+- **Database schema changes** must be additive only (add columns/tables) - never drop or alter existing columns in ways that lose data.
+- **Server initialization** must detect existing data and skip seeding/resetting. Never overwrite user passwords or reset user records on restart.
+- **This rule applies to every single change** - whether it's a UI fix, feature addition, or bug fix. Data integrity is the top priority.
+
 ### Future Mobile App Requirement
 - **All future modifications must consider mobile app conversion.** The system is planned to be converted to a native mobile app (App Store / Google Play) using PWA + Capacitor or similar wrapper technology.
 - **Design Guidelines for Mobile Readiness**: Use responsive design patterns, avoid desktop-only interactions, ensure touch-friendly UI elements, keep API-first architecture, avoid browser-specific features that won't work in a native app wrapper.
