@@ -287,10 +287,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      await apiRequest("DELETE", `/api/users/${id}`);
+      const token = localStorage.getItem("lawfirm_token");
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`/api/users/${id}`, { method: "DELETE", headers });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.dependencies) {
+          return { success: false, message: `لا يمكن حذف المستخدم لوجود بيانات مرتبطة:\n${data.dependencies.join("\n")}` };
+        }
+        return { success: false, message: data.error || "فشل حذف المستخدم" };
+      }
       await refetchUsers();
-      return { success: true, message: "تم حذف المستخدم بنجاح" };
-    } catch (error) {
+      return { success: true, message: data.message || "تم حذف المستخدم بنجاح" };
+    } catch (error: any) {
       console.error("Error deleting user:", error);
       return { success: false, message: "فشل حذف المستخدم" };
     }
