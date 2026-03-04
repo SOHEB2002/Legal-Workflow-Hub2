@@ -479,6 +479,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteUser(id: string): Promise<boolean> {
+    await db.delete(notifications).where(eq(notifications.recipientId, id));
+    await db.delete(delegationsTable).where(eq(delegationsTable.fromUserId, id));
+    await db.delete(delegationsTable).where(eq(delegationsTable.toUserId, id));
+    await db.delete(supportTickets).where(eq(supportTickets.createdBy, id));
+    await db.delete(supportTickets).where(eq(supportTickets.assignedTo, id));
     const result = await db.delete(users).where(eq(users.id, id)).returning();
     return result.length > 0;
   }
@@ -553,6 +558,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteCase(id: string): Promise<boolean> {
+    await db.delete(hearings).where(eq(hearings.caseId, id));
+    await db.delete(memos).where(eq(memos.caseId, id));
+    await db.delete(caseActivityLog).where(eq(caseActivityLog.caseId, id));
+    await db.delete(caseNotes).where(eq(caseNotes.caseId, id));
+    await db.delete(legalDeadlines).where(eq(legalDeadlines.caseId, id));
+    await db.delete(attachments).where(and(eq(attachments.entityType, "case"), eq(attachments.entityId, id)));
+    await db.delete(fieldTasks).where(eq(fieldTasks.caseId, id));
+    await db.delete(notifications).where(and(eq(notifications.relatedType, "case"), eq(notifications.relatedId, id)));
     const result = await db.delete(lawCases).where(eq(lawCases.id, id)).returning();
     return result.length > 0;
   }
@@ -672,6 +685,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteConsultation(id: string): Promise<boolean> {
+    await db.delete(attachments).where(and(eq(attachments.entityType, "consultation"), eq(attachments.entityId, id)));
+    await db.delete(fieldTasks).where(eq(fieldTasks.consultationId, id));
+    await db.delete(notifications).where(and(eq(notifications.relatedType, "consultation"), eq(notifications.relatedId, id)));
     const result = await db.delete(consultations).where(eq(consultations.id, id)).returning();
     return result.length > 0;
   }

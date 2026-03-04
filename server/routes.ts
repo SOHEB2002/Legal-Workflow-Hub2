@@ -462,8 +462,17 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
 
-      // Check dependencies before deletion
-      const dependencies: string[] = [];
+      // Check if user is a department head - this is a structural dependency that must be resolved first
+      const allDepartments = await storage.getAllDepartments();
+      const headOfDepartments = allDepartments.filter(d => d.headId === userId);
+      if (headOfDepartments.length > 0) {
+        return res.status(400).json({
+          error: `لا يمكن حذف المستخدم لأنه رئيس ${headOfDepartments.length} قسم. يرجى تعيين رئيس آخر أولاً`,
+          dependencies: [`رئيس ${headOfDepartments.length} قسم`],
+        });
+      }
+
+      // Check if there are assigned cases - warn but allow deletion
       const allCases = await storage.getAllCases();
       const assignedCases = allCases.filter(c =>
         c.primaryLawyerId === userId ||
@@ -471,58 +480,18 @@ export async function registerRoutes(
         (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId))
       );
       if (assignedCases.length > 0) {
-        dependencies.push(`${assignedCases.length} قضية مسندة`);
+        return res.status(400).json({
+          error: `لا يمكن حذف المستخدم لوجود ${assignedCases.length} قضية مسندة إليه. يرجى إعادة إسناد القضايا أو حذفها أولاً`,
+          dependencies: [`${assignedCases.length} قضية مسندة`],
+        });
       }
 
       const allConsultations = await storage.getAllConsultations();
       const assignedConsultations = allConsultations.filter(c => c.assignedTo === userId);
       if (assignedConsultations.length > 0) {
-        dependencies.push(`${assignedConsultations.length} استشارة مسندة`);
-      }
-
-      const allMemos = await storage.getAllMemos();
-      const activeMemos = allMemos.filter(m =>
-        m.assignedTo === userId && !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)
-      );
-      if (activeMemos.length > 0) {
-        dependencies.push(`${activeMemos.length} مذكرة نشطة`);
-      }
-
-      // Check if user is a department head
-      const allDepartments = await storage.getAllDepartments();
-      const headOfDepartments = allDepartments.filter(d => d.headId === userId);
-      if (headOfDepartments.length > 0) {
-        dependencies.push(`رئيس ${headOfDepartments.length} قسم`);
-      }
-
-      // Check active delegations
-      const allDelegations = await storage.getAllDelegations();
-      const activeDelegations = allDelegations.filter(d =>
-        (d.fromUserId === userId || d.toUserId === userId) && d.status === "نشط"
-      );
-      if (activeDelegations.length > 0) {
-        dependencies.push(`${activeDelegations.length} تفويض نشط`);
-      }
-
-      // Check open support tickets
-      const allTickets = await storage.getAllSupportTickets();
-      const openTickets = allTickets.filter(t =>
-        t.assignedTo === userId && t.status !== "مغلقة"
-      );
-      if (openTickets.length > 0) {
-        dependencies.push(`${openTickets.length} تذكرة دعم مفتوحة`);
-      }
-
-      if (dependencies.length > 0) {
-        // If force=true and user is branch_manager, deactivate instead of delete
-        if (req.query.force === "true" && currentUser.role === "branch_manager") {
-          await storage.updateUser(userId, { isActive: false } as any);
-          return res.json({ success: true, message: "تم تعطيل الحساب بدلاً من الحذف بسبب وجود بيانات مرتبطة" });
-        }
         return res.status(400).json({
-          error: "لا يمكن حذف المستخدم لوجود بيانات مرتبطة",
-          dependencies,
-          hint: "يمكنك إضافة ?force=true لتعطيل الحساب بدلاً من الحذف"
+          error: `لا يمكن حذف المستخدم لوجود ${assignedConsultations.length} استشارة مسندة إليه. يرجى إعادة إسناد الاستشارات أو حذفها أولاً`,
+          dependencies: [`${assignedConsultations.length} استشارة مسندة`],
         });
       }
 
