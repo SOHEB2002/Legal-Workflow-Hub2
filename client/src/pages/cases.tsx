@@ -51,6 +51,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
@@ -141,6 +151,7 @@ export default function CasesPage() {
     approveCase, 
     rejectCase, 
     closeCase,
+    deleteCase,
     moveToNextStage,
     moveToPreviousStage,
     addComment,
@@ -243,6 +254,8 @@ export default function CasesPage() {
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const [transferCaseId, setTransferCaseId] = useState<string | null>(null);
   const [transferData, setTransferData] = useState({ toDepartmentId: "", reason: "" });
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [caseToDelete, setCaseToDelete] = useState<any>(null);
 
   const [classificationFilter, setClassificationFilter] = useState<string>("all");
   const [formData, setFormData] = useState({
@@ -351,6 +364,18 @@ export default function CasesPage() {
   const handleClose = (caseItem: LawCase) => {
     closeCase(caseItem.id);
     toast({ title: "تم إغلاق القضية" });
+  };
+
+  const handleDeleteCase = async () => {
+    if (!caseToDelete) return;
+    try {
+      await deleteCase(caseToDelete.id);
+      toast({ title: "تم حذف القضية بنجاح" });
+    } catch (error) {
+      toast({ variant: "destructive", title: "خطأ", description: "فشل حذف القضية" });
+    }
+    setShowDeleteDialog(false);
+    setCaseToDelete(null);
   };
 
   const filteredCases = useMemo(() => {
@@ -654,6 +679,19 @@ export default function CasesPage() {
                               <DropdownMenuItem data-testid={`button-reminder-${c.id}`} onClick={() => openReminderDialog(c)}>
                                 <Bell className="w-4 h-4 ml-2 text-accent" />
                                 إرسال تذكير
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {user?.role === "branch_manager" && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid={`button-delete-case-${c.id}`}
+                                className="text-destructive focus:text-destructive"
+                                onClick={() => { setCaseToDelete(c); setShowDeleteDialog(true); }}
+                              >
+                                <Trash2 className="w-4 h-4 ml-2" />
+                                حذف القضية
                               </DropdownMenuItem>
                             </>
                           )}
@@ -1491,6 +1529,27 @@ export default function CasesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>هل أنت متأكد من حذف هذه القضية؟</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم حذف القضية "{caseToDelete?.caseNumber}" بشكل نهائي. هذا الإجراء لا يمكن التراجع عنه.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-delete-case"
+              onClick={handleDeleteCase}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              حذف
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

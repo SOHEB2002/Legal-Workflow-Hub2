@@ -14,6 +14,16 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -35,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight } from "lucide-react";
+import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -82,6 +92,7 @@ export default function ConsultationsPage() {
     rejectConsultation,
     markDelivered,
     closeConsultation,
+    deleteConsultation,
   } = useConsultations();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
@@ -109,6 +120,8 @@ export default function ConsultationsPage() {
     reminderType: "تذكير بتحديث الحالة",
     message: "",
   });
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [consultationToDelete, setConsultationToDelete] = useState<Consultation | null>(null);
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -187,6 +200,18 @@ export default function ConsultationsPage() {
   const handleSendToReview = (consultation: Consultation) => {
     sendToReviewCommittee(consultation.id);
     toast({ title: "تم إرسال الاستشارة للمراجعة" });
+  };
+
+  const handleDeleteConsultation = async () => {
+    if (!consultationToDelete) return;
+    try {
+      await deleteConsultation(consultationToDelete.id);
+      toast({ title: "تم حذف الاستشارة بنجاح" });
+    } catch (error) {
+      toast({ variant: "destructive", title: "خطأ", description: "فشل حذف الاستشارة" });
+    }
+    setShowDeleteDialog(false);
+    setConsultationToDelete(null);
   };
 
   const [formData, setFormData] = useState({
@@ -470,6 +495,19 @@ export default function ConsultationsPage() {
                               </DropdownMenuItem>
                             </>
                           )}
+                          {user?.role === "branch_manager" && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid={`button-delete-consultation-${consultation.id}`}
+                                className="text-destructive focus:text-destructive"
+                                onClick={() => { setConsultationToDelete(consultation); setShowDeleteDialog(true); }}
+                              >
+                                <Trash2 className="w-4 h-4 ml-2" />
+                                حذف الاستشارة
+                              </DropdownMenuItem>
+                            </>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -737,6 +775,27 @@ export default function ConsultationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>هل أنت متأكد من حذف هذه الاستشارة؟</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم حذف الاستشارة بشكل نهائي. هذا الإجراء لا يمكن التراجع عنه.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-delete-consultation"
+              onClick={handleDeleteConsultation}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              حذف
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
