@@ -1020,7 +1020,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/hearings/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
+  app.delete("/api/hearings/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
       await storage.deleteHearing(String(req.params.id));
       res.json({ success: true });

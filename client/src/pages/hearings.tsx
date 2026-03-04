@@ -753,7 +753,7 @@ export default function HearingsPage() {
                                   <TooltipContent>تأكيد التواصل مع العميل</TooltipContent>
                                 </Tooltip>
                               )}
-                              {user?.role === "branch_manager" && (
+                              {(user?.role === "branch_manager" || user?.role === "admin_support") && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
