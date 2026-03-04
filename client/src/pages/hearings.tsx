@@ -54,11 +54,23 @@ import {
   Phone,
   ClipboardCheck,
   Lock,
+  Trash2,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useHearings } from "@/lib/hearings-context";
 import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
+import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
 import { HearingStatus, HearingResult, CourtType } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
@@ -99,11 +111,13 @@ export default function HearingsPage() {
     submitReport,
     closeHearing,
     cancelHearing,
+    deleteHearing,
     getUpcomingHearings,
   } = useHearings();
   const { cases, getCaseById } = useCases();
   const { getClientName } = useClients();
-  const { user } = useAuth();
+  const { user, users } = useAuth();
+  const { departments } = useDepartments();
   const { toast } = useToast();
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -113,6 +127,10 @@ export default function HearingsPage() {
   const [reportDialogHearing, setReportDialogHearing] = useState<Hearing | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterDepartment, setFilterDepartment] = useState<string>("all");
+  const [filterLawyer, setFilterLawyer] = useState<string>("all");
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [hearingToDelete, setHearingToDelete] = useState<Hearing | null>(null);
 
   const [formData, setFormData] = useState({
     caseId: "",
@@ -288,6 +306,18 @@ export default function HearingsPage() {
     }
   };
 
+  const handleDeleteHearing = async () => {
+    if (!hearingToDelete) return;
+    try {
+      await deleteHearing(hearingToDelete.id);
+      toast({ title: "تم حذف الجلسة بنجاح" });
+    } catch (error) {
+      toast({ variant: "destructive", title: "خطأ", description: "فشل حذف الجلسة" });
+    }
+    setShowDeleteDialog(false);
+    setHearingToDelete(null);
+  };
+
   const upcomingHearings = getUpcomingHearings();
   const todayHearings = hearings.filter(
     (h) => h.status === HearingStatus.UPCOMING && isToday(new Date(h.hearingDate))
@@ -296,9 +326,36 @@ export default function HearingsPage() {
     (h) => h.status === HearingStatus.COMPLETED || h.status === HearingStatus.POSTPONED
   );
 
-  const filteredHearings = filterStatus === "all"
-    ? hearings
-    : hearings.filter((h) => h.status === filterStatus);
+  const getLawyerForHearing = (hearing: Hearing) => {
+    const caseData = hearing.caseId ? getCaseById(hearing.caseId) : null;
+    return caseData?.responsibleLawyerId || caseData?.primaryLawyerId || null;
+  };
+
+  const getDepartmentForHearing = (hearing: Hearing) => {
+    const caseData = hearing.caseId ? getCaseById(hearing.caseId) : null;
+    return caseData?.departmentId || null;
+  };
+
+  const lawyersForFilter = filterDepartment === "all"
+    ? users.filter(u => u.canBeAssignedCases)
+    : users.filter(u => u.canBeAssignedCases && u.departmentId === filterDepartment);
+
+  const filteredHearings = hearings.filter((h) => {
+    if (filterStatus === "today") {
+      if (!isToday(new Date(h.hearingDate))) return false;
+    } else if (filterStatus !== "all") {
+      if (h.status !== filterStatus) return false;
+    }
+    if (filterDepartment !== "all") {
+      const deptId = getDepartmentForHearing(h);
+      if (deptId !== filterDepartment) return false;
+    }
+    if (filterLawyer !== "all") {
+      const lawyerId = getLawyerForHearing(h);
+      if (lawyerId !== filterLawyer) return false;
+    }
+    return true;
+  });
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
@@ -473,20 +530,47 @@ export default function HearingsPage() {
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-          <CardTitle>جدول الجلسات</CardTitle>
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-40" data-testid="select-filter-status">
-              <SelectValue placeholder="تصفية الحالة" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">الكل</SelectItem>
-              <SelectItem value="قادمة">قادمة</SelectItem>
-              <SelectItem value="تمت">تمت</SelectItem>
-              <SelectItem value="مؤجلة">مؤجلة</SelectItem>
-              <SelectItem value="ملغية">ملغية</SelectItem>
-            </SelectContent>
-          </Select>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-row flex-wrap items-center justify-between gap-2">
+            <CardTitle>جدول الجلسات</CardTitle>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="w-36" data-testid="select-filter-status">
+                <SelectValue placeholder="تصفية الحالة" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">الكل</SelectItem>
+                <SelectItem value="today">اليوم</SelectItem>
+                <SelectItem value="قادمة">قادمة</SelectItem>
+                <SelectItem value="تمت">تمت</SelectItem>
+                <SelectItem value="مؤجلة">مؤجلة</SelectItem>
+                <SelectItem value="ملغية">ملغية</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={filterDepartment} onValueChange={(val) => { setFilterDepartment(val); setFilterLawyer("all"); }}>
+              <SelectTrigger className="w-40" data-testid="select-filter-department">
+                <SelectValue placeholder="القسم" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الأقسام</SelectItem>
+                {departments.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={filterLawyer} onValueChange={setFilterLawyer}>
+              <SelectTrigger className="w-44" data-testid="select-filter-lawyer">
+                <SelectValue placeholder="المترافع" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل المترافعين</SelectItem>
+                {lawyersForFilter.map((l) => (
+                  <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardHeader>
         <CardContent>
           {filteredHearings.length === 0 ? (
@@ -667,6 +751,21 @@ export default function HearingsPage() {
                                     </Button>
                                   </TooltipTrigger>
                                   <TooltipContent>تأكيد التواصل مع العميل</TooltipContent>
+                                </Tooltip>
+                              )}
+                              {user?.role === "branch_manager" && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      data-testid={`button-delete-hearing-${hearing.id}`}
+                                      onClick={() => { setHearingToDelete(hearing); setShowDeleteDialog(true); }}
+                                    >
+                                      <Trash2 className="w-4 h-4 text-destructive" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>حذف الجلسة</TooltipContent>
                                 </Tooltip>
                               )}
                             </div>
@@ -1220,6 +1319,27 @@ function WorkflowStep({
           {actionLabel}
         </Button>
       )}
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>هل أنت متأكد من حذف هذه الجلسة؟</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم حذف الجلسة بشكل نهائي. هذا الإجراء لا يمكن التراجع عنه.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-delete-hearing"
+              onClick={handleDeleteHearing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              حذف
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
