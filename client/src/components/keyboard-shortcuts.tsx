@@ -48,6 +48,7 @@ export function KeyboardShortcutsProvider({
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
     const ctrlKey = isMac ? e.metaKey : e.ctrlKey;
+    if (!e.key) return;
     const key = e.key.toLowerCase();
 
     if (e.key === "Escape") {
