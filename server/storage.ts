@@ -484,6 +484,10 @@ export class DatabaseStorage implements IStorage {
     await db.delete(delegationsTable).where(eq(delegationsTable.toUserId, id));
     await db.delete(supportTickets).where(eq(supportTickets.createdBy, id));
     await db.delete(supportTickets).where(eq(supportTickets.assignedTo, id));
+    await db.delete(fieldTasks).where(eq(fieldTasks.assignedTo, id));
+    await db.delete(memos).where(eq(memos.assignedTo, id));
+    await db.delete(caseActivityLog).where(eq(caseActivityLog.userId, id));
+    await db.update(departments).set({ headId: null } as any).where(eq(departments.headId, id));
     const result = await db.delete(users).where(eq(users.id, id)).returning();
     return result.length > 0;
   }

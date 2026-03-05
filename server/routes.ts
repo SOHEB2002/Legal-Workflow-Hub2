@@ -462,17 +462,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
 
-      // Check if user is a department head - this is a structural dependency that must be resolved first
-      const allDepartments = await storage.getAllDepartments();
-      const headOfDepartments = allDepartments.filter(d => d.headId === userId);
-      if (headOfDepartments.length > 0) {
-        return res.status(400).json({
-          error: `لا يمكن حذف المستخدم لأنه رئيس ${headOfDepartments.length} قسم. يرجى تعيين رئيس آخر أولاً`,
-          dependencies: [`رئيس ${headOfDepartments.length} قسم`],
-        });
-      }
-
-      // Check if there are assigned cases - warn but allow deletion
+      // Check if there are assigned cases
       const allCases = await storage.getAllCases();
       const assignedCases = allCases.filter(c =>
         c.primaryLawyerId === userId ||
