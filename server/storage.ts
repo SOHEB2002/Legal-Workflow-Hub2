@@ -11,7 +11,7 @@ import {
   caseActivityLog, caseNotes, legalDeadlines, delegationsTable
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, lte, gte } from "drizzle-orm";
+import { eq, and, desc, lte, gte, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
@@ -489,7 +489,7 @@ export class DatabaseStorage implements IStorage {
     await db.delete(fieldTasks).where(eq(fieldTasks.assignedTo, id));
     await db.delete(memos).where(eq(memos.assignedTo, id));
     await db.delete(caseActivityLog).where(eq(caseActivityLog.userId, id));
-    await db.update(departments).set({ headId: null }).where(eq(departments.headId, id));
+    await db.execute(sql`UPDATE departments SET head_id = NULL WHERE head_id = ${id}`);
     const result = await db.delete(users).where(eq(users.id, id)).returning();
     return result.length > 0;
   }
@@ -970,11 +970,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateDepartment(id: string, data: Partial<DepartmentInfo>): Promise<DepartmentInfo | undefined> {
-    const updates: any = {};
-    if ("headId" in data) updates.headId = data.headId ?? null;
-    if ("name" in data) updates.name = data.name;
-    if (Object.keys(updates).length > 0) {
-      await db.update(departments).set(updates).where(eq(departments.id, id));
+    if ("headId" in data) {
+      const newHeadId = data.headId ?? null;
+      if (newHeadId === null) {
+        await db.execute(sql`UPDATE departments SET head_id = NULL WHERE id = ${id}`);
+      } else {
+        await db.execute(sql`UPDATE departments SET head_id = ${newHeadId} WHERE id = ${id}`);
+      }
+    }
+    if ("name" in data && data.name) {
+      await db.execute(sql`UPDATE departments SET name = ${data.name} WHERE id = ${id}`);
     }
     return this.getDepartmentById(id);
   }
