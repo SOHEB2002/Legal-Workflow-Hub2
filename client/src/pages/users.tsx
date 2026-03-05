@@ -296,8 +296,10 @@ export default function UsersPage() {
     setLoadingDeps(true);
     try {
       const token = localStorage.getItem("lawfirm_token");
+      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
       const res = await fetch(`/api/users/${u.id}/dependencies`, { headers });
       if (res.ok) {
         const data = await res.json();
@@ -329,8 +331,10 @@ export default function UsersPage() {
     setDeletingUser(true);
     try {
       const token = localStorage.getItem("lawfirm_token");
+      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
       const res = await fetch(`/api/users/${userToAction.id}`, {
         method: "DELETE",
         headers,
