@@ -576,8 +576,9 @@ export async function registerRoutes(
       const assignedFieldTasks = allFieldTasks.filter(t => t.assignedTo === userId);
       for (const t of assignedFieldTasks) {
         const newAssignee = validReassignments[`fieldTask_${t.id}`];
-        await storage.updateFieldTask(t.id, { assignedTo: newAssignee || null });
-        if (!newAssignee) {
+        if (newAssignee) {
+          await storage.updateFieldTask(t.id, { assignedTo: newAssignee });
+        } else {
           for (const mgr of branchManagers) {
             await storage.createNotification({
               type: "general_alert",

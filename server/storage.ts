@@ -481,6 +481,7 @@ export class DatabaseStorage implements IStorage {
 
   async deleteUser(id: string): Promise<boolean> {
     await db.delete(notifications).where(eq(notifications.recipientId, id));
+    await db.delete(notifications).where(eq(notifications.senderId, id));
     await db.delete(delegationsTable).where(eq(delegationsTable.fromUserId, id));
     await db.delete(delegationsTable).where(eq(delegationsTable.toUserId, id));
     await db.delete(supportTickets).where(eq(supportTickets.createdBy, id));
@@ -488,7 +489,7 @@ export class DatabaseStorage implements IStorage {
     await db.delete(fieldTasks).where(eq(fieldTasks.assignedTo, id));
     await db.delete(memos).where(eq(memos.assignedTo, id));
     await db.delete(caseActivityLog).where(eq(caseActivityLog.userId, id));
-    await db.update(departments).set({ headId: null } as any).where(eq(departments.headId, id));
+    await db.update(departments).set({ headId: null }).where(eq(departments.headId, id));
     const result = await db.delete(users).where(eq(users.id, id)).returning();
     return result.length > 0;
   }
@@ -970,9 +971,11 @@ export class DatabaseStorage implements IStorage {
 
   async updateDepartment(id: string, data: Partial<DepartmentInfo>): Promise<DepartmentInfo | undefined> {
     const updates: any = {};
-    if (data.headId !== undefined) updates.headId = data.headId;
-    if (data.name !== undefined) updates.name = data.name;
-    await db.update(departments).set(updates).where(eq(departments.id, id));
+    if ("headId" in data) updates.headId = data.headId ?? null;
+    if ("name" in data) updates.name = data.name;
+    if (Object.keys(updates).length > 0) {
+      await db.update(departments).set(updates).where(eq(departments.id, id));
+    }
     return this.getDepartmentById(id);
   }
 
