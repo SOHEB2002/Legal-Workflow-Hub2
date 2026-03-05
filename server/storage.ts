@@ -80,6 +80,7 @@ export interface IStorage {
   // Departments
   getAllDepartments(): Promise<DepartmentInfo[]>;
   getDepartmentById(id: string): Promise<DepartmentInfo | undefined>;
+  updateDepartment(id: string, data: Partial<DepartmentInfo>): Promise<DepartmentInfo | undefined>;
 
   // Memos
   getAllMemos(): Promise<Memo[]>;
@@ -965,6 +966,14 @@ export class DatabaseStorage implements IStorage {
   async getDepartmentById(id: string): Promise<DepartmentInfo | undefined> {
     const result = await db.select().from(departments).where(eq(departments.id, id));
     return result[0] ? mapDbDepartment(result[0]) : undefined;
+  }
+
+  async updateDepartment(id: string, data: Partial<DepartmentInfo>): Promise<DepartmentInfo | undefined> {
+    const updates: any = {};
+    if (data.headId !== undefined) updates.headId = data.headId;
+    if (data.name !== undefined) updates.name = data.name;
+    await db.update(departments).set(updates).where(eq(departments.id, id));
+    return this.getDepartmentById(id);
   }
 
   // ==================== Memos ====================

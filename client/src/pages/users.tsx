@@ -36,17 +36,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Calendar, Users, FileText, Eye, Briefcase, Palmtree, UserCheck } from "lucide-react";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Calendar, Users, FileText, Eye, Briefcase, Palmtree, UserCheck, AlertTriangle, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
@@ -105,7 +95,7 @@ function getWorkloadBadge(activeCases: number, activeConsultations: number) {
 }
 
 export default function UsersPage() {
-  const { user, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus } = useAuth();
+  const { user, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { teams, getTeamById, extendedUsers, isUserOnVacation, getActiveDelegations, toggleUserStatus: toggleUserStatusExtended } = useUsers();
   const { toast } = useToast();
@@ -128,6 +118,16 @@ export default function UsersPage() {
   const [showResetPasswordDialog, setShowResetPasswordDialog] = useState(false);
   const [userToAction, setUserToAction] = useState<UserType | null>(null);
   const [newPassword, setNewPassword] = useState("");
+  const [deleteDeps, setDeleteDeps] = useState<{
+    cases: { id: string; title: string; caseNumber?: string }[];
+    consultations: { id: string; title: string }[];
+    fieldTasks: { id: string; title: string }[];
+    departments: { id: string; name: string }[];
+    hasDependencies: boolean;
+  } | null>(null);
+  const [deleteReassignments, setDeleteReassignments] = useState<Record<string, string>>({});
+  const [loadingDeps, setLoadingDeps] = useState(false);
+  const [deletingUser, setDeletingUser] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -288,22 +288,70 @@ export default function UsersPage() {
     }
   };
 
+  const handleOpenDeleteDialog = async (u: UserType) => {
+    setUserToAction(u);
+    setDeleteReassignments({});
+    setDeleteDeps(null);
+    setShowDeleteDialog(true);
+    setLoadingDeps(true);
+    try {
+      const token = localStorage.getItem("lawfirm_token");
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`/api/users/${u.id}/dependencies`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setDeleteDeps(data);
+      }
+    } catch {
+      setDeleteDeps({ cases: [], consultations: [], fieldTasks: [], departments: [], hasDependencies: false });
+    } finally {
+      setLoadingDeps(false);
+    }
+  };
+
   const handleDeleteUser = async () => {
     if (!userToAction) return;
 
-    const result = await deleteUser(userToAction.id);
-    if (result.success) {
-      toast({ title: result.message });
-    } else {
-      toast({
-        variant: "destructive",
-        title: "خطأ",
-        description: result.message,
-      });
+    if (userToAction.role === "branch_manager") {
+      const branchManagers = users.filter(u => u.role === "branch_manager" && u.id !== userToAction.id);
+      if (branchManagers.length === 0) {
+        toast({ variant: "destructive", title: "خطأ", description: "لا يمكن حذف آخر مدير فرع في النظام" });
+        return;
+      }
     }
 
-    setShowDeleteDialog(false);
-    setUserToAction(null);
+    if (user?.id === userToAction.id) {
+      toast({ variant: "destructive", title: "خطأ", description: "لا يمكنك حذف حسابك الحالي" });
+      return;
+    }
+
+    setDeletingUser(true);
+    try {
+      const token = localStorage.getItem("lawfirm_token");
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`/api/users/${userToAction.id}`, {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({ reassignments: deleteReassignments }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast({ title: `تم حذف المستخدم "${userToAction.name}" بنجاح` });
+        await refetchUsers();
+      } else {
+        toast({ variant: "destructive", title: "خطأ", description: data.error || "فشل حذف المستخدم" });
+      }
+    } catch {
+      toast({ variant: "destructive", title: "خطأ", description: "حدث خطأ في حذف المستخدم" });
+    } finally {
+      setDeletingUser(false);
+      setShowDeleteDialog(false);
+      setUserToAction(null);
+      setDeleteDeps(null);
+      setDeleteReassignments({});
+    }
   };
 
   const handleResetPassword = async () => {
@@ -714,8 +762,7 @@ export default function UsersPage() {
                               className="text-destructive focus:text-destructive"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setUserToAction(u);
-                                setShowDeleteDialog(true);
+                                handleOpenDeleteDialog(u);
                               }}
                             >
                               <Trash2 className="w-4 h-4 ml-2" />
@@ -1000,26 +1047,167 @@ export default function UsersPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>هل أنت متأكد من حذف هذا المستخدم؟</AlertDialogTitle>
-            <AlertDialogDescription>
-              سيتم حذف المستخدم "{userToAction?.name}" بشكل نهائي. هذا الإجراء لا يمكن التراجع عنه.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
+      <Dialog open={showDeleteDialog} onOpenChange={(open) => { if (!open) { setShowDeleteDialog(false); setUserToAction(null); setDeleteDeps(null); setDeleteReassignments({}); } }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              حذف المستخدم: {userToAction?.name}
+            </DialogTitle>
+            <DialogDescription>
+              سيتم حذف المستخدم بشكل نهائي. هذا الإجراء لا يمكن التراجع عنه.
+            </DialogDescription>
+          </DialogHeader>
+
+          {loadingDeps ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              <span className="mr-2 text-muted-foreground">جارِ التحقق من البيانات المرتبطة...</span>
+            </div>
+          ) : deleteDeps?.hasDependencies ? (
+            <div className="space-y-4">
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg text-sm text-amber-800 dark:text-amber-200">
+                <div className="flex items-center gap-2 font-semibold mb-1">
+                  <AlertTriangle className="w-4 h-4" />
+                  يوجد بيانات مرتبطة بهذا المستخدم
+                </div>
+                يمكنك اختيار شخص آخر لإسناد المهام إليه، أو الحذف مباشرة وستبقى المهام بدون إسناد (سيتم إرسال تنبيه لمدير الفرع).
+              </div>
+
+              {deleteDeps.departments.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-primary" />
+                    رئيس قسم ({deleteDeps.departments.length})
+                  </h4>
+                  {deleteDeps.departments.map(dept => (
+                    <div key={dept.id} className="flex items-center justify-between gap-3 p-2 bg-muted/50 rounded-md">
+                      <span className="text-sm font-medium">{dept.name}</span>
+                      <Select
+                        value={deleteReassignments[`department_${dept.id}`] || ""}
+                        onValueChange={(val) => setDeleteReassignments(prev => ({ ...prev, [`department_${dept.id}`]: val === "__none__" ? "" : val }))}
+                      >
+                        <SelectTrigger className="w-[200px] h-8 text-xs" data-testid={`select-reassign-dept-${dept.id}`}>
+                          <SelectValue placeholder="بدون رئيس" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">بدون رئيس</SelectItem>
+                          {users.filter(u => u.id !== userToAction?.id && u.isActive).map(u => (
+                            <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {deleteDeps.cases.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-primary" />
+                    قضايا مسندة ({deleteDeps.cases.length})
+                  </h4>
+                  {deleteDeps.cases.map(c => (
+                    <div key={c.id} className="flex items-center justify-between gap-3 p-2 bg-muted/50 rounded-md">
+                      <span className="text-sm font-medium truncate max-w-[250px]">{c.title || c.caseNumber}</span>
+                      <Select
+                        value={deleteReassignments[`case_${c.id}`] || ""}
+                        onValueChange={(val) => setDeleteReassignments(prev => ({ ...prev, [`case_${c.id}`]: val === "__none__" ? "" : val }))}
+                      >
+                        <SelectTrigger className="w-[200px] h-8 text-xs" data-testid={`select-reassign-case-${c.id}`}>
+                          <SelectValue placeholder="بدون إسناد" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">بدون إسناد</SelectItem>
+                          {users.filter(u => u.id !== userToAction?.id && u.isActive).map(u => (
+                            <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {deleteDeps.consultations.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-primary" />
+                    استشارات مسندة ({deleteDeps.consultations.length})
+                  </h4>
+                  {deleteDeps.consultations.map(c => (
+                    <div key={c.id} className="flex items-center justify-between gap-3 p-2 bg-muted/50 rounded-md">
+                      <span className="text-sm font-medium truncate max-w-[250px]">{c.title}</span>
+                      <Select
+                        value={deleteReassignments[`consultation_${c.id}`] || ""}
+                        onValueChange={(val) => setDeleteReassignments(prev => ({ ...prev, [`consultation_${c.id}`]: val === "__none__" ? "" : val }))}
+                      >
+                        <SelectTrigger className="w-[200px] h-8 text-xs" data-testid={`select-reassign-consultation-${c.id}`}>
+                          <SelectValue placeholder="بدون إسناد" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">بدون إسناد</SelectItem>
+                          {users.filter(u => u.id !== userToAction?.id && u.isActive).map(u => (
+                            <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {deleteDeps.fieldTasks.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <Users className="w-4 h-4 text-primary" />
+                    مهام ميدانية ({deleteDeps.fieldTasks.length})
+                  </h4>
+                  {deleteDeps.fieldTasks.map(t => (
+                    <div key={t.id} className="flex items-center justify-between gap-3 p-2 bg-muted/50 rounded-md">
+                      <span className="text-sm font-medium truncate max-w-[250px]">{t.title}</span>
+                      <Select
+                        value={deleteReassignments[`fieldTask_${t.id}`] || ""}
+                        onValueChange={(val) => setDeleteReassignments(prev => ({ ...prev, [`fieldTask_${t.id}`]: val === "__none__" ? "" : val }))}
+                      >
+                        <SelectTrigger className="w-[200px] h-8 text-xs" data-testid={`select-reassign-task-${t.id}`}>
+                          <SelectValue placeholder="بدون إسناد" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">بدون إسناد</SelectItem>
+                          {users.filter(u => u.id !== userToAction?.id && u.isActive).map(u => (
+                            <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="py-4 text-sm text-muted-foreground text-center">
+              لا توجد بيانات مرتبطة بهذا المستخدم. يمكنك حذفه بأمان.
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => { setShowDeleteDialog(false); setUserToAction(null); setDeleteDeps(null); setDeleteReassignments({}); }}>
+              إلغاء
+            </Button>
+            <Button
               data-testid="button-confirm-delete"
+              variant="destructive"
               onClick={handleDeleteUser}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={loadingDeps || deletingUser}
             >
-              حذف
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              {deletingUser ? <Loader2 className="w-4 h-4 animate-spin ml-2" /> : <Trash2 className="w-4 h-4 ml-2" />}
+              {deletingUser ? "جارِ الحذف..." : "حذف المستخدم"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showResetPasswordDialog} onOpenChange={setShowResetPasswordDialog}>
         <DialogContent>

@@ -448,6 +448,45 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/users/:id/dependencies", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
+    try {
+      const userId = String(req.params.id);
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser) {
+        return res.status(404).json({ error: "المستخدم غير موجود" });
+      }
+
+      const allCases = await storage.getAllCases();
+      const assignedCases = allCases.filter(c =>
+        c.primaryLawyerId === userId ||
+        c.responsibleLawyerId === userId ||
+        (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId))
+      ).map(c => ({ id: c.id, title: c.title, caseNumber: c.caseNumber, type: "case" as const }));
+
+      const allConsultations = await storage.getAllConsultations();
+      const assignedConsultations = allConsultations.filter(c => c.assignedTo === userId)
+        .map(c => ({ id: c.id, title: c.title, type: "consultation" as const }));
+
+      const allFieldTasks = await storage.getAllFieldTasks();
+      const assignedFieldTasks = allFieldTasks.filter(t => t.assignedTo === userId)
+        .map(t => ({ id: t.id, title: t.title, type: "fieldTask" as const }));
+
+      const allDepartments = await storage.getAllDepartments();
+      const headOfDepartments = allDepartments.filter(d => d.headId === userId)
+        .map(d => ({ id: d.id, name: d.name, type: "department" as const }));
+
+      res.json({
+        cases: assignedCases,
+        consultations: assignedConsultations,
+        fieldTasks: assignedFieldTasks,
+        departments: headOfDepartments,
+        hasDependencies: assignedCases.length > 0 || assignedConsultations.length > 0 || assignedFieldTasks.length > 0 || headOfDepartments.length > 0,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب البيانات المرتبطة" });
+    }
+  });
+
   app.delete("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
       const userId = String(req.params.id);
@@ -462,32 +501,123 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
 
-      // Check if there are assigned cases
+      const reassignments = req.body?.reassignments || {};
+      const allUsers = await storage.getAllUsers();
+      const activeUserIds = new Set(allUsers.filter(u => u.isActive && u.id !== userId).map(u => u.id));
+      const branchManagers = allUsers.filter(u => u.role === "branch_manager");
+
+      const validReassignments: Record<string, string> = {};
+      for (const [key, val] of Object.entries(reassignments)) {
+        if (val && typeof val === "string" && activeUserIds.has(val)) {
+          validReassignments[key] = val;
+        }
+      }
+
       const allCases = await storage.getAllCases();
       const assignedCases = allCases.filter(c =>
         c.primaryLawyerId === userId ||
         c.responsibleLawyerId === userId ||
         (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId))
       );
-      if (assignedCases.length > 0) {
-        return res.status(400).json({
-          error: `لا يمكن حذف المستخدم لوجود ${assignedCases.length} قضية مسندة إليه. يرجى إعادة إسناد القضايا أو حذفها أولاً`,
-          dependencies: [`${assignedCases.length} قضية مسندة`],
-        });
+
+      for (const c of assignedCases) {
+        const newAssignee = validReassignments[`case_${c.id}`];
+        const updates: any = {};
+        if (c.primaryLawyerId === userId) updates.primaryLawyerId = newAssignee || null;
+        if (c.responsibleLawyerId === userId) updates.responsibleLawyerId = newAssignee || null;
+        if (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) {
+          const filtered = c.assignedLawyers.filter((l: string) => l !== userId);
+          if (newAssignee && !filtered.includes(newAssignee)) {
+            filtered.push(newAssignee);
+          }
+          updates.assignedLawyers = filtered;
+        }
+        await storage.updateCase(c.id, updates);
+        if (!newAssignee) {
+          for (const mgr of branchManagers) {
+            await storage.createNotification({
+              type: "general_alert",
+              priority: "high",
+              title: "قضية تحتاج إسناد",
+              message: `القضية "${c.title || c.caseNumber}" أصبحت بدون محامي مسند بعد حذف المستخدم "${targetUser.name}"`,
+              senderId: currentUser.id,
+              senderName: currentUser.name,
+              recipientId: mgr.id,
+              relatedType: "case",
+              relatedId: c.id,
+            });
+          }
+        }
       }
 
       const allConsultations = await storage.getAllConsultations();
       const assignedConsultations = allConsultations.filter(c => c.assignedTo === userId);
-      if (assignedConsultations.length > 0) {
-        return res.status(400).json({
-          error: `لا يمكن حذف المستخدم لوجود ${assignedConsultations.length} استشارة مسندة إليه. يرجى إعادة إسناد الاستشارات أو حذفها أولاً`,
-          dependencies: [`${assignedConsultations.length} استشارة مسندة`],
-        });
+      for (const c of assignedConsultations) {
+        const newAssignee = validReassignments[`consultation_${c.id}`];
+        await storage.updateConsultation(c.id, { assignedTo: newAssignee || null });
+        if (!newAssignee) {
+          for (const mgr of branchManagers) {
+            await storage.createNotification({
+              type: "general_alert",
+              priority: "high",
+              title: "استشارة تحتاج إسناد",
+              message: `الاستشارة "${c.title}" أصبحت بدون محامي مسند بعد حذف المستخدم "${targetUser.name}"`,
+              senderId: currentUser.id,
+              senderName: currentUser.name,
+              recipientId: mgr.id,
+              relatedType: "consultation",
+              relatedId: c.id,
+            });
+          }
+        }
+      }
+
+      const allFieldTasks = await storage.getAllFieldTasks();
+      const assignedFieldTasks = allFieldTasks.filter(t => t.assignedTo === userId);
+      for (const t of assignedFieldTasks) {
+        const newAssignee = validReassignments[`fieldTask_${t.id}`];
+        await storage.updateFieldTask(t.id, { assignedTo: newAssignee || null });
+        if (!newAssignee) {
+          for (const mgr of branchManagers) {
+            await storage.createNotification({
+              type: "general_alert",
+              priority: "high",
+              title: "مهمة ميدانية تحتاج إسناد",
+              message: `المهمة "${t.title}" أصبحت بدون مسؤول بعد حذف المستخدم "${targetUser.name}"`,
+              senderId: currentUser.id,
+              senderName: currentUser.name,
+              recipientId: mgr.id,
+              relatedType: "field_task",
+              relatedId: t.id,
+            });
+          }
+        }
+      }
+
+      const allDepartments = await storage.getAllDepartments();
+      const headOfDepts = allDepartments.filter(d => d.headId === userId);
+      for (const d of headOfDepts) {
+        const newHead = validReassignments[`department_${d.id}`];
+        await storage.updateDepartment(d.id, { headId: newHead || null });
+        if (!newHead) {
+          for (const mgr of branchManagers) {
+            await storage.createNotification({
+              type: "general_alert",
+              priority: "urgent",
+              title: "قسم بدون رئيس",
+              message: `القسم "${d.name}" أصبح بدون رئيس بعد حذف المستخدم "${targetUser.name}"`,
+              senderId: currentUser.id,
+              senderName: currentUser.name,
+              recipientId: mgr.id,
+            });
+          }
+        }
       }
 
       await storage.deleteUser(userId);
       res.json({ success: true });
     } catch (error) {
+      console.error("Error deleting user:", error);
       res.status(500).json({ error: "حدث خطأ في حذف المستخدم" });
     }
   });
