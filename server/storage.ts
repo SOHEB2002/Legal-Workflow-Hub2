@@ -744,7 +744,7 @@ export class DatabaseStorage implements IStorage {
       objectionStatus: null,
       nextHearingDate: null,
       nextHearingTime: null,
-      responseRequired: false,
+      responseRequired: data.responseRequired || false,
       hearingReport: "",
       recommendations: "",
       nextSteps: "",

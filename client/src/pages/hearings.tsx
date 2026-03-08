@@ -139,6 +139,7 @@ export default function HearingsPage() {
     courtName: "المحكمة العامة" as CourtTypeValue,
     courtRoom: "",
     notes: "",
+    responseRequired: false,
   });
 
   const [resultForm, setResultForm] = useState({
@@ -169,6 +170,7 @@ export default function HearingsPage() {
       courtName: "المحكمة العامة",
       courtRoom: "",
       notes: "",
+      responseRequired: false,
     });
   };
 
@@ -198,12 +200,17 @@ export default function HearingsPage() {
 
   const handleAddHearing = async () => {
     if (!formData.hearingDate || !formData.hearingTime) return;
+    if (formData.responseRequired && (!formData.caseId || formData.caseId === "none")) {
+      toast({ title: "يجب اختيار القضية المرتبطة لإنشاء المذكرة", variant: "destructive" });
+      return;
+    }
     setSubmitting(true);
     try {
       await addHearing(formData);
       setIsAddDialogOpen(false);
       resetForm();
-      toast({ title: "تم إضافة الجلسة بنجاح" });
+      const memoMsg = formData.responseRequired ? "\nتم إنشاء مذكرة جوابية تلقائياً" : "";
+      toast({ title: "تم إضافة الجلسة بنجاح" + memoMsg });
     } catch (e: any) {
       toast({ title: "خطأ", description: e.message, variant: "destructive" });
     } finally {
@@ -465,6 +472,29 @@ export default function HearingsPage() {
                   placeholder="مثال: الدائرة 5"
                 />
               </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="addResponseRequired"
+                  checked={formData.responseRequired}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, responseRequired: !!checked })
+                  }
+                  data-testid="checkbox-add-response-required"
+                />
+                <Label htmlFor="addResponseRequired" className="text-sm cursor-pointer">
+                  مطلوب رد قبل الجلسة القادمة
+                </Label>
+              </div>
+              {formData.responseRequired && (
+                <p className="text-xs text-muted-foreground">
+                  سيتم إنشاء مذكرة جوابية تلقائياً بموعد نهائي قبل 3 أيام من الجلسة
+                </p>
+              )}
+              {formData.responseRequired && (!formData.caseId || formData.caseId === "none") && (
+                <p className="text-xs text-destructive">
+                  يجب اختيار قضية مرتبطة لإنشاء المذكرة
+                </p>
+              )}
               <div>
                 <Label>ملاحظات</Label>
                 <Textarea

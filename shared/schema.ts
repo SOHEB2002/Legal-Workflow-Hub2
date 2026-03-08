@@ -1285,6 +1285,7 @@ export const insertHearingSchema = z.object({
   courtNameOther: z.string().nullable().optional(),
   courtRoom: z.string().optional().default(""),
   notes: z.string().optional().default(""),
+  responseRequired: z.boolean().optional().default(false),
 });
 
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
