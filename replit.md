@@ -58,6 +58,11 @@ The system features a formal and luxurious design.
 ### Feature Specifications
 - **Dashboard**: Overview with statistics.
 - **Case Management (`/cases`)**: Tracks cases through 9 stages: Receive, Data Completion, Study, Memorandum Editing, Review Committee, Adjustments, Ready for Submission, Submitted, Closed.
+  - **Department-Specific Workflows for Plaintiff New Cases**:
+    - **Commercial (تجاري)**: Must register in Taradi platform first → attempt reconciliation → if no reconciliation, task created to file in court. Fields: `taradiStatus`, `taradiNumber`.
+    - **Labor (عمالي)**: Must register in MOHR platform → direct client to amicable settlement (notifies admin support) → when settlement ends, task to complete study and file in court. Fields: `mohrStatus`, `mohrNumber`, `amicableSettlementDirected`.
+    - **Administrative (إداري)**: Must specify case sub-type (تظلم/قضية) and prescription date. Fields: `adminCaseSubType`, `prescriptionDate`.
+  - **API Endpoints**: `PATCH /api/cases/:id/taradi`, `PATCH /api/cases/:id/mohr`, `POST /api/cases/:id/direct-settlement`.
 - **Consultation Management (`/consultations`)**: Manages legal consultations.
 - **Hearings Schedule (`/hearings`)**: Manages court hearing schedules.
 - **Client Management (`/clients`)**: Comprehensive client profiles with contact logs.

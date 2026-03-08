@@ -773,6 +773,162 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/cases/:id/taradi", requireAuth, async (req, res) => {
+    try {
+      const caseItem = await storage.getCaseById(String(req.params.id));
+      if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
+      const user = (req as any).user;
+      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "تجاري") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
+      }
+      const validStatuses = ["مقيدة_في_تراضي", "تم_الصلح", "لم_يتم_صلح"];
+      const { status, taradiNumber } = req.body;
+      if (!status || !validStatuses.includes(status)) return res.status(400).json({ error: "حالة غير صالحة" });
+      
+      const updateData: any = { taradiStatus: status };
+      if (taradiNumber && typeof taradiNumber === "string") updateData.taradiNumber = taradiNumber.substring(0, 100);
+      
+      const updated = await storage.updateCase(caseItem.id, updateData);
+      
+      if (status === "لم_يتم_صلح") {
+        const deptUsers = await storage.getAllUsers();
+        const deptHead = deptUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
+        const recipients = deptHead ? [deptHead.id] : ["1"];
+        for (const recipientId of recipients) {
+          await storage.createNotification({
+            type: "stage_changed" as any,
+            priority: "high",
+            status: "pending",
+            title: "مطلوب تقييد القضية في المحكمة",
+            message: `القضية ${caseItem.caseNumber} - لم يتم الصلح في تراضي. يرجى تقييدها في المحكمة المختصة.`,
+            senderId: user.id,
+            senderName: user.name,
+            recipientId,
+            requiresResponse: true,
+            relatedType: "case",
+            relatedId: caseItem.id,
+          });
+        }
+      }
+      
+      await storage.logCaseActivity({
+        caseId: caseItem.id,
+        userId: user.id,
+        userName: user.name,
+        actionType: "stage_changed",
+        title: status === "مقيدة_في_تراضي" ? "تم التقييد في منصة تراضي" : status === "تم_الصلح" ? "تم الصلح عبر تراضي" : "لم يتم الصلح في تراضي",
+      });
+      
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating taradi status:", error);
+      res.status(500).json({ error: "حدث خطأ في تحديث حالة تراضي" });
+    }
+  });
+
+  app.patch("/api/cases/:id/mohr", requireAuth, async (req, res) => {
+    try {
+      const caseItem = await storage.getCaseById(String(req.params.id));
+      if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
+      const user = (req as any).user;
+      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "عمالي") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
+      }
+      const validStatuses = ["مقيدة_في_الموارد", "توجيه_تسوية_ودية", "انتهت_التسوية"];
+      const { status, mohrNumber } = req.body;
+      if (!status || !validStatuses.includes(status)) return res.status(400).json({ error: "حالة غير صالحة" });
+      
+      const updateData: any = { mohrStatus: status };
+      if (mohrNumber && typeof mohrNumber === "string") updateData.mohrNumber = mohrNumber.substring(0, 100);
+      
+      const updated = await storage.updateCase(caseItem.id, updateData);
+      
+      if (status === "انتهت_التسوية") {
+        const deptUsers = await storage.getAllUsers();
+        const deptHead = deptUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
+        const recipients = deptHead ? [deptHead.id] : ["1"];
+        for (const recipientId of recipients) {
+          await storage.createNotification({
+            type: "stage_changed" as any,
+            priority: "high",
+            status: "pending",
+            title: "مطلوب استكمال دراسة القضية ورفعها للمحكمة",
+            message: `القضية ${caseItem.caseNumber} - انتهت مرحلة التسوية الودية. يرجى استكمال دراستها ورفعها في المحكمة المختصة.`,
+            senderId: user.id,
+            senderName: user.name,
+            recipientId,
+            requiresResponse: true,
+            relatedType: "case",
+            relatedId: caseItem.id,
+          });
+        }
+      }
+      
+      await storage.logCaseActivity({
+        caseId: caseItem.id,
+        userId: user.id,
+        userName: user.name,
+        actionType: "stage_changed",
+        title: status === "مقيدة_في_الموارد" ? "تم التقييد في وزارة الموارد البشرية" : status === "توجيه_تسوية_ودية" ? "تم توجيه العميل للتسوية الودية" : "انتهت مرحلة التسوية الودية",
+      });
+      
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating MOHR status:", error);
+      res.status(500).json({ error: "حدث خطأ في تحديث حالة الموارد البشرية" });
+    }
+  });
+
+  app.post("/api/cases/:id/direct-settlement", requireAuth, async (req, res) => {
+    try {
+      const caseItem = await storage.getCaseById(String(req.params.id));
+      if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
+      const user = (req as any).user;
+      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "عمالي") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
+      }
+      
+      await storage.updateCase(caseItem.id, { 
+        amicableSettlementDirected: true,
+        mohrStatus: "توجيه_تسوية_ودية",
+      } as any);
+      
+      const allUsers = await storage.getAllUsers();
+      const adminSupports = allUsers.filter((u: any) => u.role === "admin_support" && u.isActive);
+      for (const admin of adminSupports) {
+        await storage.createNotification({
+          type: "task_reminder" as any,
+          priority: "high",
+          status: "pending",
+          title: "توجيه عميل لرفع التسوية الودية",
+          message: `القضية ${caseItem.caseNumber} - يرجى توجيه العميل برفع القضية في إدارة التسوية الودية بوزارة الموارد البشرية.`,
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: admin.id,
+          requiresResponse: false,
+          relatedType: "case",
+          relatedId: caseItem.id,
+        });
+      }
+      
+      await storage.logCaseActivity({
+        caseId: caseItem.id,
+        userId: user.id,
+        userName: user.name,
+        actionType: "stage_changed",
+        title: "تم توجيه العميل لرفع القضية في التسوية الودية",
+      });
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error directing settlement:", error);
+      res.status(500).json({ error: "حدث خطأ" });
+    }
+  });
+
   app.patch("/api/cases/:id", requireAuth, async (req, res) => {
     try {
       const existing = await storage.getCaseById(String(req.params.id));

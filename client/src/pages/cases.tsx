@@ -22,6 +22,7 @@ import {
   FileText,
   AlertTriangle,
   ArrowLeftRight,
+  Info,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -274,6 +275,8 @@ export default function CasesPage() {
     responseDeadline: "",
     nextHearingDate: "",
     nextHearingTime: "",
+    adminCaseSubType: "" as string,
+    prescriptionDate: "",
   });
 
   const [assignData, setAssignData] = useState({
@@ -298,6 +301,8 @@ export default function CasesPage() {
       responseDeadline: "",
       nextHearingDate: "",
       nextHearingTime: "",
+      adminCaseSubType: "",
+      prescriptionDate: "",
     });
   };
 
@@ -308,6 +313,17 @@ export default function CasesPage() {
       return;
     }
     
+    const isPlaintiffNew = formData.caseClassification === CaseClassification.PLAINTIFF_NEW;
+    if (isPlaintiffNew && formData.caseType === "إداري") {
+      if (!formData.adminCaseSubType) {
+        toast({ title: "يرجى تحديد نوع القضية الإدارية (تظلم / قضية)", variant: "destructive" });
+        return;
+      }
+      if (!formData.prescriptionDate) {
+        toast({ title: "يرجى تحديد تاريخ التقادم", variant: "destructive" });
+        return;
+      }
+    }
     await addCase({
       clientId: formData.clientId || "",
       caseType: formData.caseType,
@@ -315,15 +331,17 @@ export default function CasesPage() {
       departmentId: formData.departmentId,
       departmentOther: formData.departmentOther,
       priority: formData.priority,
-      courtName: formData.courtName,
-      courtCaseNumber: formData.courtCaseNumber,
+      courtName: isPlaintiffNew ? "" : formData.courtName,
+      courtCaseNumber: isPlaintiffNew ? "" : formData.courtCaseNumber,
       opponentName: formData.opponentName,
       caseClassification: formData.caseClassification as CaseClassificationValue,
       previousHearingsCount: formData.previousHearingsCount,
       currentSituation: formData.currentSituation,
       responseDeadline: formData.responseDeadline || null,
-      nextHearingDate: formData.nextHearingDate || null,
-      nextHearingTime: formData.nextHearingTime || null,
+      nextHearingDate: isPlaintiffNew ? null : (formData.nextHearingDate || null),
+      nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
+      adminCaseSubType: formData.adminCaseSubType || null,
+      prescriptionDate: formData.prescriptionDate || null,
     } as any, user.id, user.name);
     
     const classLabel = CaseClassificationLabels[formData.caseClassification as CaseClassificationValue] || "";
@@ -846,25 +864,6 @@ export default function CasesPage() {
                   )}
                 </div>
                 <div>
-                  <Label>اسم المحكمة</Label>
-                  <SmartInput
-                    inputType="text"
-                    data-testid="input-court-name"
-                    value={formData.courtName}
-                    onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
-                    placeholder="مثال: المحكمة التجارية بالرياض"
-                  />
-                </div>
-                <div>
-                  <Label>رقم القضية بالمحكمة</Label>
-                  <SmartInput
-                    inputType="code"
-                    data-testid="input-court-case-number"
-                    value={formData.courtCaseNumber}
-                    onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
-                  />
-                </div>
-                <div>
                   <Label>اسم الخصم</Label>
                   <SmartInput
                     inputType="text"
@@ -873,6 +872,76 @@ export default function CasesPage() {
                     onChange={(e) => setFormData({ ...formData, opponentName: e.target.value })}
                   />
                 </div>
+
+                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                  <>
+                    <div>
+                      <Label>اسم المحكمة</Label>
+                      <SmartInput
+                        inputType="text"
+                        data-testid="input-court-name"
+                        value={formData.courtName}
+                        onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
+                        placeholder="مثال: المحكمة التجارية بالرياض"
+                      />
+                    </div>
+                    <div>
+                      <Label>رقم القضية بالمحكمة</Label>
+                      <SmartInput
+                        inputType="code"
+                        data-testid="input-court-case-number"
+                        value={formData.courtCaseNumber}
+                        onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {formData.caseClassification === CaseClassification.PLAINTIFF_NEW && (
+                  <>
+                    {formData.caseType === "تجاري" && (
+                      <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
+                        <Info className="h-4 w-4 text-blue-600 shrink-0" />
+                        <span className="text-xs text-blue-700 dark:text-blue-400">القضايا التجارية تتطلب التقييد في منصة تراضي ومحاولة الصلح قبل رفعها للمحكمة</span>
+                      </div>
+                    )}
+                    {formData.caseType === "عمالي" && (
+                      <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
+                        <Info className="h-4 w-4 text-blue-600 shrink-0" />
+                        <span className="text-xs text-blue-700 dark:text-blue-400">القضايا العمالية تتطلب التقييد في منصة وزارة الموارد البشرية والتسوية الودية قبل رفعها للمحكمة</span>
+                      </div>
+                    )}
+                    {formData.caseType === "إداري" && (
+                      <>
+                        <div>
+                          <Label>نوع القضية الإدارية <span className="text-red-500">*</span></Label>
+                          <Select
+                            value={formData.adminCaseSubType}
+                            onValueChange={(value) => setFormData({ ...formData, adminCaseSubType: value })}
+                          >
+                            <SelectTrigger data-testid="select-admin-case-subtype">
+                              <SelectValue placeholder="اختر النوع" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="تظلم">تظلم</SelectItem>
+                              <SelectItem value="قضية">قضية</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label>تاريخ التقادم <span className="text-red-500">*</span></Label>
+                          <Input
+                            dir="ltr"
+                            data-testid="input-prescription-date"
+                            type="date"
+                            value={formData.prescriptionDate}
+                            onChange={(e) => setFormData({ ...formData, prescriptionDate: e.target.value })}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
 
                 {formData.caseClassification === CaseClassification.PLAINTIFF_EXISTING && (
                   <>
@@ -912,27 +981,29 @@ export default function CasesPage() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>تاريخ الجلسة القادمة (اختياري)</Label>
-                    <Input
-                      dir="ltr"
-                      data-testid="input-next-hearing-date"
-                      type="date"
-                      value={formData.nextHearingDate}
-                      onChange={(e) => setFormData({ ...formData, nextHearingDate: e.target.value })}
-                    />
+                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label>تاريخ الجلسة القادمة (اختياري)</Label>
+                      <Input
+                        dir="ltr"
+                        data-testid="input-next-hearing-date"
+                        type="date"
+                        value={formData.nextHearingDate}
+                        onChange={(e) => setFormData({ ...formData, nextHearingDate: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label>وقت الجلسة (اختياري)</Label>
+                      <Input
+                        data-testid="input-next-hearing-time"
+                        type="time"
+                        value={formData.nextHearingTime}
+                        onChange={(e) => setFormData({ ...formData, nextHearingTime: e.target.value })}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <Label>وقت الجلسة (اختياري)</Label>
-                    <Input
-                      data-testid="input-next-hearing-time"
-                      type="time"
-                      value={formData.nextHearingTime}
-                      onChange={(e) => setFormData({ ...formData, nextHearingTime: e.target.value })}
-                    />
-                  </div>
-                </div>
+                )}
               </>
             )}
           </div>
@@ -1146,6 +1217,159 @@ export default function CasesPage() {
                       <p className="p-3 bg-destructive/10 rounded-md text-destructive">
                         {selectedCase.reviewNotes}
                       </p>
+                    </div>
+                  )}
+
+                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-muted-foreground">نوع القضية</Label>
+                          <p className="font-medium">{(selectedCase as any).adminCaseSubType === "تظلم" ? "تظلم" : "قضية"}</p>
+                        </div>
+                        <div>
+                          <Label className="text-muted-foreground">تاريخ التقادم</Label>
+                          <p className="font-medium">{(selectedCase as any).prescriptionDate ? formatDateArabic((selectedCase as any).prescriptionDate) : "-"}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "تجاري" && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3">سير عمل منصة تراضي</h4>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3">
+                          <Badge variant={(selectedCase as any).taradiStatus === "مقيدة_في_تراضي" ? "default" : (selectedCase as any).taradiStatus === "تم_الصلح" ? "default" : (selectedCase as any).taradiStatus === "لم_يتم_صلح" ? "destructive" : "secondary"}>
+                            {(selectedCase as any).taradiStatus ? ({
+                              "مقيدة_في_تراضي": "مقيدة في تراضي",
+                              "تم_الصلح": "تم الصلح",
+                              "لم_يتم_صلح": "لم يتم صلح",
+                            } as any)[(selectedCase as any).taradiStatus] : "لم تقيد بعد"}
+                          </Badge>
+                          {(selectedCase as any).taradiNumber && <span className="text-sm text-muted-foreground">رقم: {(selectedCase as any).taradiNumber}</span>}
+                        </div>
+                        {!(selectedCase as any).taradiStatus && (
+                          <Button
+                            size="sm"
+                            data-testid="button-register-taradi"
+                            onClick={async () => {
+                              const num = prompt("أدخل رقم الطلب في تراضي (اختياري):");
+                              const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
+                                method: "PATCH",
+                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
+                                body: JSON.stringify({ status: "مقيدة_في_تراضي", taradiNumber: num || "" }),
+                              });
+                              if (res.ok) { toast({ title: "تم التقييد في تراضي" }); window.location.reload(); }
+                            }}
+                          >
+                            تقييد في منصة تراضي
+                          </Button>
+                        )}
+                        {(selectedCase as any).taradiStatus === "مقيدة_في_تراضي" && (
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="default"
+                              data-testid="button-taradi-reconciled"
+                              onClick={async () => {
+                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
+                                  body: JSON.stringify({ status: "تم_الصلح" }),
+                                });
+                                if (res.ok) { toast({ title: "تم تسجيل الصلح" }); window.location.reload(); }
+                              }}
+                            >
+                              تم الصلح
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              data-testid="button-taradi-not-reconciled"
+                              onClick={async () => {
+                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
+                                  body: JSON.stringify({ status: "لم_يتم_صلح" }),
+                                });
+                                if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); window.location.reload(); }
+                              }}
+                            >
+                              لم يتم صلح
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "عمالي" && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3">سير عمل وزارة الموارد البشرية</h4>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3">
+                          <Badge variant={(selectedCase as any).mohrStatus === "انتهت_التسوية" ? "destructive" : (selectedCase as any).mohrStatus ? "default" : "secondary"}>
+                            {(selectedCase as any).mohrStatus ? ({
+                              "مقيدة_في_الموارد": "مقيدة في وزارة الموارد البشرية",
+                              "توجيه_تسوية_ودية": "تم توجيه العميل للتسوية الودية",
+                              "انتهت_التسوية": "انتهت التسوية - جاهزة للرفع",
+                            } as any)[(selectedCase as any).mohrStatus] : "لم تقيد بعد"}
+                          </Badge>
+                          {(selectedCase as any).mohrNumber && <span className="text-sm text-muted-foreground">رقم: {(selectedCase as any).mohrNumber}</span>}
+                        </div>
+                        {!(selectedCase as any).mohrStatus && (
+                          <Button
+                            size="sm"
+                            data-testid="button-register-mohr"
+                            onClick={async () => {
+                              const num = prompt("أدخل رقم الطلب في وزارة الموارد (اختياري):");
+                              const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, {
+                                method: "PATCH",
+                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
+                                body: JSON.stringify({ status: "مقيدة_في_الموارد", mohrNumber: num || "" }),
+                              });
+                              if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); window.location.reload(); }
+                            }}
+                          >
+                            تقييد في وزارة الموارد البشرية
+                          </Button>
+                        )}
+                        {(selectedCase as any).mohrStatus === "مقيدة_في_الموارد" && (
+                          <Button
+                            size="sm"
+                            data-testid="button-direct-settlement"
+                            onClick={async () => {
+                              const res = await fetch(`/api/cases/${selectedCase.id}/direct-settlement`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
+                                body: JSON.stringify({}),
+                              });
+                              if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); window.location.reload(); }
+                            }}
+                          >
+                            توجيه العميل لرفعها في التسوية الودية
+                          </Button>
+                        )}
+                        {(selectedCase as any).mohrStatus === "توجيه_تسوية_ودية" && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            data-testid="button-settlement-ended"
+                            onClick={async () => {
+                              const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, {
+                                method: "PATCH",
+                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
+                                body: JSON.stringify({ status: "انتهت_التسوية" }),
+                              });
+                              if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); window.location.reload(); }
+                            }}
+                          >
+                            انتهاء مرحلة التسوية الودية
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )}
                   

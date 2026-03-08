@@ -81,6 +81,13 @@ export const lawCases = pgTable("law_cases", {
   previousHearingsCount: integer("previous_hearings_count").default(0),
   currentSituation: text("current_situation").default(""),
   responseDeadline: varchar("response_deadline", { length: 50 }),
+  taradiStatus: varchar("taradi_status", { length: 50 }),
+  taradiNumber: varchar("taradi_number", { length: 100 }),
+  mohrStatus: varchar("mohr_status", { length: 50 }),
+  mohrNumber: varchar("mohr_number", { length: 100 }),
+  amicableSettlementDirected: boolean("amicable_settlement_directed").default(false),
+  adminCaseSubType: varchar("admin_case_sub_type", { length: 50 }),
+  prescriptionDate: varchar("prescription_date", { length: 50 }),
   isArchived: boolean("is_archived").default(false),
   archivedAt: timestamp("archived_at"),
   archivedBy: varchar("archived_by", { length: 255 }),
@@ -438,6 +445,44 @@ export const CaseClassificationLabels: Record<CaseClassificationValue, string> =
   "مدعي_قضية_مقيدة": "مدعي - قضية مقيدة (مرفوعة مسبقاً)",
   "مدعى_عليه": "مدعى عليه",
 };
+
+// ==================== حالات منصة تراضي (تجاري) ====================
+export const TaradiStatus = {
+  REGISTERED: "مقيدة_في_تراضي",
+  RECONCILED: "تم_الصلح",
+  NOT_RECONCILED: "لم_يتم_صلح",
+} as const;
+
+export type TaradiStatusValue = typeof TaradiStatus[keyof typeof TaradiStatus];
+
+export const TaradiStatusLabels: Record<TaradiStatusValue, string> = {
+  "مقيدة_في_تراضي": "مقيدة في تراضي",
+  "تم_الصلح": "تم الصلح",
+  "لم_يتم_صلح": "لم يتم صلح - جاهزة للتقييد في المحكمة",
+};
+
+// ==================== حالات وزارة الموارد البشرية (عمالي) ====================
+export const MohrStatus = {
+  REGISTERED: "مقيدة_في_الموارد",
+  SETTLEMENT_DIRECTED: "توجيه_تسوية_ودية",
+  SETTLEMENT_ENDED: "انتهت_التسوية",
+} as const;
+
+export type MohrStatusValue = typeof MohrStatus[keyof typeof MohrStatus];
+
+export const MohrStatusLabels: Record<MohrStatusValue, string> = {
+  "مقيدة_في_الموارد": "مقيدة في وزارة الموارد البشرية",
+  "توجيه_تسوية_ودية": "تم توجيه العميل للتسوية الودية",
+  "انتهت_التسوية": "انتهت التسوية الودية - جاهزة للرفع",
+};
+
+// ==================== أنواع القضايا الإدارية ====================
+export const AdminCaseSubType = {
+  GRIEVANCE: "تظلم",
+  CASE: "قضية",
+} as const;
+
+export type AdminCaseSubTypeValue = typeof AdminCaseSubType[keyof typeof AdminCaseSubType];
 
 // ==================== حالات القضايا ====================
 export const CaseStatus = {
@@ -877,6 +922,13 @@ export interface LawCase {
   previousHearingsCount: number;
   currentSituation: string;
   responseDeadline: string | null;
+  taradiStatus: string | null;
+  taradiNumber: string | null;
+  mohrStatus: string | null;
+  mohrNumber: string | null;
+  amicableSettlementDirected: boolean;
+  adminCaseSubType: string | null;
+  prescriptionDate: string | null;
   najizNumber: string;
   isArchived: boolean;
   archivedAt: string | null;
@@ -1200,6 +1252,8 @@ export const insertCaseSchema = z.object({
   previousHearingsCount: z.number().optional().default(0),
   currentSituation: z.string().optional().default(""),
   responseDeadline: z.string().nullable().optional(),
+  adminCaseSubType: z.enum(["تظلم", "قضية"]).nullable().optional(),
+  prescriptionDate: z.string().nullable().optional(),
 });
 
 export type InsertCase = z.infer<typeof insertCaseSchema>;
