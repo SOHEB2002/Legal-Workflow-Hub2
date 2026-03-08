@@ -58,7 +58,6 @@ import {
 } from "lucide-react";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -1360,13 +1359,13 @@ function WorkflowStep({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
+            <Button
               data-testid="button-confirm-delete-hearing"
+              variant="destructive"
               onClick={handleDeleteHearing}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               حذف
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
