@@ -169,7 +169,7 @@ function mapDbUser(dbUser: any): User {
 function mapDbCase(dbCase: any): LawCase {
   return {
     id: dbCase.id,
-    caseNumber: dbCase.caseNumber,
+    caseNumber: dbCase.courtCaseNumber || dbCase.caseNumber,
     clientId: dbCase.clientId || "",
     caseType: dbCase.caseType,
     caseTypeOther: dbCase.caseTypeOther || "",
@@ -564,6 +564,9 @@ export class DatabaseStorage implements IStorage {
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
+    }
+    if (updateData.courtCaseNumber && updateData.courtCaseNumber.trim()) {
+      updateData.caseNumber = updateData.courtCaseNumber.trim();
     }
 
     await db.update(lawCases).set(updateData).where(eq(lawCases.id, id));

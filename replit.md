@@ -58,6 +58,7 @@ The system features a formal and luxurious design.
 ### Feature Specifications
 - **Dashboard**: Overview with statistics.
 - **Case Management (`/cases`)**: Tracks cases through 9 stages: Receive, Data Completion, Study, Memorandum Editing, Review Committee, Adjustments, Ready for Submission, Submitted, Closed.
+  - **Case Number Display**: The system prioritizes `courtCaseNumber` (رقم القضية لدى المحكمة) as the primary display number everywhere. Cases under study without a court number show the auto-generated number (`C-YYYY-XXXXXX`). When `courtCaseNumber` is updated, `caseNumber` is automatically synced.
   - **Department-Specific Workflows for Plaintiff New Cases**:
     - **Commercial (تجاري)**: Must register in Taradi platform first → attempt reconciliation → if no reconciliation, task created to file in court. Fields: `taradiStatus`, `taradiNumber`.
     - **Labor (عمالي)**: Must register in MOHR platform → direct client to amicable settlement (notifies admin support) → when settlement ends, task to complete study and file in court. Fields: `mohrStatus`, `mohrNumber`, `amicableSettlementDirected`.
