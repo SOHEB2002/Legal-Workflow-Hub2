@@ -702,16 +702,17 @@ export async function registerRoutes(
           console.error("Error auto-creating defendant memo:", e);
         }
 
-        if (req.body.nextHearingDate && req.body.nextHearingDate.trim() && req.body.nextHearingTime && req.body.nextHearingTime.trim()) {
+        if (req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
           try {
             const hearing = await storage.createHearing({
               caseId: newCase.id,
               hearingDate: req.body.nextHearingDate,
-              hearingTime: req.body.nextHearingTime,
+              hearingTime: req.body.nextHearingTime || "09:00",
               courtName: (validatedData.courtName || "المحكمة العامة") as any,
               status: "قادمة",
             });
             autoCreated.push({ type: "hearing", id: hearing.id });
+            await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
           } catch (e) {
             console.error("Error auto-creating defendant hearing:", e);
           }
@@ -736,6 +737,22 @@ export async function registerRoutes(
         }
       }
 
+      if (classification !== CaseClassification.DEFENDANT && req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
+        try {
+          const hearing = await storage.createHearing({
+            caseId: newCase.id,
+            hearingDate: req.body.nextHearingDate,
+            hearingTime: req.body.nextHearingTime || "09:00",
+            courtName: (validatedData.courtName || "المحكمة العامة") as any,
+            status: "قادمة",
+          });
+          autoCreated.push({ type: "hearing", id: hearing.id });
+          await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+        } catch (e) {
+          console.error("Error auto-creating hearing for non-defendant case:", e);
+        }
+      }
+
       try {
         await storage.logCaseActivity({
           caseId: newCase.id,
@@ -751,6 +768,7 @@ export async function registerRoutes(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      console.error("Error creating case:", error);
       res.status(500).json({ error: "حدث خطأ في إنشاء القضية" });
     }
   });

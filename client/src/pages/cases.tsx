@@ -900,40 +900,39 @@ export default function CasesPage() {
                 )}
 
                 {formData.caseClassification === CaseClassification.DEFENDANT && (
-                  <>
-                    <div>
-                      <Label>مهلة الرد (تاريخ)</Label>
-                      <Input
-                        dir="ltr"
-                        data-testid="input-response-deadline"
-                        type="date"
-                        value={formData.responseDeadline}
-                        onChange={(e) => setFormData({ ...formData, responseDeadline: e.target.value })}
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label>تاريخ الجلسة القادمة (اختياري)</Label>
-                        <Input
-                          dir="ltr"
-                          data-testid="input-next-hearing-date"
-                          type="date"
-                          value={formData.nextHearingDate}
-                          onChange={(e) => setFormData({ ...formData, nextHearingDate: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>وقت الجلسة (اختياري)</Label>
-                        <Input
-                          data-testid="input-next-hearing-time"
-                          type="time"
-                          value={formData.nextHearingTime}
-                          onChange={(e) => setFormData({ ...formData, nextHearingTime: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                  </>
+                  <div>
+                    <Label>مهلة الرد (تاريخ)</Label>
+                    <Input
+                      dir="ltr"
+                      data-testid="input-response-deadline"
+                      type="date"
+                      value={formData.responseDeadline}
+                      onChange={(e) => setFormData({ ...formData, responseDeadline: e.target.value })}
+                    />
+                  </div>
                 )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>تاريخ الجلسة القادمة (اختياري)</Label>
+                    <Input
+                      dir="ltr"
+                      data-testid="input-next-hearing-date"
+                      type="date"
+                      value={formData.nextHearingDate}
+                      onChange={(e) => setFormData({ ...formData, nextHearingDate: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label>وقت الجلسة (اختياري)</Label>
+                    <Input
+                      data-testid="input-next-hearing-time"
+                      type="time"
+                      value={formData.nextHearingTime}
+                      onChange={(e) => setFormData({ ...formData, nextHearingTime: e.target.value })}
+                    />
+                  </div>
+                </div>
               </>
             )}
           </div>
