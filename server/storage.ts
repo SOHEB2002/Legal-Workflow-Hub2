@@ -515,7 +515,7 @@ export class DatabaseStorage implements IStorage {
 
   async createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase> {
     const id = randomUUID();
-    const caseNumber = `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+    const caseNumber = data.courtCaseNumber ? data.courtCaseNumber : `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     const now = new Date();
     
     const newCase = {

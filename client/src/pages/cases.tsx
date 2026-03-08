@@ -332,7 +332,7 @@ export default function CasesPage() {
       departmentOther: formData.departmentOther,
       priority: formData.priority,
       courtName: isPlaintiffNew ? "" : formData.courtName,
-      courtCaseNumber: isPlaintiffNew ? "" : formData.courtCaseNumber,
+      courtCaseNumber: formData.courtCaseNumber,
       opponentName: formData.opponentName,
       caseClassification: formData.caseClassification as CaseClassificationValue,
       previousHearingsCount: formData.previousHearingsCount,
@@ -401,6 +401,7 @@ export default function CasesPage() {
       const clientName = c.clientId ? getClientName(c.clientId) : "";
       const matchesSearch =
         c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesStatus = statusFilter === "all" || c.status === statusFilter;
       const matchesType = typeFilter === "all" || c.caseType === typeFilter;
@@ -873,28 +874,28 @@ export default function CasesPage() {
                   />
                 </div>
 
+                <div>
+                  <Label>رقم القضية {formData.caseClassification === CaseClassification.PLAINTIFF_NEW ? "(اختياري - يُولّد تلقائياً إن لم يُدخل)" : ""}</Label>
+                  <SmartInput
+                    inputType="code"
+                    data-testid="input-court-case-number"
+                    value={formData.courtCaseNumber}
+                    onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
+                    placeholder="أدخل رقم القضية لدى المحكمة"
+                  />
+                </div>
+
                 {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
-                  <>
-                    <div>
-                      <Label>اسم المحكمة</Label>
-                      <SmartInput
-                        inputType="text"
-                        data-testid="input-court-name"
-                        value={formData.courtName}
-                        onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
-                        placeholder="مثال: المحكمة التجارية بالرياض"
-                      />
-                    </div>
-                    <div>
-                      <Label>رقم القضية بالمحكمة</Label>
-                      <SmartInput
-                        inputType="code"
-                        data-testid="input-court-case-number"
-                        value={formData.courtCaseNumber}
-                        onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
-                      />
-                    </div>
-                  </>
+                  <div>
+                    <Label>اسم المحكمة</Label>
+                    <SmartInput
+                      inputType="text"
+                      data-testid="input-court-name"
+                      value={formData.courtName}
+                      onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
+                      placeholder="مثال: المحكمة التجارية بالرياض"
+                    />
+                  </div>
                 )}
 
                 {formData.caseClassification === CaseClassification.PLAINTIFF_NEW && (
@@ -1184,8 +1185,8 @@ export default function CasesPage() {
                       <p>{selectedCase.courtName || "-"}</p>
                     </div>
                     <div>
-                      <Label className="text-muted-foreground">رقم القضية بالمحكمة</Label>
-                      <p><LtrInline>{selectedCase.courtCaseNumber || "-"}</LtrInline></p>
+                      <Label className="text-muted-foreground">رقم القضية</Label>
+                      <p><LtrInline>{selectedCase.caseNumber || "-"}</LtrInline></p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">الدائرة</Label>
