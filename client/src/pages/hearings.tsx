@@ -56,15 +56,6 @@ import {
   Lock,
   Trash2,
 } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { useHearings } from "@/lib/hearings-context";
 import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
@@ -128,8 +119,7 @@ export default function HearingsPage() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDepartment, setFilterDepartment] = useState<string>("all");
   const [filterLawyer, setFilterLawyer] = useState<string>("all");
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [hearingToDelete, setHearingToDelete] = useState<Hearing | null>(null);
+  const [deletingHearingId, setDeletingHearingId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     caseId: "",
@@ -312,16 +302,16 @@ export default function HearingsPage() {
     }
   };
 
-  const handleDeleteHearing = async () => {
-    if (!hearingToDelete) return;
+  const handleDeleteHearing = async (hearingId: string) => {
+    if (!window.confirm("هل أنت متأكد من حذف هذه الجلسة؟ سيتم حذفها بشكل نهائي.")) return;
+    setDeletingHearingId(hearingId);
     try {
-      await deleteHearing(hearingToDelete.id);
+      await deleteHearing(hearingId);
       toast({ title: "تم حذف الجلسة بنجاح" });
     } catch (error) {
       toast({ variant: "destructive", title: "خطأ", description: "فشل حذف الجلسة" });
     }
-    setShowDeleteDialog(false);
-    setHearingToDelete(null);
+    setDeletingHearingId(null);
   };
 
   const upcomingHearings = getUpcomingHearings();
@@ -789,7 +779,8 @@ export default function HearingsPage() {
                                       size="icon"
                                       variant="ghost"
                                       data-testid={`button-delete-hearing-${hearing.id}`}
-                                      onClick={() => { setHearingToDelete(hearing); setShowDeleteDialog(true); }}
+                                      disabled={deletingHearingId === hearing.id}
+                                      onClick={() => handleDeleteHearing(hearing.id)}
                                     >
                                       <Trash2 className="w-4 h-4 text-destructive" />
                                     </Button>
@@ -1349,26 +1340,6 @@ function WorkflowStep({
         </Button>
       )}
 
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>هل أنت متأكد من حذف هذه الجلسة؟</AlertDialogTitle>
-            <AlertDialogDescription>
-              سيتم حذف الجلسة بشكل نهائي. هذا الإجراء لا يمكن التراجع عنه.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>إلغاء</AlertDialogCancel>
-            <Button
-              data-testid="button-confirm-delete-hearing"
-              variant="destructive"
-              onClick={handleDeleteHearing}
-            >
-              حذف
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
