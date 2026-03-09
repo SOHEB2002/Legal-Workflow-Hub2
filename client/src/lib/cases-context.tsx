@@ -266,7 +266,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (!lawCase) return false;
 
     if (userRole) {
-      const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType);
+      const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase);
       if (!validation.allowed) {
         console.warn("انتقال مرفوض:", validation.reason);
         return false;
@@ -306,7 +306,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (!lawCase) return false;
 
     if (userRole) {
-      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType);
+      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase);
       if (!validation.allowed) {
         console.warn("إرجاع مرفوض:", validation.reason);
         return false;

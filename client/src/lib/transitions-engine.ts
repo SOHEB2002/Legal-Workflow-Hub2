@@ -32,7 +32,8 @@ const CASE_TRANSITIONS: TransitionRule[] = [
   {
     from: CaseStage.RECEIVED,
     to: CaseStage.DATA_COMPLETION,
-    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     autoActions: [{ type: "assign_to_department_head" }],
     label: "قبول القضية وإسناد لرئيس القسم",
   },
@@ -40,6 +41,7 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     from: CaseStage.DATA_COMPLETION,
     to: CaseStage.STUDY,
     allowedRoles: [UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     autoActions: [{ type: "assign_to_lawyer" }],
     label: "إسناد للمحامي المختص",
   },
@@ -47,26 +49,28 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     from: CaseStage.STUDY,
     to: CaseStage.DRAFTING,
     allowedRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     label: "إتمام الدراسة وبدء تحرير المذكرة",
   },
   {
     from: CaseStage.DRAFTING,
     to: CaseStage.REVIEW_COMMITTEE,
     allowedRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     autoActions: [{ type: "assign_to_review_committee" }],
     label: "إحالة للجنة المراجعة",
   },
   {
     from: CaseStage.REVIEW_COMMITTEE,
     to: CaseStage.SUBMITTED,
-    allowedRoles: [UserRole.CASES_REVIEW_HEAD, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.CASES_REVIEW_HEAD, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "notify" }],
     label: "اعتماد ورفع للدائرة",
   },
   {
     from: CaseStage.REVIEW_COMMITTEE,
     to: CaseStage.AMENDMENTS,
-    allowedRoles: [UserRole.CASES_REVIEW_HEAD, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.CASES_REVIEW_HEAD, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "notify" }],
     label: "إرجاع بملاحظات",
   },
@@ -74,12 +78,13 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     from: CaseStage.AMENDMENTS,
     to: CaseStage.REVIEW_COMMITTEE,
     allowedRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     label: "إعادة الإحالة للجنة المراجعة بعد التعديلات",
   },
   {
     from: CaseStage.SUBMITTED,
     to: CaseStage.CLOSED,
-    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "close" }],
     label: "إقفال القضية",
   },
@@ -89,13 +94,13 @@ const CASE_BACKWARD_TRANSITIONS: TransitionRule[] = [
   {
     from: CaseStage.DATA_COMPLETION,
     to: CaseStage.RECEIVED,
-    allowedRoles: [UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع للاستلام",
   },
   {
     from: CaseStage.STUDY,
     to: CaseStage.DATA_COMPLETION,
-    allowedRoles: [UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع لاستكمال البيانات",
   },
   {
@@ -107,19 +112,19 @@ const CASE_BACKWARD_TRANSITIONS: TransitionRule[] = [
   {
     from: CaseStage.REVIEW_COMMITTEE,
     to: CaseStage.DRAFTING,
-    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.CASES_REVIEW_HEAD],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.CASES_REVIEW_HEAD, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع لتحرير المذكرة",
   },
   {
     from: CaseStage.AMENDMENTS,
     to: CaseStage.DRAFTING,
-    allowedRoles: [UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع لتحرير المذكرة",
   },
   {
     from: CaseStage.SUBMITTED,
     to: CaseStage.AMENDMENTS,
-    allowedRoles: [UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع للملاحظات",
   },
 ];
@@ -128,7 +133,7 @@ const CONSULTATION_TRANSITIONS: TransitionRule[] = [
   {
     from: ConsultationStatus.RECEIVED,
     to: ConsultationStatus.STUDY,
-    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "assign_to_department_head" }],
     label: "قبول الاستشارة وإسناد لرئيس القسم",
   },
@@ -136,6 +141,7 @@ const CONSULTATION_TRANSITIONS: TransitionRule[] = [
     from: ConsultationStatus.STUDY,
     to: ConsultationStatus.PREPARING_RESPONSE,
     allowedRoles: [UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     autoActions: [{ type: "assign_to_lawyer" }],
     label: "تحديد الموظف وإسناد المهمة",
   },
@@ -143,20 +149,21 @@ const CONSULTATION_TRANSITIONS: TransitionRule[] = [
     from: ConsultationStatus.PREPARING_RESPONSE,
     to: ConsultationStatus.REVIEW_COMMITTEE,
     allowedRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     autoActions: [{ type: "assign_to_review_committee" }],
     label: "إرسال للمراجعة",
   },
   {
     from: ConsultationStatus.REVIEW_COMMITTEE,
     to: ConsultationStatus.READY,
-    allowedRoles: [UserRole.CONSULTATIONS_REVIEW_HEAD, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.CONSULTATIONS_REVIEW_HEAD, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "notify" }],
     label: "اعتماد الاستشارة",
   },
   {
     from: ConsultationStatus.REVIEW_COMMITTEE,
     to: ConsultationStatus.AMENDMENTS,
-    allowedRoles: [UserRole.CONSULTATIONS_REVIEW_HEAD, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.CONSULTATIONS_REVIEW_HEAD, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "notify" }],
     label: "إرجاع بملاحظات",
   },
@@ -164,6 +171,7 @@ const CONSULTATION_TRANSITIONS: TransitionRule[] = [
     from: ConsultationStatus.AMENDMENTS,
     to: ConsultationStatus.REVIEW_COMMITTEE,
     allowedRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
     label: "إعادة الإرسال للمراجعة بعد التعديلات",
   },
   {
@@ -175,7 +183,7 @@ const CONSULTATION_TRANSITIONS: TransitionRule[] = [
   {
     from: ConsultationStatus.DELIVERED,
     to: ConsultationStatus.CLOSED,
-    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "close" }],
     label: "إقفال الاستشارة",
   },
@@ -185,7 +193,7 @@ const CONSULTATION_BACKWARD_TRANSITIONS: TransitionRule[] = [
   {
     from: ConsultationStatus.STUDY,
     to: ConsultationStatus.RECEIVED,
-    allowedRoles: [UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع للاستلام",
   },
   {
@@ -197,13 +205,13 @@ const CONSULTATION_BACKWARD_TRANSITIONS: TransitionRule[] = [
   {
     from: ConsultationStatus.REVIEW_COMMITTEE,
     to: ConsultationStatus.PREPARING_RESPONSE,
-    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.CONSULTATIONS_REVIEW_HEAD],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.CONSULTATIONS_REVIEW_HEAD, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع لإعداد الرد",
   },
   {
     from: ConsultationStatus.READY,
     to: ConsultationStatus.AMENDMENTS,
-    allowedRoles: [UserRole.BRANCH_MANAGER],
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع للتعديلات",
   },
 ];
@@ -310,12 +318,27 @@ const CONSULTATION_STAGE_INFO: StageInfo[] = [
   },
 ];
 
+function isUserAssignedToCase(userId: string, caseData: any): boolean {
+  if (!caseData || !userId) return false;
+  if (caseData.primaryLawyerId === userId || caseData.responsibleLawyerId === userId) return true;
+  if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(userId)) return true;
+  return false;
+}
+
+function checkRoleOrAssignment(rule: TransitionRule, userRole: UserRoleType, userId?: string, caseData?: any): boolean {
+  if (rule.allowedRoles.includes(userRole)) return true;
+  if (rule.requiresAssignment && userId && caseData && isUserAssignedToCase(userId, caseData)) return true;
+  return false;
+}
+
 export function validateCaseTransition(
   currentStage: CaseStageValue,
   targetStage: CaseStageValue,
   userRole: UserRoleType,
   _userDepartmentId?: string | null,
   _caseDepartmentId?: string | null,
+  userId?: string,
+  caseData?: any,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
 
@@ -330,7 +353,7 @@ export function validateCaseTransition(
     return { allowed: false, reason: "لا يمكن الانتقال من هذه المرحلة إلى المرحلة المطلوبة" };
   }
 
-  if (!rule.allowedRoles.includes(userRole)) {
+  if (!checkRoleOrAssignment(rule, userRole, userId, caseData)) {
     return { allowed: false, reason: "ليس لديك صلاحية لتنفيذ هذا الانتقال" };
   }
 
@@ -340,6 +363,8 @@ export function validateCaseTransition(
 export function validateCaseForward(
   currentStage: CaseStageValue,
   userRole: UserRoleType,
+  userId?: string,
+  caseData?: any,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
   const currentIndex = CaseStagesOrder.indexOf(normalizedCurrent);
@@ -355,7 +380,7 @@ export function validateCaseForward(
     return { allowed: false, reason: "لا توجد قاعدة انتقال للمرحلة التالية" };
   }
 
-  if (!rule.allowedRoles.includes(userRole)) {
+  if (!checkRoleOrAssignment(rule, userRole, userId, caseData)) {
     return { allowed: false, reason: "ليس لديك صلاحية لنقل القضية للمرحلة التالية" };
   }
 
@@ -365,6 +390,8 @@ export function validateCaseForward(
 export function validateCaseBackward(
   currentStage: CaseStageValue,
   userRole: UserRoleType,
+  userId?: string,
+  caseData?: any,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
   const currentIndex = CaseStagesOrder.indexOf(normalizedCurrent);
@@ -380,7 +407,7 @@ export function validateCaseBackward(
     return { allowed: false, reason: "لا توجد قاعدة رجوع لهذه المرحلة" };
   }
 
-  if (!rule.allowedRoles.includes(userRole)) {
+  if (!checkRoleOrAssignment(rule, userRole, userId, caseData)) {
     return { allowed: false, reason: "ليس لديك صلاحية لإرجاع القضية للمرحلة السابقة" };
   }
 
@@ -391,6 +418,8 @@ export function validateConsultationTransition(
   currentStatus: ConsultationStatusValue,
   targetStatus: ConsultationStatusValue,
   userRole: UserRoleType,
+  userId?: string,
+  consultationData?: any,
 ): TransitionValidation {
   if (currentStatus === targetStatus) {
     return { allowed: false, reason: "الاستشارة في نفس الحالة المطلوبة" };
@@ -403,20 +432,28 @@ export function validateConsultationTransition(
     return { allowed: false, reason: "لا يمكن الانتقال من هذه الحالة إلى الحالة المطلوبة" };
   }
 
-  if (!rule.allowedRoles.includes(userRole)) {
-    return { allowed: false, reason: "ليس لديك صلاحية لتنفيذ هذا الانتقال" };
+  if (rule.allowedRoles.includes(userRole)) {
+    return { allowed: true, rule };
   }
 
-  return { allowed: true, rule };
+  if (rule.requiresAssignment && userId && consultationData) {
+    if (consultationData.assignedTo === userId) {
+      return { allowed: true, rule };
+    }
+  }
+
+  return { allowed: false, reason: "ليس لديك صلاحية لتنفيذ هذا الانتقال" };
 }
 
 export function getAvailableCaseTransitions(
   currentStage: CaseStageValue,
   userRole: UserRoleType,
+  userId?: string,
+  caseData?: any,
 ): TransitionRule[] {
   const normalizedCurrent = normalizeCaseStage(currentStage);
   const allRules = [...CASE_TRANSITIONS, ...CASE_BACKWARD_TRANSITIONS];
-  return allRules.filter(r => r.from === normalizedCurrent && r.allowedRoles.includes(userRole));
+  return allRules.filter(r => r.from === normalizedCurrent && checkRoleOrAssignment(r, userRole, userId, caseData));
 }
 
 export function getAvailableConsultationTransitions(
