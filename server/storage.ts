@@ -1332,6 +1332,19 @@ export class DatabaseStorage implements IStorage {
 
     if (existingUsers.length > 0) {
       console.log("[INIT] Users already exist, skipping initialization to preserve user data.");
+      const assignableRoles = ["employee", "department_head", "branch_manager"];
+      const usersToFix = existingUsers.filter(
+        u => assignableRoles.includes(u.role) && u.isActive && (!u.canBeAssignedCases || !u.canBeAssignedConsultations)
+      );
+      if (usersToFix.length > 0) {
+        for (const u of usersToFix) {
+          await db.update(users).set({
+            canBeAssignedCases: true,
+            canBeAssignedConsultations: true,
+          }).where(eq(users.id, u.id));
+        }
+        console.log(`[INIT] Fixed assignment flags for ${usersToFix.length} users: ${usersToFix.map(u => u.name).join(", ")}`);
+      }
       return;
     }
 

@@ -138,8 +138,8 @@ export default function UsersPage() {
     role: "employee" as UserRoleType,
     departmentId: "" as string | null,
     isActive: true,
-    canBeAssignedCases: false,
-    canBeAssignedConsultations: false,
+    canBeAssignedCases: true,
+    canBeAssignedConsultations: true,
   });
 
   const [editFormData, setEditFormData] = useState({
@@ -164,8 +164,8 @@ export default function UsersPage() {
       role: "employee",
       departmentId: "",
       isActive: true,
-      canBeAssignedCases: false,
-      canBeAssignedConsultations: false,
+      canBeAssignedCases: true,
+      canBeAssignedConsultations: true,
     });
   };
 
