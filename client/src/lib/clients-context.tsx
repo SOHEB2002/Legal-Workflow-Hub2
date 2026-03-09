@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { Client, ClientTypeValue } from "@shared/schema";
 import { ClientType } from "@shared/schema";
 import { apiRequest } from "./queryClient";
@@ -29,21 +29,52 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsLoading(true);
       const headers: Record<string, string> = { "Authorization": `Bearer ${token}` };
-      const response = await fetch("/api/clients", { headers });
+      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
+      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+      const response = await fetch("/api/clients", { headers, credentials: "include" });
       if (response.ok) {
         const data = await response.json();
         setClients(data);
+      } else if (response.status === 401) {
+        try {
+          const refreshRes = await fetch("/api/auth/refresh", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+          });
+          if (refreshRes.ok) {
+            const refreshData = await refreshRes.json();
+            if (refreshData.token) {
+              localStorage.setItem("lawfirm_token", refreshData.token);
+              if (refreshData.csrfToken) localStorage.setItem("lawfirm_csrf_token", refreshData.csrfToken);
+              const retryHeaders: Record<string, string> = { "Authorization": `Bearer ${refreshData.token}` };
+              if (refreshData.csrfToken) retryHeaders["X-CSRF-Token"] = refreshData.csrfToken;
+              const retryResponse = await fetch("/api/clients", { headers: retryHeaders, credentials: "include" });
+              if (retryResponse.ok) {
+                const data = await retryResponse.json();
+                setClients(data);
+              }
+            }
+          }
+        } catch (_) {}
       }
     } catch (error) {
-      // fetch clients failed silently
+      console.error("Failed to fetch clients:", error);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
+  const retryRef = useRef(false);
   useEffect(() => {
-    if (user) fetchClients();
-    else { setClients([]); setIsLoading(false); }
+    if (user) {
+      retryRef.current = false;
+      fetchClients().then(() => {
+        if (!retryRef.current) {
+          retryRef.current = true;
+          setTimeout(() => fetchClients(), 3000);
+        }
+      });
+    } else { setClients([]); setIsLoading(false); }
   }, [user, fetchClients]);
 
   const addClient = async (data: Partial<Client>, createdBy: string): Promise<Client> => {

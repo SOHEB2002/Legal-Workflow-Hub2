@@ -79,15 +79,38 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsLoading(true);
       const token = localStorage.getItem("lawfirm_token");
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const response = await fetch("/api/cases", { headers });
+      if (!token) { setIsLoading(false); return; }
+      const headers: Record<string, string> = { "Authorization": `Bearer ${token}` };
+      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
+      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+      const response = await fetch("/api/cases", { headers, credentials: "include" });
       if (response.ok) {
         const data = await response.json();
         setCases(data.map(migrateCase));
+      } else if (response.status === 401) {
+        try {
+          const refreshRes = await fetch("/api/auth/refresh", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+          });
+          if (refreshRes.ok) {
+            const refreshData = await refreshRes.json();
+            if (refreshData.token) {
+              localStorage.setItem("lawfirm_token", refreshData.token);
+              if (refreshData.csrfToken) localStorage.setItem("lawfirm_csrf_token", refreshData.csrfToken);
+              const retryHeaders: Record<string, string> = { "Authorization": `Bearer ${refreshData.token}` };
+              if (refreshData.csrfToken) retryHeaders["X-CSRF-Token"] = refreshData.csrfToken;
+              const retryResponse = await fetch("/api/cases", { headers: retryHeaders, credentials: "include" });
+              if (retryResponse.ok) {
+                const data = await retryResponse.json();
+                setCases(data.map(migrateCase));
+              }
+            }
+          }
+        } catch (_) {}
       }
     } catch (error) {
-      // fetch cases failed silently
+      console.error("Failed to fetch cases:", error);
     } finally {
       setIsLoading(false);
     }
