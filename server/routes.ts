@@ -105,38 +105,38 @@ interface StageTransitionRule {
 
 const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // Forward transitions
-  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["admin_support", "branch_manager"] },
-  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "branch_manager"] },
-  { from: "دراسة", to: "تحرير_المذكرة", allowedRoles: ["employee", "department_head", "branch_manager"] },
-  { from: "تحرير_المذكرة", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
-  { from: "إحالة_للجنة_المراجعة", to: "تم_الرفع_للدائرة", allowedRoles: ["cases_review_head", "branch_manager"] },
-  { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
-  { from: "الأخذ_بالملاحظات", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
-  { from: "تم_الرفع_للدائرة", to: "مقفلة", allowedRoles: ["admin_support", "branch_manager"] },
+  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["admin_support", "department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "دراسة", to: "تحرير_المذكرة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "تحرير_المذكرة", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "إحالة_للجنة_المراجعة", to: "تم_الرفع_للدائرة", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
+  { from: "الأخذ_بالملاحظات", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "تم_الرفع_للدائرة", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   // Backward transitions
-  { from: "استكمال_البيانات", to: "استلام", allowedRoles: ["branch_manager"] },
-  { from: "دراسة", to: "استكمال_البيانات", allowedRoles: ["branch_manager"] },
+  { from: "استكمال_البيانات", to: "استلام", allowedRoles: ["branch_manager", "department_head"] },
+  { from: "دراسة", to: "استكمال_البيانات", allowedRoles: ["branch_manager", "department_head"] },
   { from: "تحرير_المذكرة", to: "دراسة", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "إحالة_للجنة_المراجعة", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "cases_review_head"] },
-  { from: "الأخذ_بالملاحظات", to: "تحرير_المذكرة", allowedRoles: ["branch_manager"] },
-  { from: "تم_الرفع_للدائرة", to: "الأخذ_بالملاحظات", allowedRoles: ["branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "cases_review_head", "department_head"] },
+  { from: "الأخذ_بالملاحظات", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "department_head"] },
+  { from: "تم_الرفع_للدائرة", to: "الأخذ_بالملاحظات", allowedRoles: ["branch_manager", "department_head"] },
 ];
 
 const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   // Forward transitions
-  { from: "استلام", to: "دراسة", allowedRoles: ["admin_support", "branch_manager"] },
-  { from: "دراسة", to: "إعداد_الرد", allowedRoles: ["department_head", "branch_manager"] },
-  { from: "إعداد_الرد", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
-  { from: "لجنة_المراجعة", to: "جاهز", allowedRoles: ["consultations_review_head", "branch_manager"] },
-  { from: "لجنة_المراجعة", to: "تعديلات", allowedRoles: ["consultations_review_head", "branch_manager"] },
-  { from: "تعديلات", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager"] },
+  { from: "استلام", to: "دراسة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "دراسة", to: "إعداد_الرد", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "إعداد_الرد", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "لجنة_المراجعة", to: "جاهز", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
+  { from: "لجنة_المراجعة", to: "تعديلات", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
+  { from: "تعديلات", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
   { from: "جاهز", to: "مسلّم", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "مسلّم", to: "مغلق", allowedRoles: ["admin_support", "branch_manager"] },
+  { from: "مسلّم", to: "مغلق", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   // Backward transitions
-  { from: "دراسة", to: "استلام", allowedRoles: ["branch_manager"] },
+  { from: "دراسة", to: "استلام", allowedRoles: ["branch_manager", "department_head"] },
   { from: "إعداد_الرد", to: "دراسة", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "لجنة_المراجعة", to: "إعداد_الرد", allowedRoles: ["branch_manager", "consultations_review_head"] },
-  { from: "جاهز", to: "تعديلات", allowedRoles: ["branch_manager"] },
+  { from: "لجنة_المراجعة", to: "إعداد_الرد", allowedRoles: ["branch_manager", "consultations_review_head", "department_head"] },
+  { from: "جاهز", to: "تعديلات", allowedRoles: ["branch_manager", "department_head"] },
 ];
 
 // Legacy stage name mapping
@@ -144,11 +144,20 @@ const LEGACY_CASE_STAGE_MAP: Record<string, string> = {
   "رفع_للدائرة": "تم_الرفع_للدائرة",
 };
 
+function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
+  if (entityData.primaryLawyerId === user.id || entityData.responsibleLawyerId === user.id) return true;
+  if (entityData.assignedTo === user.id) return true;
+  if (Array.isArray(entityData.assignedLawyers) && entityData.assignedLawyers.includes(user.id)) return true;
+  return false;
+}
+
 function validateStageTransition(
   currentStage: string,
   targetStage: string,
   userRole: string,
-  entityType: "case" | "consultation"
+  entityType: "case" | "consultation",
+  user?: { id: string },
+  entityData?: any
 ): { allowed: boolean; reason?: string } {
   const normalizedCurrent = entityType === "case"
     ? (LEGACY_CASE_STAGE_MAP[currentStage] || currentStage)
@@ -165,7 +174,12 @@ function validateStageTransition(
     return { allowed: false, reason: `لا يمكن الانتقال من "${normalizedCurrent}" إلى "${targetStage}"` };
   }
 
-  if (!rule.allowedRoles.includes(userRole)) {
+  const effectiveRoles = [userRole];
+  if (entityType === "case" && user && entityData && isAssignedLawyer(user, entityData)) {
+    effectiveRoles.push("assigned_lawyer");
+  }
+
+  if (!effectiveRoles.some(role => rule.allowedRoles.includes(role))) {
     return { allowed: false, reason: "ليس لديك صلاحية لتنفيذ هذا الانتقال" };
   }
 
@@ -942,7 +956,7 @@ export async function registerRoutes(
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
-        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case");
+        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, existing);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -1172,7 +1186,7 @@ export async function registerRoutes(
 
       // Validate stage transition if changing status
       if (req.body.status && req.body.status !== existing.status) {
-        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation");
+        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
