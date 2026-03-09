@@ -905,6 +905,7 @@ export interface LawCase {
   courtCaseNumber: string;
   judgeName: string;
   circuitNumber: string;
+  plaintiffName: string;
   opponentName: string;
   opponentLawyer: string;
   opponentPhone: string;
@@ -1243,6 +1244,7 @@ export const insertCaseSchema = z.object({
   courtName: z.string().optional().default(""),
   courtCaseNumber: z.string().optional().default(""),
   judgeName: z.string().optional().default(""),
+  plaintiffName: z.string().optional().default(""),
   opponentName: z.string().optional().default(""),
   opponentLawyer: z.string().optional().default(""),
   opponentPhone: z.string().optional().default(""),

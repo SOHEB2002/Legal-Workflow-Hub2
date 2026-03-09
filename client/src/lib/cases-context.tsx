@@ -130,7 +130,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const caseData = {
       caseNumber: generateCaseNumber(),
       clientId: data.clientId || "",
-      plaintiffName: (data as any).plaintiffName || "",
+      plaintiffName: data.plaintiffName || "",
       caseType: data.caseType || "عام",
       caseTypeOther: data.caseTypeOther || "",
       departmentOther: data.departmentOther || "",
