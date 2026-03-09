@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   Info,
+  Pencil,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -257,6 +258,93 @@ export default function CasesPage() {
   const [transferData, setTransferData] = useState({ toDepartmentId: "", reason: "" });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [caseToDelete, setCaseToDelete] = useState<any>(null);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editCaseId, setEditCaseId] = useState<string | null>(null);
+  const [editFormData, setEditFormData] = useState({
+    clientId: "",
+    plaintiffName: "",
+    caseType: "عام" as CaseTypeValue,
+    caseTypeOther: "",
+    departmentId: "",
+    departmentOther: "",
+    priority: "متوسط" as PriorityType,
+    courtName: "",
+    courtCaseNumber: "",
+    judgeName: "",
+    circuitNumber: "",
+    opponentName: "",
+    opponentLawyer: "",
+    opponentPhone: "",
+    opponentNotes: "",
+    caseClassification: "" as CaseClassificationValue | "",
+    previousHearingsCount: 0,
+    currentSituation: "",
+    responseDeadline: "",
+    adminCaseSubType: "" as string,
+    prescriptionDate: "",
+  });
+
+  const openEditDialog = (caseItem: LawCase) => {
+    setEditCaseId(caseItem.id);
+    setEditFormData({
+      clientId: caseItem.clientId || "",
+      plaintiffName: (caseItem as any).plaintiffName || "",
+      caseType: (caseItem.caseType || "عام") as CaseTypeValue,
+      caseTypeOther: caseItem.caseTypeOther || "",
+      departmentId: caseItem.departmentId || "",
+      departmentOther: caseItem.departmentOther || "",
+      priority: (caseItem.priority || "متوسط") as PriorityType,
+      courtName: caseItem.courtName || "",
+      courtCaseNumber: caseItem.courtCaseNumber || "",
+      judgeName: caseItem.judgeName || "",
+      circuitNumber: caseItem.circuitNumber || "",
+      opponentName: caseItem.opponentName || "",
+      opponentLawyer: caseItem.opponentLawyer || "",
+      opponentPhone: caseItem.opponentPhone || "",
+      opponentNotes: caseItem.opponentNotes || "",
+      caseClassification: (caseItem.caseClassification || "") as CaseClassificationValue | "",
+      previousHearingsCount: caseItem.previousHearingsCount || 0,
+      currentSituation: caseItem.currentSituation || "",
+      responseDeadline: caseItem.responseDeadline || "",
+      adminCaseSubType: (caseItem as any).adminCaseSubType || "",
+      prescriptionDate: (caseItem as any).prescriptionDate || "",
+    });
+    setShowEditDialog(true);
+  };
+
+  const handleEditCase = async () => {
+    if (!editCaseId) return;
+    try {
+      await updateCase(editCaseId, {
+        clientId: editFormData.clientId,
+        plaintiffName: editFormData.plaintiffName,
+        caseType: editFormData.caseType,
+        caseTypeOther: editFormData.caseTypeOther,
+        departmentId: editFormData.departmentId,
+        departmentOther: editFormData.departmentOther,
+        priority: editFormData.priority,
+        courtName: editFormData.courtName,
+        courtCaseNumber: editFormData.courtCaseNumber,
+        judgeName: editFormData.judgeName,
+        circuitNumber: editFormData.circuitNumber,
+        opponentName: editFormData.opponentName,
+        opponentLawyer: editFormData.opponentLawyer,
+        opponentPhone: editFormData.opponentPhone,
+        opponentNotes: editFormData.opponentNotes,
+        caseClassification: editFormData.caseClassification as CaseClassificationValue,
+        previousHearingsCount: editFormData.previousHearingsCount,
+        currentSituation: editFormData.currentSituation,
+        responseDeadline: editFormData.responseDeadline || null,
+        adminCaseSubType: editFormData.adminCaseSubType || null,
+        prescriptionDate: editFormData.prescriptionDate || null,
+      } as any);
+      toast({ title: "تم تحديث بيانات القضية بنجاح" });
+      setShowEditDialog(false);
+      setEditCaseId(null);
+    } catch (error) {
+      toast({ title: "حدث خطأ أثناء تحديث القضية", variant: "destructive" });
+    }
+  };
 
   const [classificationFilter, setClassificationFilter] = useState<string>("all");
   const [formData, setFormData] = useState({
@@ -666,6 +754,10 @@ export default function CasesPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          <DropdownMenuItem data-testid={`button-edit-${c.id}`} onClick={() => openEditDialog(c)}>
+                            <Pencil className="w-4 h-4 ml-2" />
+                            تعديل البيانات
+                          </DropdownMenuItem>
                           {canAssign(c) && (
                             <DropdownMenuItem data-testid={`button-assign-${c.id}`} onClick={() => openAssignDialog(c)}>
                               <UserPlus className="w-4 h-4 ml-2" />
@@ -1140,7 +1232,20 @@ export default function CasesPage() {
       <Dialog open={showDetailsDialog} onOpenChange={(open) => { setShowDetailsDialog(open); if (!open) setActiveTab("info"); }}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>تفاصيل القضية <LtrInline>{selectedCase?.caseNumber}</LtrInline></DialogTitle>
+            <div className="flex items-center justify-between">
+              <DialogTitle>تفاصيل القضية <LtrInline>{selectedCase?.caseNumber}</LtrInline></DialogTitle>
+              {selectedCase && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-testid="button-edit-from-details"
+                  onClick={() => { setShowDetailsDialog(false); openEditDialog(selectedCase); }}
+                >
+                  <Pencil className="w-4 h-4 ml-2" />
+                  تعديل البيانات
+                </Button>
+              )}
+            </div>
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
@@ -1811,6 +1916,193 @@ export default function CasesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={showEditDialog} onOpenChange={(open) => { setShowEditDialog(open); if (!open) setEditCaseId(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تعديل بيانات القضية</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>العميل</Label>
+              <ClientAutocomplete
+                value={editFormData.clientId}
+                onChange={(clientId) => setEditFormData({ ...editFormData, clientId })}
+              />
+            </div>
+            <div>
+              <Label>اسم المدعي <span className="text-xs text-muted-foreground">(إذا كان مختلفاً عن العميل)</span></Label>
+              <SmartInput
+                inputType="text"
+                data-testid="edit-plaintiff-name"
+                value={editFormData.plaintiffName}
+                onChange={(e) => setEditFormData({ ...editFormData, plaintiffName: e.target.value })}
+                placeholder="مثال: شركة بيت الجودة"
+              />
+            </div>
+            <div>
+              <Label>اسم الخصم</Label>
+              <SmartInput
+                inputType="text"
+                data-testid="edit-opponent-name"
+                value={editFormData.opponentName}
+                onChange={(e) => setEditFormData({ ...editFormData, opponentName: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>نوع القضية</Label>
+                <Select
+                  value={editFormData.caseType}
+                  onValueChange={(value: CaseTypeValue) => setEditFormData({ ...editFormData, caseType: value, caseTypeOther: "" })}
+                >
+                  <SelectTrigger data-testid="edit-case-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.values(CaseType).map((type) => (
+                      <SelectItem key={type} value={type}>{type}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {editFormData.caseType === "أخرى" && (
+                  <SmartInput
+                    inputType="text"
+                    data-testid="edit-case-type-other"
+                    value={editFormData.caseTypeOther}
+                    onChange={(e) => setEditFormData({ ...editFormData, caseTypeOther: e.target.value })}
+                    placeholder="اكتب نوع القضية..."
+                    className="mt-2"
+                  />
+                )}
+              </div>
+              <div>
+                <Label>الأولوية</Label>
+                <Select
+                  value={editFormData.priority}
+                  onValueChange={(value: PriorityType) => setEditFormData({ ...editFormData, priority: value })}
+                >
+                  <SelectTrigger data-testid="edit-priority">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.values(Priority).map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label>القسم</Label>
+              <Select
+                value={editFormData.departmentId}
+                onValueChange={(value) => setEditFormData({ ...editFormData, departmentId: value, departmentOther: "" })}
+              >
+                <SelectTrigger data-testid="edit-department">
+                  <SelectValue placeholder="اختر القسم" />
+                </SelectTrigger>
+                <SelectContent>
+                  {departments.map((dept) => (
+                    <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
+                  ))}
+                  <SelectItem value="أخرى">أخرى</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>رقم القضية لدى المحكمة</Label>
+              <SmartInput
+                inputType="code"
+                data-testid="edit-court-case-number"
+                value={editFormData.courtCaseNumber}
+                onChange={(e) => setEditFormData({ ...editFormData, courtCaseNumber: e.target.value })}
+                placeholder="أدخل رقم القضية لدى المحكمة"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>المحكمة</Label>
+                <SmartInput
+                  inputType="text"
+                  data-testid="edit-court-name"
+                  value={editFormData.courtName}
+                  onChange={(e) => setEditFormData({ ...editFormData, courtName: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label>الدائرة</Label>
+                <SmartInput
+                  inputType="code"
+                  data-testid="edit-circuit-number"
+                  value={editFormData.circuitNumber}
+                  onChange={(e) => setEditFormData({ ...editFormData, circuitNumber: e.target.value })}
+                />
+              </div>
+            </div>
+            <div>
+              <Label>القاضي</Label>
+              <SmartInput
+                inputType="text"
+                data-testid="edit-judge-name"
+                value={editFormData.judgeName}
+                onChange={(e) => setEditFormData({ ...editFormData, judgeName: e.target.value })}
+              />
+            </div>
+            <div className="border-t pt-4">
+              <h4 className="font-semibold mb-3">بيانات الخصم</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>محامي الخصم</Label>
+                  <SmartInput
+                    inputType="text"
+                    data-testid="edit-opponent-lawyer"
+                    value={editFormData.opponentLawyer}
+                    onChange={(e) => setEditFormData({ ...editFormData, opponentLawyer: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label>هاتف الخصم</Label>
+                  <SmartInput
+                    inputType="code"
+                    data-testid="edit-opponent-phone"
+                    value={editFormData.opponentPhone}
+                    onChange={(e) => setEditFormData({ ...editFormData, opponentPhone: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="mt-3">
+                <Label>ملاحظات عن الخصم</Label>
+                <Textarea
+                  data-testid="edit-opponent-notes"
+                  value={editFormData.opponentNotes}
+                  onChange={(e) => setEditFormData({ ...editFormData, opponentNotes: e.target.value })}
+                  rows={2}
+                />
+              </div>
+            </div>
+            {editFormData.caseClassification === CaseClassification.DEFENDANT && (
+              <div>
+                <Label>موعد الرد</Label>
+                <SmartInput
+                  inputType="date"
+                  data-testid="edit-response-deadline"
+                  value={editFormData.responseDeadline}
+                  onChange={(e) => setEditFormData({ ...editFormData, responseDeadline: e.target.value })}
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2 mt-4">
+            <Button variant="outline" onClick={() => setShowEditDialog(false)} data-testid="button-cancel-edit">
+              إلغاء
+            </Button>
+            <Button onClick={handleEditCase} data-testid="button-save-edit" className="bg-accent text-accent-foreground hover:bg-accent/90">
+              حفظ التعديلات
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
