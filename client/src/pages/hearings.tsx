@@ -355,10 +355,12 @@ export default function HearingsPage() {
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
-    if (!caseData) return { number: caseId || "بدون قضية", client: "" };
+    if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "" };
     return {
       number: caseData.caseNumber,
       client: getClientName(caseData.clientId),
+      plaintiff: (caseData as any).plaintiffName || "",
+      opponent: caseData.opponentName || "",
     };
   };
 
@@ -604,6 +606,7 @@ export default function HearingsPage() {
                   <TableRow>
                     <TableHead className="text-right">التاريخ والوقت</TableHead>
                     <TableHead className="text-right">القضية</TableHead>
+                    <TableHead className="text-right">الخصم</TableHead>
                     <TableHead className="text-right">المحكمة</TableHead>
                     <TableHead className="text-right">الحالة</TableHead>
                     <TableHead className="text-right">النتيجة</TableHead>
@@ -629,10 +632,16 @@ export default function HearingsPage() {
                           <TableCell>
                             <div>
                               <p className="font-medium text-sm"><LtrInline>{caseInfo.number}</LtrInline></p>
-                              {caseInfo.client && (
+                              {(caseInfo.plaintiff || caseInfo.client) && (
+                                <p className="text-xs font-medium">{caseInfo.plaintiff || caseInfo.client}</p>
+                              )}
+                              {caseInfo.plaintiff && caseInfo.client && (
                                 <p className="text-xs text-muted-foreground">{caseInfo.client}</p>
                               )}
                             </div>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm">{caseInfo.opponent || "-"}</span>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1 text-sm">

@@ -45,6 +45,7 @@ import { useMemos } from "@/lib/memos-context";
 import { useCases } from "@/lib/cases-context";
 import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
+import { useClients } from "@/lib/clients-context";
 import {
   MemoType,
   MemoTypeLabels,
@@ -117,6 +118,7 @@ export default function MemosPage() {
   const { cases } = useCases();
   const { user } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
+  const { clients } = useClients();
   const { toast } = useToast();
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -241,6 +243,24 @@ export default function MemosPage() {
     return c?.caseNumber || caseId;
   };
 
+  const getCaseDetails = (caseId: string) => {
+    const c = cases.find(cs => cs.id === caseId);
+    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "" };
+    return {
+      number: c.caseNumber,
+      plaintiff: (c as any).plaintiffName || "",
+      client: getClientName(c.clientId),
+      opponent: c.opponentName || "",
+    };
+  };
+
+  const getClientName = (clientId: string): string => {
+    if (!clientId) return "";
+    const client = clients.find((cl: any) => cl.id === clientId);
+    if (!client) return "";
+    return client.clientType === "شركة" ? (client.companyName || "") : (client.individualName || "");
+  };
+
   const activeMemos = getActiveMemos();
   const overdueMemos = getOverdueMemos();
   const assignableUsers = users.filter(u => u.canBeAssignedCases && u.isActive);
@@ -354,6 +374,7 @@ export default function MemosPage() {
                   <TableRow>
                     <TableHead className="text-right">العنوان</TableHead>
                     <TableHead className="text-right">القضية</TableHead>
+                    <TableHead className="text-right">الخصم</TableHead>
                     <TableHead className="text-right">المحامي المكلف</TableHead>
                     <TableHead className="text-right">الموعد النهائي</TableHead>
                     <TableHead className="text-right">الحالة</TableHead>
@@ -364,7 +385,9 @@ export default function MemosPage() {
                 <TableBody>
                   {filteredMemos
                     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-                    .map((memo) => (
+                    .map((memo) => {
+                      const caseDetails = getCaseDetails(memo.caseId);
+                      return (
                       <TableRow key={memo.id} data-testid={`row-memo-${memo.id}`}>
                         <TableCell>
                           <div>
@@ -375,7 +398,18 @@ export default function MemosPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm"><LtrInline>{getCaseNumber(memo.caseId)}</LtrInline></span>
+                          <div>
+                            <span className="text-sm"><LtrInline>{caseDetails.number}</LtrInline></span>
+                            {(caseDetails.plaintiff || caseDetails.client) && (
+                              <p className="text-xs font-medium">{caseDetails.plaintiff || caseDetails.client}</p>
+                            )}
+                            {caseDetails.plaintiff && caseDetails.client && (
+                              <p className="text-xs text-muted-foreground">{caseDetails.client}</p>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm">{caseDetails.opponent || "-"}</span>
                         </TableCell>
                         <TableCell>
                           <span className="text-sm">{getUserName(memo.assignedTo)}</span>
@@ -411,7 +445,8 @@ export default function MemosPage() {
                           </div>
                         </TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                 </TableBody>
               </Table>
             </div>

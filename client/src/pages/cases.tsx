@@ -261,6 +261,7 @@ export default function CasesPage() {
   const [classificationFilter, setClassificationFilter] = useState<string>("all");
   const [formData, setFormData] = useState({
     clientId: "",
+    plaintiffName: "",
     caseType: "عام" as CaseTypeValue,
     caseTypeOther: "",
     departmentId: "",
@@ -287,6 +288,7 @@ export default function CasesPage() {
   const resetForm = () => {
     setFormData({
       clientId: "",
+      plaintiffName: "",
       caseType: "عام",
       caseTypeOther: "",
       departmentId: "",
@@ -326,6 +328,7 @@ export default function CasesPage() {
     }
     await addCase({
       clientId: formData.clientId || "",
+      plaintiffName: formData.plaintiffName || "",
       caseType: formData.caseType,
       caseTypeOther: formData.caseTypeOther,
       departmentId: formData.departmentId,
@@ -580,20 +583,22 @@ export default function CasesPage() {
           <div className="overflow-x-auto">
           <Table className="w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '13%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '13%' }} />
               <col style={{ width: '11%' }} />
               <col style={{ width: '7%' }} />
-              <col style={{ width: '15%' }} />
-              <col style={{ width: '13%' }} />
               <col style={{ width: '7%' }} />
               <col style={{ width: '7%' }} />
-              <col style={{ width: '8%' }} />
             </colgroup>
             <TableHeader>
               <TableRow>
                 <TableHead className="text-right">رقم القضية</TableHead>
-                <TableHead className="text-right">العميل</TableHead>
+                <TableHead className="text-right">المدعي / العميل</TableHead>
+                <TableHead className="text-right">الخصم</TableHead>
                 <TableHead className="text-right">التصنيف</TableHead>
                 <TableHead className="text-right">النوع</TableHead>
                 <TableHead className="text-right">المرحلة</TableHead>
@@ -607,7 +612,19 @@ export default function CasesPage() {
               {filteredCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
                   <TableCell className="font-medium overflow-hidden"><div className="truncate"><LtrInline>{c.caseNumber}</LtrInline></div></TableCell>
-                  <TableCell className="overflow-hidden"><div className="truncate" title={getClientName(c.clientId)}>{getClientName(c.clientId)}</div></TableCell>
+                  <TableCell className="overflow-hidden">
+                    <div>
+                      <div className="truncate font-medium text-sm" title={(c as any).plaintiffName || getClientName(c.clientId)}>
+                        {(c as any).plaintiffName || getClientName(c.clientId)}
+                      </div>
+                      {(c as any).plaintiffName && getClientName(c.clientId) && (
+                        <div className="truncate text-xs text-muted-foreground" title={getClientName(c.clientId)}>
+                          {getClientName(c.clientId)}
+                        </div>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="overflow-hidden"><div className="truncate text-sm" title={c.opponentName}>{c.opponentName || "-"}</div></TableCell>
                   <TableCell className="overflow-hidden">
                     <Badge variant="outline" className={`whitespace-nowrap text-xs ${
                       c.caseClassification === CaseClassification.DEFENDANT
@@ -791,6 +808,16 @@ export default function CasesPage() {
                   <ClientAutocomplete
                     value={formData.clientId}
                     onChange={(clientId) => setFormData({ ...formData, clientId })}
+                  />
+                </div>
+                <div>
+                  <Label>اسم المدعي <span className="text-xs text-muted-foreground">(إذا كان مختلفاً عن العميل)</span></Label>
+                  <SmartInput
+                    inputType="text"
+                    data-testid="input-plaintiff-name"
+                    value={formData.plaintiffName}
+                    onChange={(e) => setFormData({ ...formData, plaintiffName: e.target.value })}
+                    placeholder="مثال: شركة بيت الجودة (منشأة تابعة للعميل)"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -1163,6 +1190,16 @@ export default function CasesPage() {
                     <div>
                       <Label className="text-muted-foreground">العميل</Label>
                       <p className="font-medium"><BidiText>{getClientName(selectedCase.clientId)}</BidiText></p>
+                    </div>
+                    {(selectedCase as any).plaintiffName && (
+                      <div>
+                        <Label className="text-muted-foreground">اسم المدعي</Label>
+                        <p className="font-medium"><BidiText>{(selectedCase as any).plaintiffName}</BidiText></p>
+                      </div>
+                    )}
+                    <div>
+                      <Label className="text-muted-foreground">الخصم</Label>
+                      <p className="font-medium"><BidiText>{selectedCase.opponentName || "-"}</BidiText></p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">المحامي المسؤول</Label>

@@ -59,6 +59,7 @@ export const lawCases = pgTable("law_cases", {
   najizNumber: varchar("najiz_number", { length: 100 }).default(""),
   judgeName: varchar("judge_name", { length: 255 }).default(""),
   circuitNumber: varchar("circuit_number", { length: 100 }).default(""),
+  plaintiffName: varchar("plaintiff_name", { length: 255 }).default(""),
   opponentName: varchar("opponent_name", { length: 255 }).default(""),
   opponentLawyer: varchar("opponent_lawyer", { length: 255 }).default(""),
   opponentPhone: varchar("opponent_phone", { length: 50 }).default(""),
