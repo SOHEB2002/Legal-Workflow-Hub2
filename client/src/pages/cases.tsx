@@ -836,7 +836,7 @@ export default function CasesPage() {
       </Card>
 
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <DialogTitle>إضافة قضية جديدة</DialogTitle>
           </DialogHeader>
@@ -1230,7 +1230,7 @@ export default function CasesPage() {
       </Dialog>
 
       <Dialog open={showDetailsDialog} onOpenChange={(open) => { setShowDetailsDialog(open); if (!open) setActiveTab("info"); }}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <div className="flex items-center justify-between">
               <DialogTitle>تفاصيل القضية <LtrInline>{selectedCase?.caseNumber}</LtrInline></DialogTitle>
@@ -1736,7 +1736,7 @@ export default function CasesPage() {
       </Dialog>
 
       <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ClipboardCheck className="w-5 h-5" />
@@ -1764,7 +1764,7 @@ export default function CasesPage() {
       </Dialog>
 
       <Dialog open={showReminderDialog} onOpenChange={setShowReminderDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Bell className="w-5 h-5 text-accent" />
@@ -1840,7 +1840,7 @@ export default function CasesPage() {
       </Dialog>
 
       <Dialog open={showTransferDialog} onOpenChange={setShowTransferDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ArrowLeftRight className="w-5 h-5" />

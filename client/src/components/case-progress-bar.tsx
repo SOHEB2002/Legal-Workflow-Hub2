@@ -61,7 +61,7 @@ export function CaseProgressBar({
   };
 
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full space-y-4" dir="rtl">
       <div className="flex items-center justify-between gap-2 overflow-x-auto pb-2">
         {stagesOrder.map((stage, index) => {
           const status = getStageStatus(index);
