@@ -329,6 +329,10 @@
     unicode-bidi: plaintext;
   }
 
+  table, thead, tbody, tfoot, tr, th, td {
+    text-align: right;
+  }
+
   input[type="date"],
   input[type="time"],
   input[type="datetime-local"] {

@@ -300,7 +300,7 @@ export default function NotificationDashboardPage() {
                           style={{ width: `${(count / stats.total) * 100}%` }}
                         />
                       </div>
-                      <span className="text-sm font-medium w-8 text-left">{count}</span>
+                      <span className="text-sm font-medium w-8 text-right">{count}</span>
                     </div>
                   </div>
                 ))}
@@ -330,7 +330,7 @@ export default function NotificationDashboardPage() {
                           style={{ width: `${(count / stats.total) * 100}%` }}
                         />
                       </div>
-                      <span className="text-sm font-medium w-8 text-left">{count}</span>
+                      <span className="text-sm font-medium w-8 text-right">{count}</span>
                     </div>
                   </div>
                 ))}
