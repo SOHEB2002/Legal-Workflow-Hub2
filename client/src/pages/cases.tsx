@@ -911,7 +911,7 @@ export default function CasesPage() {
                     data-testid="input-plaintiff-name"
                     value={formData.plaintiffName}
                     onChange={(e) => setFormData({ ...formData, plaintiffName: e.target.value })}
-                    placeholder="مثال: شركة بيت الجودة (منشأة تابعة للعميل)"
+                    placeholder=""
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -1933,7 +1933,7 @@ export default function CasesPage() {
                 data-testid="edit-plaintiff-name"
                 value={editFormData.plaintiffName}
                 onChange={(e) => setEditFormData({ ...editFormData, plaintiffName: e.target.value })}
-                placeholder="مثال: شركة بيت الجودة"
+                placeholder=""
               />
             </div>
             <div>
