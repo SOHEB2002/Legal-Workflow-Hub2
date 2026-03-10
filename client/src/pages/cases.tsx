@@ -903,7 +903,7 @@ export default function CasesPage() {
                   />
                 </div>
                 <div>
-                  <Label>اسم المدعي <span className="text-xs text-muted-foreground">(إذا كان مختلفاً عن العميل)</span></Label>
+                  <Label>اسم المدعي <span className="text-xs text-muted-foreground">يُسجل اسم المدعي الحقيقي في الدعوى (منشأة تابعة للعميل)</span></Label>
                   <SmartInput
                     inputType="text"
                     data-testid="input-plaintiff-name"
@@ -1931,7 +1931,7 @@ export default function CasesPage() {
               />
             </div>
             <div>
-              <Label>اسم المدعي <span className="text-xs text-muted-foreground">(إذا كان مختلفاً عن العميل)</span></Label>
+              <Label>اسم المدعي <span className="text-xs text-muted-foreground">يُسجل اسم المدعي الحقيقي في الدعوى (منشأة تابعة للعميل)</span></Label>
               <SmartInput
                 inputType="text"
                 data-testid="edit-plaintiff-name"
