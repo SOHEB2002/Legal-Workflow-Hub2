@@ -64,7 +64,9 @@ import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
 import { HearingStatus, HearingResult, CourtType } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
-import { formatDateArabic, formatTimeAmPm } from "@/lib/date-utils";
+import { formatTimeAmPm } from "@/lib/date-utils";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useToast } from "@/hooks/use-toast";
 
 function getUrgencyColor(hearingDate: string) {
@@ -415,12 +417,10 @@ export default function HearingsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>التاريخ</Label>
-                  <Input
-                    dir="ltr"
-                    data-testid="input-hearing-date"
-                    type="date"
+                  <HijriDatePicker
                     value={formData.hearingDate}
-                    onChange={(e) => setFormData({ ...formData, hearingDate: e.target.value })}
+                    onChange={(v) => setFormData({ ...formData, hearingDate: v })}
+                    data-testid="input-hearing-date"
                   />
                 </div>
                 <div>
@@ -624,7 +624,7 @@ export default function HearingsPage() {
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <Badge className={getUrgencyColor(hearing.hearingDate)}>
-                                {formatDateArabic(hearing.hearingDate, "dd MMM yyyy")}
+                                <DualDateDisplay date={hearing.hearingDate} compact />
                               </Badge>
                               <LtrInline className="text-sm text-muted-foreground">{formatTimeAmPm(hearing.hearingTime)}</LtrInline>
                             </div>
@@ -882,12 +882,10 @@ export default function HearingsPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label>تاريخ الجلسة القادمة</Label>
-                    <Input
-                      dir="ltr"
-                      data-testid="input-next-date"
-                      type="date"
+                    <HijriDatePicker
                       value={resultForm.nextHearingDate}
-                      onChange={(e) => setResultForm({ ...resultForm, nextHearingDate: e.target.value })}
+                      onChange={(v) => setResultForm({ ...resultForm, nextHearingDate: v })}
+                      data-testid="input-next-date"
                     />
                   </div>
                   <div>
@@ -976,14 +974,12 @@ export default function HearingsPage() {
                     {resultForm.objectionFeasible && (
                       <div>
                         <Label>مهلة الاعتراض</Label>
-                        <Input
-                          dir="ltr"
-                          data-testid="input-objection-deadline"
-                          type="date"
+                        <HijriDatePicker
                           value={resultForm.objectionDeadline}
-                          onChange={(e) =>
-                            setResultForm({ ...resultForm, objectionDeadline: e.target.value })
+                          onChange={(v) =>
+                            setResultForm({ ...resultForm, objectionDeadline: v })
                           }
+                          data-testid="input-objection-deadline"
                         />
                       </div>
                     )}
@@ -1093,7 +1089,7 @@ export default function HearingsPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <p className="text-xs text-muted-foreground">التاريخ</p>
-                    <p className="font-medium">{formatDateArabic(detailHearing.hearingDate, "dd MMMM yyyy")}</p>
+                    <DualDateDisplay date={detailHearing.hearingDate} />
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">الوقت</p>
@@ -1162,16 +1158,16 @@ export default function HearingsPage() {
                     {detailHearing.objectionDeadline && (
                       <div>
                         <p className="text-xs text-muted-foreground">مهلة الاعتراض</p>
-                        <p className="text-sm">{formatDateArabic(detailHearing.objectionDeadline, "dd MMMM yyyy")}</p>
+                        <DualDateDisplay date={detailHearing.objectionDeadline} />
                       </div>
                     )}
                     {detailHearing.nextHearingDate && (
                       <div>
                         <p className="text-xs text-muted-foreground">الجلسة القادمة</p>
-                        <p className="text-sm">
-                          {formatDateArabic(detailHearing.nextHearingDate, "dd MMMM yyyy")}
+                        <div className="text-sm flex items-center gap-2">
+                          <DualDateDisplay date={detailHearing.nextHearingDate} compact />
                           {detailHearing.nextHearingTime && <> - <LtrInline>{formatTimeAmPm(detailHearing.nextHearingTime)}</LtrInline></>}
-                        </p>
+                        </div>
                       </div>
                     )}
                   </>

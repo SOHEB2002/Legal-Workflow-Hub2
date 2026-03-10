@@ -45,7 +45,8 @@ import { useConsultations } from "@/lib/consultations-context";
 import { useContacts } from "@/lib/contacts-context";
 import type { Client, ClientTypeValue, ContactTypeValue, FollowUpStatusValue } from "@shared/schema";
 import { ClientType, CaseStageLabels, ContactType, ContactTypeLabels, FollowUpStatus, FollowUpStatusLabels } from "@shared/schema";
-import { formatDateArabic } from "@/lib/date-utils";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 export default function ClientsPage() {
   const { clients, addClient, updateClient, deleteClient, getClientName } = useClients();
@@ -184,22 +185,20 @@ export default function ClientsPage() {
         </div>
         <div>
           <Label>تاريخ التواصل</Label>
-          <Input
-            dir="ltr"
-            type="date"
+          <HijriDatePicker
             value={contactFormData.contactDate}
-            onChange={(e) => setContactFormData({ ...contactFormData, contactDate: e.target.value })}
+            onChange={(value) => setContactFormData({ ...contactFormData, contactDate: value })}
+            placeholder="اختر تاريخ التواصل"
             data-testid="input-contact-date"
           />
         </div>
       </div>
       <div>
         <Label>تاريخ المتابعة القادمة (اختياري)</Label>
-        <Input
-          dir="ltr"
-          type="date"
+        <HijriDatePicker
           value={contactFormData.nextFollowUpDate}
-          onChange={(e) => setContactFormData({ ...contactFormData, nextFollowUpDate: e.target.value })}
+          onChange={(value) => setContactFormData({ ...contactFormData, nextFollowUpDate: value })}
+          placeholder="اختر تاريخ المتابعة"
           data-testid="input-followup-date"
         />
       </div>
@@ -640,8 +639,8 @@ export default function ClientsPage() {
                     </div>
                   )}
                 </div>
-                <div className="border-t pt-4 text-sm text-muted-foreground">
-                  تاريخ الإضافة: {formatDateArabic(viewingClient.createdAt)}
+                <div className="border-t pt-4 text-sm text-muted-foreground flex items-center gap-2">
+                  تاريخ الإضافة: <DualDateDisplay date={viewingClient.createdAt} />
                 </div>
               </TabsContent>
 
@@ -683,12 +682,12 @@ export default function ClientsPage() {
                               <Badge variant="outline">{ContactTypeLabels[contact.contactType]}</Badge>
                             </TableCell>
                             <TableCell>
-                              {formatDateArabic(contact.contactDate)}
+                              <DualDateDisplay date={contact.contactDate} />
                             </TableCell>
                             <TableCell>
                               {contact.nextFollowUpDate ? (
                                 <span className={new Date(contact.nextFollowUpDate) < new Date() && contact.followUpStatus === FollowUpStatus.PENDING ? "text-destructive font-medium" : ""}>
-                                  {formatDateArabic(contact.nextFollowUpDate)}
+                                  <DualDateDisplay date={contact.nextFollowUpDate} />
                                 </span>
                               ) : "-"}
                             </TableCell>
@@ -747,7 +746,7 @@ export default function ClientsPage() {
                               <Badge variant="outline">{CaseStageLabels[c.currentStage] || c.currentStage}</Badge>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
-                              {formatDateArabic(c.createdAt)}
+                              <DualDateDisplay date={c.createdAt} />
                             </TableCell>
                           </TableRow>
                         ))}
@@ -782,7 +781,7 @@ export default function ClientsPage() {
                               <Badge variant="outline">{c.status}</Badge>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
-                              {formatDateArabic(c.createdAt)}
+                              <DualDateDisplay date={c.createdAt} />
                             </TableCell>
                           </TableRow>
                         ))}

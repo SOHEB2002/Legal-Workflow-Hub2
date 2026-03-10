@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect } from "react";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
-import { formatDateArabic, formatDateTimeArabic, formatTimeAmPm } from "@/lib/date-utils";
+import { formatTimeAmPm } from "@/lib/date-utils";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import {
   Plus,
   Search,
@@ -1050,12 +1052,10 @@ export default function CasesPage() {
                         </div>
                         <div>
                           <Label>تاريخ التقادم <span className="text-red-500">*</span></Label>
-                          <Input
-                            dir="ltr"
-                            data-testid="input-prescription-date"
-                            type="date"
+                          <HijriDatePicker
                             value={formData.prescriptionDate}
-                            onChange={(e) => setFormData({ ...formData, prescriptionDate: e.target.value })}
+                            onChange={(v) => setFormData({ ...formData, prescriptionDate: v })}
+                            data-testid="input-prescription-date"
                           />
                         </div>
                       </>
@@ -1091,12 +1091,10 @@ export default function CasesPage() {
                 {formData.caseClassification === CaseClassification.DEFENDANT && (
                   <div>
                     <Label>مهلة الرد (تاريخ)</Label>
-                    <Input
-                      dir="ltr"
-                      data-testid="input-response-deadline"
-                      type="date"
+                    <HijriDatePicker
                       value={formData.responseDeadline}
-                      onChange={(e) => setFormData({ ...formData, responseDeadline: e.target.value })}
+                      onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
+                      data-testid="input-response-deadline"
                     />
                   </div>
                 )}
@@ -1105,12 +1103,10 @@ export default function CasesPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label>تاريخ الجلسة القادمة (اختياري)</Label>
-                      <Input
-                        dir="ltr"
-                        data-testid="input-next-hearing-date"
-                        type="date"
+                      <HijriDatePicker
                         value={formData.nextHearingDate}
-                        onChange={(e) => setFormData({ ...formData, nextHearingDate: e.target.value })}
+                        onChange={(v) => setFormData({ ...formData, nextHearingDate: v })}
+                        data-testid="input-next-hearing-date"
                       />
                     </div>
                     <div>
@@ -1373,7 +1369,7 @@ export default function CasesPage() {
                         </div>
                         <div>
                           <Label className="text-muted-foreground">تاريخ التقادم</Label>
-                          <p className="font-medium">{(selectedCase as any).prescriptionDate ? formatDateArabic((selectedCase as any).prescriptionDate) : "-"}</p>
+                          <p className="font-medium">{(selectedCase as any).prescriptionDate ? <DualDateDisplay date={(selectedCase as any).prescriptionDate} compact /> : "-"}</p>
                         </div>
                       </div>
                     </div>
@@ -1518,8 +1514,8 @@ export default function CasesPage() {
                   
                   <div className="border-t pt-4">
                     <div className="flex justify-between text-sm text-muted-foreground">
-                      <span>تاريخ الإنشاء: {formatDateArabic(selectedCase.createdAt)}</span>
-                      <span>آخر تحديث: {formatDateArabic(selectedCase.updatedAt)}</span>
+                      <span>تاريخ الإنشاء: <DualDateDisplay date={selectedCase.createdAt} compact /></span>
+                      <span>آخر تحديث: <DualDateDisplay date={selectedCase.updatedAt} compact /></span>
                     </div>
                   </div>
                 </TabsContent>
@@ -1543,7 +1539,7 @@ export default function CasesPage() {
                         <TableBody>
                           {caseHearings.map((hearing) => (
                             <TableRow key={hearing.id}>
-                              <TableCell>{formatDateArabic(hearing.hearingDate)}</TableCell>
+                              <TableCell><DualDateDisplay date={hearing.hearingDate} compact /></TableCell>
                               <TableCell><LtrInline>{formatTimeAmPm(hearing.hearingTime)}</LtrInline></TableCell>
                               <TableCell>{hearing.courtName}</TableCell>
                               <TableCell>
@@ -1570,7 +1566,7 @@ export default function CasesPage() {
                             <div className="text-sm text-muted-foreground">
                               <span>{transition.userName}</span>
                               <span className="mx-2">•</span>
-                              <span>{formatDateTimeArabic(transition.timestamp)}</span>
+                              <DualDateDisplay date={transition.timestamp} showTime compact />
                             </div>
                             {transition.notes && (
                               <p className="mt-1 text-sm bg-muted p-2 rounded">{transition.notes}</p>
@@ -1639,7 +1635,7 @@ export default function CasesPage() {
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                                   <span>{users.find(u => u.id === att.uploadedBy)?.name || "غير معروف"}</span>
                                   <span>-</span>
-                                  <span>{formatDateTimeArabic(att.createdAt)}</span>
+                                  <DualDateDisplay date={att.createdAt} showTime compact />
                                 </div>
                               </div>
                             </div>
@@ -1706,7 +1702,7 @@ export default function CasesPage() {
                               <div className="flex items-center gap-2 mb-2">
                                 <span className="font-medium">{comment.userName}</span>
                                 <span className="text-xs text-muted-foreground">
-                                  {formatDateTimeArabic(comment.createdAt)}
+                                  <DualDateDisplay date={comment.createdAt} showTime compact />
                                 </span>
                               </div>
                               <p className="text-sm">{comment.content}</p>
@@ -2084,11 +2080,10 @@ export default function CasesPage() {
             {editFormData.caseClassification === CaseClassification.DEFENDANT && (
               <div>
                 <Label>موعد الرد</Label>
-                <SmartInput
-                  inputType="date"
-                  data-testid="edit-response-deadline"
+                <HijriDatePicker
                   value={editFormData.responseDeadline}
-                  onChange={(e) => setEditFormData({ ...editFormData, responseDeadline: e.target.value })}
+                  onChange={(v) => setEditFormData({ ...editFormData, responseDeadline: v })}
+                  data-testid="edit-response-deadline"
                 />
               </div>
             )}

@@ -1,7 +1,7 @@
-# نظام إدارة مكتب المحاماة - Law Firm Management System
+# Law Firm Management System
 
 ## Overview
-This is an integrated law firm management system with an Arabic RTL interface. It features a luxurious, formal design using dark navy and gold colors, supporting 10 functional roles and 4 different departments. The system streamlines case management, consultations, client interactions, field tasks, and internal communications, aiming to enhance efficiency and decision-making within law firms. Key capabilities include comprehensive case lifecycle tracking, client relationship management, and performance analytics.
+This project is an integrated law firm management system with an Arabic RTL interface, featuring a luxurious and formal design. It supports 10 functional roles across 4 departments, aiming to streamline case management, client interactions, consultations, field tasks, and internal communications. The system's core purpose is to enhance efficiency, improve decision-making, and provide comprehensive tools for managing the entire lifecycle of legal operations within a law firm. It includes robust case tracking, client relationship management, and performance analytics capabilities.
 
 ## User Preferences
 I prefer clear and concise communication. For any proposed changes, please provide a high-level overview first. I value iterative development and prefer to review major architectural decisions before implementation. Ensure all output is in Arabic.
@@ -28,108 +28,42 @@ I prefer clear and concise communication. For any proposed changes, please provi
 ## System Architecture
 
 ### UI/UX Decisions
-The system features a formal and luxurious design.
-- **Logo**: Al-Awn Company logo.
-- **Primary Color**: Petrol Blue (#345774) for sidebars and headers.
-- **Accent Color**: Gold (#D4AF37) for active buttons and icons.
-- **Backgrounds**: Pure white (#FFFFFF) for cards, light gray (#F9FAFB) for the general background.
-- **Fonts**: Tajawal, Cairo.
+The system features a formal and luxurious design with an Arabic RTL interface.
+- **Color Scheme**: Primary Petrol Blue (#345774), Accent Gold (#D4AF37), Pure White (#FFFFFF) for cards, Light Gray (#F9FAFB) for backgrounds.
+- **Typography**: Tajawal and Cairo fonts.
 - **Theme**: Supports both dark and light modes.
-- **Borders**: `rounded-lg` for buttons and cards.
-- **Shadows**: `shadow-sm` for element separation.
-- **Responsiveness**: The design is responsive and supports all devices.
+- **Styling**: `rounded-lg` borders for components, `shadow-sm` for element separation.
+- **Responsiveness**: Designed to be fully responsive across all devices.
 
 ### Technical Implementations
-- **Frontend**: React, TypeScript, Tailwind CSS, Shadcn/UI (components), React Context with API + localStorage (state management), Wouter (routing).
-- **Backend**: Express.js, Node.js.
+- **Frontend**: React, TypeScript, Tailwind CSS, Shadcn/UI, React Context for state management, Wouter for routing.
+- **Backend**: Node.js with Express.js.
 - **Database**: PostgreSQL with Drizzle ORM.
-- **Authentication**: JWT-based authentication with 10 distinct roles and permissions.
-  - **Token Lifespan**: 2 hours with automatic refresh at 110 minutes.
-  - **Refresh Token**: 30-minute grace period for expired tokens via `/api/auth/refresh`.
-  - **Password Policy**: Minimum 8 characters, must contain letters and numbers.
-  - **Default Password**: `Awn@2024!` for all seed users with `mustChangePassword: true`.
-  - **Rate Limiting**: Login (5 attempts/15 min per IP), API (100 requests/min).
-  - **SESSION_SECRET**: Required environment variable - app exits if not set.
-  - **Forced Password Change**: Users with `mustChangePassword` flag see a change-password screen before accessing the system.
-- **Security Middleware**: `requireAuth` on all API endpoints (except login/refresh), `requireRole` on admin operations.
-- **Data Storage**: Client-side data is temporarily saved in `localStorage`.
-- **API Endpoints**: Ready for future expansion.
-
-### Feature Specifications
-- **Dashboard**: Overview with statistics.
-- **Case Management (`/cases`)**: Tracks cases through 9 stages: Receive, Data Completion, Study, Memorandum Editing, Review Committee, Adjustments, Ready for Submission, Submitted, Closed.
-  - **Case Number Display**: The system prioritizes `courtCaseNumber` (رقم القضية لدى المحكمة) as the primary display number everywhere. Cases under study without a court number show the auto-generated number (`C-YYYY-XXXXXX`). When `courtCaseNumber` is updated, `caseNumber` is automatically synced.
-  - **Department-Specific Workflows for Plaintiff New Cases**:
-    - **Commercial (تجاري)**: Must register in Taradi platform first → attempt reconciliation → if no reconciliation, task created to file in court. Fields: `taradiStatus`, `taradiNumber`.
-    - **Labor (عمالي)**: Must register in MOHR platform → direct client to amicable settlement (notifies admin support) → when settlement ends, task to complete study and file in court. Fields: `mohrStatus`, `mohrNumber`, `amicableSettlementDirected`.
-    - **Administrative (إداري)**: Must specify case sub-type (تظلم/قضية) and prescription date. Fields: `adminCaseSubType`, `prescriptionDate`.
-  - **API Endpoints**: `PATCH /api/cases/:id/taradi`, `PATCH /api/cases/:id/mohr`, `POST /api/cases/:id/direct-settlement`.
-- **Consultation Management (`/consultations`)**: Manages legal consultations.
-- **Hearings Schedule (`/hearings`)**: Manages court hearing schedules.
-- **Client Management (`/clients`)**: Comprehensive client profiles with contact logs.
-- **Field Tasks (`/field-tasks`)**: Manages external tasks (e.g., field review, document delivery, client visit) with statuses (pending, in progress, completed, canceled) and evidence upload.
-- **User Management (`/users`)**: For administrators, including advanced features like password reset, status change, and restrictions on deleting/disabling the last branch manager.
-- **Contact Log (`/clients`)**: Records and tracks client communications (phone, WhatsApp, email, meeting) with follow-up statuses.
-- **Quick Search (Command Palette)**: `Ctrl+K` (or `Cmd+K`) for searching cases, clients, consultations, and hearings.
-- **KPIs (`/kpis`)**: Advanced analytical page for case statistics, completion rates, employee performance, and time-period filtering.
-- **Help Center (`/help`)**: FAQ, system section explanations, role guidelines, and onboarding tour restart.
-- **Onboarding Tour**: 7-step guided tour for new users, savable state in `localStorage`.
-- **Keyboard Shortcuts**: Defined shortcuts for navigation and common actions.
-- **Favorites & Recent Items**: Users can favorite items and view their last 10 visited items, saved in `localStorage`.
-- **Review Standards (`/standards`)**: Quality review system for contracts, consultations, reports, and legal letters, with checklists and review statuses.
-- **Notifications & Alerts**:
-    - **Types**: 19+ types including task reminders, case delays, deadlines, new assignments, escalations, workflow events (STAGE_CHANGED, SLA_WARNING, SLA_OVERDUE, RETURNED_FOR_REVISION, THIRD_RETURN_WARNING, WORKLOAD_HIGH, WORKLOAD_CRITICAL, CASE_ASSIGNED, CONSULTATION_ASSIGNED, SENT_TO_REVIEW).
-    - **Priority Levels**: Low, Medium, High, Urgent.
-    - **Statuses**: Pending, Sent, Read, Replied, Escalated, Archived.
-    - **Features**: Notification bell, send to specific users/departments, scheduling, automatic escalation, 4 response types (approve, reject, in progress, note), dynamic templates.
-    - **User Preferences**: Sound alerts, desktop notifications, notification mode (instant, daily, weekly summary), quiet hours, muting specific types, workflow notification toggles (assignment, stage change, review notes, returns, SLA warnings).
-    - **Rule-Based System**: 10 default notification rules with configurable conditions (stages, priorities, departments), recipients (assigned employee, department head, branch manager, review committee), and auto-escalation settings.
-    - **Workflow Integration**: Automatic notifications triggered by workflow events (case/consultation assignment, stage changes, returns, SLA warnings) via triggerWorkflowNotification function.
-    - **Automated Scheduler** (`server/scheduler.ts`): Background `node-cron` jobs for:
-        - Unupdated hearing alerts: 8h (lawyer+dept head+admin), 24h (branch manager escalation), 48h (final escalation).
-        - Upcoming hearing reminders: 48h and 24h before hearing date.
-        - Memo deadline reminders: 3 days, 1 day, and overdue alerts with `reminderSent*` flags to prevent duplicates.
-        - Legal deadline reminders: 7 days, 3 days, 1 day, and overdue with auto-status update and escalation.
-        - Delegation expiry: Auto-detection and notification when delegations expire.
-        - Contact follow-up: Overdue contact follow-up reminders.
-        - Weekly reports: Sunday 7am summary to managers (new/closed cases, hearings, overdue memos).
-        - Monthly reports: 1st of month summary to branch manager/review head.
-        - Auto-archive: Closed cases automatically archived after 6 months.
-- **Workflow Management System**:
-    - **Workflow Board (`/workflow-board`)**: Kanban-style board for visualizing cases/consultations across stages with drag-like stage progression.
-    - **Workload Dashboard (`/workload-dashboard`)**: Monitors employee workload distribution with overload alerts (>15 items), overdue counts, and bottleneck detection.
-    - **Performance Dashboard (`/performance-dashboard`)**: Analytics dashboard with top 5 performers ranking, return rate warnings, SLA compliance tracking.
-    - **Components**: Stage tracker (7-stage visual), priority badge (animated urgent), SLA indicator (time-remaining), review notes dialog, workload cards.
-    - **SLA Tracking**: Configurable hours per stage, priority-adjusted (urgent -50%, low +50%).
-    - **Review Committee**: Third return triggers escalation to branch manager.
-    - **State Management**: WorkflowProvider context with localStorage persistence.
-- **User Management System** (ENHANCED):
-    - **User Management (`/users`)**: CRUD operations with enhanced dropdown menu (7 actions: edit, password reset, toggle status, view profile, schedule vacation, create delegation, custom permissions, activity log).
-    - **Vacation System**: Schedule vacations with conflict detection, auto-reassignment of cases/consultations, and delegation during absence.
-    - **Delegation System**: Full or partial delegation of permissions to other users with date ranges and reason tracking.
-    - **Custom Permissions**: Role-based permission defaults with granular custom permission overrides, expiration dates, and restriction capabilities.
-    - **Team Management (`/teams`)**: Create and manage teams with leader assignment, member management, and workload tracking.
-    - **Activity Log (`/activity-log`)**: Track all user actions with filtering by user, action type, entity type, and date range with CSV export.
-    - **User Profile (`/user-profile/:id`)**: 6-tab comprehensive view (stats, cases, vacations, delegations, activity log, permissions).
-    - **State Management**: UsersProvider context with localStorage persistence, supports 40+ methods for managing all user-related operations.
-
-- **Enhancement Features (Phase 2)**:
-    - **Lawyer Performance KPIs (`/kpis`)**: Server-side performance API with 5-star rating system, closure rate (30%), hearing update rate (25%), memo completion time (25%), win rate (20%).
-    - **Case Activity Logging**: Automatic activity logging on case create/update/stage changes, hearing results via `logCaseActivity()`. Timeline view in case details.
-    - **Internal Case Notes**: Confidential notes per case with importance marking, edit/delete capabilities.
-    - **Legal Deadline Tracking**: Per-case deadline management with types (legal, administrative, payment, contractual), auto-reminder scheduling, status tracking.
-    - **Delegations Management (`/delegations`)**: Full delegation CRUD with date ranges, permission types (full/partial), revocation.
-    - **Reports & Analytics (`/reports`)**: Court analytics, CSV export with Arabic BOM support, case/consultation statistics.
-    - **File Attachments**: Multer-based file uploads (max 10MB), restricted file types, unique filename storage in `./uploads`.
-    - **Smart Search**: Cross-entity search across cases, clients, consultations, hearings.
-    - **Database Tables**: `case_activity_log`, `case_notes`, `legal_deadlines`, `delegations_table`.
-    - **Token Key**: Standardized to `lawfirm_token` across all frontend components.
+- **Authentication**: JWT-based with 10 distinct roles, 2-hour token lifespan, 30-minute refresh grace period. Strong password policy enforced, with a default password (`Awn@2024!`) requiring immediate change for new seed users. Rate limiting is applied to login attempts and API requests.
+- **Security**: `requireAuth` middleware on all protected API endpoints and `requireRole` for administrative operations.
+- **Dual Calendar System**: All date inputs and displays utilize a dual Hijri/Gregorian calendar, with dates stored internally as ISO Gregorian strings. Custom components (`HijriDatePicker`, `DualDateDisplay`) and utility functions handle conversions and formatting.
+- **Data Storage**: Client-side temporary data stored in `localStorage`.
+- **Key Features**:
+    - **Case Management**: Comprehensive tracking through 9 stages, department-specific workflows for plaintiff cases (Commercial, Labor, Administrative), prioritizing `courtCaseNumber`.
+    - **Consultation Management**: System for managing legal consultations.
+    - **Hearings Schedule**: Management of court hearing dates.
+    - **Client Management**: Detailed client profiles and contact logging.
+    - **Field Tasks**: Management of external tasks with status tracking and evidence upload.
+    - **User Management**: CRUD operations for users, including advanced features like password reset, status toggling, vacation scheduling with conflict detection, delegation system (full/partial permissions), custom permission overrides, and team management.
+    - **Notifications & Alerts**: Rule-based system with 19+ types, priority levels, user preferences (sound, desktop, summary modes), auto-escalation, and integration with workflow events. Automated scheduler handles reminders for hearings, memos, legal deadlines, and delegation expiry.
+    - **Workflow Management**: Kanban-style board, workload dashboard with overload alerts, performance dashboard, SLA tracking, and a review committee process.
+    - **Reporting & Analytics**: KPIs, case activity logging, internal notes, legal deadline tracking, and file attachments.
+    - **Search**: Quick search (command palette) and smart search across entities.
+    - **Onboarding & Help**: Guided tour and help center for user support.
+    - **Activity Log**: Comprehensive tracking of all user actions with filtering and export capabilities.
 
 ## External Dependencies
-- **PostgreSQL**: Integrated database for data persistence.
-- **Drizzle ORM**: Used for database interactions.
+- **PostgreSQL**: Primary database.
+- **Drizzle ORM**: Object-relational mapper for database interactions.
 - **React**: Frontend library.
-- **Node.js/Express.js**: Backend runtime and framework.
+- **Node.js**: Backend runtime.
+- **Express.js**: Backend web framework.
 - **Tailwind CSS**: Utility-first CSS framework.
-- **Shadcn/UI**: UI component library.
-- **Wouter**: Routing library.
+- **Shadcn/UI**: Reusable UI components.
+- **Wouter**: Lightweight React routing library.
+- **node-cron**: For scheduling background jobs.

@@ -4,7 +4,6 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -18,8 +17,9 @@ import { DelegationReasonLabels } from "@shared/schema";
 import {
   Plus, UserCheck, Calendar, Clock, CheckCircle, XCircle, ArrowLeftRight, RefreshCw,
 } from "lucide-react";
-import { BidiText, LtrInline } from "@/components/ui/bidi-text";
-import { formatDateShortArabic } from "@/lib/date-utils";
+import { BidiText } from "@/components/ui/bidi-text";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 function getAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -213,8 +213,8 @@ export default function DelegationsPage() {
                     <TableCell>
                       <Badge variant="outline">{DelegationReasonLabels[d.reason] || d.reason}</Badge>
                     </TableCell>
-                    <TableCell className="text-center"><LtrInline>{formatDateShortArabic(d.startDate)}</LtrInline></TableCell>
-                    <TableCell className="text-center"><LtrInline>{formatDateShortArabic(d.endDate)}</LtrInline></TableCell>
+                    <TableCell className="text-center"><DualDateDisplay date={d.startDate} compact /></TableCell>
+                    <TableCell className="text-center"><DualDateDisplay date={d.endDate} compact /></TableCell>
                     <TableCell className="text-center">
                       {d.scope === "all_cases" ? "جميع القضايا" : "قضايا محددة"}
                     </TableCell>
@@ -293,11 +293,11 @@ export default function DelegationsPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>من تاريخ</Label>
-                <Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} data-testid="input-delegation-start" />
+                <HijriDatePicker value={form.startDate} onChange={(value) => setForm({ ...form, startDate: value })} placeholder="اختر تاريخ البداية" data-testid="input-delegation-start" />
               </div>
               <div>
                 <Label>إلى تاريخ</Label>
-                <Input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} data-testid="input-delegation-end" />
+                <HijriDatePicker value={form.endDate} onChange={(value) => setForm({ ...form, endDate: value })} placeholder="اختر تاريخ النهاية" data-testid="input-delegation-end" />
               </div>
             </div>
             <div>

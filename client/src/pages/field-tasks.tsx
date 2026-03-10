@@ -60,7 +60,8 @@ import {
   type FieldTaskTypeValue,
 } from "@shared/schema";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
-import { formatDateShortArabic, formatDateTimeArabic } from "@/lib/date-utils";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 export default function FieldTasksPage() {
   const { user, permissions, users } = useAuth();
@@ -330,12 +331,11 @@ export default function FieldTasksPage() {
                 </div>
                 <div>
                   <Label>تاريخ الاستحقاق *</Label>
-                  <Input
-                    dir="ltr"
-                    type="date"
+                  <HijriDatePicker
                     data-testid="input-due-date"
                     value={newTask.dueDate}
-                    onChange={(e) => setNewTask({ ...newTask, dueDate: e.target.value })}
+                    onChange={(value) => setNewTask({ ...newTask, dueDate: value })}
+                    placeholder="اختر تاريخ الاستحقاق"
                   />
                 </div>
                 <div>
@@ -466,7 +466,7 @@ export default function FieldTasksPage() {
                     </TableCell>
                     <TableCell><BidiText>{getUserName(task.assignedTo)}</BidiText></TableCell>
                     <TableCell>
-                      <LtrInline>{formatDateShortArabic(task.dueDate)}</LtrInline>
+                      <DualDateDisplay date={task.dueDate} compact />
                     </TableCell>
                     <TableCell>
                       <Badge className={getPriorityColor(task.priority)}>{task.priority}</Badge>
@@ -655,15 +655,11 @@ export default function FieldTasksPage() {
                 </div>
                 <div>
                   <Label className="text-muted-foreground text-sm">تاريخ الاستحقاق</Label>
-                  <p>
-                    <LtrInline>{formatDateShortArabic(selectedTask.dueDate)}</LtrInline>
-                  </p>
+                  <DualDateDisplay date={selectedTask.dueDate} />
                 </div>
                 <div>
                   <Label className="text-muted-foreground text-sm">تاريخ الإنشاء</Label>
-                  <p>
-                    <LtrInline>{formatDateShortArabic(selectedTask.createdAt)}</LtrInline>
-                  </p>
+                  <DualDateDisplay date={selectedTask.createdAt} />
                 </div>
               </div>
               {selectedTask.description && (
@@ -688,9 +684,7 @@ export default function FieldTasksPage() {
                 <>
                   <div>
                     <Label className="text-muted-foreground text-sm">تاريخ الإنجاز</Label>
-                    <p>
-                      <LtrInline>{formatDateTimeArabic(selectedTask.completedAt)}</LtrInline>
-                    </p>
+                    <DualDateDisplay date={selectedTask.completedAt} showTime />
                   </div>
                   {selectedTask.completionNotes && (
                     <div>

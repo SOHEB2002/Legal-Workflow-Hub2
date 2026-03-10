@@ -7,10 +7,10 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
   Select,
   SelectContent,
@@ -124,19 +124,19 @@ export function VacationDialog({ open, onOpenChange, user }: VacationDialogProps
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>تاريخ البداية *</Label>
-              <Input
-                type="date"
+              <HijriDatePicker
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
+                onChange={setStartDate}
+                placeholder="اختر تاريخ البداية"
                 data-testid="input-vacation-start"
               />
             </div>
             <div>
               <Label>تاريخ النهاية *</Label>
-              <Input
-                type="date"
+              <HijriDatePicker
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={setEndDate}
+                placeholder="اختر تاريخ النهاية"
                 data-testid="input-vacation-end"
               />
             </div>

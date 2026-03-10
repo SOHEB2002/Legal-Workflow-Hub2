@@ -58,8 +58,9 @@ import {
 } from "@shared/schema";
 import type { Memo, MemoTypeValue, MemoStatusValue } from "@shared/schema";
 import { differenceInDays } from "date-fns";
-import { formatDateArabic, formatDateTimeArabic } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 function getStatusBadgeClass(status: MemoStatusValue): string {
   switch (status) {
@@ -416,7 +417,7 @@ export default function MemosPage() {
                         </TableCell>
                         <TableCell>
                           <span className={`text-sm ${getDeadlineColor(memo.deadline)}`}>
-                            {formatDateArabic(memo.deadline)}
+                            <DualDateDisplay date={memo.deadline} compact />
                           </span>
                         </TableCell>
                         <TableCell>
@@ -543,12 +544,11 @@ export default function MemosPage() {
               </div>
               <div>
                 <Label>الموعد النهائي *</Label>
-                <Input
-                  dir="ltr"
+                <HijriDatePicker
                   data-testid="input-memo-deadline"
-                  type="date"
                   value={formData.deadline}
-                  onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
+                  onChange={(value) => setFormData({ ...formData, deadline: value })}
+                  placeholder="اختر الموعد النهائي"
                 />
               </div>
             </div>
@@ -626,9 +626,9 @@ export default function MemosPage() {
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">الموعد النهائي</p>
-                    <p className={`font-medium ${getDeadlineColor(detailMemo.deadline)}`}>
-                      {formatDateArabic(detailMemo.deadline)}
-                    </p>
+                    <div className={`font-medium ${getDeadlineColor(detailMemo.deadline)}`}>
+                      <DualDateDisplay date={detailMemo.deadline} />
+                    </div>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">الأولوية</p>
@@ -787,34 +787,34 @@ export default function MemosPage() {
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-primary shrink-0" />
                       <span className="text-muted-foreground">تاريخ الإنشاء:</span>
-                      <span>{formatDateTimeArabic(detailMemo.createdAt)}</span>
+                      <DualDateDisplay date={detailMemo.createdAt} showTime />
                     </div>
                     {detailMemo.startedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
                         <span className="text-muted-foreground">بدء التحرير:</span>
-                        <span>{formatDateTimeArabic(detailMemo.startedAt)}</span>
+                        <DualDateDisplay date={detailMemo.startedAt} showTime />
                       </div>
                     )}
                     {detailMemo.completedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-yellow-500 shrink-0" />
                         <span className="text-muted-foreground">إرسال للمراجعة:</span>
-                        <span>{formatDateTimeArabic(detailMemo.completedAt)}</span>
+                        <DualDateDisplay date={detailMemo.completedAt} showTime />
                       </div>
                     )}
                     {detailMemo.reviewedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
                         <span className="text-muted-foreground">تاريخ المراجعة:</span>
-                        <span>{formatDateTimeArabic(detailMemo.reviewedAt)}</span>
+                        <DualDateDisplay date={detailMemo.reviewedAt} showTime />
                       </div>
                     )}
                     {detailMemo.submittedAt && (
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
                         <span className="text-muted-foreground">تاريخ الرفع:</span>
-                        <span>{formatDateTimeArabic(detailMemo.submittedAt)}</span>
+                        <DualDateDisplay date={detailMemo.submittedAt} showTime />
                       </div>
                     )}
                   </div>

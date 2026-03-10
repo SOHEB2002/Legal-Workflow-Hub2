@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import {
   Dialog,
   DialogContent,
@@ -144,7 +145,7 @@ export function ReviewNotesDialog({
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium">{currentNote.reviewerName}</span>
                   <span className="text-xs text-muted-foreground">
-                    {new Date(currentNote.createdAt).toLocaleDateString("ar-SA")}
+                    <DualDateDisplay date={currentNote.createdAt} compact />
                   </span>
                 </div>
                 <p className="text-sm">{currentNote.notes}</p>

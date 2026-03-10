@@ -18,6 +18,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
 import { FileText, Search, Download, Filter, Clock, User } from "lucide-react";
@@ -203,23 +205,19 @@ export default function ActivityLogPage() {
           <div className="flex flex-wrap items-center gap-4 mt-4">
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">من:</span>
-              <Input
-                dir="ltr"
-                type="date"
+              <HijriDatePicker
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-40"
+                onChange={setStartDate}
+                placeholder="تاريخ البداية"
                 data-testid="input-start-date"
               />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">إلى:</span>
-              <Input
-                dir="ltr"
-                type="date"
+              <HijriDatePicker
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-40"
+                onChange={setEndDate}
+                placeholder="تاريخ النهاية"
                 data-testid="input-end-date"
               />
             </div>
@@ -241,7 +239,7 @@ export default function ActivityLogPage() {
               {filteredLogs.slice(0, 100).map((log) => (
                 <TableRow key={log.id} data-testid={`row-activity-${log.id}`}>
                   <TableCell className="text-sm">
-                    {new Date(log.timestamp).toLocaleString("ar-SA")}
+                    <DualDateDisplay date={log.timestamp} showTime />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">

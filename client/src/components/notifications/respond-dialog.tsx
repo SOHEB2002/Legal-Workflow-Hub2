@@ -24,7 +24,7 @@ import {
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
 import { cn } from "@/lib/utils";
-import { formatDateArabic, formatDateTimeArabic } from "@/lib/date-utils";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 interface RespondDialogProps {
   open: boolean;
@@ -112,7 +112,7 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
             <h4 className="font-semibold">{notification.title}</h4>
             <p className="text-sm text-muted-foreground">{notification.message}</p>
             <p className="text-xs text-muted-foreground">
-              من: {notification.senderName} • {formatDateArabic(notification.createdAt)}
+              من: {notification.senderName} • <DualDateDisplay date={notification.createdAt} compact />
             </p>
           </div>
 
@@ -133,7 +133,7 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
               {existingResponse.respondedAt && (
                 <p className="text-xs text-green-600 dark:text-green-400">
                   {existingResponse.responderName ? `${existingResponse.responderName} • ` : ""}
-                  {formatDateTimeArabic(existingResponse.respondedAt)}
+                  <DualDateDisplay date={existingResponse.respondedAt} showTime compact />
                 </p>
               )}
             </div>

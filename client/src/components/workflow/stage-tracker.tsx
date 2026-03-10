@@ -1,5 +1,6 @@
 import { Check, Clock, AlertTriangle, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import {
   WorkflowCaseStageValue,
   ConsultationStageValue,
@@ -162,7 +163,7 @@ export function StageTracker({
                     {stageInfo && (
                       <>
                         <p className="text-xs text-muted-foreground">
-                          {new Date(stageInfo.timestamp).toLocaleDateString("ar-SA")}
+                          <DualDateDisplay date={stageInfo.timestamp} compact />
                         </p>
                         {stageInfo.userName && (
                           <p className="text-xs">بواسطة: {stageInfo.userName}</p>

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Bell, CheckCheck, Trash2, Archive, Send, Filter, ArrowUpCircle, Eye, RefreshCw, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -42,7 +41,7 @@ import {
 } from "@shared/schema";
 import type { Notification, NotificationTypeValue, NotificationPriorityValue, ResponseTypeValue } from "@shared/schema";
 import { cn } from "@/lib/utils";
-import { formatDateTimeArabic } from "@/lib/date-utils";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { Link } from "wouter";
 
 function getPriorityColor(priority: string): string {
@@ -56,10 +55,6 @@ function getPriorityColor(priority: string): string {
     default:
       return "bg-muted text-muted-foreground";
   }
-}
-
-function formatDate(dateStr: string): string {
-  return formatDateTimeArabic(dateStr);
 }
 
 export default function NotificationsPage() {
@@ -316,7 +311,7 @@ export default function NotificationsPage() {
                           <span className="text-sm">{notification.senderName}</span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm text-muted-foreground">{formatDate(notification.createdAt)}</span>
+                          <span className="text-sm text-muted-foreground"><DualDateDisplay date={notification.createdAt} showTime compact /></span>
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-col gap-1">

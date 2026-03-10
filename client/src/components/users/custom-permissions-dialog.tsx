@@ -7,10 +7,10 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -214,10 +214,10 @@ export function CustomPermissionsDialog({ open, onOpenChange, user }: CustomPerm
 
           <div>
             <Label>تاريخ الانتهاء (اختياري)</Label>
-            <Input
-              type="date"
+            <HijriDatePicker
               value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
+              onChange={setExpiresAt}
+              placeholder="اختر تاريخ الانتهاء"
               data-testid="input-permissions-expires"
             />
           </div>

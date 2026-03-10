@@ -15,7 +15,9 @@ import {
 } from "lucide-react";
 import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels } from "@shared/schema";
 import { LtrInline } from "@/components/ui/bidi-text";
-import { formatRelativeArabic, formatDateShortArabic } from "@/lib/date-utils";
+import { formatRelativeArabic } from "@/lib/date-utils";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 function getAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -375,10 +377,10 @@ export function CaseDeadlinesTab({ caseId }: { caseId: string }) {
             </div>
             <div>
               <Label>تاريخ البداية</Label>
-              <Input type="date" value={form.startDate} onChange={(e) => {
-                const start = new Date(e.target.value);
+              <HijriDatePicker value={form.startDate} onChange={(v) => {
+                const start = new Date(v);
                 start.setDate(start.getDate() + form.durationDays);
-                setForm({ ...form, startDate: e.target.value, deadlineDate: start.toISOString().split("T")[0] });
+                setForm({ ...form, startDate: v, deadlineDate: start.toISOString().split("T")[0] });
               }} data-testid="input-deadline-start" />
             </div>
             <div>
@@ -396,7 +398,7 @@ export function CaseDeadlinesTab({ caseId }: { caseId: string }) {
             </div>
             <div className="col-span-2">
               <Label>تاريخ الانتهاء</Label>
-              <Input type="date" value={form.deadlineDate} onChange={(e) => setForm({ ...form, deadlineDate: e.target.value })} data-testid="input-deadline-date" />
+              <HijriDatePicker value={form.deadlineDate} onChange={(v) => setForm({ ...form, deadlineDate: v })} data-testid="input-deadline-date" />
             </div>
           </div>
           <Textarea
@@ -453,8 +455,8 @@ export function CaseDeadlinesTab({ caseId }: { caseId: string }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-4 mt-2 text-xs">
-                  <span>من: <LtrInline>{formatDateShortArabic(deadline.startDate)}</LtrInline></span>
-                  <span>إلى: <LtrInline>{formatDateShortArabic(deadline.deadlineDate)}</LtrInline></span>
+                  <span>من: <DualDateDisplay date={deadline.startDate} compact /></span>
+                  <span>إلى: <DualDateDisplay date={deadline.deadlineDate} compact /></span>
                   <span>المدة: {deadline.durationDays} يوم</span>
                   {deadline.status === "نشط" && (
                     <span className="font-bold">

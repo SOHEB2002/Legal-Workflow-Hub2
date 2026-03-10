@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, isWithinInterval, subMonths } from "date-fns";
 import { ar } from "date-fns/locale";
 import { useQuery } from "@tanstack/react-query";
-import { formatDateShortArabic, formatMonthYearArabic } from "@/lib/date-utils";
+import { formatDateShortArabic } from "@/lib/date-utils";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import {
   Briefcase,
   MessageSquare,
@@ -966,7 +967,7 @@ function HearingsReportSection() {
                   <TableRow key={hearing.id} data-testid={`row-hearing-${hearing.id}`}>
                     <TableCell className="font-medium">{getCaseName(hearing.caseId)}</TableCell>
                     <TableCell>
-                      {formatDateShortArabic(hearing.hearingDate)}
+                      <DualDateDisplay date={hearing.hearingDate} compact />
                     </TableCell>
                     <TableCell>{hearing.hearingTime || "-"}</TableCell>
                     <TableCell>{hearing.courtName || "-"}</TableCell>

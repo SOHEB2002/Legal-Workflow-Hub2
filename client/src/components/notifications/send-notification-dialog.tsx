@@ -1,16 +1,11 @@
 import { useState, useEffect } from "react";
-import { Send, Calendar as CalendarIcon, AlertTriangle, Users, CalendarDays } from "lucide-react";
+import { Send, Calendar as CalendarIcon, AlertTriangle, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Calendar } from "@/components/ui/calendar";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
   Dialog,
   DialogContent,
@@ -25,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatDateArabic } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
 import { useNotifications } from "@/lib/notifications-context";
 import { useAuth } from "@/lib/auth-context";
@@ -82,7 +76,7 @@ export function SendNotificationDialog({
   const [relatedId, setRelatedId] = useState(prefilledRelatedId || "");
   const [requiresResponse, setRequiresResponse] = useState(false);
   const [enableSchedule, setEnableSchedule] = useState(false);
-  const [scheduledDate, setScheduledDate] = useState<Date | undefined>(undefined);
+  const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("12:00");
   const [enableAutoEscalate, setEnableAutoEscalate] = useState(false);
   const [autoEscalateHours, setAutoEscalateHours] = useState("24");
@@ -140,7 +134,7 @@ export function SendNotificationDialog({
       relatedType: relatedType || null,
       relatedId: relatedId || null,
       requiresResponse,
-      scheduledAt: enableSchedule && scheduledDate ? `${scheduledDate.toISOString().split('T')[0]}T${scheduledTime}` : null,
+      scheduledAt: enableSchedule && scheduledDate ? `${scheduledDate}T${scheduledTime}` : null,
       autoEscalateAfterHours: enableAutoEscalate ? parseInt(autoEscalateHours) : 0,
       isAutomatic: false,
       relatedStage: null,
@@ -154,7 +148,7 @@ export function SendNotificationDialog({
           return;
         }
         if (enableSchedule && scheduledDate) {
-          const scheduledAtStr = `${scheduledDate.toISOString().split('T')[0]}T${scheduledTime}`;
+          const scheduledAtStr = `${scheduledDate}T${scheduledTime}`;
           scheduleNotification({ ...baseNotification, recipientId, status: "pending" }, scheduledAtStr);
         } else {
           sendNotification({ ...baseNotification, recipientId });
@@ -400,29 +394,13 @@ export function SendNotificationDialog({
             </div>
             {enableSchedule && (
               <div className="mt-2 flex gap-2 items-center">
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className={cn(
-                        "justify-start text-right font-normal flex-1",
-                        !scheduledDate && "text-muted-foreground"
-                      )}
-                    >
-                      <CalendarDays className="ml-2 h-4 w-4" />
-                      {scheduledDate ? formatDateArabic(scheduledDate) : "اختر التاريخ"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={scheduledDate}
-                      onSelect={setScheduledDate}
-                      disabled={(date) => date < new Date()}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
+                <HijriDatePicker
+                  value={scheduledDate}
+                  onChange={setScheduledDate}
+                  placeholder="اختر التاريخ"
+                  className="flex-1"
+                  data-testid="input-scheduled-date"
+                />
                 <Input
                   type="time"
                   value={scheduledTime}

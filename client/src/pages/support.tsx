@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth-context";
 import { apiRequest } from "@/lib/queryClient";
@@ -349,7 +350,7 @@ export default function SupportPage() {
                               {commentsArr.length}
                             </span>
                           )}
-                          <span>{ticket.createdAt ? new Date(ticket.createdAt).toLocaleDateString("ar-SA") : ""}</span>
+                          <DualDateDisplay date={ticket.createdAt} compact />
                         </div>
                       </div>
                     </div>
@@ -590,7 +591,7 @@ function TicketDetailDialog({
               )}
               <div>
                 <span className="text-muted-foreground">تاريخ الإنشاء: </span>
-                <span>{ticket.createdAt ? new Date(ticket.createdAt).toLocaleDateString("ar-SA") : ""}</span>
+                <DualDateDisplay date={ticket.createdAt} compact />
               </div>
               {ticket.relatedPage && (
                 <div>
@@ -658,9 +659,7 @@ function TicketDetailDialog({
                           <span className="font-medium">{c.userName}</span>
                           {isAdminComment && <Badge variant="secondary" className="text-[10px]">دعم فني</Badge>}
                           {c.isInternal && <Badge variant="outline" className="text-[10px]">ملاحظة داخلية</Badge>}
-                          <span className="text-muted-foreground">
-                            {new Date(c.createdAt).toLocaleDateString("ar-SA")}
-                          </span>
+                          <DualDateDisplay date={c.createdAt} compact className="text-muted-foreground" />
                         </div>
                         <p className="text-sm mt-1 whitespace-pre-wrap">{c.message}</p>
                       </div>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useRoute } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -188,14 +189,14 @@ export default function UserProfilePage() {
                 <Calendar className="w-5 h-5 text-muted-foreground" />
                 <div>
                   <p className="text-sm text-muted-foreground">تاريخ التعيين</p>
-                  <p className="font-medium">{extendedUser?.hireDate ? new Date(extendedUser.hireDate).toLocaleDateString("ar-SA") : "-"}</p>
+                  <div className="font-medium"><DualDateDisplay date={extendedUser?.hireDate} compact /></div>
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <Clock className="w-5 h-5 text-muted-foreground" />
                 <div>
                   <p className="text-sm text-muted-foreground">آخر دخول</p>
-                  <p className="font-medium">{extendedUser?.lastLoginAt ? new Date(extendedUser.lastLoginAt).toLocaleDateString("ar-SA") : "-"}</p>
+                  <div className="font-medium"><DualDateDisplay date={extendedUser?.lastLoginAt} compact /></div>
                 </div>
               </div>
             </div>
@@ -335,8 +336,8 @@ export default function UserProfilePage() {
                 <TableBody>
                   {userVacations.map((v) => (
                     <TableRow key={v.id}>
-                      <TableCell>{new Date(v.startDate).toLocaleDateString("ar-SA")}</TableCell>
-                      <TableCell>{new Date(v.endDate).toLocaleDateString("ar-SA")}</TableCell>
+                      <TableCell><DualDateDisplay date={v.startDate} compact /></TableCell>
+                      <TableCell><DualDateDisplay date={v.endDate} compact /></TableCell>
                       <TableCell>{v.reason || "-"}</TableCell>
                       <TableCell>
                         <Badge variant="outline">
@@ -373,9 +374,9 @@ export default function UserProfilePage() {
                         <div key={d.id} className="flex items-center justify-between p-3 border rounded-md">
                           <div>
                             <p className="font-medium">{toUser?.name}</p>
-                            <p className="text-sm text-muted-foreground">
-                              {new Date(d.startDate).toLocaleDateString("ar-SA")} - {new Date(d.endDate).toLocaleDateString("ar-SA")}
-                            </p>
+                            <div className="text-sm text-muted-foreground flex flex-wrap items-center gap-1">
+                              <DualDateDisplay date={d.startDate} compact /> - <DualDateDisplay date={d.endDate} compact />
+                            </div>
                           </div>
                           <Badge>{DelegationTypeLabels[d.type as DelegationTypeValue]}</Badge>
                         </div>
@@ -401,9 +402,9 @@ export default function UserProfilePage() {
                         <div key={d.id} className="flex items-center justify-between p-3 border rounded-md">
                           <div>
                             <p className="font-medium">{fromUser?.name}</p>
-                            <p className="text-sm text-muted-foreground">
-                              {new Date(d.startDate).toLocaleDateString("ar-SA")} - {new Date(d.endDate).toLocaleDateString("ar-SA")}
-                            </p>
+                            <div className="text-sm text-muted-foreground flex flex-wrap items-center gap-1">
+                              <DualDateDisplay date={d.startDate} compact /> - <DualDateDisplay date={d.endDate} compact />
+                            </div>
                           </div>
                           <Badge>{DelegationTypeLabels[d.type as DelegationTypeValue]}</Badge>
                         </div>
@@ -430,9 +431,9 @@ export default function UserProfilePage() {
                       <p className="text-sm text-muted-foreground">
                         {log.entityType} {log.entityId ? `- ${log.entityId}` : ""}
                       </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {new Date(log.timestamp).toLocaleString("ar-SA")}
-                      </p>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        <DualDateDisplay date={log.timestamp} showTime compact />
+                      </div>
                     </div>
                   </div>
                 ))}
