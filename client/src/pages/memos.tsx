@@ -400,9 +400,8 @@ export default function MemosPage() {
                         </TableCell>
                         <TableCell>
                           <div>
-                            <span className="text-sm"><LtrInline>{caseDetails.number}</LtrInline></span>
                             {(caseDetails.plaintiff || caseDetails.client) && (
-                              <p className="text-xs font-medium">{caseDetails.plaintiff || caseDetails.client}</p>
+                              <p className="text-sm font-medium">{caseDetails.plaintiff || caseDetails.client}</p>
                             )}
                             {caseDetails.plaintiff && caseDetails.client && (
                               <p className="text-xs text-muted-foreground">{caseDetails.client}</p>

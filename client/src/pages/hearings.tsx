@@ -55,6 +55,7 @@ import {
   ClipboardCheck,
   Lock,
   Trash2,
+  Pencil,
 } from "lucide-react";
 import { useHearings } from "@/lib/hearings-context";
 import { useCases } from "@/lib/cases-context";
@@ -122,6 +123,14 @@ export default function HearingsPage() {
   const [filterDepartment, setFilterDepartment] = useState<string>("all");
   const [filterLawyer, setFilterLawyer] = useState<string>("all");
   const [deletingHearingId, setDeletingHearingId] = useState<string | null>(null);
+  const [editDialogHearing, setEditDialogHearing] = useState<Hearing | null>(null);
+  const [editFormData, setEditFormData] = useState({
+    hearingDate: "",
+    hearingTime: "",
+    courtName: "المحكمة العامة" as CourtTypeValue,
+    courtRoom: "",
+    notes: "",
+  });
 
   const [formData, setFormData] = useState({
     caseId: "",
@@ -297,6 +306,31 @@ export default function HearingsPage() {
     try {
       await cancelHearing(hearing.id);
       toast({ title: "تم إلغاء الجلسة" });
+    } catch (e: any) {
+      toast({ title: "خطأ", description: e.message, variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openEditDialog = (hearing: Hearing) => {
+    setEditFormData({
+      hearingDate: hearing.hearingDate || "",
+      hearingTime: hearing.hearingTime || "",
+      courtName: (hearing.courtName as CourtTypeValue) || "المحكمة العامة",
+      courtRoom: hearing.courtRoom || "",
+      notes: hearing.notes || "",
+    });
+    setEditDialogHearing(hearing);
+  };
+
+  const handleEditHearing = async () => {
+    if (!editDialogHearing) return;
+    setSubmitting(true);
+    try {
+      await updateHearing(editDialogHearing.id, editFormData);
+      toast({ title: "تم تعديل الجلسة بنجاح" });
+      setEditDialogHearing(null);
     } catch (e: any) {
       toast({ title: "خطأ", description: e.message, variant: "destructive" });
     } finally {
@@ -607,6 +641,7 @@ export default function HearingsPage() {
                     <TableHead className="text-right">التاريخ والوقت</TableHead>
                     <TableHead className="text-right">القضية</TableHead>
                     <TableHead className="text-right">الخصم</TableHead>
+                    <TableHead className="text-right">رقم القضية</TableHead>
                     <TableHead className="text-right">المحكمة</TableHead>
                     <TableHead className="text-right">الحالة</TableHead>
                     <TableHead className="text-right">النتيجة</TableHead>
@@ -631,9 +666,8 @@ export default function HearingsPage() {
                           </TableCell>
                           <TableCell>
                             <div>
-                              <p className="font-medium text-sm"><LtrInline>{caseInfo.number}</LtrInline></p>
                               {(caseInfo.plaintiff || caseInfo.client) && (
-                                <p className="text-xs font-medium">{caseInfo.plaintiff || caseInfo.client}</p>
+                                <p className="text-sm font-medium">{caseInfo.plaintiff || caseInfo.client}</p>
                               )}
                               {caseInfo.plaintiff && caseInfo.client && (
                                 <p className="text-xs text-muted-foreground">{caseInfo.client}</p>
@@ -642,6 +676,9 @@ export default function HearingsPage() {
                           </TableCell>
                           <TableCell>
                             <span className="text-sm">{caseInfo.opponent || "-"}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm"><LtrInline>{caseInfo.number}</LtrInline></span>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1 text-sm">
@@ -713,6 +750,19 @@ export default function HearingsPage() {
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>عرض التفاصيل</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    data-testid={`button-edit-hearing-${hearing.id}`}
+                                    onClick={() => openEditDialog(hearing)}
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>تعديل الجلسة</TooltipContent>
                               </Tooltip>
                               {hearing.status === HearingStatus.UPCOMING && (
                                 <>
@@ -1063,6 +1113,93 @@ export default function HearingsPage() {
             >
               {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
               حفظ التقرير
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editDialogHearing} onOpenChange={(open) => !open && setEditDialogHearing(null)}>
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="w-5 h-5" />
+              تعديل الجلسة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>التاريخ</Label>
+                <HijriDatePicker
+                  value={editFormData.hearingDate}
+                  onChange={(v) => setEditFormData({ ...editFormData, hearingDate: v })}
+                  data-testid="input-edit-hearing-date"
+                />
+              </div>
+              <div>
+                <Label>الوقت</Label>
+                <Input
+                  data-testid="input-edit-hearing-time"
+                  type="time"
+                  value={editFormData.hearingTime}
+                  onChange={(e) => setEditFormData({ ...editFormData, hearingTime: e.target.value })}
+                />
+              </div>
+            </div>
+            <div>
+              <Label>المحكمة</Label>
+              <Select
+                value={editFormData.courtName}
+                onValueChange={(value: CourtTypeValue) =>
+                  setEditFormData({ ...editFormData, courtName: value })
+                }
+              >
+                <SelectTrigger data-testid="select-edit-court">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.values(CourtType).map((court) => (
+                    <SelectItem key={court} value={court}>
+                      {court}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>رقم الدائرة</Label>
+              <Input
+                data-testid="input-edit-court-room"
+                value={editFormData.courtRoom}
+                onChange={(e) => setEditFormData({ ...editFormData, courtRoom: e.target.value })}
+                placeholder="مثال: الدائرة 5"
+              />
+            </div>
+            <div>
+              <Label>ملاحظات</Label>
+              <Textarea
+                data-testid="input-edit-notes"
+                value={editFormData.notes}
+                onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                placeholder="ملاحظات إضافية..."
+              />
+            </div>
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-cancel-edit-hearing"
+              onClick={() => setEditDialogHearing(null)}
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-save-edit-hearing"
+              onClick={handleEditHearing}
+              disabled={!editFormData.hearingDate || !editFormData.hearingTime || submitting}
+            >
+              {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
+              حفظ التعديلات
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -661,6 +661,7 @@ export async function registerRoutes(
 
       if (role === "employee") {
         const filtered = allCases.filter((c: any) =>
+          c.departmentId === departmentId ||
           (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) ||
           c.primaryLawyerId === userId ||
           c.responsibleLawyerId === userId
@@ -697,13 +698,14 @@ export async function registerRoutes(
 
       if (classification === CaseClassification.DEFENDANT) {
         const deadlineStr = validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+        const casePriority = validatedData.priority || "متوسط";
         try {
           const memo = await storage.createMemo({
             caseId: newCase.id,
             memoType: MemoType.RESPONSE,
             title: `مذكرة جوابية - ${newCase.caseNumber}`,
             description: `مذكرة جوابية تلقائية لقضية مدعى عليه - ${newCase.caseNumber}`,
-            priority: "عاجل",
+            priority: casePriority,
             assignedTo: "",
             createdBy: "system",
             deadline: deadlineStr,
@@ -1138,7 +1140,10 @@ export async function registerRoutes(
       }
 
       if (role === "employee") {
-        const filtered = allConsultations.filter((c: any) => c.assignedTo === userId);
+        const filtered = allConsultations.filter((c: any) =>
+          c.departmentId === departmentId ||
+          c.assignedTo === userId
+        );
         return res.json(filtered);
       }
 
