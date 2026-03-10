@@ -112,6 +112,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "إحالة_للجنة_المراجعة", to: "تم_الرفع_للدائرة", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
   { from: "الأخذ_بالملاحظات", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "الأخذ_بالملاحظات", to: "تم_الرفع_للدائرة", allowedRoles: ["department_head", "branch_manager"] },
   { from: "تم_الرفع_للدائرة", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   // Backward transitions
   { from: "استكمال_البيانات", to: "استلام", allowedRoles: ["branch_manager", "department_head"] },

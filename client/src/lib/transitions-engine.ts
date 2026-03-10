@@ -82,6 +82,12 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     label: "إعادة الإحالة للجنة المراجعة بعد التعديلات",
   },
   {
+    from: CaseStage.AMENDMENTS,
+    to: CaseStage.SUBMITTED,
+    allowedRoles: [UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    label: "رفع الدعوى للمحكمة مباشرة",
+  },
+  {
     from: CaseStage.SUBMITTED,
     to: CaseStage.CLOSED,
     allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
