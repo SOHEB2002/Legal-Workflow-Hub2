@@ -197,12 +197,16 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
   const assignCase = (id: string, lawyerId: string, departmentId: string) => {
     const lawCase = cases.find(c => c.id === id);
-    updateCase(id, {
+    const isReassign = !!(lawCase?.primaryLawyerId);
+    const updateData: any = {
       assignedLawyers: [lawyerId],
       primaryLawyerId: lawyerId,
       departmentId,
-      status: CaseStatus.STUDY as CaseStatusValue,
-    });
+    };
+    if (!isReassign) {
+      updateData.status = CaseStatus.STUDY as CaseStatusValue;
+    }
+    updateCase(id, updateData);
     notifyCaseAssigned(id, lawCase?.caseNumber || "", lawyerId).catch(() => {});
   };
 

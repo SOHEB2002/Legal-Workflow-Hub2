@@ -446,8 +446,9 @@ export default function CasesPage() {
   const handleAssign = () => {
     if (!selectedCase || !assignData.lawyerId || !assignData.departmentId) return;
     
+    const isReassign = !!selectedCase.primaryLawyerId;
     assignCase(selectedCase.id, assignData.lawyerId, assignData.departmentId);
-    toast({ title: "تم إسناد القضية بنجاح" });
+    toast({ title: isReassign ? "تم تعديل الإسناد بنجاح" : "تم إسناد القضية بنجاح" });
     setShowAssignDialog(false);
     setSelectedCaseId(null);
     setAssignData({ lawyerId: "", departmentId: "" });
@@ -589,7 +590,6 @@ export default function CasesPage() {
   };
 
   const canAssign = (c: LawCase) => 
-    (c.status === CaseStatus.RECEIVED || c.status === CaseStatus.DATA_COMPLETION) &&
     (user?.role === "branch_manager" || 
      (permissions.canAssignInDepartment && c.departmentId === user?.departmentId));
 
@@ -763,7 +763,7 @@ export default function CasesPage() {
                           {canAssign(c) && (
                             <DropdownMenuItem data-testid={`button-assign-${c.id}`} onClick={() => openAssignDialog(c)}>
                               <UserPlus className="w-4 h-4 ml-2" />
-                              إسناد القضية
+                              {c.primaryLawyerId ? "تعديل الإسناد" : "إسناد القضية"}
                             </DropdownMenuItem>
                           )}
                           {canSendToReview(c) && (
@@ -1135,7 +1135,7 @@ export default function CasesPage() {
       <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>إسناد القضية</DialogTitle>
+            <DialogTitle>{selectedCase?.primaryLawyerId ? "تعديل الإسناد" : "إسناد القضية"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
@@ -1188,7 +1188,7 @@ export default function CasesPage() {
               onClick={handleAssign}
               disabled={!assignData.lawyerId || !assignData.departmentId}
             >
-              إسناد
+              {selectedCase?.primaryLawyerId ? "حفظ التعديل" : "إسناد"}
             </Button>
           </DialogFooter>
         </DialogContent>

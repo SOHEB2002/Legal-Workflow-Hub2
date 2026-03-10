@@ -1148,23 +1148,12 @@ export default function HearingsPage() {
             </div>
             <div>
               <Label>المحكمة</Label>
-              <Select
+              <Input
+                data-testid="input-edit-court-name"
+                placeholder=""
                 value={editFormData.courtName}
-                onValueChange={(value: CourtTypeValue) =>
-                  setEditFormData({ ...editFormData, courtName: value })
-                }
-              >
-                <SelectTrigger data-testid="select-edit-court">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.values(CourtType).map((court) => (
-                    <SelectItem key={court} value={court}>
-                      {court}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onChange={(e) => setEditFormData({ ...editFormData, courtName: e.target.value as CourtTypeValue })}
+              />
             </div>
             <div>
               <Label>رقم الدائرة</Label>
