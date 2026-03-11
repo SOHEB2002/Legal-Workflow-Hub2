@@ -437,6 +437,7 @@ export const CaseClassification = {
   PLAINTIFF_NEW: "مدعي_قضية_جديدة",
   PLAINTIFF_EXISTING: "مدعي_قضية_مقيدة",
   DEFENDANT: "مدعى_عليه",
+  DEFENDANT_NEW: "مدعى_عليه_قضية_جديدة",
 } as const;
 
 export type CaseClassificationValue = typeof CaseClassification[keyof typeof CaseClassification];
@@ -445,6 +446,7 @@ export const CaseClassificationLabels: Record<CaseClassificationValue, string> =
   "مدعي_قضية_جديدة": "مدعي - قضية جديدة",
   "مدعي_قضية_مقيدة": "مدعي - قضية مقيدة (مرفوعة مسبقاً)",
   "مدعى_عليه": "مدعى عليه",
+  "مدعى_عليه_قضية_جديدة": "مدعى عليه - قضية جديدة",
 };
 
 // ==================== حالات منصة تراضي (تجاري) ====================
@@ -585,6 +587,7 @@ export function getStagesForClassification(classification: CaseClassificationVal
     case "مدعي_قضية_جديدة": return PlaintiffNewStages;
     case "مدعي_قضية_مقيدة": return PlaintiffExistingStages;
     case "مدعى_عليه": return DefendantStages;
+    case "مدعى_عليه_قضية_جديدة": return PlaintiffNewStages;
     default: return PlaintiffNewStages;
   }
 }
@@ -606,6 +609,7 @@ export function getStageLabel(stage: CaseStageValue, classification?: CaseClassi
       case "مدعي_قضية_جديدة": return "تحرير صحيفة الدعوى";
       case "مدعي_قضية_مقيدة": return "تحرير المذكرة";
       case "مدعى_عليه": return "تحرير المذكرة الجوابية";
+      case "مدعى_عليه_قضية_جديدة": return "تحرير صحيفة الدعوى";
     }
   }
 
@@ -614,6 +618,7 @@ export function getStageLabel(stage: CaseStageValue, classification?: CaseClassi
       case "مدعي_قضية_جديدة": return "رفع الدعوى للمحكمة";
       case "مدعي_قضية_مقيدة": return "تقديم المذكرة للمحكمة";
       case "مدعى_عليه": return "تقديم المذكرة الجوابية للمحكمة";
+      case "مدعى_عليه_قضية_جديدة": return "رفع الدعوى للمحكمة";
     }
   }
 
@@ -1254,7 +1259,7 @@ export const insertCaseSchema = z.object({
   opponentNotes: z.string().optional().default(""),
   whatsappGroupLink: z.string().optional().default(""),
   googleDriveFolderId: z.string().optional().default(""),
-  caseClassification: z.enum(["مدعي_قضية_جديدة", "مدعي_قضية_مقيدة", "مدعى_عليه"]).default("مدعي_قضية_جديدة"),
+  caseClassification: z.enum(["مدعي_قضية_جديدة", "مدعي_قضية_مقيدة", "مدعى_عليه", "مدعى_عليه_قضية_جديدة"]).default("مدعي_قضية_جديدة"),
   previousHearingsCount: z.number().optional().default(0),
   currentSituation: z.string().optional().default(""),
   responseDeadline: z.string().nullable().optional(),

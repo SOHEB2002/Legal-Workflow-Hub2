@@ -405,7 +405,7 @@ export default function CasesPage() {
       return;
     }
     
-    const isPlaintiffNew = formData.caseClassification === CaseClassification.PLAINTIFF_NEW;
+    const isPlaintiffNew = formData.caseClassification === CaseClassification.PLAINTIFF_NEW || formData.caseClassification === CaseClassification.DEFENDANT_NEW;
     if (isPlaintiffNew && formData.caseType === "إداري") {
       if (!formData.adminCaseSubType) {
         toast({ title: "يرجى تحديد نوع القضية الإدارية (تظلم / قضية)", variant: "destructive" });
@@ -719,6 +719,8 @@ export default function CasesPage() {
                     <Badge variant="outline" className={`whitespace-nowrap text-xs ${
                       c.caseClassification === CaseClassification.DEFENDANT
                         ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
+                        : c.caseClassification === CaseClassification.DEFENDANT_NEW
+                        ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"
                         : c.caseClassification === CaseClassification.PLAINTIFF_EXISTING
                         ? "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                         : ""
@@ -845,7 +847,7 @@ export default function CasesPage() {
           <div className="space-y-4">
             <div>
               <Label className="text-sm font-medium mb-2 block">تصنيف القضية</Label>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <button
                   type="button"
                   data-testid="classification-plaintiff-new"
@@ -884,6 +886,19 @@ export default function CasesPage() {
                 >
                   <Swords className="h-6 w-6 text-red-600" />
                   <span className="text-xs font-medium text-center">مدعى عليه</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="classification-defendant-new"
+                  onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.DEFENDANT_NEW, previousHearingsCount: 0, currentSituation: "", responseDeadline: "" })}
+                  className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                    formData.caseClassification === CaseClassification.DEFENDANT_NEW
+                      ? "border-orange-500 bg-orange-500/10"
+                      : "border-border hover-elevate"
+                  }`}
+                >
+                  <Swords className="h-6 w-6 text-orange-600" />
+                  <span className="text-xs font-medium text-center">مدعى عليه - قضية جديدة</span>
                 </button>
               </div>
             </div>
@@ -996,7 +1011,7 @@ export default function CasesPage() {
                 </div>
 
                 <div>
-                  <Label>رقم القضية {formData.caseClassification === CaseClassification.PLAINTIFF_NEW ? "(اختياري - يُولّد تلقائياً إن لم يُدخل)" : ""}</Label>
+                  <Label>رقم القضية {(formData.caseClassification === CaseClassification.PLAINTIFF_NEW || formData.caseClassification === CaseClassification.DEFENDANT_NEW) ? "(اختياري - يُولّد تلقائياً إن لم يُدخل)" : ""}</Label>
                   <SmartInput
                     inputType="code"
                     data-testid="input-court-case-number"
@@ -1006,7 +1021,7 @@ export default function CasesPage() {
                   />
                 </div>
 
-                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && formData.caseClassification !== CaseClassification.DEFENDANT_NEW && (
                   <div>
                     <Label>اسم المحكمة</Label>
                     <SmartInput
@@ -1019,7 +1034,7 @@ export default function CasesPage() {
                   </div>
                 )}
 
-                {formData.caseClassification === CaseClassification.PLAINTIFF_NEW && (
+                {(formData.caseClassification === CaseClassification.PLAINTIFF_NEW || formData.caseClassification === CaseClassification.DEFENDANT_NEW) && (
                   <>
                     {formData.caseType === "تجاري" && (
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
@@ -1099,7 +1114,7 @@ export default function CasesPage() {
                   </div>
                 )}
 
-                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && formData.caseClassification !== CaseClassification.DEFENDANT_NEW && (
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label>تاريخ الجلسة القادمة (اختياري)</Label>
@@ -1359,7 +1374,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
+                  {(selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW || selectedCase.caseClassification === CaseClassification.DEFENDANT_NEW) && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
                       <div className="grid grid-cols-2 gap-4">
@@ -1375,7 +1390,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "تجاري" && (
+                  {(selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW || selectedCase.caseClassification === CaseClassification.DEFENDANT_NEW) && selectedCase.caseType === "تجاري" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل منصة تراضي</h4>
                       <div className="space-y-3">
@@ -1444,7 +1459,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "عمالي" && (
+                  {(selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW || selectedCase.caseClassification === CaseClassification.DEFENDANT_NEW) && selectedCase.caseType === "عمالي" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل وزارة الموارد البشرية</h4>
                       <div className="space-y-3">

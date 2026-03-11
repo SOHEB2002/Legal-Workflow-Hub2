@@ -796,7 +796,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "تجاري") {
+      if ((caseItem.caseClassification !== "مدعي_قضية_جديدة" && caseItem.caseClassification !== "مدعى_عليه_قضية_جديدة") || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_تراضي", "تم_الصلح", "لم_يتم_صلح"];
@@ -850,7 +850,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "عمالي") {
+      if ((caseItem.caseClassification !== "مدعي_قضية_جديدة" && caseItem.caseClassification !== "مدعى_عليه_قضية_جديدة") || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_الموارد", "توجيه_تسوية_ودية", "انتهت_التسوية"];
@@ -904,7 +904,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "عمالي") {
+      if ((caseItem.caseClassification !== "مدعي_قضية_جديدة" && caseItem.caseClassification !== "مدعى_عليه_قضية_جديدة") || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       
