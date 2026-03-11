@@ -44,7 +44,7 @@ export const lawCases = pgTable("law_cases", {
   id: varchar("id", { length: 255 }).primaryKey(),
   caseNumber: varchar("case_number", { length: 50 }).notNull().unique(),
   clientId: varchar("client_id", { length: 255 }).default(""),
-  caseType: varchar("case_type", { length: 50 }).notNull(),
+  caseType: varchar("case_type", { length: 255 }).notNull(),
   caseTypeOther: varchar("case_type_other", { length: 255 }).default(""),
   departmentOther: varchar("department_other", { length: 255 }).default(""),
   status: varchar("status", { length: 50 }).notNull(),
@@ -100,7 +100,7 @@ export const consultations = pgTable("consultations", {
   id: varchar("id", { length: 255 }).primaryKey(),
   consultationNumber: varchar("consultation_number", { length: 50 }).notNull().unique(),
   clientId: varchar("client_id", { length: 255 }).notNull(),
-  consultationType: varchar("consultation_type", { length: 50 }).notNull(),
+  consultationType: varchar("consultation_type", { length: 255 }).notNull(),
   deliveryType: varchar("delivery_type", { length: 50 }).notNull(),
   status: varchar("status", { length: 50 }).notNull(),
   departmentId: varchar("department_id", { length: 255 }).notNull(),
@@ -1239,7 +1239,7 @@ export type InsertClient = z.infer<typeof insertClientSchema>;
 
 export const insertCaseSchema = z.object({
   clientId: z.string().optional().nullable().default(""),
-  caseType: z.enum(["عام", "تجاري", "عمالي", "إداري", "أخرى"]),
+  caseType: z.string().min(1, "نوع القضية مطلوب"),
   caseTypeOther: z.string().optional().default(""),
   departmentId: z.string().optional(),
   departmentOther: z.string().optional().default(""),
@@ -1266,7 +1266,7 @@ export type InsertCase = z.infer<typeof insertCaseSchema>;
 
 export const insertConsultationSchema = z.object({
   clientId: z.string().min(1, "العميل مطلوب"),
-  consultationType: z.enum(["عام", "تجاري", "عمالي", "إداري"]),
+  consultationType: z.string().min(1, "نوع الاستشارة مطلوب"),
   deliveryType: z.enum(["مكتوبة", "شفهية"]),
   departmentId: z.string().optional(),
   questionSummary: z.string().min(1, "ملخص السؤال مطلوب"),
@@ -1436,6 +1436,10 @@ export function canCreateMemos(role: UserRoleType): boolean {
 }
 
 export function canReviewMemos(role: UserRoleType): boolean {
+  return ["branch_manager", "cases_review_head"].includes(role);
+}
+
+export function canChangeMemoStatus(role: UserRoleType): boolean {
   return ["branch_manager", "cases_review_head"].includes(role);
 }
 

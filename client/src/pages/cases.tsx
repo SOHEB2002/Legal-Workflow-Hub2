@@ -89,7 +89,6 @@ import {
   CaseStatus, 
   CaseStatusLabels, 
   CaseStageLabels,
-  CaseType, 
   Priority,
   Department,
   CaseClassification,
@@ -651,7 +650,7 @@ export default function CasesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">الكل</SelectItem>
-                {Object.values(CaseType).map((type) => (
+                {Array.from(new Set(cases.map(c => c.caseType).filter(Boolean))).map((type) => (
                   <SelectItem key={type} value={type}>{type}</SelectItem>
                 ))}
               </SelectContent>
@@ -727,7 +726,7 @@ export default function CasesPage() {
                     </Badge>
                   </TableCell>
                   <TableCell className="overflow-hidden">
-                    <Badge variant="outline">{c.caseType === "أخرى" ? (c.caseTypeOther || "أخرى") : c.caseType}</Badge>
+                    <Badge variant="outline">{c.caseType || "-"}</Badge>
                   </TableCell>
                   <TableCell className="overflow-hidden">
                     <Badge className="bg-accent/20 text-accent border-accent/30 whitespace-nowrap">
@@ -756,10 +755,12 @@ export default function CasesPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem data-testid={`button-edit-${c.id}`} onClick={() => openEditDialog(c)}>
-                            <Pencil className="w-4 h-4 ml-2" />
-                            تعديل البيانات
-                          </DropdownMenuItem>
+                          {(user?.role === "branch_manager" || user?.role === "admin_support") && (
+                            <DropdownMenuItem data-testid={`button-edit-${c.id}`} onClick={() => openEditDialog(c)}>
+                              <Pencil className="w-4 h-4 ml-2" />
+                              تعديل البيانات
+                            </DropdownMenuItem>
+                          )}
                           {canAssign(c) && (
                             <DropdownMenuItem data-testid={`button-assign-${c.id}`} onClick={() => openAssignDialog(c)}>
                               <UserPlus className="w-4 h-4 ml-2" />
@@ -917,29 +918,13 @@ export default function CasesPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>نوع القضية</Label>
-                    <Select
+                    <SmartInput
+                      inputType="text"
+                      data-testid="input-case-type"
                       value={formData.caseType}
-                      onValueChange={(value: CaseTypeValue) => setFormData({ ...formData, caseType: value, caseTypeOther: "" })}
-                    >
-                      <SelectTrigger data-testid="select-case-type">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Object.values(CaseType).map((type) => (
-                          <SelectItem key={type} value={type}>{type}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {formData.caseType === "أخرى" && (
-                      <SmartInput
-                        inputType="text"
-                        data-testid="input-case-type-other"
-                        value={formData.caseTypeOther}
-                        onChange={(e) => setFormData({ ...formData, caseTypeOther: e.target.value })}
-                        placeholder="اكتب نوع القضية..."
-                        className="mt-2"
-                      />
-                    )}
+                      onChange={(e) => setFormData({ ...formData, caseType: e.target.value as CaseTypeValue })}
+                      placeholder="أدخل نوع القضية..."
+                    />
                   </div>
                   <div>
                     <Label>الأولوية</Label>
@@ -1230,7 +1215,7 @@ export default function CasesPage() {
           <DialogHeader>
             <div className="flex items-center justify-between">
               <DialogTitle>تفاصيل القضية <LtrInline>{selectedCase?.caseNumber}</LtrInline></DialogTitle>
-              {selectedCase && (
+              {selectedCase && (user?.role === "branch_manager" || user?.role === "admin_support") && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -1308,7 +1293,7 @@ export default function CasesPage() {
                     </div>
                     <div>
                       <Label className="text-muted-foreground">النوع</Label>
-                      <p>{selectedCase.caseType === "أخرى" ? (selectedCase.caseTypeOther || "أخرى") : selectedCase.caseType}</p>
+                      <p>{selectedCase.caseType || "-"}</p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">الأولوية</Label>
@@ -1948,29 +1933,13 @@ export default function CasesPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>نوع القضية</Label>
-                <Select
+                <SmartInput
+                  inputType="text"
+                  data-testid="edit-case-type"
                   value={editFormData.caseType}
-                  onValueChange={(value: CaseTypeValue) => setEditFormData({ ...editFormData, caseType: value, caseTypeOther: "" })}
-                >
-                  <SelectTrigger data-testid="edit-case-type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.values(CaseType).map((type) => (
-                      <SelectItem key={type} value={type}>{type}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {editFormData.caseType === "أخرى" && (
-                  <SmartInput
-                    inputType="text"
-                    data-testid="edit-case-type-other"
-                    value={editFormData.caseTypeOther}
-                    onChange={(e) => setEditFormData({ ...editFormData, caseTypeOther: e.target.value })}
-                    placeholder="اكتب نوع القضية..."
-                    className="mt-2"
-                  />
-                )}
+                  onChange={(e) => setEditFormData({ ...editFormData, caseType: e.target.value as CaseTypeValue })}
+                  placeholder="أدخل نوع القضية..."
+                />
               </div>
               <div>
                 <Label>الأولوية</Label>

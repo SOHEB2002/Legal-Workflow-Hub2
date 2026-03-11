@@ -40,6 +40,7 @@ import {
   XCircle,
   Trash2,
   Zap,
+  Ban,
 } from "lucide-react";
 import { useMemos } from "@/lib/memos-context";
 import { useCases } from "@/lib/cases-context";
@@ -54,6 +55,7 @@ import {
   Priority,
   canCreateMemos,
   canReviewMemos,
+  canChangeMemoStatus,
   canDeleteMemos,
 } from "@shared/schema";
 import type { Memo, MemoTypeValue, MemoStatusValue } from "@shared/schema";
@@ -231,6 +233,29 @@ export default function MemosPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleNoMemoNeeded = async (memo: Memo) => {
+    setSubmitting(true);
+    try {
+      await changeStatus(memo.id, MemoStatus.CANCELLED, {
+        reviewNotes: "لا يحتاج مذكرة",
+      });
+      toast({ title: "تم إنهاء المذكرة - لا يحتاج مذكرة" });
+    } catch (e: any) {
+      toast({ title: "خطأ", description: e.message, variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const canUserChangeStatus = (memo: Memo): boolean => {
+    if (!user) return false;
+    if (canChangeMemoStatus(user.role)) return true;
+    const relatedCase = cases.find(c => c.id === memo.caseId);
+    if (relatedCase && (relatedCase.primaryLawyerId === user.id || relatedCase.responsibleLawyerId === user.id)) return true;
+    if (memo.assignedTo === user.id) return true;
+    return false;
   };
 
   const getUserName = (id: string | null): string => {
@@ -442,6 +467,18 @@ export default function MemosPage() {
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
+                            {!["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && canUserChangeStatus(memo) && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                data-testid={`button-no-memo-needed-${memo.id}`}
+                                onClick={() => handleNoMemoNeeded(memo)}
+                                title="لا يحتاج مذكرة"
+                                className="text-muted-foreground hover:text-destructive"
+                              >
+                                <Ban className="w-4 h-4" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -733,8 +770,7 @@ export default function MemosPage() {
                 )}
 
                 <div className="flex flex-wrap gap-2">
-                  {detailMemo.status === MemoStatus.NOT_STARTED &&
-                    (detailMemo.assignedTo === user?.id || (user && canReviewMemos(user.role))) && (
+                  {detailMemo.status === MemoStatus.NOT_STARTED && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-start-drafting"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.DRAFTING, { startedAt: new Date().toISOString() })}
@@ -744,8 +780,7 @@ export default function MemosPage() {
                       بدء التحرير
                     </Button>
                   )}
-                  {(detailMemo.status === MemoStatus.DRAFTING || detailMemo.status === MemoStatus.REVISION_REQUIRED) &&
-                    (detailMemo.assignedTo === user?.id || (user && canReviewMemos(user.role))) && (
+                  {(detailMemo.status === MemoStatus.DRAFTING || detailMemo.status === MemoStatus.REVISION_REQUIRED) && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-send-review"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.IN_REVIEW, { completedAt: new Date().toISOString() })}
@@ -755,8 +790,7 @@ export default function MemosPage() {
                       إرسال للمراجعة
                     </Button>
                   )}
-                  {detailMemo.status === MemoStatus.APPROVED &&
-                    (detailMemo.assignedTo === user?.id || (user && canReviewMemos(user.role))) && (
+                  {detailMemo.status === MemoStatus.APPROVED && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-submit-final"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.SUBMITTED, { submittedAt: new Date().toISOString() })}
@@ -765,6 +799,18 @@ export default function MemosPage() {
                     >
                       <CheckCircle className="w-4 h-4 ml-2" />
                       رفع المذكرة
+                    </Button>
+                  )}
+                  {!["معتمدة", "مرفوعة", "ملغاة"].includes(detailMemo.status) && canUserChangeStatus(detailMemo) && (
+                    <Button
+                      data-testid="button-no-memo-needed-detail"
+                      variant="outline"
+                      onClick={() => handleNoMemoNeeded(detailMemo)}
+                      disabled={submitting}
+                      className="text-muted-foreground hover:text-destructive hover:border-destructive"
+                    >
+                      <Ban className="w-4 h-4 ml-2" />
+                      لا يحتاج مذكرة
                     </Button>
                   )}
                   {user && canDeleteMemos(user.role) && (

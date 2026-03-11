@@ -21,6 +21,7 @@ import {
   CaseClassification,
   canCreateMemos,
   canReviewMemos,
+  canChangeMemoStatus,
   canDeleteMemos,
   insertTicketSchema,
   canManageSupportTickets,
@@ -73,6 +74,10 @@ function canModifyCase(user: { id: string; role: string; departmentId: string | 
   if (caseData.primaryLawyerId === user.id || caseData.responsibleLawyerId === user.id) return true;
   if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) return true;
   return false;
+}
+
+function canEditCaseData(user: { id: string; role: string; departmentId: string | null }): boolean {
+  return ["branch_manager", "admin_support"].includes(user.role);
 }
 
 function canModifyConsultation(user: { id: string; role: string; departmentId: string | null }, consultation: any): boolean {
@@ -953,7 +958,16 @@ export async function registerRoutes(
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
       const user = (req as any).user;
-      if (!canModifyCase(user, existing)) {
+
+      const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentId", "departmentOther",
+        "courtName", "courtCaseNumber", "judgeName", "circuitNumber", "opponentName", "opponentLawyer", "opponentPhone", "opponentNotes",
+        "caseClassification", "previousHearingsCount", "currentSituation", "responseDeadline", "adminCaseSubType", "prescriptionDate", "priority"];
+      const hasDataFields = Object.keys(req.body).some(k => caseDataFields.includes(k));
+
+      if (hasDataFields && !canEditCaseData(user)) {
+        return res.status(403).json({ error: "تعديل بيانات القضية متاح فقط لمدير الفرع والدعم الإداري" });
+      }
+      if (!hasDataFields && !canModifyCase(user, existing)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
 
@@ -1824,6 +1838,17 @@ export async function registerRoutes(
       const validated = updateMemoSchema.parse(req.body);
       const updateData: any = { ...validated };
 
+      // Check if user can change memo status
+      const isAssignedToMemo = memo.assignedTo === user.id;
+      const relatedCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+      const isAssignedToCase = relatedCase && (relatedCase.primaryLawyerId === user.id || relatedCase.responsibleLawyerId === user.id);
+      const isDeptHeadForCase = user.role === "department_head" && relatedCase && relatedCase.departmentId === user.departmentId;
+      const canChangeStatus = canReviewMemos(user.role) || canChangeMemoStatus(user.role) || isAssignedToMemo || isAssignedToCase || isDeptHeadForCase;
+
+      if (updateData.status && !canChangeStatus) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
+      }
+
       // Validate assignedTo user is active if being changed
       if (updateData.assignedTo) {
         const { valid } = await validateAssignedUsersActive([updateData.assignedTo]);
@@ -1837,15 +1862,19 @@ export async function registerRoutes(
         if (!canReviewMemos(user.role)) {
           return res.status(403).json({ error: "ليس لديك صلاحية لمراجعة المذكرات" });
         }
-        // Cannot approve/reject unless memo is in review
         if (memo.status !== MemoStatus.IN_REVIEW) {
           return res.status(400).json({ error: "لا يمكن اعتماد أو إرجاع المذكرة إلا بعد تقديمها للمراجعة" });
         }
       }
       if (updateData.status === MemoStatus.SUBMITTED) {
-        // Cannot submit unless approved
         if (memo.status !== MemoStatus.APPROVED) {
           return res.status(400).json({ error: "لا يمكن رفع المذكرة إلا بعد اعتمادها" });
+        }
+      }
+      // Allow cancellation (no memo needed) for active memos
+      if (updateData.status === MemoStatus.CANCELLED) {
+        if (["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status)) {
+          return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
         }
       }
 

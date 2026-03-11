@@ -44,7 +44,7 @@ The system features a formal and luxurious design with an Arabic RTL interface.
 - **Dual Calendar System**: All date inputs and displays utilize a dual Hijri/Gregorian calendar, with dates stored internally as ISO Gregorian strings. Custom components (`HijriDatePicker`, `DualDateDisplay`) and utility functions handle conversions and formatting.
 - **Data Storage**: Client-side temporary data stored in `localStorage`.
 - **Key Features**:
-    - **Case Management**: Comprehensive tracking through 9 stages, department-specific workflows for plaintiff cases (Commercial, Labor, Administrative), prioritizing `courtCaseNumber`.
+    - **Case Management**: Comprehensive tracking through 9 stages, department-specific workflows for plaintiff cases, prioritizing `courtCaseNumber`. Case type is free text (not enum). Case data editing restricted to `branch_manager` and `admin_support` roles only.
     - **Consultation Management**: System for managing legal consultations.
     - **Hearings Schedule**: Management of court hearing dates.
     - **Client Management**: Detailed client profiles and contact logging.

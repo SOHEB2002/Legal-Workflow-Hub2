@@ -54,7 +54,7 @@ import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Consultation, ConsultationStatusValue, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
-import { ConsultationStatus, ConsultationStatusLabels, CaseType, DeliveryType, Department } from "@shared/schema";
+import { ConsultationStatus, ConsultationStatusLabels, DeliveryType, Department } from "@shared/schema";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 import { DialogFooter } from "@/components/ui/dialog";
@@ -278,23 +278,12 @@ export default function ConsultationsPage() {
                 </div>
                 <div>
                   <Label>نوع الاستشارة</Label>
-                  <Select
+                  <Input
+                    data-testid="input-consultation-type"
                     value={formData.consultationType}
-                    onValueChange={(value: CaseTypeValue) =>
-                      setFormData({ ...formData, consultationType: value })
-                    }
-                  >
-                    <SelectTrigger data-testid="select-consultation-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.values(CaseType).map((type) => (
-                        <SelectItem key={type} value={type}>
-                          {type}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={(e) => setFormData({ ...formData, consultationType: e.target.value as CaseTypeValue })}
+                    placeholder="أدخل نوع الاستشارة..."
+                  />
                 </div>
                 <div>
                   <Label>طريقة التسليم</Label>
