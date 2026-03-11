@@ -23,7 +23,7 @@ export function ClientAutocomplete({ value, onChange }: ClientAutocompleteProps)
   const [isOpen, setIsOpen] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [newClientData, setNewClientData] = useState({
-    clientType: "فرد" as "فرد" | "شركة",
+    clientType: "فرد" as "فرد" | "شركة" | "مؤسسة" | "وقف" | "جمعية",
     individualName: "",
     phone: "",
     companyName: "",
@@ -81,7 +81,7 @@ export function ClientAutocomplete({ value, onChange }: ClientAutocompleteProps)
       const newClient = await addClient({
         clientType: newClientData.clientType,
         individualName: newClientData.clientType === "فرد" ? newClientData.individualName : undefined,
-        companyName: newClientData.clientType === "شركة" ? newClientData.companyName : undefined,
+        companyName: newClientData.clientType !== "فرد" ? newClientData.companyName : undefined,
         phone: newClientData.phone,
       }, user.id);
       toast({ title: "تم إضافة العميل بنجاح" });
@@ -176,7 +176,7 @@ export function ClientAutocomplete({ value, onChange }: ClientAutocompleteProps)
               <Label>نوع العميل</Label>
               <Select
                 value={newClientData.clientType}
-                onValueChange={(v: "فرد" | "شركة") => setNewClientData({ ...newClientData, clientType: v })}
+                onValueChange={(v: "فرد" | "شركة" | "مؤسسة" | "وقف" | "جمعية") => setNewClientData({ ...newClientData, clientType: v })}
               >
                 <SelectTrigger data-testid="select-new-client-type">
                   <SelectValue />
@@ -184,6 +184,9 @@ export function ClientAutocomplete({ value, onChange }: ClientAutocompleteProps)
                 <SelectContent>
                   <SelectItem value="فرد">فرد</SelectItem>
                   <SelectItem value="شركة">شركة</SelectItem>
+                  <SelectItem value="مؤسسة">مؤسسة</SelectItem>
+                  <SelectItem value="وقف">وقف</SelectItem>
+                  <SelectItem value="جمعية">جمعية</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -199,12 +202,12 @@ export function ClientAutocomplete({ value, onChange }: ClientAutocompleteProps)
               </div>
             ) : (
               <div>
-                <Label>اسم الشركة</Label>
+                <Label>اسم {newClientData.clientType === "شركة" ? "الشركة" : newClientData.clientType === "مؤسسة" ? "المؤسسة" : newClientData.clientType === "وقف" ? "الوقف" : newClientData.clientType === "جمعية" ? "الجمعية" : "الجهة"}</Label>
                 <Input
                   data-testid="input-new-company-name"
                   value={newClientData.companyName}
                   onChange={(e) => setNewClientData({ ...newClientData, companyName: e.target.value })}
-                  placeholder="اسم الشركة"
+                  placeholder={`اسم ${newClientData.clientType === "شركة" ? "الشركة" : newClientData.clientType === "مؤسسة" ? "المؤسسة" : newClientData.clientType === "وقف" ? "الوقف" : newClientData.clientType === "جمعية" ? "الجمعية" : "الجهة"}`}
                 />
               </div>
             )}
