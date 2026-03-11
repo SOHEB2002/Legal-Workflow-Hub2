@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { useMemos } from "@/lib/memos-context";
 import { useCases } from "@/lib/cases-context";
+import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
 import { useClients } from "@/lib/clients-context";
@@ -119,6 +120,7 @@ export default function MemosPage() {
     getOverdueMemos,
   } = useMemos();
   const { cases } = useCases();
+  const { departments } = useDepartments();
   const { user } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
   const { clients } = useClients();
@@ -130,7 +132,7 @@ export default function MemosPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [filterStatus, setFilterStatus] = useState<string>("all");
-  const [filterType, setFilterType] = useState<string>("all");
+  const [filterDept, setFilterDept] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -294,12 +296,13 @@ export default function MemosPage() {
   const filteredMemos = useMemo(() => {
     return memos.filter((m) => {
       const matchesStatus = filterStatus === "all" || m.status === filterStatus;
-      const matchesType = filterType === "all" || m.memoType === filterType;
+      const relatedCase = cases.find(c => c.id === m.caseId);
+      const matchesDept = filterDept === "all" || (relatedCase && relatedCase.departmentId === filterDept);
       const matchesPriority = filterPriority === "all" || m.priority === filterPriority;
       const matchesSearch = !searchQuery || m.title.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesStatus && matchesType && matchesPriority && matchesSearch;
+      return matchesStatus && matchesDept && matchesPriority && matchesSearch;
     });
-  }, [memos, filterStatus, filterType, filterPriority, searchQuery]);
+  }, [memos, cases, filterStatus, filterDept, filterPriority, searchQuery]);
 
   if (isLoading) {
     return (
@@ -362,14 +365,14 @@ export default function MemosPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={filterType} onValueChange={setFilterType}>
-              <SelectTrigger className="w-[160px]" data-testid="select-filter-type">
-                <SelectValue placeholder="النوع" />
+            <Select value={filterDept} onValueChange={setFilterDept}>
+              <SelectTrigger className="w-[160px]" data-testid="select-filter-dept">
+                <SelectValue placeholder="القسم" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">جميع الأنواع</SelectItem>
-                {Object.entries(MemoTypeLabels).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                <SelectItem value="all">جميع الأقسام</SelectItem>
+                {departments.map((dept) => (
+                  <SelectItem key={String(dept.id)} value={String(dept.id)}>{dept.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>

@@ -179,7 +179,7 @@ export default function CasesPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [deptFilter, setDeptFilter] = useState<string>("all");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -497,11 +497,11 @@ export default function CasesPage() {
         (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesStatus = statusFilter === "all" || c.status === statusFilter;
-      const matchesType = typeFilter === "all" || c.caseType === typeFilter;
+      const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" || c.caseClassification === classificationFilter;
-      return matchesSearch && matchesStatus && matchesType && matchesClassification;
+      return matchesSearch && matchesStatus && matchesDept && matchesClassification;
     });
-  }, [cases, searchQuery, statusFilter, typeFilter, classificationFilter, getClientName]);
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, getClientName]);
 
   const isDeptHead = user?.role === "department_head";
 
@@ -644,14 +644,14 @@ export default function CasesPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger className="w-[150px]" data-testid="select-type-filter">
-                <SelectValue placeholder="النوع" />
+            <Select value={deptFilter} onValueChange={setDeptFilter}>
+              <SelectTrigger className="w-[150px]" data-testid="select-dept-filter">
+                <SelectValue placeholder="القسم" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">الكل</SelectItem>
-                {Array.from(new Set(cases.map(c => c.caseType).filter(Boolean))).map((type) => (
-                  <SelectItem key={type} value={type}>{type}</SelectItem>
+                <SelectItem value="all">جميع الأقسام</SelectItem>
+                {departments.map((dept) => (
+                  <SelectItem key={String(dept.id)} value={String(dept.id)}>{dept.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
