@@ -504,7 +504,11 @@ export default function MemosPage() {
               <Label>القضية *</Label>
               <Select
                 value={formData.caseId}
-                onValueChange={(value) => setFormData({ ...formData, caseId: value })}
+                onValueChange={(value) => {
+                  const selectedCase = cases.find(c => c.id === value);
+                  const autoLawyer = selectedCase?.primaryLawyerId || selectedCase?.responsibleLawyerId || "";
+                  setFormData(prev => ({ ...prev, caseId: value, assignedTo: autoLawyer }));
+                }}
               >
                 <SelectTrigger data-testid="select-memo-case">
                   <SelectValue placeholder="اختر القضية" />
@@ -598,7 +602,7 @@ export default function MemosPage() {
                 onValueChange={(value) => setFormData({ ...formData, assignedTo: value })}
               >
                 <SelectTrigger data-testid="select-memo-assigned">
-                  <SelectValue placeholder="اختر المحامي" />
+                  <SelectValue placeholder="المحامي المكلف بالقضية (تلقائي)" />
                 </SelectTrigger>
                 <SelectContent>
                   {assignableUsers.map((u) => (
@@ -606,6 +610,7 @@ export default function MemosPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground mt-1">يتم تعيين المحامي المكلف بالقضية تلقائياً</p>
             </div>
             <div>
               <Label>المحتوى</Label>

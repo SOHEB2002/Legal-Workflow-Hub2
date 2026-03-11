@@ -145,6 +145,7 @@ export const hearings = pgTable("hearings", {
   adminTasksCreated: boolean("admin_tasks_created").default(false),
   opponentMemos: text("opponent_memos").default(""),
   hearingMinutes: text("hearing_minutes").default(""),
+  attendingLawyerId: varchar("attending_lawyer_id", { length: 255 }),
   reminderSent24h: boolean("reminder_sent_24h").default(false),
   reminderSent1h: boolean("reminder_sent_1h").default(false),
   googleCalendarEventId: varchar("google_calendar_event_id", { length: 255 }),
@@ -1004,6 +1005,7 @@ export interface Hearing {
   adminTasksCreated: boolean;
   opponentMemos: string;
   hearingMinutes: string;
+  attendingLawyerId: string | null;
   reminderSent24h: boolean;
   reminderSent1h: boolean;
   googleCalendarEventId: string | null;
@@ -1292,6 +1294,7 @@ export const insertHearingSchema = z.object({
   courtRoom: z.string().optional().default(""),
   notes: z.string().optional().default(""),
   responseRequired: z.boolean().optional().default(false),
+  attendingLawyerId: z.string().nullable().optional(),
 });
 
 export type InsertHearing = z.infer<typeof insertHearingSchema>;

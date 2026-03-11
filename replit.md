@@ -46,7 +46,7 @@ The system features a formal and luxurious design with an Arabic RTL interface.
 - **Key Features**:
     - **Case Management**: Comprehensive tracking through 9 stages, department-specific workflows for plaintiff cases, prioritizing `courtCaseNumber`. Case type is free text (not enum). Case data editing restricted to `branch_manager` and `admin_support` roles only.
     - **Consultation Management**: System for managing legal consultations.
-    - **Hearings Schedule**: Management of court hearing dates.
+    - **Hearings Schedule**: Management of court hearing dates with `attendingLawyerId` field. When a hearing is created for a case, the attending lawyer is auto-assigned from the case's `primaryLawyerId`. Department heads can override individual assignments.
     - **Client Management**: Detailed client profiles and contact logging.
     - **Field Tasks**: Management of external tasks with status tracking and evidence upload.
     - **User Management**: CRUD operations for users, including advanced features like password reset, status toggling, vacation scheduling with conflict detection, delegation system (full/partial permissions), custom permission overrides, and team management.

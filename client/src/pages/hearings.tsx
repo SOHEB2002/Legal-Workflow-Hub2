@@ -130,6 +130,7 @@ export default function HearingsPage() {
     courtName: "المحكمة العامة" as CourtTypeValue,
     courtRoom: "",
     notes: "",
+    attendingLawyerId: "",
   });
 
   const [formData, setFormData] = useState({
@@ -140,6 +141,7 @@ export default function HearingsPage() {
     courtRoom: "",
     notes: "",
     responseRequired: false,
+    attendingLawyerId: "",
   });
 
   const [resultForm, setResultForm] = useState({
@@ -171,6 +173,7 @@ export default function HearingsPage() {
       courtRoom: "",
       notes: "",
       responseRequired: false,
+      attendingLawyerId: "",
     });
   };
 
@@ -320,6 +323,7 @@ export default function HearingsPage() {
       courtName: (hearing.courtName as CourtTypeValue) || "المحكمة العامة",
       courtRoom: hearing.courtRoom || "",
       notes: hearing.notes || "",
+      attendingLawyerId: hearing.attendingLawyerId || "",
     });
     setEditDialogHearing(hearing);
   };
@@ -359,8 +363,9 @@ export default function HearingsPage() {
   );
 
   const getLawyerForHearing = (hearing: Hearing) => {
+    if (hearing.attendingLawyerId) return hearing.attendingLawyerId;
     const caseData = hearing.caseId ? getCaseById(hearing.caseId) : null;
-    return caseData?.responsibleLawyerId || caseData?.primaryLawyerId || null;
+    return caseData?.primaryLawyerId || caseData?.responsibleLawyerId || null;
   };
 
   const getDepartmentForHearing = (hearing: Hearing) => {
@@ -431,7 +436,11 @@ export default function HearingsPage() {
                 <Label>القضية (اختياري)</Label>
                 <Select
                   value={formData.caseId}
-                  onValueChange={(value) => setFormData({ ...formData, caseId: value })}
+                  onValueChange={(value) => {
+                    const selectedCase = getCaseById(value);
+                    const autoLawyer = selectedCase?.primaryLawyerId || selectedCase?.responsibleLawyerId || "";
+                    setFormData(prev => ({ ...prev, caseId: value, attendingLawyerId: autoLawyer }));
+                  }}
                 >
                   <SelectTrigger data-testid="select-case">
                     <SelectValue placeholder="اختر القضية" />
@@ -497,6 +506,25 @@ export default function HearingsPage() {
                   placeholder="مثال: الدائرة 5"
                 />
               </div>
+              {formData.caseId && formData.caseId !== "none" && (
+                <div>
+                  <Label>المحامي المكلف بالحضور</Label>
+                  <Select
+                    value={formData.attendingLawyerId}
+                    onValueChange={(value) => setFormData({ ...formData, attendingLawyerId: value })}
+                  >
+                    <SelectTrigger data-testid="select-attending-lawyer">
+                      <SelectValue placeholder="المحامي المكلف بالقضية (تلقائي)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                        <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">يتم تعيين المحامي المكلف بالقضية تلقائياً</p>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="addResponseRequired"
@@ -1164,6 +1192,24 @@ export default function HearingsPage() {
                 placeholder="مثال: الدائرة 5"
               />
             </div>
+            {editDialogHearing?.caseId && editDialogHearing.caseId !== "none" && (
+              <div>
+                <Label>المحامي المكلف بالحضور</Label>
+                <Select
+                  value={editFormData.attendingLawyerId}
+                  onValueChange={(value) => setEditFormData({ ...editFormData, attendingLawyerId: value })}
+                >
+                  <SelectTrigger data-testid="select-edit-attending-lawyer">
+                    <SelectValue placeholder="اختر المحامي" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                      <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div>
               <Label>ملاحظات</Label>
               <Textarea
@@ -1236,6 +1282,14 @@ export default function HearingsPage() {
                   <div>
                     <p className="text-xs text-muted-foreground">الحالة</p>
                     {getStatusBadge(detailHearing.status)}
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">المحامي المكلف بالحضور</p>
+                    <p className="font-medium">{(() => {
+                      const lawyerId = getLawyerForHearing(detailHearing);
+                      const lawyer = lawyerId ? users.find(u => u.id === lawyerId) : null;
+                      return lawyer?.name || "-";
+                    })()}</p>
                   </div>
                 </div>
                 {detailHearing.notes && (

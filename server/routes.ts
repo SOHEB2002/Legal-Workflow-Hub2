@@ -1026,6 +1026,28 @@ export async function registerRoutes(
         } catch (e) {}
       }
 
+      // Cascade lawyer assignment to pending hearings and active memos
+      if (req.body.primaryLawyerId && req.body.primaryLawyerId !== existing.primaryLawyerId) {
+        const caseId = String(req.params.id);
+        const newLawyerId = req.body.primaryLawyerId;
+        try {
+          const caseHearings = await storage.getHearingsByCase(caseId);
+          for (const h of caseHearings) {
+            if (h.status === "قادمة") {
+              await storage.updateHearing(h.id, { attendingLawyerId: newLawyerId });
+            }
+          }
+          const caseMemos = await storage.getMemosByCase(caseId);
+          for (const m of caseMemos) {
+            if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
+              await storage.updateMemo(m.id, { assignedTo: newLawyerId } as any);
+            }
+          }
+        } catch (e) {
+          console.error("Error cascading lawyer assignment:", e);
+        }
+      }
+
       // Handle related entities when case is closed/archived
       if (req.body.currentStage === "مقفلة" && existing.currentStage !== "مقفلة") {
         const caseId = String(req.params.id);
@@ -1265,6 +1287,12 @@ export async function registerRoutes(
   app.post("/api/hearings", requireAuth, async (req, res) => {
     try {
       const validatedData = insertHearingSchema.parse(req.body);
+      if (validatedData.caseId && validatedData.caseId !== "none" && !validatedData.attendingLawyerId) {
+        const relatedCase = await storage.getCaseById(validatedData.caseId);
+        if (relatedCase) {
+          validatedData.attendingLawyerId = relatedCase.primaryLawyerId || relatedCase.responsibleLawyerId || null;
+        }
+      }
       const newHearing = await storage.createHearing(validatedData);
       const user = (req as any).user;
       const createdMemos: any[] = [];
