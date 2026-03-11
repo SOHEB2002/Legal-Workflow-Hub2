@@ -248,6 +248,9 @@ export default function ClientsPage() {
           <SelectContent>
             <SelectItem value="فرد">فرد</SelectItem>
             <SelectItem value="شركة">شركة</SelectItem>
+            <SelectItem value="مؤسسة">مؤسسة</SelectItem>
+            <SelectItem value="وقف">وقف</SelectItem>
+            <SelectItem value="جمعية">جمعية</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -278,13 +281,13 @@ export default function ClientsPage() {
       ) : (
         <>
           <div>
-            <Label>اسم الشركة</Label>
+            <Label>اسم {formData.clientType === "شركة" ? "الشركة" : formData.clientType === "مؤسسة" ? "المؤسسة" : formData.clientType === "وقف" ? "الوقف" : formData.clientType === "جمعية" ? "الجمعية" : "الجهة"}</Label>
             <SmartInput
               inputType="text"
               data-testid="input-company-name"
               value={formData.companyName || ""}
               onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
-              placeholder="أدخل اسم الشركة"
+              placeholder={`أدخل اسم ${formData.clientType === "شركة" ? "الشركة" : formData.clientType === "مؤسسة" ? "المؤسسة" : formData.clientType === "وقف" ? "الوقف" : formData.clientType === "جمعية" ? "الجمعية" : "الجهة"}`}
             />
           </div>
           <div>
@@ -304,7 +307,7 @@ export default function ClientsPage() {
               data-testid="input-representative-name"
               value={formData.representativeName || ""}
               onChange={(e) => setFormData({ ...formData, representativeName: e.target.value })}
-              placeholder="اسم ممثل الشركة"
+              placeholder={`اسم ممثل ${formData.clientType === "شركة" ? "الشركة" : formData.clientType === "مؤسسة" ? "المؤسسة" : formData.clientType === "وقف" ? "الوقف" : formData.clientType === "جمعية" ? "الجمعية" : "الجهة"}`}
             />
           </div>
           <div>
@@ -413,6 +416,9 @@ export default function ClientsPage() {
                 <SelectItem value="all">الكل</SelectItem>
                 <SelectItem value="فرد">أفراد</SelectItem>
                 <SelectItem value="شركة">شركات</SelectItem>
+                <SelectItem value="مؤسسة">مؤسسات</SelectItem>
+                <SelectItem value="وقف">أوقاف</SelectItem>
+                <SelectItem value="جمعية">جمعيات</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -445,7 +451,7 @@ export default function ClientsPage() {
                         <p className="font-medium">
                           <BidiText>{client.clientType === "فرد" ? client.individualName : client.companyName}</BidiText>
                         </p>
-                        {client.clientType === "شركة" && client.representativeName && (
+                        {client.clientType !== "فرد" && client.representativeName && (
                           <p className="text-sm text-muted-foreground">
                             {client.representativeName} - {client.representativeTitle}
                           </p>
@@ -603,7 +609,7 @@ export default function ClientsPage() {
                   ) : (
                     <>
                       <div>
-                        <Label className="text-muted-foreground">اسم الشركة</Label>
+                        <Label className="text-muted-foreground">اسم {viewingClient.clientType === "شركة" ? "الشركة" : viewingClient.clientType === "مؤسسة" ? "المؤسسة" : viewingClient.clientType === "وقف" ? "الوقف" : viewingClient.clientType === "جمعية" ? "الجمعية" : "الجهة"}</Label>
                         <p className="font-medium"><BidiText>{viewingClient.companyName}</BidiText></p>
                       </div>
                       <div>
@@ -611,7 +617,7 @@ export default function ClientsPage() {
                         <p className="font-medium"><LtrInline>{viewingClient.commercialRegister || "-"}</LtrInline></p>
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">ممثل الشركة</Label>
+                        <Label className="text-muted-foreground">ممثل {viewingClient.clientType === "شركة" ? "الشركة" : viewingClient.clientType === "مؤسسة" ? "المؤسسة" : viewingClient.clientType === "وقف" ? "الوقف" : viewingClient.clientType === "جمعية" ? "الجمعية" : "الجهة"}</Label>
                         <p className="font-medium"><BidiText>{viewingClient.representativeName || "-"}</BidiText></p>
                       </div>
                       <div>

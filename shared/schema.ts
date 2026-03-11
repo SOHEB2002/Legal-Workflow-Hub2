@@ -658,6 +658,9 @@ export const ReviewDecisionLabels: Record<ReviewDecisionType, string> = {
 export const ClientType = {
   INDIVIDUAL: "فرد",
   COMPANY: "شركة",
+  INSTITUTION: "مؤسسة",
+  WAQF: "وقف",
+  ASSOCIATION: "جمعية",
 } as const;
 
 export type ClientTypeValue = typeof ClientType[keyof typeof ClientType];
@@ -1218,7 +1221,7 @@ export const updateUserSchema = z.object({
 export type UpdateUser = z.infer<typeof updateUserSchema>;
 
 export const insertClientSchema = z.object({
-  clientType: z.enum(["فرد", "شركة"]),
+  clientType: z.enum(["فرد", "شركة", "مؤسسة", "وقف", "جمعية"]),
   individualName: z.string().nullable().optional(),
   nationalId: z.string().nullable().optional(),
   phone: z.string().optional().default(""),

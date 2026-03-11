@@ -271,7 +271,7 @@ export default function KPIsPage() {
     });
 
     const individualClients = clients.filter(c => c.clientType === "فرد");
-    const companyClients = clients.filter(c => c.clientType === "شركة");
+    const companyClients = clients.filter(c => c.clientType !== "فرد");
 
     return {
       total: clients.length,
