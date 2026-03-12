@@ -1270,7 +1270,7 @@ export default function CasesPage() {
                 </TabsList>
                 
                 <TabsContent value="info" className="space-y-4 mt-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                     <div>
                       <Label className="text-muted-foreground">العميل</Label>
                       <p className="font-medium"><BidiText>{getClientName(selectedCase.clientId)}</BidiText></p>
@@ -1295,7 +1295,7 @@ export default function CasesPage() {
                     </div>
                     <div>
                       <Label className="text-muted-foreground">الأولوية</Label>
-                      <Badge className={getPriorityColor(selectedCase.priority)}>{selectedCase.priority}</Badge>
+                      <div><Badge className={getPriorityColor(selectedCase.priority)}>{selectedCase.priority}</Badge></div>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">القسم</Label>
@@ -1321,7 +1321,7 @@ export default function CasesPage() {
                   
                   <div className="border-t pt-4">
                     <h4 className="font-semibold mb-3">بيانات الخصم</h4>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                       <div>
                         <Label className="text-muted-foreground">اسم الخصم</Label>
                         <p><BidiText>{selectedCase.opponentName || "-"}</BidiText></p>
@@ -1345,7 +1345,7 @@ export default function CasesPage() {
                   {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                         <div>
                           <Label className="text-muted-foreground">نوع القضية</Label>
                           <p className="font-medium">{(selectedCase as any).adminCaseSubType === "تظلم" ? "تظلم" : "قضية"}</p>
