@@ -976,16 +976,18 @@ export default function CasesPage() {
                   />
                 </div>
 
-                <div>
-                  <Label>رقم القضية {formData.caseClassification === CaseClassification.PLAINTIFF_NEW ? "(اختياري - يُولّد تلقائياً إن لم يُدخل)" : ""}</Label>
-                  <SmartInput
-                    inputType="code"
-                    data-testid="input-court-case-number"
-                    value={formData.courtCaseNumber}
-                    onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
-                    placeholder="أدخل رقم القضية لدى المحكمة"
-                  />
-                </div>
+                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                  <div>
+                    <Label>رقم القضية</Label>
+                    <SmartInput
+                      inputType="code"
+                      data-testid="input-court-case-number"
+                      value={formData.courtCaseNumber}
+                      onChange={(e) => setFormData({ ...formData, courtCaseNumber: e.target.value })}
+                      placeholder="أدخل رقم القضية لدى المحكمة"
+                    />
+                  </div>
+                )}
 
                 {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
                   <div>
