@@ -663,18 +663,29 @@ export default function HearingsPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table className="w-full min-w-[900px]">
+              <Table className="w-full" style={{ tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '12%' }} />
+                </colgroup>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-center whitespace-nowrap">التاريخ والوقت</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">القضية</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">الخصم</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">رقم القضية</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">المحكمة</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">الحالة</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">النتيجة</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">سير العمل</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">الإجراءات</TableHead>
+                    <TableHead className="text-center">التاريخ والوقت</TableHead>
+                    <TableHead className="text-center">القضية</TableHead>
+                    <TableHead className="text-center">الخصم</TableHead>
+                    <TableHead className="text-center">رقم القضية</TableHead>
+                    <TableHead className="text-center">المحكمة</TableHead>
+                    <TableHead className="text-center">الحالة</TableHead>
+                    <TableHead className="text-center">النتيجة</TableHead>
+                    <TableHead className="text-center">سير العمل</TableHead>
+                    <TableHead className="text-center">الإجراءات</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
