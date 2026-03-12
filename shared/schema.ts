@@ -444,7 +444,7 @@ export type CaseClassificationValue = typeof CaseClassification[keyof typeof Cas
 
 export const CaseClassificationLabels: Record<CaseClassificationValue, string> = {
   "مدعي_قضية_جديدة": "مدعي - قضية جديدة",
-  "مدعي_قضية_مقيدة": "مدعي - قضية مقيدة (مرفوعة مسبقاً)",
+  "مدعي_قضية_مقيدة": "مدعي - قضية مقيدة",
   "مدعى_عليه": "مدعى عليه",
 };
 
