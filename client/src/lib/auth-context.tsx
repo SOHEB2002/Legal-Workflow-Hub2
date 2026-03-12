@@ -85,6 +85,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refetchUsers = useCallback(async () => {
     const fetched = await fetchUsersFromAPI();
     setUsers(fetched);
+    setUser(prev => {
+      if (!prev) return prev;
+      const fresh = fetched.find(u => u.id === prev.id);
+      if (!fresh) return prev;
+      const merged = { ...prev, ...fresh };
+      localStorage.setItem("lawfirm_user", JSON.stringify(merged));
+      return merged;
+    });
   }, []);
 
   const logout = useCallback(async () => {
@@ -263,6 +271,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await apiRequest("PATCH", `/api/users/${id}`, userData);
       await refetchUsers();
+      if (user && user.id === id) {
+        const updatedUser = { ...user, ...userData };
+        setUser(updatedUser);
+        localStorage.setItem("lawfirm_user", JSON.stringify(updatedUser));
+      }
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error?.message || "فشل تحديث المستخدم" };
