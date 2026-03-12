@@ -63,8 +63,7 @@ import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
-import { HearingStatus, HearingResult, CourtType, CaseClassificationLabels } from "@shared/schema";
-import type { CaseClassificationValue } from "@shared/schema";
+import { HearingStatus, HearingResult, CourtType } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -723,14 +722,12 @@ export default function HearingsPage() {
                           </TableCell>
                           <TableCell className="text-center">
                             {caseInfo.classification && (
-                              <Badge variant="outline" className={`text-xs ${
+                              <Badge variant="outline" className={`text-xs inline-flex justify-center ${
                                 caseInfo.classification === "مدعى_عليه"
                                   ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
-                                  : caseInfo.classification === "مدعي_قضية_مقيدة"
-                                  ? "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
-                                  : ""
+                                  : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                               }`}>
-                                {CaseClassificationLabels[caseInfo.classification as CaseClassificationValue] || "-"}
+                                {caseInfo.classification === "مدعى_عليه" ? "مدعى عليه" : "مدعي"}
                               </Badge>
                             )}
                           </TableCell>

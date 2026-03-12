@@ -421,25 +421,25 @@ export default function MemosPage() {
                       return (
                       <TableRow key={memo.id} data-testid={`row-memo-${memo.id}`}>
                         <TableCell className="text-center">
-                          <div className="flex flex-col items-center">
-                            <p className="font-medium text-sm">{memo.title}</p>
+                          <div className="flex flex-col items-center text-center w-full">
+                            <p className="font-medium text-sm text-center w-full">{memo.title}</p>
                             <Badge variant="outline" className="mt-1">
                               {memo.memoType === "أخرى" ? (memo.memoTypeOther || "أخرى") : MemoTypeLabels[memo.memoType]}
                             </Badge>
                           </div>
                         </TableCell>
                         <TableCell className="text-center">
-                          <div>
+                          <div className="flex flex-col items-center text-center w-full">
                             {(caseDetails.plaintiff || caseDetails.client) && (
-                              <p className="text-sm font-medium">{caseDetails.plaintiff || caseDetails.client}</p>
+                              <p className="text-sm font-medium text-center">{caseDetails.plaintiff || caseDetails.client}</p>
                             )}
                             {caseDetails.plaintiff && caseDetails.client && (
-                              <p className="text-xs text-muted-foreground">{caseDetails.client}</p>
+                              <p className="text-xs text-muted-foreground text-center">{caseDetails.client}</p>
                             )}
                           </div>
                         </TableCell>
                         <TableCell className="text-center">
-                          <span className="text-sm">{caseDetails.opponent || "-"}</span>
+                          <span className="text-sm block text-center">{caseDetails.opponent || "-"}</span>
                         </TableCell>
                         <TableCell className="text-center">
                           {caseDetails.classification && (
