@@ -513,7 +513,7 @@ export const CaseStatusLabels: Record<CaseStatusValue, string> = {
   "مغلق": "مغلق",
 };
 
-// ==================== مراحل القضية (7 مراحل للشريط) ====================
+// ==================== مراحل القضية ====================
 export const CaseStage = {
   RECEIVED: "استلام",
   DATA_COMPLETION: "استكمال_البيانات",
@@ -522,6 +522,9 @@ export const CaseStage = {
   REVIEW_COMMITTEE: "إحالة_للجنة_المراجعة",
   AMENDMENTS: "الأخذ_بالملاحظات",
   SUBMITTED: "تم_الرفع_للدائرة",
+  PENDING_REVIEW: "قيد_التدقيق",
+  CONCILIATION: "مداولة_الصلح",
+  CONCILIATION_CLOSED: "أغلق_طلب_الصلح",
   CLOSED: "مقفلة",
 } as const;
 
@@ -531,10 +534,13 @@ export const CaseStageLabels: Record<CaseStageValue, string> = {
   "استلام": "استلام",
   "استكمال_البيانات": "استكمال البيانات",
   "دراسة": "دراسة",
-  "تحرير_المذكرة": "تحرير المذكرة",
+  "تحرير_المذكرة": "تحرير صحيفة الدعوى",
   "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
   "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
-  "تم_الرفع_للدائرة": "تم الرفع للدائرة",
+  "تم_الرفع_للدائرة": "جاهزة للرفع",
+  "قيد_التدقيق": "قيد التدقيق",
+  "مداولة_الصلح": "مداولة الصلح",
+  "أغلق_طلب_الصلح": "أغلق طلب الصلح",
   "مقفلة": "مقفلة",
 };
 
@@ -546,6 +552,9 @@ export const CaseStagesOrder: CaseStageValue[] = [
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
   "تم_الرفع_للدائرة",
+  "قيد_التدقيق",
+  "مداولة_الصلح",
+  "أغلق_طلب_الصلح",
   "مقفلة",
 ];
 
@@ -559,6 +568,9 @@ export const PlaintiffNewStages: CaseStageValue[] = [
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
   "تم_الرفع_للدائرة",
+  "قيد_التدقيق",
+  "مداولة_الصلح",
+  "أغلق_طلب_الصلح",
 ];
 
 export const PlaintiffExistingStages: CaseStageValue[] = [
@@ -569,6 +581,7 @@ export const PlaintiffExistingStages: CaseStageValue[] = [
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
   "تم_الرفع_للدائرة",
+  "قيد_التدقيق",
 ];
 
 export const DefendantStages: CaseStageValue[] = [
@@ -605,17 +618,13 @@ export function getStageLabel(stage: CaseStageValue, classification?: CaseClassi
   if (stage === "تحرير_المذكرة") {
     switch (classification) {
       case "مدعي_قضية_جديدة": return "تحرير صحيفة الدعوى";
-      case "مدعي_قضية_مقيدة": return "تحرير المذكرة";
+      case "مدعي_قضية_مقيدة": return "تحرير صحيفة الدعوى";
       case "مدعى_عليه": return "تحرير المذكرة الجوابية";
     }
   }
 
   if (stage === "تم_الرفع_للدائرة") {
-    switch (classification) {
-      case "مدعي_قضية_جديدة": return "رفع الدعوى للمحكمة";
-      case "مدعي_قضية_مقيدة": return "تقديم المذكرة للمحكمة";
-      case "مدعى_عليه": return "تقديم المذكرة الجوابية للمحكمة";
-    }
+    return "جاهزة للرفع";
   }
 
   return CaseStageLabels[stage] || stage;

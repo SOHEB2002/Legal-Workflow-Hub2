@@ -96,7 +96,7 @@ import {
   getStageLabel,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -120,6 +120,12 @@ function getStageColor(stage: CaseStageValue | string) {
       return "bg-destructive/20 text-destructive border-destructive/30";
     case CaseStage.SUBMITTED:
       return "bg-green-500/20 text-green-600 border-green-500/30";
+    case CaseStage.PENDING_REVIEW:
+      return "bg-violet-500/20 text-violet-600 border-violet-500/30";
+    case CaseStage.CONCILIATION:
+      return "bg-cyan-500/20 text-cyan-600 border-cyan-500/30";
+    case CaseStage.CONCILIATION_CLOSED:
+      return "bg-teal-500/20 text-teal-600 border-teal-500/30";
     case CaseStage.CLOSED:
       return "bg-muted text-muted-foreground border-muted";
     default:
@@ -602,7 +608,9 @@ export default function CasesPage() {
 
   const canClose = (c: LawCase) => 
     permissions.canCloseCases && 
-    (c.currentStage === CaseStage.SUBMITTED || c.currentStage === CaseStage.CLOSED);
+    (c.currentStage === CaseStage.SUBMITTED || c.currentStage === CaseStage.PENDING_REVIEW ||
+     c.currentStage === CaseStage.CONCILIATION || c.currentStage === CaseStage.CONCILIATION_CLOSED ||
+     c.currentStage === CaseStage.CLOSED);
 
   return (
     <div className="p-6 space-y-6">
@@ -1505,6 +1513,96 @@ export default function CasesPage() {
                     </div>
                   )}
                   
+                  {CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.SUBMITTED) && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
+                        أرقام الطلبات - جاهزة للرفع
+                      </h4>
+                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
+                        <div>
+                          <Label className="text-muted-foreground">رقم الطلب في منصة تراضي</Label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="font-medium">{selectedCase.taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                            <Button
+                              variant="ghost" size="sm"
+                              data-testid="button-edit-taradi-number"
+                              onClick={async () => {
+                                const val = prompt("رقم الطلب في منصة تراضي:", selectedCase.taradiNumber || "");
+                                if (val !== null) {
+                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { taradiNumber: val });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                                }
+                              }}
+                            ><Pencil className="w-3 h-3" /></Button>
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-muted-foreground">رقم الطلب في ناجز / معين</Label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="font-medium">{selectedCase.najizNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                            <Button
+                              variant="ghost" size="sm"
+                              data-testid="button-edit-najiz-number"
+                              onClick={async () => {
+                                const val = prompt("رقم الطلب في ناجز / معين:", selectedCase.najizNumber || "");
+                                if (val !== null) {
+                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { najizNumber: val });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                                }
+                              }}
+                            ><Pencil className="w-3 h-3" /></Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.PENDING_REVIEW) && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-violet-500 inline-block"></span>
+                        بيانات ما بعد التقييد
+                      </h4>
+                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
+                        <div>
+                          <Label className="text-muted-foreground">رقم القضية</Label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="font-medium">{selectedCase.courtCaseNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                            <Button
+                              variant="ghost" size="sm"
+                              data-testid="button-edit-court-case-number"
+                              onClick={async () => {
+                                const val = prompt("رقم القضية:", selectedCase.courtCaseNumber || "");
+                                if (val !== null) {
+                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { courtCaseNumber: val });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                                }
+                              }}
+                            ><Pencil className="w-3 h-3" /></Button>
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-muted-foreground">موعد الجلسة</Label>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="font-medium">{selectedCase.nextHearingDate ? <DualDateDisplay date={selectedCase.nextHearingDate} compact /> : <span className="text-muted-foreground text-sm italic">غير محدد</span>}</p>
+                            <Button
+                              variant="ghost" size="sm"
+                              data-testid="button-edit-next-hearing-date"
+                              onClick={async () => {
+                                const val = prompt("موعد الجلسة (YYYY-MM-DD):", selectedCase.nextHearingDate || "");
+                                if (val !== null) {
+                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { nextHearingDate: val || null });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                                }
+                              }}
+                            ><Pencil className="w-3 h-3" /></Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="border-t pt-4">
                     <div className="flex justify-between text-sm text-muted-foreground">
                       <span>تاريخ الإنشاء: <DualDateDisplay date={selectedCase.createdAt} compact /></span>

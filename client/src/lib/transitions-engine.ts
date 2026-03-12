@@ -50,7 +50,7 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     to: CaseStage.DRAFTING,
     allowedRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     requiresAssignment: true,
-    label: "إتمام الدراسة وبدء تحرير المذكرة",
+    label: "إتمام الدراسة وبدء تحرير صحيفة الدعوى",
   },
   {
     from: CaseStage.DRAFTING,
@@ -65,7 +65,7 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     to: CaseStage.SUBMITTED,
     allowedRoles: [UserRole.CASES_REVIEW_HEAD, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "notify" }],
-    label: "اعتماد ورفع للدائرة",
+    label: "اعتماد - جاهزة للرفع",
   },
   {
     from: CaseStage.REVIEW_COMMITTEE,
@@ -85,7 +85,39 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     from: CaseStage.AMENDMENTS,
     to: CaseStage.SUBMITTED,
     allowedRoles: [UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
-    label: "رفع الدعوى للمحكمة مباشرة",
+    label: "جاهزة للرفع مباشرة",
+  },
+  {
+    from: CaseStage.SUBMITTED,
+    to: CaseStage.PENDING_REVIEW,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    label: "قيد التدقيق",
+  },
+  {
+    from: CaseStage.PENDING_REVIEW,
+    to: CaseStage.CONCILIATION,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    label: "إحالة لمداولة الصلح",
+  },
+  {
+    from: CaseStage.CONCILIATION,
+    to: CaseStage.CONCILIATION_CLOSED,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    label: "إغلاق طلب الصلح",
+  },
+  {
+    from: CaseStage.CONCILIATION_CLOSED,
+    to: CaseStage.CLOSED,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    autoActions: [{ type: "close" }],
+    label: "إقفال القضية",
+  },
+  {
+    from: CaseStage.PENDING_REVIEW,
+    to: CaseStage.CLOSED,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    autoActions: [{ type: "close" }],
+    label: "إقفال القضية مباشرة",
   },
   {
     from: CaseStage.SUBMITTED,
@@ -132,6 +164,24 @@ const CASE_BACKWARD_TRANSITIONS: TransitionRule[] = [
     to: CaseStage.AMENDMENTS,
     allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
     label: "إرجاع للملاحظات",
+  },
+  {
+    from: CaseStage.PENDING_REVIEW,
+    to: CaseStage.SUBMITTED,
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD, UserRole.ADMIN_SUPPORT],
+    label: "إرجاع لجاهزة للرفع",
+  },
+  {
+    from: CaseStage.CONCILIATION,
+    to: CaseStage.PENDING_REVIEW,
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD, UserRole.ADMIN_SUPPORT],
+    label: "إرجاع لقيد التدقيق",
+  },
+  {
+    from: CaseStage.CONCILIATION_CLOSED,
+    to: CaseStage.CONCILIATION,
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD, UserRole.ADMIN_SUPPORT],
+    label: "إرجاع لمداولة الصلح",
   },
 ];
 
@@ -243,8 +293,8 @@ const CASE_STAGE_INFO: StageInfo[] = [
   },
   {
     stage: CaseStage.DRAFTING,
-    label: "تحرير المذكرة",
-    description: "المحامي يحرر المذكرة ويجهزها للمراجعة",
+    label: "تحرير صحيفة الدعوى",
+    description: "المحامي يحرر صحيفة الدعوى ويجهزها للمراجعة",
     responsibleRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD],
   },
   {
@@ -261,9 +311,27 @@ const CASE_STAGE_INFO: StageInfo[] = [
   },
   {
     stage: CaseStage.SUBMITTED,
-    label: "تم الرفع للدائرة",
-    description: "القضية معتمدة ومرفوعة للدائرة القضائية",
+    label: "جاهزة للرفع",
+    description: "القضية معتمدة وجاهزة للرفع للمحكمة",
     responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.BRANCH_MANAGER],
+  },
+  {
+    stage: CaseStage.PENDING_REVIEW,
+    label: "قيد التدقيق",
+    description: "القضية قيد التدقيق في المحكمة",
+    responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.BRANCH_MANAGER],
+  },
+  {
+    stage: CaseStage.CONCILIATION,
+    label: "مداولة الصلح",
+    description: "القضية في مرحلة مداولة الصلح",
+    responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+  },
+  {
+    stage: CaseStage.CONCILIATION_CLOSED,
+    label: "أغلق طلب الصلح",
+    description: "تم إغلاق طلب الصلح",
+    responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
   },
   {
     stage: CaseStage.CLOSED,
