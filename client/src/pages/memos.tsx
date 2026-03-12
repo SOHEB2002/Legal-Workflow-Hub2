@@ -59,8 +59,7 @@ import {
   canChangeMemoStatus,
   canDeleteMemos,
 } from "@shared/schema";
-import type { Memo, MemoTypeValue, MemoStatusValue, CaseClassificationValue } from "@shared/schema";
-import { CaseClassificationLabels } from "@shared/schema";
+import type { Memo, MemoTypeValue, MemoStatusValue } from "@shared/schema";
 import { differenceInDays } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -403,15 +402,15 @@ export default function MemosPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-right">العنوان</TableHead>
-                    <TableHead className="text-right">العميل</TableHead>
-                    <TableHead className="text-right">الخصم</TableHead>
-                    <TableHead className="text-right">صفة العميل</TableHead>
-                    <TableHead className="text-right">المحامي المكلف</TableHead>
-                    <TableHead className="text-right">الموعد النهائي</TableHead>
-                    <TableHead className="text-right">الحالة</TableHead>
-                    <TableHead className="text-right">الأولوية</TableHead>
-                    <TableHead className="text-right">الإجراءات</TableHead>
+                    <TableHead className="text-center">العنوان</TableHead>
+                    <TableHead className="text-center">العميل</TableHead>
+                    <TableHead className="text-center">الخصم</TableHead>
+                    <TableHead className="text-center">صفة العميل</TableHead>
+                    <TableHead className="text-center">المحامي المكلف</TableHead>
+                    <TableHead className="text-center">الموعد النهائي</TableHead>
+                    <TableHead className="text-center">الحالة</TableHead>
+                    <TableHead className="text-center">الأولوية</TableHead>
+                    <TableHead className="text-center">الإجراءات</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -421,15 +420,15 @@ export default function MemosPage() {
                       const caseDetails = getCaseDetails(memo.caseId);
                       return (
                       <TableRow key={memo.id} data-testid={`row-memo-${memo.id}`}>
-                        <TableCell>
-                          <div>
+                        <TableCell className="text-center">
+                          <div className="flex flex-col items-center">
                             <p className="font-medium text-sm">{memo.title}</p>
                             <Badge variant="outline" className="mt-1">
                               {memo.memoType === "أخرى" ? (memo.memoTypeOther || "أخرى") : MemoTypeLabels[memo.memoType]}
                             </Badge>
                           </div>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           <div>
                             {(caseDetails.plaintiff || caseDetails.client) && (
                               <p className="text-sm font-medium">{caseDetails.plaintiff || caseDetails.client}</p>
@@ -439,42 +438,40 @@ export default function MemosPage() {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           <span className="text-sm">{caseDetails.opponent || "-"}</span>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           {caseDetails.classification && (
-                            <Badge variant="outline" className={`text-xs ${
+                            <Badge variant="outline" className={`text-xs inline-flex justify-center ${
                               caseDetails.classification === "مدعى_عليه"
                                 ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
-                                : caseDetails.classification === "مدعي_قضية_مقيدة"
-                                ? "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
-                                : ""
+                                : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                             }`}>
-                              {CaseClassificationLabels[caseDetails.classification as CaseClassificationValue] || "-"}
+                              {caseDetails.classification === "مدعى_عليه" ? "مدعى عليه" : "مدعي"}
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           <span className="text-sm">{getUserName(memo.assignedTo)}</span>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           <span className={`text-sm ${getDeadlineColor(memo.deadline)}`}>
                             <DualDateDisplay date={memo.deadline} compact />
                           </span>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           <Badge className={getStatusBadgeClass(memo.status)}>
                             {MemoStatusLabels[memo.status]}
                           </Badge>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-center">
                           <Badge className={getPriorityBadgeClass(memo.priority)}>
                             {memo.priority}
                           </Badge>
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
+                        <TableCell className="text-center">
+                          <div className="flex items-center justify-center gap-1">
                             <Button
                               size="icon"
                               variant="ghost"
