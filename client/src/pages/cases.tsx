@@ -522,7 +522,9 @@ export default function CasesPage() {
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" || 
         (classificationFilter === "منظورة"
-          ? (c.caseClassification === CaseClassification.PLAINTIFF_EXISTING || c.caseClassification === CaseClassification.DEFENDANT || !!c.nextHearingDate)
+          ? !!c.nextHearingDate
+          : classificationFilter === "دعوى_للدراسة"
+          ? (c.caseClassification === CaseClassification.PLAINTIFF_NEW && !c.nextHearingDate)
           : c.caseClassification === classificationFilter);
       return matchesSearch && matchesStatus && matchesDept && matchesClassification;
     });
@@ -688,10 +690,8 @@ export default function CasesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
-                <SelectItem value="مدعي_قضية_جديدة">دعوى للدراسة</SelectItem>
-                <SelectItem value="منظورة">منظورة (الكل)</SelectItem>
-                <SelectItem value="مدعي_قضية_مقيدة">منظورة - مدعي</SelectItem>
-                <SelectItem value="مدعى_عليه">منظورة - مدعى عليه</SelectItem>
+                <SelectItem value="دعوى_للدراسة">دعوى للدراسة</SelectItem>
+                <SelectItem value="منظورة">منظورة</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -742,11 +742,9 @@ export default function CasesPage() {
                     <Badge variant="outline" className={`text-xs inline-flex text-center justify-center ${
                       c.caseClassification === CaseClassification.DEFENDANT
                         ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
-                        : c.caseClassification === CaseClassification.PLAINTIFF_EXISTING
-                        ? "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
-                        : ""
+                        : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                     }`}>
-                      {CaseClassificationLabels[c.caseClassification as CaseClassificationValue] || "مدعي - جديدة"}
+                      {c.caseClassification === CaseClassification.DEFENDANT ? "مدعى عليه" : "مدعي"}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-center">
