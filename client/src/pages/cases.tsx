@@ -7,13 +7,12 @@ import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import {
   Plus,
   Search,
-  MoreHorizontal,
+  Eye,
   Send,
   CheckCircle,
   XCircle,
   Archive,
   UserPlus,
-  FolderOpen,
   ClipboardCheck,
   Bell,
   Paperclip,
@@ -521,7 +520,10 @@ export default function CasesPage() {
         (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
-      const matchesClassification = classificationFilter === "all" || c.caseClassification === classificationFilter;
+      const matchesClassification = classificationFilter === "all" || 
+        (classificationFilter === "منظورة"
+          ? (c.caseClassification === CaseClassification.PLAINTIFF_EXISTING || c.caseClassification === CaseClassification.DEFENDANT || !!c.nextHearingDate)
+          : c.caseClassification === classificationFilter);
       return matchesSearch && matchesStatus && matchesDept && matchesClassification;
     });
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, getClientName]);
@@ -687,6 +689,7 @@ export default function CasesPage() {
               <SelectContent>
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
                 <SelectItem value="مدعي_قضية_جديدة">دعوى للدراسة</SelectItem>
+                <SelectItem value="منظورة">منظورة (الكل)</SelectItem>
                 <SelectItem value="مدعي_قضية_مقيدة">منظورة - مدعي</SelectItem>
                 <SelectItem value="مدعى_عليه">منظورة - مدعى عليه</SelectItem>
               </SelectContent>
@@ -761,94 +764,19 @@ export default function CasesPage() {
                   <TableCell className="text-center text-sm">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell className="text-center">
                     <div className="flex items-center justify-center gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        data-testid={`button-view-${c.id}`}
-                        onClick={() => openDetailsDialog(c)}
-                      >
-                        <FolderOpen className="w-4 h-4" />
+                      <Button size="icon" variant="ghost" className="text-primary hover:text-primary" title="عرض التفاصيل" data-testid={`button-view-${c.id}`} onClick={() => openDetailsDialog(c)}>
+                        <Eye className="w-4 h-4" />
                       </Button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button size="icon" variant="ghost" data-testid={`button-actions-${c.id}`}>
-                            <MoreHorizontal className="w-4 h-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {(user?.role === "branch_manager" || user?.role === "admin_support") && (
-                            <DropdownMenuItem data-testid={`button-edit-${c.id}`} onClick={() => openEditDialog(c)}>
-                              <Pencil className="w-4 h-4 ml-2" />
-                              تعديل البيانات
-                            </DropdownMenuItem>
-                          )}
-                          {canAssign(c) && (
-                            <DropdownMenuItem data-testid={`button-assign-${c.id}`} onClick={() => openAssignDialog(c)}>
-                              <UserPlus className="w-4 h-4 ml-2" />
-                              {c.primaryLawyerId ? "تعديل الإسناد" : "إسناد القضية"}
-                            </DropdownMenuItem>
-                          )}
-                          {canSendToReview(c) && (
-                            <DropdownMenuItem data-testid={`button-send-review-${c.id}`} onClick={() => handleSendToReview(c)}>
-                              <Send className="w-4 h-4 ml-2" />
-                              إرسال للمراجعة
-                            </DropdownMenuItem>
-                          )}
-                          {canReview(c) && (
-                            <>
-                              <DropdownMenuItem data-testid={`button-review-checklist-${c.id}`} onClick={() => openReviewDialog(c)}>
-                                <ClipboardCheck className="w-4 h-4 ml-2" />
-                                قائمة المراجعة
-                              </DropdownMenuItem>
-                              <DropdownMenuItem data-testid={`button-approve-${c.id}`} onClick={() => handleApprove(c)}>
-                                <CheckCircle className="w-4 h-4 ml-2 text-green-600" />
-                                اعتماد القضية
-                              </DropdownMenuItem>
-                              <DropdownMenuItem data-testid={`button-reject-${c.id}`} onClick={() => openRejectDialog(c)}>
-                                <XCircle className="w-4 h-4 ml-2 text-destructive" />
-                                إعادة للتعديل
-                              </DropdownMenuItem>
-                            </>
-                          )}
-                          {canClose(c) && (
-                            <DropdownMenuItem data-testid={`button-close-${c.id}`} onClick={() => handleClose(c)}>
-                              <Archive className="w-4 h-4 ml-2" />
-                              إغلاق القضية
-                            </DropdownMenuItem>
-                          )}
-                          {isDeptHead && c.departmentId === user?.departmentId && (
-                            <>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem data-testid={`button-transfer-${c.id}`} onClick={() => openTransferDialog(c)}>
-                                <ArrowLeftRight className="w-4 h-4 ml-2" />
-                                طلب تحويل لقسم آخر
-                              </DropdownMenuItem>
-                            </>
-                          )}
-                          {permissions.canSendReminders && (c.responsibleLawyerId || c.primaryLawyerId) && (
-                            <>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem data-testid={`button-reminder-${c.id}`} onClick={() => openReminderDialog(c)}>
-                                <Bell className="w-4 h-4 ml-2 text-accent" />
-                                إرسال تذكير
-                              </DropdownMenuItem>
-                            </>
-                          )}
-                          {user?.role === "branch_manager" && (
-                            <>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                data-testid={`button-delete-case-${c.id}`}
-                                className="text-destructive focus:text-destructive"
-                                onClick={() => { setCaseToDelete(c); setShowDeleteDialog(true); }}
-                              >
-                                <Trash2 className="w-4 h-4 ml-2" />
-                                حذف القضية
-                              </DropdownMenuItem>
-                            </>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {(user?.role === "branch_manager" || user?.role === "admin_support") && (
+                        <Button size="icon" variant="ghost" title="تعديل البيانات" data-testid={`button-edit-${c.id}`} onClick={() => openEditDialog(c)}>
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                      )}
+                      {user?.role === "branch_manager" && (
+                        <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive" title="حذف القضية" data-testid={`button-delete-case-${c.id}`} onClick={() => { setCaseToDelete(c); setShowDeleteDialog(true); }}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -1316,7 +1244,7 @@ export default function CasesPage() {
               </div>
 
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
+                <TabsList className="grid w-full grid-cols-5 lg:grid-cols-9">
                   <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
                   <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
@@ -1325,6 +1253,7 @@ export default function CasesPage() {
                   <TabsTrigger value="activity" data-testid="tab-activity">النشاط</TabsTrigger>
                   <TabsTrigger value="notes" data-testid="tab-notes">ملاحظات</TabsTrigger>
                   <TabsTrigger value="deadlines" data-testid="tab-deadlines">مواعيد</TabsTrigger>
+                  <TabsTrigger value="actions" data-testid="tab-actions">الإجراءات</TabsTrigger>
                 </TabsList>
                 
                 <TabsContent value="info" className="space-y-4 mt-4">
@@ -1904,6 +1833,102 @@ export default function CasesPage() {
 
                 <TabsContent value="deadlines" className="mt-4">
                   <CaseDeadlinesTab caseId={selectedCase?.id || ""} />
+                </TabsContent>
+
+                <TabsContent value="actions" className="mt-4">
+                  <div className="space-y-3">
+                    {canAssign(selectedCase) && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                        <div>
+                          <p className="font-medium text-sm">{selectedCase.primaryLawyerId ? "تعديل الإسناد" : "إسناد القضية"}</p>
+                          <p className="text-xs text-muted-foreground">تحديد المحامي المسؤول عن القضية</p>
+                        </div>
+                        <Button size="sm" variant="outline" data-testid={`button-assign-details-${selectedCase.id}`} onClick={() => { openAssignDialog(selectedCase); }}>
+                          <UserPlus className="w-4 h-4 ml-1" />{selectedCase.primaryLawyerId ? "تعديل الإسناد" : "إسناد"}
+                        </Button>
+                      </div>
+                    )}
+                    {canSendToReview(selectedCase) && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                        <div>
+                          <p className="font-medium text-sm">إرسال للمراجعة</p>
+                          <p className="text-xs text-muted-foreground">إرسال القضية للجنة المراجعة للاعتماد</p>
+                        </div>
+                        <Button size="sm" variant="outline" data-testid={`button-send-review-details-${selectedCase.id}`} onClick={() => { handleSendToReview(selectedCase); }}>
+                          <Send className="w-4 h-4 ml-1" />إرسال للمراجعة
+                        </Button>
+                      </div>
+                    )}
+                    {canReview(selectedCase) && (
+                      <>
+                        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                          <div>
+                            <p className="font-medium text-sm">قائمة المراجعة</p>
+                            <p className="text-xs text-muted-foreground">مراجعة بنود القضية قبل الاعتماد</p>
+                          </div>
+                          <Button size="sm" variant="outline" data-testid={`button-review-checklist-details-${selectedCase.id}`} onClick={() => { openReviewDialog(selectedCase); }}>
+                            <ClipboardCheck className="w-4 h-4 ml-1" />قائمة المراجعة
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                          <div>
+                            <p className="font-medium text-sm">اعتماد القضية</p>
+                            <p className="text-xs text-muted-foreground">اعتماد القضية ورفعها للمرحلة التالية</p>
+                          </div>
+                          <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" data-testid={`button-approve-details-${selectedCase.id}`} onClick={() => { handleApprove(selectedCase); }}>
+                            <CheckCircle className="w-4 h-4 ml-1" />اعتماد
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                          <div>
+                            <p className="font-medium text-sm">إعادة للتعديل</p>
+                            <p className="text-xs text-muted-foreground">إعادة القضية لمرحلة التعديل</p>
+                          </div>
+                          <Button size="sm" variant="destructive" data-testid={`button-reject-details-${selectedCase.id}`} onClick={() => { openRejectDialog(selectedCase); }}>
+                            <XCircle className="w-4 h-4 ml-1" />إعادة
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                    {canClose(selectedCase) && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                        <div>
+                          <p className="font-medium text-sm">إغلاق القضية</p>
+                          <p className="text-xs text-muted-foreground">إغلاق القضية وأرشفتها</p>
+                        </div>
+                        <Button size="sm" variant="outline" className="border-orange-500 text-orange-600" data-testid={`button-close-details-${selectedCase.id}`} onClick={() => { handleClose(selectedCase); }}>
+                          <Archive className="w-4 h-4 ml-1" />إغلاق
+                        </Button>
+                      </div>
+                    )}
+                    {isDeptHead && selectedCase.departmentId === user?.departmentId && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                        <div>
+                          <p className="font-medium text-sm">طلب تحويل لقسم آخر</p>
+                          <p className="text-xs text-muted-foreground">تقديم طلب تحويل القضية لقسم مختلف</p>
+                        </div>
+                        <Button size="sm" variant="outline" data-testid={`button-transfer-details-${selectedCase.id}`} onClick={() => { openTransferDialog(selectedCase); }}>
+                          <ArrowLeftRight className="w-4 h-4 ml-1" />تحويل
+                        </Button>
+                      </div>
+                    )}
+                    {permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId) && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                        <div>
+                          <p className="font-medium text-sm">إرسال تذكير</p>
+                          <p className="text-xs text-muted-foreground">إرسال تذكير للمحامي المسؤول</p>
+                        </div>
+                        <Button size="sm" variant="outline" className="border-amber-500 text-amber-600" data-testid={`button-reminder-details-${selectedCase.id}`} onClick={() => { openReminderDialog(selectedCase); }}>
+                          <Bell className="w-4 h-4 ml-1" />تذكير
+                        </Button>
+                      </div>
+                    )}
+                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !(isDeptHead && selectedCase.departmentId === user?.departmentId) && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
+                      <div className="text-center text-muted-foreground py-8">
+                        <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
+                      </div>
+                    )}
+                  </div>
                 </TabsContent>
               </Tabs>
             </div>
