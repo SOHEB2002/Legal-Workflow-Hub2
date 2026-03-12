@@ -670,51 +670,35 @@ export default function CasesPage() {
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-          <Table className="w-full" style={{ tableLayout: 'fixed' }}>
-            <colgroup>
-              <col style={{ width: '9%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '6%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '7%' }} />
-            </colgroup>
+          <Table className="w-full min-w-[900px]">
             <TableHeader>
               <TableRow>
-                <TableHead className="text-right">رقم القضية</TableHead>
-                <TableHead className="text-right">المدعي / العميل</TableHead>
-                <TableHead className="text-right">الخصم</TableHead>
-                <TableHead className="text-right">التصنيف</TableHead>
-                <TableHead className="text-right">النوع</TableHead>
-                <TableHead className="text-right">المرحلة</TableHead>
-                <TableHead className="text-right">المحامي المسؤول</TableHead>
-                <TableHead className="text-right">الأولوية</TableHead>
-                <TableHead className="text-right">القسم</TableHead>
-                <TableHead className="text-right">الإجراءات</TableHead>
+                <TableHead className="text-center whitespace-nowrap">رقم القضية</TableHead>
+                <TableHead className="text-center whitespace-nowrap">المدعي / العميل</TableHead>
+                <TableHead className="text-center whitespace-nowrap">الخصم</TableHead>
+                <TableHead className="text-center whitespace-nowrap">التصنيف</TableHead>
+                <TableHead className="text-center whitespace-nowrap">النوع</TableHead>
+                <TableHead className="text-center whitespace-nowrap">المرحلة</TableHead>
+                <TableHead className="text-center whitespace-nowrap">المحامي المسؤول</TableHead>
+                <TableHead className="text-center whitespace-nowrap">الأولوية</TableHead>
+                <TableHead className="text-center whitespace-nowrap">القسم</TableHead>
+                <TableHead className="text-center whitespace-nowrap">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
-                  <TableCell className="font-medium overflow-hidden"><div className="truncate"><LtrInline>{c.caseNumber}</LtrInline></div></TableCell>
-                  <TableCell className="overflow-hidden">
+                  <TableCell className="text-center font-medium whitespace-nowrap"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
+                  <TableCell className="text-center">
                     <div>
-                      <div className="truncate font-medium text-sm" title={(c as any).plaintiffName || getClientName(c.clientId)}>
-                        {(c as any).plaintiffName || getClientName(c.clientId)}
-                      </div>
+                      <div className="font-medium text-sm">{(c as any).plaintiffName || getClientName(c.clientId)}</div>
                       {(c as any).plaintiffName && getClientName(c.clientId) && (
-                        <div className="truncate text-xs text-muted-foreground" title={getClientName(c.clientId)}>
-                          {getClientName(c.clientId)}
-                        </div>
+                        <div className="text-xs text-muted-foreground">{getClientName(c.clientId)}</div>
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="overflow-hidden"><div className="truncate text-sm" title={c.opponentName}>{c.opponentName || "-"}</div></TableCell>
-                  <TableCell className="overflow-hidden">
+                  <TableCell className="text-center text-sm">{c.opponentName || "-"}</TableCell>
+                  <TableCell className="text-center">
                     <Badge variant="outline" className={`whitespace-nowrap text-xs ${
                       c.caseClassification === CaseClassification.DEFENDANT
                         ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
@@ -725,21 +709,21 @@ export default function CasesPage() {
                       {CaseClassificationLabels[c.caseClassification as CaseClassificationValue] || "مدعي - جديدة"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="overflow-hidden">
+                  <TableCell className="text-center">
                     <Badge variant="outline">{c.caseType || "-"}</Badge>
                   </TableCell>
-                  <TableCell className="overflow-hidden">
+                  <TableCell className="text-center">
                     <Badge className="bg-accent/20 text-accent border-accent/30 whitespace-nowrap">
                       {c.currentStage ? getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue) : CaseStatusLabels[c.status]}
                     </Badge>
                   </TableCell>
-                  <TableCell className="overflow-hidden"><div className="truncate">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</div></TableCell>
-                  <TableCell>
+                  <TableCell className="text-center whitespace-nowrap">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
+                  <TableCell className="text-center">
                     <Badge className={getPriorityColor(c.priority)}>{c.priority}</Badge>
                   </TableCell>
-                  <TableCell>{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
+                  <TableCell className="text-center whitespace-nowrap">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
+                  <TableCell className="text-center">
+                    <div className="flex items-center justify-center gap-1">
                       <Button
                         size="icon"
                         variant="ghost"

@@ -663,18 +663,18 @@ export default function HearingsPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table className="w-full min-w-[900px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-right">التاريخ والوقت</TableHead>
-                    <TableHead className="text-right">القضية</TableHead>
-                    <TableHead className="text-right">الخصم</TableHead>
-                    <TableHead className="text-right">رقم القضية</TableHead>
-                    <TableHead className="text-right">المحكمة</TableHead>
-                    <TableHead className="text-right">الحالة</TableHead>
-                    <TableHead className="text-right">النتيجة</TableHead>
-                    <TableHead className="text-right">سير العمل</TableHead>
-                    <TableHead className="text-right">الإجراءات</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">التاريخ والوقت</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">القضية</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">الخصم</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">رقم القضية</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">المحكمة</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">الحالة</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">النتيجة</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">سير العمل</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">الإجراءات</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -682,17 +682,19 @@ export default function HearingsPage() {
                     .sort((a, b) => new Date(b.hearingDate).getTime() - new Date(a.hearingDate).getTime())
                     .map((hearing) => {
                       const caseInfo = getCaseInfo(hearing.caseId);
+                      const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
+                      const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
                       return (
                         <TableRow key={hearing.id} data-testid={`row-hearing-${hearing.id}`}>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
+                          <TableCell className="text-center">
+                            <div className="flex items-center justify-center gap-2">
                               <Badge className={getUrgencyColor(hearing.hearingDate)}>
                                 <DualDateDisplay date={hearing.hearingDate} compact />
                               </Badge>
                               <LtrInline className="text-sm text-muted-foreground">{formatTimeAmPm(hearing.hearingTime)}</LtrInline>
                             </div>
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="text-center">
                             <div>
                               {(caseInfo.plaintiff || caseInfo.client) && (
                                 <p className="text-sm font-medium">{caseInfo.plaintiff || caseInfo.client}</p>
@@ -702,14 +704,14 @@ export default function HearingsPage() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="text-center">
                             <span className="text-sm">{caseInfo.opponent || "-"}</span>
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="text-center">
                             <span className="text-sm"><LtrInline>{caseInfo.number}</LtrInline></span>
                           </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1 text-sm">
+                          <TableCell className="text-center">
+                            <div className="flex items-center justify-center gap-1 text-sm">
                               <MapPin className="w-3 h-3 shrink-0" />
                               <BidiText>{hearing.courtName}</BidiText>
                               {hearing.courtRoom && (
@@ -717,8 +719,8 @@ export default function HearingsPage() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell>{getStatusBadge(hearing.status)}</TableCell>
-                          <TableCell>
+                          <TableCell className="text-center">{getStatusBadge(hearing.status)}</TableCell>
+                          <TableCell className="text-center">
                             {hearing.result && (
                               <Badge variant="secondary">
                                 {hearing.result}
@@ -728,8 +730,8 @@ export default function HearingsPage() {
                               </Badge>
                             )}
                           </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1">
+                          <TableCell className="text-center">
+                            <div className="flex items-center justify-center gap-1">
                               {hearing.result && !hearing.reportCompleted && (
                                 <Tooltip>
                                   <TooltipTrigger>
@@ -764,8 +766,8 @@ export default function HearingsPage() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1">
+                          <TableCell className="text-center">
+                            <div className="flex items-center justify-center gap-1">
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
@@ -792,7 +794,7 @@ export default function HearingsPage() {
                                 </TooltipTrigger>
                                 <TooltipContent>تعديل الجلسة</TooltipContent>
                               </Tooltip>
-                              {hearing.status === HearingStatus.UPCOMING && (
+                              {hearing.status === HearingStatus.UPCOMING && canActOnHearing && (
                                 <>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
@@ -825,7 +827,7 @@ export default function HearingsPage() {
                                   </Tooltip>
                                 </>
                               )}
-                              {hearing.result && !hearing.reportCompleted && (
+                              {hearing.result && !hearing.reportCompleted && canActOnHearing && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
@@ -843,7 +845,7 @@ export default function HearingsPage() {
                                   <TooltipContent>كتابة التقرير</TooltipContent>
                                 </Tooltip>
                               )}
-                              {hearing.result && !hearing.contactCompleted && (
+                              {hearing.result && !hearing.contactCompleted && canActOnHearing && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
