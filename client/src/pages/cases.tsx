@@ -264,7 +264,7 @@ export default function CasesPage() {
   const [editFormData, setEditFormData] = useState({
     clientId: "",
     plaintiffName: "",
-    caseType: "عام" as CaseTypeValue,
+    caseType: "" as string,
     caseTypeOther: "",
     departmentId: "",
     departmentOther: "",
@@ -290,7 +290,7 @@ export default function CasesPage() {
     setEditFormData({
       clientId: caseItem.clientId || "",
       plaintiffName: (caseItem as any).plaintiffName || "",
-      caseType: (caseItem.caseType || "عام") as CaseTypeValue,
+      caseType: (caseItem.caseType || "") as string,
       caseTypeOther: caseItem.caseTypeOther || "",
       departmentId: caseItem.departmentId || "",
       departmentOther: caseItem.departmentOther || "",
@@ -351,7 +351,7 @@ export default function CasesPage() {
   const [formData, setFormData] = useState({
     clientId: "",
     plaintiffName: "",
-    caseType: "عام" as CaseTypeValue,
+    caseType: "" as string,
     caseTypeOther: "",
     departmentId: "",
     departmentOther: "",
@@ -378,7 +378,7 @@ export default function CasesPage() {
     setFormData({
       clientId: "",
       plaintiffName: "",
-      caseType: "عام",
+      caseType: "",
       caseTypeOther: "",
       departmentId: "",
       departmentOther: "",
@@ -918,7 +918,7 @@ export default function CasesPage() {
                       inputType="text"
                       data-testid="input-case-type"
                       value={formData.caseType}
-                      onChange={(e) => setFormData({ ...formData, caseType: e.target.value as CaseTypeValue })}
+                      onChange={(e) => setFormData({ ...formData, caseType: e.target.value as string })}
                       placeholder="أدخل نوع القضية..."
                     />
                   </div>
@@ -1933,7 +1933,7 @@ export default function CasesPage() {
                   inputType="text"
                   data-testid="edit-case-type"
                   value={editFormData.caseType}
-                  onChange={(e) => setEditFormData({ ...editFormData, caseType: e.target.value as CaseTypeValue })}
+                  onChange={(e) => setEditFormData({ ...editFormData, caseType: e.target.value as string })}
                   placeholder="أدخل نوع القضية..."
                 />
               </div>
