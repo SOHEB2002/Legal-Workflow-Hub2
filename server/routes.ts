@@ -959,7 +959,7 @@ export async function registerRoutes(
       }
       const user = (req as any).user;
 
-      const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentId", "departmentOther",
+      const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
         "courtName", "courtCaseNumber", "judgeName", "circuitNumber", "opponentName", "opponentLawyer", "opponentPhone", "opponentNotes",
         "caseClassification", "previousHearingsCount", "currentSituation", "responseDeadline", "adminCaseSubType", "prescriptionDate", "priority"];
       const hasDataFields = Object.keys(req.body).some(k => caseDataFields.includes(k));
@@ -967,7 +967,28 @@ export async function registerRoutes(
       if (hasDataFields && !canEditCaseData(user)) {
         return res.status(403).json({ error: "تعديل بيانات القضية متاح فقط لمدير الفرع والدعم الإداري" });
       }
-      if (!hasDataFields && !canModifyCase(user, existing)) {
+
+      // Guard departmentId changes – use explicit presence check to catch null/empty string too
+      if ("departmentId" in req.body && req.body.departmentId !== existing.departmentId) {
+        if (!canEditCaseData(user)) {
+          // department_head may only set their own department, and only when req.body.departmentId is their dept
+          if (user.role !== "department_head" || req.body.departmentId !== user.departmentId) {
+            return res.status(403).json({ error: "لا تملك صلاحية تغيير قسم هذه القضية" });
+          }
+        }
+      }
+
+      // Check if this is an assignment operation (primaryLawyerId / assignedLawyers)
+      const isAssignmentOp = !hasDataFields && (req.body.primaryLawyerId || req.body.assignedLawyers !== undefined);
+
+      if (isAssignmentOp && user.role === "department_head") {
+        // Determine effective target department after this operation
+        const targetDeptId = ("departmentId" in req.body ? req.body.departmentId : existing.departmentId);
+        // Block if target dept is missing or does not match the department head's own department
+        if (!targetDeptId || targetDeptId !== user.departmentId) {
+          return res.status(403).json({ error: "يمكنك فقط إسناد قضايا قسمك" });
+        }
+      } else if (!hasDataFields && !canModifyCase(user, existing)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
 
