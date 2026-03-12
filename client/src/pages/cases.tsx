@@ -1490,10 +1490,10 @@ export default function CasesPage() {
                         <span className="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
                         أرقام الطلبات - جاهزة للرفع
                       </h4>
-                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
-                        <div>
-                          <Label className="text-muted-foreground">رقم الطلب في منصة تراضي</Label>
-                          <div className="flex items-center gap-2 mt-1">
+                      <div className="grid grid-cols-2 gap-4" dir="rtl">
+                        <div className="text-right">
+                          <Label className="text-muted-foreground block text-right">رقم الطلب في منصة تراضي</Label>
+                          <div className="flex items-center gap-2 mt-1 justify-start">
                             {inlineEditField === `taradi-${selectedCase.id}` ? (
                               <>
                                 <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-taradi-number"
@@ -1512,9 +1512,9 @@ export default function CasesPage() {
                             )}
                           </div>
                         </div>
-                        <div>
-                          <Label className="text-muted-foreground">رقم الطلب في ناجز / معين</Label>
-                          <div className="flex items-center gap-2 mt-1">
+                        <div className="text-right">
+                          <Label className="text-muted-foreground block text-right">رقم الطلب في ناجز / معين</Label>
+                          <div className="flex items-center gap-2 mt-1 justify-start">
                             {inlineEditField === `najiz-${selectedCase.id}` ? (
                               <>
                                 <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-najiz-number"
@@ -1574,10 +1574,10 @@ export default function CasesPage() {
                         <span className="w-2 h-2 rounded-full bg-violet-500 inline-block"></span>
                         بيانات ما بعد التقييد
                       </h4>
-                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
-                        <div>
-                          <Label className="text-muted-foreground">رقم القضية</Label>
-                          <div className="flex items-center gap-2 mt-1">
+                      <div className="grid grid-cols-2 gap-4" dir="rtl">
+                        <div className="text-right">
+                          <Label className="text-muted-foreground block text-right">رقم القضية</Label>
+                          <div className="flex items-center gap-2 mt-1 justify-start">
                             {inlineEditField === `court-${selectedCase.id}` ? (
                               <>
                                 <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-court-case-number"
@@ -1596,9 +1596,9 @@ export default function CasesPage() {
                             )}
                           </div>
                         </div>
-                        <div>
-                          <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
-                          <div className="flex items-center gap-2 mt-1">
+                        <div className="text-right">
+                          <Label className="text-muted-foreground block text-right">موعد الجلسة القادمة</Label>
+                          <div className="flex items-center gap-2 mt-1 justify-start">
                             {inlineEditField === `hearing-${selectedCase.id}` ? (
                               <>
                                 <Input type="date" value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-36" autoFocus data-testid="input-next-hearing-date"
