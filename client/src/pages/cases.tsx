@@ -86,16 +86,16 @@ import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { 
-  CaseStatus, 
-  CaseStatusLabels, 
   CaseStageLabels,
+  CaseStagesOrder,
+  CaseStage,
   Priority,
   Department,
   CaseClassification,
   CaseClassificationLabels,
   getStageLabel,
 } from "@shared/schema";
-import type { LawCase, CaseStatusValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
+import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
@@ -104,24 +104,23 @@ import { useHearings } from "@/lib/hearings-context";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 
-function getStatusColor(status: CaseStatusValue) {
-  switch (status) {
-    case CaseStatus.RECEIVED:
+function getStageColor(stage: CaseStageValue | string) {
+  switch (stage) {
+    case CaseStage.RECEIVED:
       return "bg-primary/20 text-primary border-primary/30";
-    case CaseStatus.DATA_COMPLETION:
-    case CaseStatus.STUDY:
+    case CaseStage.DATA_COMPLETION:
+      return "bg-amber-500/20 text-amber-600 border-amber-500/30";
+    case CaseStage.STUDY:
       return "bg-accent/20 text-accent border-accent/30";
-    case CaseStatus.DRAFTING:
+    case CaseStage.DRAFTING:
       return "bg-blue-500/20 text-blue-600 border-blue-500/30";
-    case CaseStatus.REVIEW_COMMITTEE:
+    case CaseStage.REVIEW_COMMITTEE:
       return "bg-secondary/20 text-secondary-foreground border-secondary/30";
-    case CaseStatus.AMENDMENTS:
+    case CaseStage.AMENDMENTS:
       return "bg-destructive/20 text-destructive border-destructive/30";
-    case CaseStatus.READY_TO_SUBMIT:
-      return "bg-accent/30 text-accent border-accent/40";
-    case CaseStatus.SUBMITTED:
+    case CaseStage.SUBMITTED:
       return "bg-green-500/20 text-green-600 border-green-500/30";
-    case CaseStatus.CLOSED:
+    case CaseStage.CLOSED:
       return "bg-muted text-muted-foreground border-muted";
     default:
       return "bg-muted text-muted-foreground";
@@ -185,8 +184,8 @@ export default function CasesPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const s = params.get("status");
-    if (s === "pending_review") setStatusFilter(CaseStatus.REVIEW_COMMITTEE);
-    else if (s === "ready") setStatusFilter(CaseStatus.READY_TO_SUBMIT);
+    if (s === "pending_review") setStatusFilter(CaseStage.REVIEW_COMMITTEE);
+    else if (s === "ready") setStatusFilter(CaseStage.SUBMITTED);
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -497,7 +496,7 @@ export default function CasesPage() {
         c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
-      const matchesStatus = statusFilter === "all" || c.status === statusFilter;
+      const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" || c.caseClassification === classificationFilter;
       return matchesSearch && matchesStatus && matchesDept && matchesClassification;
@@ -595,15 +594,15 @@ export default function CasesPage() {
 
   const canSendToReview = (c: LawCase) => 
     permissions.canManageDepartment && 
-    (c.status === CaseStatus.STUDY || c.status === CaseStatus.DRAFTING || c.status === CaseStatus.AMENDMENTS);
+    (c.currentStage === CaseStage.STUDY || c.currentStage === CaseStage.DRAFTING || c.currentStage === CaseStage.AMENDMENTS);
 
   const canReview = (c: LawCase) => 
     permissions.canReviewCases && 
-    c.status === CaseStatus.REVIEW_COMMITTEE;
+    c.currentStage === CaseStage.REVIEW_COMMITTEE;
 
   const canClose = (c: LawCase) => 
     permissions.canCloseCases && 
-    (c.status === CaseStatus.READY_TO_SUBMIT || c.status === CaseStatus.SUBMITTED);
+    (c.currentStage === CaseStage.SUBMITTED || c.currentStage === CaseStage.CLOSED);
 
   return (
     <div className="p-6 space-y-6">
@@ -639,9 +638,9 @@ export default function CasesPage() {
                 <SelectValue placeholder="الحالة" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">جميع الحالات</SelectItem>
-                {Object.entries(CaseStatusLabels).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                <SelectItem value="all">جميع المراحل</SelectItem>
+                {CaseStagesOrder.map((stage) => (
+                  <SelectItem key={stage} value={stage}>{CaseStageLabels[stage]}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -726,8 +725,8 @@ export default function CasesPage() {
                     <Badge variant="outline" className="inline-flex justify-center">{c.caseType || "-"}</Badge>
                   </TableCell>
                   <TableCell className="text-center">
-                    <Badge className="bg-accent/20 text-accent border-accent/30 inline-flex justify-center">
-                      {c.currentStage ? getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue) : CaseStatusLabels[c.status]}
+                    <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
+                      {getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue)}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
