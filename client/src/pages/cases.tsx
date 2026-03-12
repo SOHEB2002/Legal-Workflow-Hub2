@@ -157,6 +157,7 @@ export default function CasesPage() {
     deleteCase,
     moveToNextStage,
     moveToPreviousStage,
+    skipDataCompletion,
     addComment,
     getCommentsByCaseId,
     getCaseById,
@@ -1251,6 +1252,16 @@ export default function CasesPage() {
                         toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
                       } else {
                         toast({ title: "لا يمكن إرجاع القضية", description: "ليس لديك صلاحية لهذا الإرجاع", variant: "destructive" });
+                      }
+                    }
+                  }}
+                  onSkipDataCompletion={async (notes) => {
+                    if (user) {
+                      const success = await skipDataCompletion(selectedCase.id, user.id, user.name, notes);
+                      if (success) {
+                        toast({ title: "تم تجاوز استكمال البيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
+                      } else {
+                        toast({ title: "تعذّر التجاوز", variant: "destructive" });
                       }
                     }
                   }}

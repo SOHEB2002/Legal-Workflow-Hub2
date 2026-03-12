@@ -23,6 +23,7 @@ interface CasesContextType {
   closeCase: (id: string) => void;
   moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
+  skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
   addComment: (caseId: string, userId: string, userName: string, content: string) => void;
   getCommentsByCaseId: (caseId: string) => CaseComment[];
   getCaseById: (id: string) => LawCase | undefined;
@@ -349,6 +350,31 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
+  const skipDataCompletion = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
+    const lawCase = cases.find((c) => c.id === id);
+    if (!lawCase) return false;
+
+    const normalized = normalizeCaseStage(lawCase.currentStage);
+    if (normalized !== "استلام") return false;
+
+    const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
+    const stagesOrder = getStagesForClassification(effectiveClassification);
+    const studyIndex = stagesOrder.indexOf("دراسة");
+    if (studyIndex === -1) return false;
+
+    const targetStage = stagesOrder[studyIndex];
+    const skipNote = notes || "تم تجاوز مرحلة استكمال البيانات - الدعوى مكتملة";
+    const dataCompletionTransition = createStageTransitionRecord("استكمال_البيانات" as CaseStageValue, userId, userName, "تجاوز تلقائي");
+    const studyTransition = createStageTransitionRecord(targetStage, userId, userName, skipNote);
+
+    await updateCase(id, {
+      currentStage: targetStage,
+      stageHistory: [...lawCase.stageHistory, dataCompletionTransition, studyTransition],
+    });
+
+    return true;
+  };
+
   const addComment = (caseId: string, userId: string, userName: string, content: string) => {
     const newComment: CaseComment = {
       id: generateId(),
@@ -383,6 +409,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         closeCase,
         moveToNextStage,
         moveToPreviousStage,
+        skipDataCompletion,
         addComment,
         getCommentsByCaseId,
         getCaseById,

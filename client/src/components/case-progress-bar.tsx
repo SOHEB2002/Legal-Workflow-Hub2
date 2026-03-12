@@ -1,6 +1,6 @@
-import { Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CaseStagesOrder, CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
+import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,6 +19,7 @@ interface CaseProgressBarProps {
   currentStage: CaseStageValue;
   onMoveToNext: (notes: string) => void;
   onMoveToPrevious: (notes: string) => void;
+  onSkipDataCompletion?: (notes: string) => void;
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
@@ -28,11 +29,13 @@ export function CaseProgressBar({
   currentStage,
   onMoveToNext,
   onMoveToPrevious,
+  onSkipDataCompletion,
   userRole,
   disabled = false,
   caseClassification,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
+  const [skipNotes, setSkipNotes] = useState("");
   const legacyStageMap: Record<string, CaseStageValue> = {
     "رفع_للدائرة": "تم_الرفع_للدائرة" as CaseStageValue,
   };
@@ -43,6 +46,10 @@ export function CaseProgressBar({
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
   const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;
   const canGoPrev = currentIndex > 0 && canMoveToPreviousStage(userRole) && !disabled;
+
+  const isAtReception = normalizedStage === "استلام";
+  const nextStageIsDataCompletion = stagesOrder[currentIndex + 1] === "استكمال_البيانات";
+  const canSkip = isAtReception && nextStageIsDataCompletion && !!onSkipDataCompletion && !disabled;
 
   const getStageStatus = (stageIndex: number) => {
     if (stageIndex < currentIndex) return "completed";
@@ -58,6 +65,11 @@ export function CaseProgressBar({
   const handleMovePrev = () => {
     onMoveToPrevious(notes);
     setNotes("");
+  };
+
+  const handleSkip = () => {
+    onSkipDataCompletion!(skipNotes);
+    setSkipNotes("");
   };
 
   return (
@@ -110,7 +122,7 @@ export function CaseProgressBar({
         })}
       </div>
 
-      <div className="flex items-center justify-center gap-4">
+      <div className="flex items-center justify-center gap-3 flex-wrap">
         {canGoPrev && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -140,6 +152,42 @@ export function CaseProgressBar({
               <AlertDialogFooter className="gap-2">
                 <AlertDialogCancel onClick={() => setNotes("")}>إلغاء</AlertDialogCancel>
                 <AlertDialogAction onClick={handleMovePrev}>تأكيد</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
+
+        {canSkip && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-amber-500 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950"
+                data-testid="button-skip-data-completion"
+              >
+                <SkipForward className="w-4 h-4 ml-1" />
+                الدعوى مكتملة - تجاوز للدراسة
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تجاوز مرحلة استكمال البيانات</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم تجاوز مرحلة "استكمال البيانات" والانتقال مباشرةً إلى مرحلة <strong>دراسة</strong>.
+                  استخدم هذا الخيار فقط عندما تكون بيانات الدعوى مكتملة ولا توجد نواقص.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <Textarea
+                placeholder="ملاحظات (اختياري)"
+                value={skipNotes}
+                onChange={(e) => setSkipNotes(e.target.value)}
+                className="mt-2"
+                data-testid="input-skip-notes"
+              />
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel onClick={() => setSkipNotes("")}>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={handleSkip}>تأكيد التجاوز</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
