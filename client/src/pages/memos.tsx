@@ -59,7 +59,8 @@ import {
   canChangeMemoStatus,
   canDeleteMemos,
 } from "@shared/schema";
-import type { Memo, MemoTypeValue, MemoStatusValue } from "@shared/schema";
+import type { Memo, MemoTypeValue, MemoStatusValue, CaseClassificationValue } from "@shared/schema";
+import { CaseClassificationLabels } from "@shared/schema";
 import { differenceInDays } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -273,12 +274,13 @@ export default function MemosPage() {
 
   const getCaseDetails = (caseId: string) => {
     const c = cases.find(cs => cs.id === caseId);
-    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "" };
+    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "" };
     return {
       number: c.caseNumber,
       plaintiff: (c as any).plaintiffName || "",
       client: getClientName(c.clientId),
       opponent: c.opponentName || "",
+      classification: c.caseClassification || "",
     };
   };
 
@@ -402,8 +404,9 @@ export default function MemosPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="text-right">العنوان</TableHead>
-                    <TableHead className="text-right">القضية</TableHead>
+                    <TableHead className="text-right">العميل</TableHead>
                     <TableHead className="text-right">الخصم</TableHead>
+                    <TableHead className="text-right">صفة العميل</TableHead>
                     <TableHead className="text-right">المحامي المكلف</TableHead>
                     <TableHead className="text-right">الموعد النهائي</TableHead>
                     <TableHead className="text-right">الحالة</TableHead>
@@ -438,6 +441,19 @@ export default function MemosPage() {
                         </TableCell>
                         <TableCell>
                           <span className="text-sm">{caseDetails.opponent || "-"}</span>
+                        </TableCell>
+                        <TableCell>
+                          {caseDetails.classification && (
+                            <Badge variant="outline" className={`text-xs ${
+                              caseDetails.classification === "مدعى_عليه"
+                                ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
+                                : caseDetails.classification === "مدعي_قضية_مقيدة"
+                                ? "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
+                                : ""
+                            }`}>
+                              {CaseClassificationLabels[caseDetails.classification as CaseClassificationValue] || "-"}
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell>
                           <span className="text-sm">{getUserName(memo.assignedTo)}</span>

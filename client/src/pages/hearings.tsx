@@ -63,7 +63,8 @@ import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
-import { HearingStatus, HearingResult, CourtType } from "@shared/schema";
+import { HearingStatus, HearingResult, CourtType, CaseClassificationLabels } from "@shared/schema";
+import type { CaseClassificationValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -396,12 +397,13 @@ export default function HearingsPage() {
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
-    if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "" };
+    if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "" };
     return {
       number: caseData.caseNumber,
       client: getClientName(caseData.clientId),
       plaintiff: (caseData as any).plaintiffName || "",
       opponent: caseData.opponentName || "",
+      classification: caseData.caseClassification || "",
     };
   };
 
@@ -678,8 +680,9 @@ export default function HearingsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="text-center">التاريخ والوقت</TableHead>
-                    <TableHead className="text-center">القضية</TableHead>
+                    <TableHead className="text-center">العميل</TableHead>
                     <TableHead className="text-center">الخصم</TableHead>
+                    <TableHead className="text-center">صفة العميل</TableHead>
                     <TableHead className="text-center">رقم القضية</TableHead>
                     <TableHead className="text-center">المحكمة</TableHead>
                     <TableHead className="text-center">الحالة</TableHead>
@@ -717,6 +720,19 @@ export default function HearingsPage() {
                           </TableCell>
                           <TableCell className="text-center">
                             <span className="text-sm">{caseInfo.opponent || "-"}</span>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {caseInfo.classification && (
+                              <Badge variant="outline" className={`text-xs ${
+                                caseInfo.classification === "مدعى_عليه"
+                                  ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
+                                  : caseInfo.classification === "مدعي_قضية_مقيدة"
+                                  ? "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
+                                  : ""
+                              }`}>
+                                {CaseClassificationLabels[caseInfo.classification as CaseClassificationValue] || "-"}
+                              </Badge>
+                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             <span className="text-sm"><LtrInline>{caseInfo.number}</LtrInline></span>

@@ -26,6 +26,7 @@ import {
   ArrowLeftRight,
   Info,
   Pencil,
+  Scale,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -195,6 +196,7 @@ export default function CasesPage() {
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [classificationGroup, setClassificationGroup] = useState<"" | "study" | "registered">("");
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
@@ -620,7 +622,7 @@ export default function CasesPage() {
           <p className="text-muted-foreground">متابعة وإدارة جميع القضايا</p>
         </div>
         {permissions.canAddCasesAndConsultations && (
-          <Button data-testid="button-add-case" onClick={() => { resetForm(); setShowAddDialog(true); }}>
+          <Button data-testid="button-add-case" onClick={() => { resetForm(); setClassificationGroup(""); setShowAddDialog(true); }}>
             <Plus className="w-4 h-4 ml-2" />
             قضية جديدة
           </Button>
@@ -694,9 +696,9 @@ export default function CasesPage() {
             <TableHeader>
               <TableRow>
                 <TableHead className="text-center">رقم القضية</TableHead>
-                <TableHead className="text-center">المدعي / العميل</TableHead>
+                <TableHead className="text-center">العميل</TableHead>
                 <TableHead className="text-center">الخصم</TableHead>
-                <TableHead className="text-center">التصنيف</TableHead>
+                <TableHead className="text-center">صفة العميل</TableHead>
                 <TableHead className="text-center">النوع</TableHead>
                 <TableHead className="text-center">المرحلة</TableHead>
                 <TableHead className="text-center">المحامي المسؤول</TableHead>
@@ -850,47 +852,70 @@ export default function CasesPage() {
           <div className="space-y-4">
             <div>
               <Label className="text-sm font-medium mb-2 block">تصنيف القضية</Label>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   data-testid="classification-plaintiff-new"
-                  onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_NEW, previousHearingsCount: 0, currentSituation: "", responseDeadline: "" })}
+                  onClick={() => {
+                    setClassificationGroup("study");
+                    setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_NEW, previousHearingsCount: 0, currentSituation: "", responseDeadline: "" });
+                  }}
                   className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                    formData.caseClassification === CaseClassification.PLAINTIFF_NEW
+                    classificationGroup === "study"
                       ? "border-[#D4AF37] bg-[#D4AF37]/10"
                       : "border-border hover-elevate"
                   }`}
                 >
                   <FileText className="h-6 w-6 text-[#345774]" />
-                  <span className="text-xs font-medium text-center">مدعي - قضية جديدة</span>
+                  <span className="text-xs font-medium text-center">دعوى للدراسة</span>
                 </button>
                 <button
                   type="button"
-                  data-testid="classification-plaintiff-existing"
-                  onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_EXISTING, responseDeadline: "" })}
+                  data-testid="classification-registered"
+                  onClick={() => {
+                    setClassificationGroup("registered");
+                    setFormData({ ...formData, caseClassification: "" as any });
+                  }}
                   className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                    formData.caseClassification === CaseClassification.PLAINTIFF_EXISTING
-                      ? "border-[#D4AF37] bg-[#D4AF37]/10"
+                    classificationGroup === "registered"
+                      ? "border-[#345774] bg-[#345774]/10"
                       : "border-border hover-elevate"
                   }`}
                 >
-                  <Shield className="h-6 w-6 text-blue-600" />
-                  <span className="text-xs font-medium text-center">مدعي - قضية مقيدة</span>
-                </button>
-                <button
-                  type="button"
-                  data-testid="classification-defendant"
-                  onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.DEFENDANT, previousHearingsCount: 0, currentSituation: "", priority: "عاجل" })}
-                  className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                    formData.caseClassification === CaseClassification.DEFENDANT
-                      ? "border-red-500 bg-red-500/10"
-                      : "border-border hover-elevate"
-                  }`}
-                >
-                  <Swords className="h-6 w-6 text-red-600" />
-                  <span className="text-xs font-medium text-center">مدعى عليه</span>
+                  <Scale className="h-6 w-6 text-[#345774]" />
+                  <span className="text-xs font-medium text-center">منظورة</span>
                 </button>
               </div>
+              {classificationGroup === "registered" && (
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <button
+                    type="button"
+                    data-testid="classification-plaintiff-existing"
+                    onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_EXISTING, responseDeadline: "" })}
+                    className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                      formData.caseClassification === CaseClassification.PLAINTIFF_EXISTING
+                        ? "border-[#D4AF37] bg-[#D4AF37]/10"
+                        : "border-border hover-elevate"
+                    }`}
+                  >
+                    <Shield className="h-6 w-6 text-blue-600" />
+                    <span className="text-xs font-medium text-center">مدعي</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="classification-defendant"
+                    onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.DEFENDANT, previousHearingsCount: 0, currentSituation: "", priority: "عاجل" })}
+                    className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
+                      formData.caseClassification === CaseClassification.DEFENDANT
+                        ? "border-red-500 bg-red-500/10"
+                        : "border-border hover-elevate"
+                    }`}
+                  >
+                    <Swords className="h-6 w-6 text-red-600" />
+                    <span className="text-xs font-medium text-center">مدعى عليه</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {formData.caseClassification === CaseClassification.DEFENDANT && (
