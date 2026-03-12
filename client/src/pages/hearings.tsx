@@ -666,27 +666,20 @@ export default function HearingsPage() {
             <div className="overflow-x-auto">
               <Table className="w-full" style={{ tableLayout: 'fixed' }}>
                 <colgroup>
+                  <col style={{ width: '15%' }} />
+                  <col style={{ width: '22%' }} />
+                  <col style={{ width: '15%' }} />
+                  <col style={{ width: '20%' }} />
+                  <col style={{ width: '15%' }} />
                   <col style={{ width: '13%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '8%' }} />
-                  <col style={{ width: '8%' }} />
-                  <col style={{ width: '12%' }} />
                 </colgroup>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="text-center">التاريخ والوقت</TableHead>
-                    <TableHead className="text-center">العميل</TableHead>
+                    <TableHead className="text-center">العميل / صفة العميل</TableHead>
                     <TableHead className="text-center">الخصم</TableHead>
-                    <TableHead className="text-center">صفة العميل</TableHead>
-                    <TableHead className="text-center">رقم القضية</TableHead>
-                    <TableHead className="text-center">المحكمة</TableHead>
-                    <TableHead className="text-center">الحالة</TableHead>
-                    <TableHead className="text-center">النتيجة</TableHead>
-                    <TableHead className="text-center">سير العمل</TableHead>
+                    <TableHead className="text-center">القضية والمحكمة</TableHead>
+                    <TableHead className="text-center">الحالة / النتيجة</TableHead>
                     <TableHead className="text-center">الإجراءات</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -700,20 +693,24 @@ export default function HearingsPage() {
                       return (
                         <TableRow key={hearing.id} data-testid={`row-hearing-${hearing.id}`}>
                           <TableCell className="text-center">
-                            <div className="flex items-center justify-center gap-2">
+                            <div className="flex flex-col items-center gap-1">
                               <Badge className={getUrgencyColor(hearing.hearingDate)}>
                                 <DualDateDisplay date={hearing.hearingDate} compact />
                               </Badge>
-                              <LtrInline className="text-sm text-muted-foreground">{formatTimeAmPm(hearing.hearingTime)}</LtrInline>
+                              <LtrInline className="text-xs text-muted-foreground">{formatTimeAmPm(hearing.hearingTime)}</LtrInline>
                             </div>
                           </TableCell>
                           <TableCell className="text-center">
-                            <div>
-                              {(caseInfo.plaintiff || caseInfo.client) && (
-                                <p className="text-sm font-medium">{caseInfo.plaintiff || caseInfo.client}</p>
-                              )}
-                              {caseInfo.plaintiff && caseInfo.client && (
-                                <p className="text-xs text-muted-foreground">{caseInfo.client}</p>
+                            <div className="flex flex-col items-center gap-1">
+                              <p className="text-sm font-medium">{caseInfo.plaintiff || caseInfo.client || "-"}</p>
+                              {caseInfo.classification && (
+                                <Badge variant="outline" className={`text-xs ${
+                                  caseInfo.classification === "مدعى_عليه"
+                                    ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
+                                    : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
+                                }`}>
+                                  {caseInfo.classification === "مدعى_عليه" ? "مدعى عليه" : "مدعي"}
+                                </Badge>
                               )}
                             </div>
                           </TableCell>
@@ -721,72 +718,27 @@ export default function HearingsPage() {
                             <span className="text-sm">{caseInfo.opponent || "-"}</span>
                           </TableCell>
                           <TableCell className="text-center">
-                            {caseInfo.classification && (
-                              <Badge variant="outline" className={`text-xs inline-flex justify-center ${
-                                caseInfo.classification === "مدعى_عليه"
-                                  ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
-                                  : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
-                              }`}>
-                                {caseInfo.classification === "مدعى_عليه" ? "مدعى عليه" : "مدعي"}
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <span className="text-sm"><LtrInline>{caseInfo.number}</LtrInline></span>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <div className="flex items-center justify-center gap-1 text-sm">
-                              <MapPin className="w-3 h-3 shrink-0" />
-                              <BidiText>{hearing.courtName}</BidiText>
-                              {hearing.courtRoom && (
-                                <span className="text-muted-foreground">- <LtrInline>{hearing.courtRoom}</LtrInline></span>
-                              )}
+                            <div className="flex flex-col items-center gap-1">
+                              <LtrInline className="text-sm font-medium">{caseInfo.number}</LtrInline>
+                              <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
+                                <MapPin className="w-3 h-3 shrink-0" />
+                                <BidiText>{hearing.courtName}</BidiText>
+                                {hearing.courtRoom && (
+                                  <span>- <LtrInline>{hearing.courtRoom}</LtrInline></span>
+                                )}
+                              </div>
                             </div>
                           </TableCell>
-                          <TableCell className="text-center">{getStatusBadge(hearing.status)}</TableCell>
                           <TableCell className="text-center">
-                            {hearing.result && (
-                              <Badge variant="secondary">
-                                {hearing.result}
-                                {hearing.result === HearingResult.JUDGMENT && hearing.judgmentSide && (
-                                  <span className="mr-1">({hearing.judgmentSide})</span>
-                                )}
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              {hearing.result && !hearing.reportCompleted && (
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <FileText className="w-4 h-4 text-orange-500" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>بانتظار التقرير</TooltipContent>
-                                </Tooltip>
-                              )}
-                              {hearing.reportCompleted && (
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <ClipboardCheck className="w-4 h-4 text-green-600 dark:text-green-400" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>التقرير مكتمل</TooltipContent>
-                                </Tooltip>
-                              )}
-                              {hearing.contactCompleted && (
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <Phone className="w-4 h-4 text-green-600 dark:text-green-400" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>تم التواصل مع العميل</TooltipContent>
-                                </Tooltip>
-                              )}
-                              {hearing.adminTasksCreated && (
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <CheckCircle className="w-4 h-4 text-accent" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>تم إنشاء المهام التلقائية</TooltipContent>
-                                </Tooltip>
+                            <div className="flex flex-col items-center gap-1">
+                              {getStatusBadge(hearing.status)}
+                              {hearing.result && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {hearing.result}
+                                  {hearing.result === HearingResult.JUDGMENT && hearing.judgmentSide && (
+                                    <span className="mr-1">({hearing.judgmentSide})</span>
+                                  )}
+                                </Badge>
                               )}
                             </div>
                           </TableCell>
