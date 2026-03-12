@@ -444,8 +444,8 @@ export type CaseClassificationValue = typeof CaseClassification[keyof typeof Cas
 
 export const CaseClassificationLabels: Record<CaseClassificationValue, string> = {
   "مدعي_قضية_جديدة": "دعوى للدراسة",
-  "مدعي_قضية_مقيدة": "مدعي",
-  "مدعى_عليه": "مدعى عليه",
+  "مدعي_قضية_مقيدة": "منظورة",
+  "مدعى_عليه": "منظورة",
 };
 
 // ==================== حالات منصة تراضي (تجاري) ====================
@@ -525,6 +525,9 @@ export const CaseStage = {
   PENDING_REVIEW: "قيد_التدقيق",
   CONCILIATION: "مداولة_الصلح",
   CONCILIATION_CLOSED: "أغلق_طلب_الصلح",
+  UNDER_REVIEW: "تحت_النظر",
+  PRIMARY_JUDGMENT: "محكوم_حكم_ابتدائي",
+  FINAL_JUDGMENT: "محكوم_حكم_نهائي",
   CLOSED: "مقفلة",
 } as const;
 
@@ -541,6 +544,9 @@ export const CaseStageLabels: Record<CaseStageValue, string> = {
   "قيد_التدقيق": "قيد التدقيق",
   "مداولة_الصلح": "مداولة الصلح",
   "أغلق_طلب_الصلح": "أغلق طلب الصلح",
+  "تحت_النظر": "تحت النظر",
+  "محكوم_حكم_ابتدائي": "محكوم حكم ابتدائي",
+  "محكوم_حكم_نهائي": "محكوم حكم نهائي",
   "مقفلة": "مقفلة",
 };
 
@@ -555,6 +561,9 @@ export const CaseStagesOrder: CaseStageValue[] = [
   "قيد_التدقيق",
   "مداولة_الصلح",
   "أغلق_طلب_الصلح",
+  "تحت_النظر",
+  "محكوم_حكم_ابتدائي",
+  "محكوم_حكم_نهائي",
   "مقفلة",
 ];
 
@@ -581,7 +590,9 @@ export const PlaintiffExistingStages: CaseStageValue[] = [
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
   "تم_الرفع_للدائرة",
-  "قيد_التدقيق",
+  "تحت_النظر",
+  "محكوم_حكم_ابتدائي",
+  "محكوم_حكم_نهائي",
 ];
 
 export const DefendantStages: CaseStageValue[] = [
@@ -592,6 +603,9 @@ export const DefendantStages: CaseStageValue[] = [
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
   "تم_الرفع_للدائرة",
+  "تحت_النظر",
+  "محكوم_حكم_ابتدائي",
+  "محكوم_حكم_نهائي",
 ];
 
 export function getStagesForClassification(classification: CaseClassificationValue): CaseStageValue[] {

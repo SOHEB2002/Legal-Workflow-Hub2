@@ -1,5 +1,5 @@
-import type { CaseStageValue, ConsultationStatusValue, UserRoleType, CaseStageTransition } from "@shared/schema";
-import { CaseStage, CaseStagesOrder, ConsultationStatus, UserRole } from "@shared/schema";
+import type { CaseStageValue, ConsultationStatusValue, UserRoleType, CaseStageTransition, CaseClassificationValue } from "@shared/schema";
+import { CaseStage, CaseStagesOrder, ConsultationStatus, UserRole, getStagesForClassification } from "@shared/schema";
 
 export interface TransitionRule {
   from: string;
@@ -87,6 +87,7 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     allowedRoles: [UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     label: "جاهزة للرفع مباشرة",
   },
+  // دعوى للدراسة: مسار الصلح
   {
     from: CaseStage.SUBMITTED,
     to: CaseStage.PENDING_REVIEW,
@@ -118,6 +119,39 @@ const CASE_TRANSITIONS: TransitionRule[] = [
     allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
     autoActions: [{ type: "close" }],
     label: "إقفال القضية مباشرة",
+  },
+  // منظورة: مسار التقاضي
+  {
+    from: CaseStage.SUBMITTED,
+    to: CaseStage.UNDER_REVIEW,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    label: "قيد النظر",
+  },
+  {
+    from: CaseStage.UNDER_REVIEW,
+    to: CaseStage.PRIMARY_JUDGMENT,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    label: "صدور حكم ابتدائي",
+  },
+  {
+    from: CaseStage.PRIMARY_JUDGMENT,
+    to: CaseStage.FINAL_JUDGMENT,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    label: "صدور حكم نهائي",
+  },
+  {
+    from: CaseStage.FINAL_JUDGMENT,
+    to: CaseStage.CLOSED,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    autoActions: [{ type: "close" }],
+    label: "إقفال القضية",
+  },
+  {
+    from: CaseStage.UNDER_REVIEW,
+    to: CaseStage.CLOSED,
+    allowedRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    autoActions: [{ type: "close" }],
+    label: "إقفال القضية",
   },
   {
     from: CaseStage.SUBMITTED,
@@ -182,6 +216,24 @@ const CASE_BACKWARD_TRANSITIONS: TransitionRule[] = [
     to: CaseStage.CONCILIATION,
     allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD, UserRole.ADMIN_SUPPORT],
     label: "إرجاع لمداولة الصلح",
+  },
+  {
+    from: CaseStage.UNDER_REVIEW,
+    to: CaseStage.SUBMITTED,
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD, UserRole.ADMIN_SUPPORT],
+    label: "إرجاع لجاهزة للرفع",
+  },
+  {
+    from: CaseStage.PRIMARY_JUDGMENT,
+    to: CaseStage.UNDER_REVIEW,
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD, UserRole.ADMIN_SUPPORT],
+    label: "إرجاع لتحت النظر",
+  },
+  {
+    from: CaseStage.FINAL_JUDGMENT,
+    to: CaseStage.PRIMARY_JUDGMENT,
+    allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD, UserRole.ADMIN_SUPPORT],
+    label: "إرجاع للحكم الابتدائي",
   },
 ];
 
@@ -334,6 +386,24 @@ const CASE_STAGE_INFO: StageInfo[] = [
     responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
   },
   {
+    stage: CaseStage.UNDER_REVIEW,
+    label: "تحت النظر",
+    description: "القضية قيد النظر أمام المحكمة",
+    responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+  },
+  {
+    stage: CaseStage.PRIMARY_JUDGMENT,
+    label: "محكوم حكم ابتدائي",
+    description: "صدر حكم ابتدائي في القضية",
+    responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+  },
+  {
+    stage: CaseStage.FINAL_JUDGMENT,
+    label: "محكوم حكم نهائي",
+    description: "صدر حكم نهائي في القضية",
+    responsibleRoles: [UserRole.ADMIN_SUPPORT, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+  },
+  {
     stage: CaseStage.CLOSED,
     label: "مقفلة",
     description: "القضية مقفلة نهائياً",
@@ -439,15 +509,17 @@ export function validateCaseForward(
   userRole: UserRoleType,
   userId?: string,
   caseData?: any,
+  classification?: CaseClassificationValue,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
-  const currentIndex = CaseStagesOrder.indexOf(normalizedCurrent);
+  const stagesOrder = classification ? getStagesForClassification(classification) : CaseStagesOrder;
+  const currentIndex = stagesOrder.indexOf(normalizedCurrent);
 
-  if (currentIndex === -1 || currentIndex >= CaseStagesOrder.length - 1) {
+  if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) {
     return { allowed: false, reason: "لا يمكن التقدم من هذه المرحلة" };
   }
 
-  const nextStage = CaseStagesOrder[currentIndex + 1];
+  const nextStage = stagesOrder[currentIndex + 1];
   const rule = CASE_TRANSITIONS.find(r => r.from === normalizedCurrent && r.to === nextStage);
 
   if (!rule) {
@@ -466,15 +538,17 @@ export function validateCaseBackward(
   userRole: UserRoleType,
   userId?: string,
   caseData?: any,
+  classification?: CaseClassificationValue,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
-  const currentIndex = CaseStagesOrder.indexOf(normalizedCurrent);
+  const stagesOrder = classification ? getStagesForClassification(classification) : CaseStagesOrder;
+  const currentIndex = stagesOrder.indexOf(normalizedCurrent);
 
   if (currentIndex <= 0) {
     return { allowed: false, reason: "لا يمكن الرجوع من هذه المرحلة" };
   }
 
-  const prevStage = CaseStagesOrder[currentIndex - 1];
+  const prevStage = stagesOrder[currentIndex - 1];
   const rule = CASE_BACKWARD_TRANSITIONS.find(r => r.from === normalizedCurrent && r.to === prevStage);
 
   if (!rule) {

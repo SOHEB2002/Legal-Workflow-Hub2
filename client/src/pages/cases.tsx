@@ -27,6 +27,8 @@ import {
   Info,
   Pencil,
   Scale,
+  Check,
+  X,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -127,6 +129,12 @@ function getStageColor(stage: CaseStageValue | string) {
       return "bg-cyan-500/20 text-cyan-600 border-cyan-500/30";
     case CaseStage.CONCILIATION_CLOSED:
       return "bg-teal-500/20 text-teal-600 border-teal-500/30";
+    case CaseStage.UNDER_REVIEW:
+      return "bg-orange-500/20 text-orange-600 border-orange-500/30";
+    case CaseStage.PRIMARY_JUDGMENT:
+      return "bg-red-500/20 text-red-600 border-red-500/30";
+    case CaseStage.FINAL_JUDGMENT:
+      return "bg-rose-600/20 text-rose-700 border-rose-600/30";
     case CaseStage.CLOSED:
       return "bg-muted text-muted-foreground border-muted";
     default:
@@ -381,6 +389,13 @@ export default function CasesPage() {
     lawyerId: "",
     departmentId: "",
   });
+  const [inlineEditField, setInlineEditField] = useState<string | null>(null);
+  const [inlineEditValue, setInlineEditValue] = useState<string>("");
+  const [registrationDialogType, setRegistrationDialogType] = useState<"" | "taradi" | "mohr">("");
+  const [registrationNumberInput, setRegistrationNumberInput] = useState("");
+  const [showCourtRegistrationDialog, setShowCourtRegistrationDialog] = useState(false);
+  const [courtRegistrationCaseId, setCourtRegistrationCaseId] = useState<string | null>(null);
+  const [courtCaseNumberInput, setCourtCaseNumberInput] = useState("");
 
   const resetForm = () => {
     setFormData({
@@ -671,9 +686,9 @@ export default function CasesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
-                {Object.entries(CaseClassificationLabels).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
-                ))}
+                <SelectItem value="مدعي_قضية_جديدة">دعوى للدراسة</SelectItem>
+                <SelectItem value="مدعي_قضية_مقيدة">منظورة - مدعي</SelectItem>
+                <SelectItem value="مدعى_عليه">منظورة - مدعى عليه</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -700,7 +715,7 @@ export default function CasesPage() {
                 <TableHead className="text-center">الخصم</TableHead>
                 <TableHead className="text-center">صفة العميل</TableHead>
                 <TableHead className="text-center">النوع</TableHead>
-                <TableHead className="text-center">المرحلة</TableHead>
+                <TableHead className="text-center">الحالة</TableHead>
                 <TableHead className="text-center">المحامي المسؤول</TableHead>
                 <TableHead className="text-center">الأولوية</TableHead>
                 <TableHead className="text-center">القسم</TableHead>
@@ -1416,21 +1431,20 @@ export default function CasesPage() {
                           {(selectedCase as any).taradiNumber && <span className="text-sm text-muted-foreground">رقم: {(selectedCase as any).taradiNumber}</span>}
                         </div>
                         {!(selectedCase as any).taradiStatus && (
-                          <Button
-                            size="sm"
-                            data-testid="button-register-taradi"
-                            onClick={async () => {
-                              const num = prompt("أدخل رقم الطلب في تراضي (اختياري):");
-                              const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
-                                method: "PATCH",
-                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                body: JSON.stringify({ status: "مقيدة_في_تراضي", taradiNumber: num || "" }),
-                              });
-                              if (res.ok) { toast({ title: "تم التقييد في تراضي" }); window.location.reload(); }
-                            }}
-                          >
-                            تقييد في منصة تراضي
-                          </Button>
+                          registrationDialogType === "taradi" ? (
+                            <div className="flex items-center gap-2 mt-1">
+                              <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في تراضي (اختياري)" className="h-8 text-sm" data-testid="input-taradi-registration" autoFocus />
+                              <Button size="sm" data-testid="button-confirm-taradi" onClick={async () => {
+                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_تراضي", taradiNumber: registrationNumberInput }) });
+                                if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); }
+                              }}>تأكيد</Button>
+                              <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
+                            </div>
+                          ) : (
+                            <Button size="sm" data-testid="button-register-taradi" onClick={() => { setRegistrationDialogType("taradi"); setRegistrationNumberInput(""); }}>
+                              تقييد في منصة تراضي
+                            </Button>
+                          )
                         )}
                         {(selectedCase as any).taradiStatus === "مقيدة_في_تراضي" && (
                           <div className="flex gap-2">
@@ -1485,21 +1499,24 @@ export default function CasesPage() {
                           {(selectedCase as any).mohrNumber && <span className="text-sm text-muted-foreground">رقم: {(selectedCase as any).mohrNumber}</span>}
                         </div>
                         {!(selectedCase as any).mohrStatus && (
+                          registrationDialogType === "mohr" ? (
+                            <div className="flex items-center gap-2 mt-1">
+                              <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في الموارد البشرية (اختياري)" className="h-8 text-sm" data-testid="input-mohr-registration" autoFocus />
+                              <Button size="sm" data-testid="button-confirm-mohr" onClick={async () => {
+                                const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput }) });
+                                if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); }
+                              }}>تأكيد</Button>
+                              <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
+                            </div>
+                          ) : (
                           <Button
                             size="sm"
                             data-testid="button-register-mohr"
-                            onClick={async () => {
-                              const num = prompt("أدخل رقم الطلب في وزارة الموارد (اختياري):");
-                              const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, {
-                                method: "PATCH",
-                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                body: JSON.stringify({ status: "مقيدة_في_الموارد", mohrNumber: num || "" }),
-                              });
-                              if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); window.location.reload(); }
-                            }}
+                            onClick={() => { setRegistrationDialogType("mohr"); setRegistrationNumberInput(""); }}
                           >
                             تقييد في وزارة الموارد البشرية
                           </Button>
+                          )
                         )}
                         {(selectedCase as any).mohrStatus === "مقيدة_في_الموارد" && (
                           <Button
@@ -1548,38 +1565,77 @@ export default function CasesPage() {
                         <div>
                           <Label className="text-muted-foreground">رقم الطلب في منصة تراضي</Label>
                           <div className="flex items-center gap-2 mt-1">
-                            <p className="font-medium">{selectedCase.taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
-                            <Button
-                              variant="ghost" size="sm"
-                              data-testid="button-edit-taradi-number"
-                              onClick={async () => {
-                                const val = prompt("رقم الطلب في منصة تراضي:", selectedCase.taradiNumber || "");
-                                if (val !== null) {
-                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { taradiNumber: val });
-                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-                                }
-                              }}
-                            ><Pencil className="w-3 h-3" /></Button>
+                            {inlineEditField === `taradi-${selectedCase.id}` ? (
+                              <>
+                                <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-taradi-number"
+                                  onKeyDown={async e => {
+                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { taradiNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    else if (e.key === "Escape") setInlineEditField(null);
+                                  }} />
+                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { taradiNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
+                              </>
+                            ) : (
+                              <>
+                                <p className="font-medium">{selectedCase.taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                <Button variant="ghost" size="sm" data-testid="button-edit-taradi-number" onClick={() => { setInlineEditField(`taradi-${selectedCase.id}`); setInlineEditValue(selectedCase.taradiNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                              </>
+                            )}
                           </div>
                         </div>
                         <div>
                           <Label className="text-muted-foreground">رقم الطلب في ناجز / معين</Label>
                           <div className="flex items-center gap-2 mt-1">
-                            <p className="font-medium">{selectedCase.najizNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
-                            <Button
-                              variant="ghost" size="sm"
-                              data-testid="button-edit-najiz-number"
-                              onClick={async () => {
-                                const val = prompt("رقم الطلب في ناجز / معين:", selectedCase.najizNumber || "");
-                                if (val !== null) {
-                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { najizNumber: val });
-                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-                                }
-                              }}
-                            ><Pencil className="w-3 h-3" /></Button>
+                            {inlineEditField === `najiz-${selectedCase.id}` ? (
+                              <>
+                                <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-najiz-number"
+                                  onKeyDown={async e => {
+                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { najizNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    else if (e.key === "Escape") setInlineEditField(null);
+                                  }} />
+                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { najizNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
+                              </>
+                            ) : (
+                              <>
+                                <p className="font-medium">{selectedCase.najizNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                <Button variant="ghost" size="sm" data-testid="button-edit-najiz-number" onClick={() => { setInlineEditField(`najiz-${selectedCase.id}`); setInlineEditValue(selectedCase.najizNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW &&
+                    CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.SUBMITTED) &&
+                    (user?.role === "branch_manager" || user?.role === "admin_support") && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
+                        تحويل القضية إلى منظورة
+                      </h4>
+                      <p className="text-xs text-muted-foreground mb-3">عند تقييد القضية في المحكمة، يتم تحويل تصنيفها إلى "منظورة" وتنتقل لمرحلة "تحت النظر"</p>
+                      {showCourtRegistrationDialog && courtRegistrationCaseId === selectedCase.id ? (
+                        <div className="flex items-center gap-2">
+                          <Input value={courtCaseNumberInput} onChange={e => setCourtCaseNumberInput(e.target.value)} placeholder="رقم القضية في المحكمة" className="h-8 text-sm" autoFocus data-testid="input-court-registration-number" />
+                          <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {
+                            if (!courtCaseNumberInput.trim()) { toast({ title: "يرجى إدخال رقم القضية", variant: "destructive" }); return; }
+                            try {
+                              const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { caseClassification: "مدعي_قضية_مقيدة", currentStage: "تحت_النظر", courtCaseNumber: courtCaseNumberInput.trim() });
+                              queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                              toast({ title: "تم تقييد القضية في المحكمة بنجاح" });
+                              setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput("");
+                            } catch (e) { toast({ title: "حدث خطأ", variant: "destructive" }); }
+                          }}>تأكيد</Button>
+                          <Button size="sm" variant="ghost" onClick={() => { setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput(""); }}>إلغاء</Button>
+                        </div>
+                      ) : (
+                        <Button size="sm" variant="outline" className="border-blue-500 text-blue-600" data-testid="button-register-court" onClick={() => { setShowCourtRegistrationDialog(true); setCourtRegistrationCaseId(selectedCase.id); setCourtCaseNumberInput(""); }}>
+                          <Scale className="w-3 h-3 ml-1" /> تقييد القضية في المحكمة
+                        </Button>
+                      )}
                     </div>
                   )}
 
@@ -1593,35 +1649,43 @@ export default function CasesPage() {
                         <div>
                           <Label className="text-muted-foreground">رقم القضية</Label>
                           <div className="flex items-center gap-2 mt-1">
-                            <p className="font-medium">{selectedCase.courtCaseNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
-                            <Button
-                              variant="ghost" size="sm"
-                              data-testid="button-edit-court-case-number"
-                              onClick={async () => {
-                                const val = prompt("رقم القضية:", selectedCase.courtCaseNumber || "");
-                                if (val !== null) {
-                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { courtCaseNumber: val });
-                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-                                }
-                              }}
-                            ><Pencil className="w-3 h-3" /></Button>
+                            {inlineEditField === `court-${selectedCase.id}` ? (
+                              <>
+                                <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-court-case-number"
+                                  onKeyDown={async e => {
+                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { courtCaseNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    else if (e.key === "Escape") setInlineEditField(null);
+                                  }} />
+                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { courtCaseNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
+                              </>
+                            ) : (
+                              <>
+                                <p className="font-medium">{selectedCase.courtCaseNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                <Button variant="ghost" size="sm" data-testid="button-edit-court-case-number" onClick={() => { setInlineEditField(`court-${selectedCase.id}`); setInlineEditValue(selectedCase.courtCaseNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                              </>
+                            )}
                           </div>
                         </div>
                         <div>
-                          <Label className="text-muted-foreground">موعد الجلسة</Label>
+                          <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
                           <div className="flex items-center gap-2 mt-1">
-                            <p className="font-medium">{selectedCase.nextHearingDate ? <DualDateDisplay date={selectedCase.nextHearingDate} compact /> : <span className="text-muted-foreground text-sm italic">غير محدد</span>}</p>
-                            <Button
-                              variant="ghost" size="sm"
-                              data-testid="button-edit-next-hearing-date"
-                              onClick={async () => {
-                                const val = prompt("موعد الجلسة (YYYY-MM-DD):", selectedCase.nextHearingDate || "");
-                                if (val !== null) {
-                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { nextHearingDate: val || null });
-                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-                                }
-                              }}
-                            ><Pencil className="w-3 h-3" /></Button>
+                            {inlineEditField === `hearing-${selectedCase.id}` ? (
+                              <>
+                                <Input type="date" value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-36" autoFocus data-testid="input-next-hearing-date"
+                                  onKeyDown={async e => {
+                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { nextHearingDate: inlineEditValue || null }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    else if (e.key === "Escape") setInlineEditField(null);
+                                  }} />
+                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { nextHearingDate: inlineEditValue || null }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
+                              </>
+                            ) : (
+                              <>
+                                <p className="font-medium">{selectedCase.nextHearingDate ? <DualDateDisplay date={selectedCase.nextHearingDate} compact /> : <span className="text-muted-foreground text-sm italic">غير محدد</span>}</p>
+                                <Button variant="ghost" size="sm" data-testid="button-edit-next-hearing-date" onClick={() => { setInlineEditField(`hearing-${selectedCase.id}`); setInlineEditValue(selectedCase.nextHearingDate || ""); }}><Pencil className="w-3 h-3" /></Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>

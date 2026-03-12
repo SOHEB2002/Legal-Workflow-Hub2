@@ -118,6 +118,18 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
   { from: "الأخذ_بالملاحظات", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
   { from: "الأخذ_بالملاحظات", to: "تم_الرفع_للدائرة", allowedRoles: ["department_head", "branch_manager"] },
+  // دعوى للدراسة: من جاهزة للرفع إلى مسار الصلح
+  { from: "تم_الرفع_للدائرة", to: "قيد_التدقيق", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "قيد_التدقيق", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "أغلق_طلب_الصلح", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "قيد_التدقيق", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  // منظورة: من جاهزة للرفع إلى تحت النظر وما بعده
+  { from: "تم_الرفع_للدائرة", to: "تحت_النظر", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "تحت_النظر", to: "محكوم_حكم_ابتدائي", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "محكوم_حكم_ابتدائي", to: "محكوم_حكم_نهائي", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "محكوم_حكم_نهائي", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "تحت_النظر", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "تم_الرفع_للدائرة", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   // Backward transitions
   { from: "استكمال_البيانات", to: "استلام", allowedRoles: ["branch_manager", "department_head"] },
@@ -126,6 +138,12 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "إحالة_للجنة_المراجعة", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "cases_review_head", "department_head"] },
   { from: "الأخذ_بالملاحظات", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "department_head"] },
   { from: "تم_الرفع_للدائرة", to: "الأخذ_بالملاحظات", allowedRoles: ["branch_manager", "department_head"] },
+  { from: "قيد_التدقيق", to: "تم_الرفع_للدائرة", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
+  { from: "مداولة_الصلح", to: "قيد_التدقيق", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
+  { from: "أغلق_طلب_الصلح", to: "مداولة_الصلح", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
+  { from: "تحت_النظر", to: "تم_الرفع_للدائرة", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
+  { from: "محكوم_حكم_ابتدائي", to: "تحت_النظر", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
+  { from: "محكوم_حكم_نهائي", to: "محكوم_حكم_ابتدائي", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
 ];
 
 const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
@@ -1477,6 +1495,17 @@ export async function registerRoutes(
         };
         if (data.result === HearingResult.POSTPONEMENT && data.nextHearingDate) {
           caseUpdate.nextHearingDate = data.nextHearingDate;
+        }
+        if (data.result === HearingResult.JUDGMENT) {
+          const targetStage = data.judgmentFinal ? "محكوم_حكم_نهائي" : "محكوم_حكم_ابتدائي";
+          const existingCase = await storage.getCaseById(effectiveCaseId);
+          if (existingCase) {
+            const currentStageNormalized = existingCase.currentStage === "رفع_للدائرة" ? "تم_الرفع_للدائرة" : existingCase.currentStage;
+            const allowedFromStages = ["تم_الرفع_للدائرة", "قيد_التدقيق", "مداولة_الصلح", "أغلق_طلب_الصلح", "تحت_النظر", "محكوم_حكم_ابتدائي"];
+            if (allowedFromStages.includes(currentStageNormalized) && currentStageNormalized !== targetStage) {
+              caseUpdate.currentStage = targetStage;
+            }
+          }
         }
         await storage.updateCase(effectiveCaseId, caseUpdate);
       }

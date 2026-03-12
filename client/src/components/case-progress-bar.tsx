@@ -97,7 +97,7 @@ export function CaseProgressBar({
                   )}
                 </div>
                 <span
-                  className={`mt-2 text-xs text-center whitespace-nowrap ${
+                  className={`mt-2 text-xs text-center break-words max-w-[72px] leading-tight ${
                     status === "current"
                       ? "font-bold text-accent"
                       : status === "completed"
