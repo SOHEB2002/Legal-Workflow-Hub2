@@ -533,10 +533,11 @@ export default function CasesPage() {
   const isDeptHead = user?.role === "department_head";
 
   const openAssignDialog = (caseItem: LawCase) => {
+    refetchUsers();
     setSelectedCaseId(caseItem.id);
     setAssignData({ 
       lawyerId: caseItem.primaryLawyerId || "", 
-      departmentId: isDeptHead ? (user?.departmentId || "") : (caseItem.departmentId || "")
+      departmentId: isDeptHead ? (String(user?.departmentId || "")) : (String(caseItem.departmentId || ""))
     });
     setShowAssignDialog(true);
   };
@@ -1129,11 +1130,22 @@ export default function CasesPage() {
                   <SelectValue placeholder="اختر المحامي" />
                 </SelectTrigger>
                 <SelectContent>
-                  {lawyers
-                    .filter(l => !assignData.departmentId || l.departmentId === assignData.departmentId)
-                    .map((lawyer) => (
+                  {(() => {
+                    const filtered = lawyers.filter(l =>
+                      !assignData.departmentId ||
+                      String(l.departmentId) === String(assignData.departmentId)
+                    );
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="px-3 py-2 text-sm text-muted-foreground text-center">
+                          {assignData.departmentId ? "لا يوجد محامون في هذا القسم" : "اختر القسم أولاً"}
+                        </div>
+                      );
+                    }
+                    return filtered.map((lawyer) => (
                       <SelectItem key={lawyer.id} value={lawyer.id}>{lawyer.name}</SelectItem>
-                    ))}
+                    ));
+                  })()}
                 </SelectContent>
               </Select>
             </div>
