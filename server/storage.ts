@@ -580,6 +580,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteCase(id: string): Promise<boolean> {
+    // جلب معرّفات الجلسات والمذكرات المرتبطة بالقضية
+    const relatedHearings = await db.select({ id: hearings.id }).from(hearings).where(eq(hearings.caseId, id));
+    const relatedMemos = await db.select({ id: memos.id }).from(memos).where(eq(memos.caseId, id));
+    const hearingIds = relatedHearings.map(h => h.id);
+    const memoIds = relatedMemos.map(m => m.id);
+
+    // حذف الإشعارات المرتبطة بالجلسات
+    if (hearingIds.length > 0) {
+      for (const hid of hearingIds) {
+        await db.delete(notifications).where(and(eq(notifications.relatedType, "hearing"), eq(notifications.relatedId, hid)));
+        await db.delete(attachments).where(and(eq(attachments.entityType, "hearing"), eq(attachments.entityId, hid)));
+      }
+    }
+
+    // حذف الإشعارات المرتبطة بالمذكرات
+    if (memoIds.length > 0) {
+      for (const mid of memoIds) {
+        await db.delete(notifications).where(and(eq(notifications.relatedType, "memo"), eq(notifications.relatedId, mid)));
+        await db.delete(attachments).where(and(eq(attachments.entityType, "memo"), eq(attachments.entityId, mid)));
+      }
+    }
+
+    // حذف الجلسات والمذكرات والسجلات المرتبطة
     await db.delete(hearings).where(eq(hearings.caseId, id));
     await db.delete(memos).where(eq(memos.caseId, id));
     await db.delete(caseActivityLog).where(eq(caseActivityLog.caseId, id));
