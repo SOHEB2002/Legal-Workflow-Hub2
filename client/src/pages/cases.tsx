@@ -28,6 +28,7 @@ import {
   Scale,
   Check,
   X,
+  MessageSquare,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -486,9 +487,9 @@ export default function CasesPage() {
   };
 
   const handleReject = () => {
-    if (!selectedCase || !rejectNotes) return;
-    rejectCase(selectedCase.id, rejectNotes, "rejected");
-    toast({ title: "تم إعادة القضية للتعديل" });
+    if (!selectedCase) return;
+    rejectCase(selectedCase.id, rejectNotes || "تم إضافة ملاحظات من لجنة المراجعة", "rejected");
+    toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
     setShowRejectDialog(false);
     setSelectedCaseId(null);
     setRejectNotes("");
@@ -1163,18 +1164,19 @@ export default function CasesPage() {
       </Dialog>
 
       <Dialog open={showRejectDialog} onOpenChange={setShowRejectDialog}>
-        <DialogContent>
+        <DialogContent dir="rtl">
           <DialogHeader>
-            <DialogTitle>إعادة القضية للتعديل</DialogTitle>
+            <DialogTitle>تم إضافة ملاحظات — الأخذ بملاحظات اللجنة</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">سيتم إرسال القضية لمرحلة الأخذ بالملاحظات. يمكنك إضافة ملاحظات توضيحية اختيارية.</p>
             <div>
-              <Label>ملاحظات المراجعة</Label>
+              <Label>ملاحظات اللجنة (اختياري)</Label>
               <Textarea
                 data-testid="input-reject-notes"
                 value={rejectNotes}
                 onChange={(e) => setRejectNotes(e.target.value)}
-                placeholder="اكتب ملاحظاتك للمحامي..."
+                placeholder="ملاحظات اللجنة للمحامي المسؤول..."
                 rows={4}
               />
             </div>
@@ -1184,10 +1186,9 @@ export default function CasesPage() {
             <Button 
               data-testid="button-confirm-reject" 
               onClick={handleReject}
-              disabled={!rejectNotes}
-              variant="destructive"
+              className="bg-amber-600 hover:bg-amber-700 text-white"
             >
-              إعادة للتعديل
+              إرسال للأخذ بالملاحظات
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1873,29 +1874,39 @@ export default function CasesPage() {
                         <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
                           <div>
                             <p className="font-medium text-sm">قائمة المراجعة</p>
-                            <p className="text-xs text-muted-foreground">مراجعة بنود القضية قبل الاعتماد</p>
+                            <p className="text-xs text-muted-foreground">مراجعة بنود القضية قبل البت فيها</p>
                           </div>
                           <Button size="sm" variant="outline" data-testid={`button-review-checklist-details-${selectedCase.id}`} onClick={() => { openReviewDialog(selectedCase); }}>
                             <ClipboardCheck className="w-4 h-4 ml-1" />قائمة المراجعة
                           </Button>
                         </div>
-                        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                        <div className="p-3 rounded-lg border bg-card space-y-3">
                           <div>
-                            <p className="font-medium text-sm">اعتماد القضية</p>
-                            <p className="text-xs text-muted-foreground">اعتماد القضية ورفعها للمرحلة التالية</p>
+                            <p className="font-medium text-sm">قرار لجنة المراجعة</p>
+                            <p className="text-xs text-muted-foreground">حدد نتيجة مراجعة اللجنة للقضية</p>
                           </div>
-                          <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" data-testid={`button-approve-details-${selectedCase.id}`} onClick={() => { handleApprove(selectedCase); }}>
-                            <CheckCircle className="w-4 h-4 ml-1" />اعتماد
-                          </Button>
-                        </div>
-                        <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
-                          <div>
-                            <p className="font-medium text-sm">إعادة للتعديل</p>
-                            <p className="text-xs text-muted-foreground">إعادة القضية لمرحلة التعديل</p>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
+                              data-testid={`button-reject-details-${selectedCase.id}`}
+                              onClick={() => { openRejectDialog(selectedCase); }}
+                            >
+                              <MessageSquare className="w-4 h-4 ml-1" />تم إضافة ملاحظات
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                              data-testid={`button-approve-details-${selectedCase.id}`}
+                              onClick={() => { handleApprove(selectedCase); }}
+                            >
+                              <CheckCircle className="w-4 h-4 ml-1" />لا يوجد ملاحظات
+                            </Button>
                           </div>
-                          <Button size="sm" variant="destructive" data-testid={`button-reject-details-${selectedCase.id}`} onClick={() => { openRejectDialog(selectedCase); }}>
-                            <XCircle className="w-4 h-4 ml-1" />إعادة
-                          </Button>
+                          <div className="flex gap-2 text-xs text-muted-foreground">
+                            <span className="flex-1 text-center">→ الأخذ بالملاحظات</span>
+                            <span className="flex-1 text-center">→ جاهزة للرفع</span>
+                          </div>
                         </div>
                       </>
                     )}

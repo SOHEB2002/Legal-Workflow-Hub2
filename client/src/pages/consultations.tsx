@@ -122,6 +122,9 @@ export default function ConsultationsPage() {
   });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [consultationToDelete, setConsultationToDelete] = useState<Consultation | null>(null);
+  const [showConsultRejectDialog, setShowConsultRejectDialog] = useState(false);
+  const [consultRejectNotes, setConsultRejectNotes] = useState("");
+  const [consultationToReject, setConsultationToReject] = useState<Consultation | null>(null);
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -143,6 +146,15 @@ export default function ConsultationsPage() {
     }
     setShowReminderDialog(false);
     setReminderConsultation(null);
+  };
+
+  const handleConsultReject = () => {
+    if (!consultationToReject) return;
+    rejectConsultation(consultationToReject.id, consultRejectNotes || "تم إضافة ملاحظات من لجنة المراجعة", user?.role);
+    toast({ title: "تم إرسال الاستشارة للأخذ بالملاحظات" });
+    setShowConsultRejectDialog(false);
+    setConsultationToReject(null);
+    setConsultRejectNotes("");
   };
 
   const consultationLawyers = users.filter(u => u.canBeAssignedConsultations);
@@ -450,13 +462,22 @@ export default function ConsultationsPage() {
                                   <ClipboardCheck className="w-4 h-4 ml-2" />
                                   قائمة المراجعة
                                 </DropdownMenuItem>
-                                <DropdownMenuItem data-testid={`button-approve-${consultation.id}`} onClick={() => approveConsultation(consultation.id)}>
-                                  <CheckCircle className="w-4 h-4 ml-2 text-green-600" />
-                                  اعتماد الاستشارة
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  data-testid={`button-reject-${consultation.id}`}
+                                  onClick={() => { setConsultationToReject(consultation); setConsultRejectNotes(""); setShowConsultRejectDialog(true); }}
+                                  className="text-amber-700 focus:text-amber-700"
+                                >
+                                  <MessageSquare className="w-4 h-4 ml-2 text-amber-600" />
+                                  تم إضافة ملاحظات
                                 </DropdownMenuItem>
-                                <DropdownMenuItem data-testid={`button-reject-${consultation.id}`} onClick={() => rejectConsultation(consultation.id, "يرجى المراجعة")}>
-                                  <XCircle className="w-4 h-4 ml-2 text-destructive" />
-                                  إعادة للتعديل
+                                <DropdownMenuItem
+                                  data-testid={`button-approve-${consultation.id}`}
+                                  onClick={() => { approveConsultation(consultation.id, undefined, user?.role); toast({ title: "تم اعتماد الاستشارة — جاهزة للرفع" }); }}
+                                  className="text-green-700 focus:text-green-700"
+                                >
+                                  <CheckCircle className="w-4 h-4 ml-2 text-green-600" />
+                                  لا يوجد ملاحظات
                                 </DropdownMenuItem>
                               </>
                             )}
@@ -760,6 +781,37 @@ export default function ConsultationsPage() {
             >
               <ArrowLeftRight className="w-4 h-4 ml-2" />
               إرسال الطلب
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showConsultRejectDialog} onOpenChange={setShowConsultRejectDialog}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تم إضافة ملاحظات — الأخذ بملاحظات اللجنة</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">سيتم إرسال الاستشارة لمرحلة الأخذ بالملاحظات. يمكنك إضافة ملاحظات توضيحية اختيارية.</p>
+            <div>
+              <Label>ملاحظات اللجنة (اختياري)</Label>
+              <Textarea
+                data-testid="input-consult-reject-notes"
+                value={consultRejectNotes}
+                onChange={(e) => setConsultRejectNotes(e.target.value)}
+                placeholder="ملاحظات اللجنة للمحامي المسؤول..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowConsultRejectDialog(false)}>إلغاء</Button>
+            <Button
+              data-testid="button-confirm-consult-reject"
+              onClick={handleConsultReject}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              إرسال للأخذ بالملاحظات
             </Button>
           </DialogFooter>
         </DialogContent>
