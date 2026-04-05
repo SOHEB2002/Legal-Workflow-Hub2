@@ -177,7 +177,7 @@ export default function CasesPage() {
   } = useCases();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, permissions, users } = useAuth();
+  const { user, permissions, users, refetchUsers } = useAuth();
   const { getHearingsByCase } = useHearings();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
