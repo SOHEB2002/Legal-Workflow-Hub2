@@ -483,7 +483,8 @@ export default function CasesPage() {
 
   const handleApprove = (caseItem: LawCase) => {
     approveCase(caseItem.id);
-    toast({ title: "تم اعتماد القضية" });
+    toast({ title: "تم اعتماد القضية — جاهزة للرفع" });
+    setSelectedCaseId(null);
   };
 
   const handleReject = () => {

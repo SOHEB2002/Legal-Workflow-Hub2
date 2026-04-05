@@ -181,14 +181,19 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateCase = async (id: string, data: Partial<LawCase>): Promise<void> => {
-    await apiRequest("PATCH", `/api/cases/${id}`, data);
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? { ...c, ...data, updatedAt: new Date().toISOString() }
-          : c
-      )
-    );
+    const response = await apiRequest("PATCH", `/api/cases/${id}`, data);
+    try {
+      const updatedCase = await response.json();
+      setCases((prev) =>
+        prev.map((c) => c.id === id ? migrateCase(updatedCase) : c)
+      );
+    } catch {
+      setCases((prev) =>
+        prev.map((c) =>
+          c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c
+        )
+      );
+    }
   };
 
   const deleteCase = async (id: string): Promise<void> => {
@@ -222,8 +227,18 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const approveCase = (id: string, notes?: string) => {
+    const lawCase = cases.find(c => c.id === id);
+    if (!lawCase || !user) return;
+    const newTransition = createStageTransitionRecord(
+      CaseStage.SUBMITTED,
+      user.id,
+      user.name,
+      "اعتماد اللجنة - لا يوجد ملاحظات"
+    );
     updateCase(id, {
       status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
+      currentStage: CaseStage.SUBMITTED,
+      stageHistory: [...(lawCase.stageHistory || []), newTransition],
       reviewDecision: "approved" as ReviewDecisionType,
       reviewNotes: notes || "",
     });
@@ -231,8 +246,17 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
   const rejectCase = (id: string, notes: string, decision: ReviewDecisionType) => {
     const lawCase = cases.find(c => c.id === id);
+    if (!lawCase || !user) return;
+    const newTransition = createStageTransitionRecord(
+      CaseStage.AMENDMENTS,
+      user.id,
+      user.name,
+      notes || "إرجاع بملاحظات اللجنة"
+    );
     updateCase(id, {
       status: CaseStatus.AMENDMENTS as CaseStatusValue,
+      currentStage: CaseStage.AMENDMENTS,
+      stageHistory: [...(lawCase.stageHistory || []), newTransition],
       reviewDecision: decision,
       reviewNotes: notes,
     });
