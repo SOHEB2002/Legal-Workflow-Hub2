@@ -177,7 +177,7 @@ export default function CasesPage() {
   } = useCases();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, permissions, users, refetchUsers } = useAuth();
+  const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
@@ -533,7 +533,6 @@ export default function CasesPage() {
   const isDeptHead = user?.role === "department_head";
 
   const openAssignDialog = (caseItem: LawCase) => {
-    refetchUsers();
     setSelectedCaseId(caseItem.id);
     setAssignData({ 
       lawyerId: caseItem.primaryLawyerId || "", 
