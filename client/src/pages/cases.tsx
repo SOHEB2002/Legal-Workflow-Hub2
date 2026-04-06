@@ -173,6 +173,7 @@ export default function CasesPage() {
     moveToPreviousStage,
     skipDataCompletion,
     addComment,
+    fetchComments,
     getCommentsByCaseId,
     getCaseById,
   } = useCases();
@@ -578,6 +579,7 @@ export default function CasesPage() {
     setSelectedCaseId(caseItem.id);
     setShowDetailsDialog(true);
     fetchAttachments(caseItem.id);
+    fetchComments(caseItem.id);
     addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
   };
 

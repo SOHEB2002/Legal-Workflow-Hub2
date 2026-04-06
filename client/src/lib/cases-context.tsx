@@ -24,7 +24,8 @@ interface CasesContextType {
   moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
-  addComment: (caseId: string, userId: string, userName: string, content: string) => void;
+  addComment: (caseId: string, userId: string, userName: string, content: string) => Promise<void>;
+  fetchComments: (caseId: string) => Promise<void>;
   getCommentsByCaseId: (caseId: string) => CaseComment[];
   getCaseById: (id: string) => LawCase | undefined;
   getCasesByDepartment: (departmentId: string) => LawCase[];
@@ -401,16 +402,36 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const addComment = (caseId: string, userId: string, userName: string, content: string) => {
-    const newComment: CaseComment = {
-      id: generateId(),
-      caseId,
-      userId,
-      userName,
-      content,
-      createdAt: new Date().toISOString(),
-    };
-    setComments((prev) => [newComment, ...prev]);
+  const fetchComments = async (caseId: string) => {
+    try {
+      const response = await apiRequest("GET", `/api/cases/${caseId}/comments`);
+      const data: CaseComment[] = await response.json();
+      setComments((prev) => [
+        ...prev.filter((c) => c.caseId !== caseId),
+        ...data,
+      ]);
+    } catch {
+      // fetch comments failed silently
+    }
+  };
+
+  const addComment = async (caseId: string, userId: string, userName: string, content: string) => {
+    try {
+      const response = await apiRequest("POST", `/api/cases/${caseId}/comments`, { content });
+      const saved: CaseComment = await response.json();
+      setComments((prev) => [...prev, saved]);
+    } catch {
+      // Fallback: add locally so the UI doesn't freeze if the request fails
+      const newComment: CaseComment = {
+        id: generateId(),
+        caseId,
+        userId,
+        userName,
+        content,
+        createdAt: new Date().toISOString(),
+      };
+      setComments((prev) => [...prev, newComment]);
+    }
   };
 
   const getCommentsByCaseId = (caseId: string) =>
@@ -437,6 +458,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         moveToPreviousStage,
         skipDataCompletion,
         addComment,
+        fetchComments,
         getCommentsByCaseId,
         getCaseById,
         getCasesByDepartment,

@@ -1,14 +1,15 @@
-import { 
-  type User, type LawCase, type Client, type Consultation, type Hearing, 
+import {
+  type User, type LawCase, type Client, type Consultation, type Hearing,
   type FieldTask, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
   type SupportTicket,
   type CaseActivity, type InsertCaseActivity,
   type CaseNote, type InsertCaseNote,
+  type CaseCommentRow, type InsertCaseComment,
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   CaseStatus, CaseStage,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
-  caseActivityLog, caseNotes, legalDeadlines, delegationsTable
+  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, lte, gte, sql } from "drizzle-orm";
@@ -114,6 +115,10 @@ export interface IStorage {
   createCaseNote(data: InsertCaseNote): Promise<CaseNote>;
   updateCaseNote(id: string, data: Partial<CaseNote>): Promise<CaseNote | undefined>;
   deleteCaseNote(id: string): Promise<boolean>;
+
+  // Case Comments
+  getCommentsByCaseId(caseId: string): Promise<CaseCommentRow[]>;
+  createCaseComment(data: InsertCaseComment): Promise<CaseCommentRow>;
 
   // Legal Deadlines
   getAllLegalDeadlines(): Promise<LegalDeadline[]>;
@@ -1251,6 +1256,23 @@ export class DatabaseStorage implements IStorage {
   async deleteCaseNote(id: string): Promise<boolean> {
     const result = await db.delete(caseNotes).where(eq(caseNotes.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ==================== Case Comments ====================
+
+  async getCommentsByCaseId(caseId: string): Promise<CaseCommentRow[]> {
+    return await db.select().from(caseComments)
+      .where(eq(caseComments.caseId, caseId))
+      .orderBy(caseComments.createdAt);
+  }
+
+  async createCaseComment(data: InsertCaseComment): Promise<CaseCommentRow> {
+    const [comment] = await db.insert(caseComments).values({
+      ...data,
+      id: nanoid(),
+      createdAt: new Date(),
+    }).returning();
+    return comment;
   }
 
   // ==================== Legal Deadlines ====================

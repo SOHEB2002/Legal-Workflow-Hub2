@@ -2442,6 +2442,36 @@ export async function registerRoutes(
     res.json({ data: paginatedLogs, total, page, limit });
   });
 
+  // ==================== Case Comments ====================
+
+  app.get("/api/cases/:id/comments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const comments = await storage.getCommentsByCaseId(String(req.params.id));
+      res.json(comments);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التعليقات" });
+    }
+  });
+
+  app.post("/api/cases/:id/comments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const { content } = req.body;
+      if (!content || !String(content).trim()) {
+        return res.status(400).json({ error: "محتوى التعليق مطلوب" });
+      }
+      const comment = await storage.createCaseComment({
+        caseId: String(req.params.id),
+        userId: user.id,
+        userName: user.name,
+        content: String(content).trim(),
+      });
+      res.status(201).json(comment);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في إضافة التعليق" });
+    }
+  });
+
   // ==================== Case Notes ====================
 
   app.get("/api/cases/:id/notes", requireAuth, async (req: AuthRequest, res) => {
