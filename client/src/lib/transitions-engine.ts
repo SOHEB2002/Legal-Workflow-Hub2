@@ -470,9 +470,15 @@ function isUserAssignedToCase(userId: string, caseData: any): boolean {
 }
 
 function checkRoleOrAssignment(rule: TransitionRule, userRole: UserRoleType, userId?: string, caseData?: any): boolean {
-  if (rule.allowedRoles.includes(userRole)) return true;
-  if (rule.requiresAssignment && userId && caseData && isUserAssignedToCase(userId, caseData)) return true;
-  return false;
+  const roleAllowed = rule.allowedRoles.includes(userRole);
+  if (!roleAllowed) {
+    if (rule.requiresAssignment && userId && caseData && isUserAssignedToCase(userId, caseData)) return true;
+    return false;
+  }
+  if (rule.requiresAssignment) {
+    return !!(userId && caseData && isUserAssignedToCase(userId, caseData));
+  }
+  return true;
 }
 
 export function validateCaseTransition(
@@ -520,17 +526,20 @@ export function validateCaseForward(
   }
 
   const nextStage = stagesOrder[currentIndex + 1];
-  const rule = CASE_TRANSITIONS.find(r => r.from === normalizedCurrent && r.to === nextStage);
+  const primaryRule = CASE_TRANSITIONS.find(r => r.from === normalizedCurrent && r.to === nextStage);
 
-  if (!rule) {
-    return { allowed: false, reason: "لا توجد قاعدة انتقال للمرحلة التالية" };
+  if (primaryRule && checkRoleOrAssignment(primaryRule, userRole, userId, caseData)) {
+    return { allowed: true, rule: primaryRule };
   }
 
-  if (!checkRoleOrAssignment(rule, userRole, userId, caseData)) {
-    return { allowed: false, reason: "ليس لديك صلاحية لنقل القضية للمرحلة التالية" };
+  const alternativeRule = CASE_TRANSITIONS.find(
+    r => r.from === normalizedCurrent && r.to !== nextStage && checkRoleOrAssignment(r, userRole, userId, caseData)
+  );
+  if (alternativeRule) {
+    return { allowed: true, rule: alternativeRule };
   }
 
-  return { allowed: true, rule };
+  return { allowed: false, reason: "ليس لديك صلاحية لنقل القضية للمرحلة التالية" };
 }
 
 export function validateCaseBackward(

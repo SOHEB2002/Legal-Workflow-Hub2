@@ -1230,11 +1230,6 @@ export default function CasesPage() {
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
                   onMoveToNext={async (notes) => {
                     if (user) {
-                      if (canEmployeeResendToReview(selectedCase)) {
-                        sendToReviewCommittee(selectedCase.id);
-                        toast({ title: "تم إعادة إحالة القضية للجنة المراجعة" });
-                        return;
-                      }
                       const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });

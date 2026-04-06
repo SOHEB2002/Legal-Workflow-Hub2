@@ -316,21 +316,27 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
+    let targetStage: string | undefined;
+
     if (userRole) {
       const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue);
       if (!validation.allowed) {
         console.warn("انتقال مرفوض:", validation.reason);
         return false;
       }
+      targetStage = validation.rule?.to;
     }
 
-    const normalized = normalizeCaseStage(lawCase.currentStage);
-    const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification);
-    const currentIndex = stagesOrder.indexOf(normalized);
-    if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) return false;
+    if (!targetStage) {
+      const normalized = normalizeCaseStage(lawCase.currentStage);
+      const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
+      const stagesOrder = getStagesForClassification(effectiveClassification);
+      const currentIndex = stagesOrder.indexOf(normalized);
+      if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) return false;
+      targetStage = stagesOrder[currentIndex + 1];
+    }
 
-    const nextStage = stagesOrder[currentIndex + 1];
+    const nextStage = targetStage;
     const newTransition = createStageTransitionRecord(nextStage, userId, userName, notes);
 
     const updateData: Record<string, unknown> = {
