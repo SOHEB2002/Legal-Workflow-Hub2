@@ -205,6 +205,7 @@ function mapDbCase(dbCase: any): LawCase {
     lastHearingResult: dbCase.lastHearingResult || null,
     lastHearingDate: dbCase.lastHearingDate || null,
     nextHearingDate: dbCase.nextHearingDate || null,
+    nextHearingTime: dbCase.nextHearingTime || null,
     activeMemoCount: dbCase.activeMemoCount ?? 0,
     caseClassification: dbCase.caseClassification || "مدعي_قضية_جديدة",
     previousHearingsCount: dbCase.previousHearingsCount ?? 0,
