@@ -1037,13 +1037,56 @@ export async function registerRoutes(
         req.body.assignedLawyers = [...finalAssignedLawyers, finalPrimaryLawyer];
       }
 
+      // When a case is transferred to a new department without a simultaneous
+      // lawyer assignment, clear the old lawyer so the new department can re-assign.
+      const isDeptTransfer =
+        "departmentId" in req.body &&
+        req.body.departmentId &&
+        req.body.departmentId !== existing.departmentId &&
+        !req.body.primaryLawyerId &&
+        !req.body.assignedLawyers;
+
+      if (isDeptTransfer) {
+        req.body.primaryLawyerId = null;
+        req.body.responsibleLawyerId = null;
+        req.body.assignedLawyers = [];
+        // Also unassign the lawyer from pending hearings and active memos
+        const caseId = String(req.params.id);
+        try {
+          const caseHearings = await storage.getHearingsByCase(caseId);
+          for (const h of caseHearings) {
+            if (h.status === "قادمة") {
+              await storage.updateHearing(h.id, { attendingLawyerId: null } as any);
+            }
+          }
+          const caseMemos = await storage.getMemosByCase(caseId);
+          for (const m of caseMemos) {
+            if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
+              await storage.updateMemo(m.id, { assignedTo: null } as any);
+            }
+          }
+        } catch (e) {
+          console.error("Error clearing assignments on department transfer:", e);
+        }
+      }
+
       const updated = await storage.updateCase(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
       if (user && existing) {
         try {
-          if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
+          if (isDeptTransfer) {
+            await storage.logCaseActivity({
+              caseId: String(req.params.id),
+              userId: user.id,
+              userName: user.name || user.id,
+              actionType: "case_updated",
+              title: `تم تحويل القضية من قسم إلى آخر`,
+              previousValue: existing.departmentId || "",
+              newValue: req.body.departmentId,
+            });
+          } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
             await storage.logCaseActivity({
               caseId: String(req.params.id),
               userId: user.id,
@@ -1063,6 +1106,33 @@ export async function registerRoutes(
             });
           }
         } catch (e) {}
+      }
+
+      // Notify the new department head when a transfer lands
+      if (isDeptTransfer && updated) {
+        try {
+          const allUsers = await storage.getAllUsers();
+          const newDeptHead = allUsers.find((u: any) =>
+            u.role === "department_head" && u.departmentId === req.body.departmentId && u.isActive
+          );
+          if (newDeptHead) {
+            await storage.createNotification({
+              type: "case_assigned" as any,
+              priority: "high",
+              status: "pending",
+              title: "تم تحويل قضية لقسمك",
+              message: `تم تحويل القضية ${existing.caseNumber} إلى قسمك. يرجى إسناد محامٍ مسؤول لها.`,
+              senderId: user.id,
+              senderName: user.name || user.id,
+              recipientId: newDeptHead.id,
+              requiresResponse: false,
+              relatedType: "case",
+              relatedId: String(req.params.id),
+            });
+          }
+        } catch (e) {
+          console.error("Error sending transfer notification:", e);
+        }
       }
 
       // Cascade lawyer assignment to pending hearings and active memos
