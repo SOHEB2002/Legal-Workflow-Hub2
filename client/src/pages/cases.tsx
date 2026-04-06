@@ -176,6 +176,7 @@ export default function CasesPage() {
     fetchComments,
     getCommentsByCaseId,
     getCaseById,
+    refreshCases,
   } = useCases();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
@@ -1504,98 +1505,115 @@ export default function CasesPage() {
                   )}
                   
                   {CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.SUBMITTED) && (
+                    selectedCase.caseType === "تجاري" || selectedCase.caseType === "عمالي"
+                  ) && (
                     <div className="border-t pt-4">
-                      <h4 className="font-semibold mb-3 flex items-center gap-2">
+                      <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
                         <span className="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
                         أرقام الطلبات - جاهزة للرفع
                       </h4>
                       <div className="grid grid-cols-2 gap-4" dir="rtl">
-                        <div className="text-right">
-                          <Label className="text-muted-foreground block text-right">رقم الطلب في منصة تراضي</Label>
-                          <div className="flex items-center gap-2 mt-1 justify-start">
-                            {inlineEditField === `taradi-${selectedCase.id}` ? (
-                              <>
-                                <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-taradi-number"
-                                  onKeyDown={async e => {
-                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { taradiNumber: inlineEditValue }); setInlineEditField(null); }
-                                    else if (e.key === "Escape") setInlineEditField(null);
-                                  }} />
-                                <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { taradiNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
-                                <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
-                              </>
+                        {selectedCase.caseType === "تجاري" && (
+                          <div className="text-right">
+                            <Label className="text-muted-foreground block text-right">رقم الطلب في منصة تراضي</Label>
+                            {(selectedCase as any).taradiStatus === "تم_الصلح" || (selectedCase as any).taradiStatus === "لم_يتم_صلح" ? (
+                              <p className="font-medium mt-1">{(selectedCase as any).taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
                             ) : (
-                              <>
-                                <p className="font-medium">{selectedCase.taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
-                                <Button variant="ghost" size="sm" data-testid="button-edit-taradi-number" onClick={() => { setInlineEditField(`taradi-${selectedCase.id}`); setInlineEditValue(selectedCase.taradiNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
-                              </>
+                              <div className="flex items-center gap-2 mt-1 justify-end">
+                                {inlineEditField === `taradi-${selectedCase.id}` ? (
+                                  <>
+                                    <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-taradi-number"
+                                      onKeyDown={async e => {
+                                        if (e.key === "Enter") { await updateCase(selectedCase.id, { taradiNumber: inlineEditValue }); setInlineEditField(null); }
+                                        else if (e.key === "Escape") setInlineEditField(null);
+                                      }} />
+                                    <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { taradiNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                    <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <p className="font-medium">{(selectedCase as any).taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                    <Button variant="ghost" size="sm" data-testid="button-edit-taradi-number" onClick={() => { setInlineEditField(`taradi-${selectedCase.id}`); setInlineEditValue((selectedCase as any).taradiNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                                  </>
+                                )}
+                              </div>
                             )}
                           </div>
-                        </div>
-                        <div className="text-right">
-                          <Label className="text-muted-foreground block text-right">رقم الطلب في ناجز / معين</Label>
-                          <div className="flex items-center gap-2 mt-1 justify-start">
-                            {inlineEditField === `najiz-${selectedCase.id}` ? (
-                              <>
-                                <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-najiz-number"
-                                  onKeyDown={async e => {
-                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { najizNumber: inlineEditValue }); setInlineEditField(null); }
-                                    else if (e.key === "Escape") setInlineEditField(null);
-                                  }} />
-                                <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { najizNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
-                                <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
-                              </>
-                            ) : (
-                              <>
-                                <p className="font-medium">{selectedCase.najizNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
-                                <Button variant="ghost" size="sm" data-testid="button-edit-najiz-number" onClick={() => { setInlineEditField(`najiz-${selectedCase.id}`); setInlineEditValue(selectedCase.najizNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
-                              </>
+                        )}
+                        {selectedCase.caseType === "عمالي" && (
+                          <div className="text-right">
+                            <Label className="text-muted-foreground block text-right">رقم الطلب في ناجز / معين</Label>
+                            <div className="flex items-center gap-2 mt-1 justify-end">
+                              {inlineEditField === `najiz-${selectedCase.id}` ? (
+                                <>
+                                  <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-najiz-number"
+                                    onKeyDown={async e => {
+                                      if (e.key === "Enter") { await updateCase(selectedCase.id, { najizNumber: inlineEditValue }); setInlineEditField(null); }
+                                      else if (e.key === "Escape") setInlineEditField(null);
+                                    }} />
+                                  <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { najizNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                  <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
+                                </>
+                              ) : (
+                                <>
+                                  <p className="font-medium">{(selectedCase as any).najizNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                  <Button variant="ghost" size="sm" data-testid="button-edit-najiz-number" onClick={() => { setInlineEditField(`najiz-${selectedCase.id}`); setInlineEditValue((selectedCase as any).najizNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                                </>
+                              )}
+                            </div>
+                            {(selectedCase as any).mohrStatus === "انتهت_التسوية" && (
+                              <p className="text-xs text-amber-600 mt-1">انتهت مرحلة التسوية الودية - القضية جاهزة للرفع في المحكمة</p>
                             )}
                           </div>
-                        </div>
+                        )}
                       </div>
                     </div>
                   )}
 
                   {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW &&
                     CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.SUBMITTED) &&
-                    (user?.role === "branch_manager" || user?.role === "admin_support") && (
+                    (user?.role === "branch_manager" || user?.role === "admin_support") &&
+                    (selectedCase.caseType !== "تجاري" || (selectedCase as any).taradiStatus === "لم_يتم_صلح") &&
+                    (selectedCase.caseType !== "عمالي" || (selectedCase as any).mohrStatus === "انتهت_التسوية") && (
                     <div className="border-t pt-4">
-                      <h4 className="font-semibold mb-3 flex items-center gap-2">
+                      <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
                         <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
                         تحويل القضية إلى منظورة
                       </h4>
                       <p className="text-xs text-muted-foreground mb-3">عند تقييد القضية في المحكمة، يتم تحويل تصنيفها إلى "منظورة" وتنتقل لمرحلة "تحت النظر"</p>
                       {showCourtRegistrationDialog && courtRegistrationCaseId === selectedCase.id ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2" dir="rtl">
                           <Input value={courtCaseNumberInput} onChange={e => setCourtCaseNumberInput(e.target.value)} placeholder="رقم القضية في المحكمة" className="h-8 text-sm" autoFocus data-testid="input-court-registration-number" />
                           <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {
                             if (!courtCaseNumberInput.trim()) { toast({ title: "يرجى إدخال رقم القضية", variant: "destructive" }); return; }
                             try {
-                              await updateCase(selectedCase.id, { caseClassification: "مدعي_قضية_مقيدة" as any, currentStage: "تحت_النظر" as any, courtCaseNumber: courtCaseNumberInput.trim() });
+                              const response = await fetch(`/api/cases/${selectedCase.id}/court-register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courtCaseNumber: courtCaseNumberInput.trim() }) });
+                              if (!response.ok) { const err = await response.json(); throw new Error(err.error || "حدث خطأ"); }
+                              await refreshCases();
                               toast({ title: "تم تقييد القضية في المحكمة بنجاح" });
                               setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput("");
-                            } catch (e) { toast({ title: "حدث خطأ", variant: "destructive" }); }
+                            } catch (e: any) { toast({ title: e.message || "حدث خطأ", variant: "destructive" }); }
                           }}>تأكيد</Button>
                           <Button size="sm" variant="ghost" onClick={() => { setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput(""); }}>إلغاء</Button>
                         </div>
                       ) : (
                         <Button size="sm" variant="outline" className="border-blue-500 text-blue-600" data-testid="button-register-court" onClick={() => { setShowCourtRegistrationDialog(true); setCourtRegistrationCaseId(selectedCase.id); setCourtCaseNumberInput(""); }}>
-                          <Scale className="w-3 h-3 ml-1" /> تقييد القضية في المحكمة
+                          <Scale className="w-3 h-3 mr-1" /> تقييد القضية في المحكمة
                         </Button>
                       )}
                     </div>
                   )}
 
-                  {CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.PENDING_REVIEW) && (
+                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_EXISTING && (
                     <div className="border-t pt-4">
-                      <h4 className="font-semibold mb-3 flex items-center gap-2">
+                      <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
                         <span className="w-2 h-2 rounded-full bg-violet-500 inline-block"></span>
                         بيانات ما بعد التقييد
                       </h4>
                       <div className="grid grid-cols-2 gap-4" dir="rtl">
                         <div className="text-right">
                           <Label className="text-muted-foreground block text-right">رقم القضية</Label>
-                          <div className="flex items-center gap-2 mt-1 justify-start">
+                          <div className="flex items-center gap-2 mt-1 justify-end">
                             {inlineEditField === `court-${selectedCase.id}` ? (
                               <>
                                 <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-court-case-number"
@@ -1616,7 +1634,7 @@ export default function CasesPage() {
                         </div>
                         <div className="text-right">
                           <Label className="text-muted-foreground block text-right">موعد الجلسة القادمة</Label>
-                          <div className="flex items-center gap-2 mt-1 justify-start">
+                          <div className="flex items-center gap-2 mt-1 justify-end">
                             {inlineEditField === `hearing-${selectedCase.id}` ? (
                               <>
                                 <Input type="date" value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-36" autoFocus data-testid="input-next-hearing-date"
