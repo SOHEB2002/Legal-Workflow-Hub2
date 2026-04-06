@@ -73,14 +73,17 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
     onOpenChange(false);
   };
 
-  const handleQuickRespond = (type: ResponseTypeValue) => {
+  const handleQuickRespond = async (type: ResponseTypeValue) => {
     if (!notification) return;
 
-    respondToNotification(notification.id, type, "");
-    markAsRead(notification.id);
-
-    toast({ title: `تم الرد: ${ResponseTypeLabels[type]}` });
-    onOpenChange(false);
+    try {
+      await respondToNotification(notification.id, type, "");
+      markAsRead(notification.id);
+      toast({ title: `تم الرد: ${ResponseTypeLabels[type]}` });
+      onOpenChange(false);
+    } catch (err: any) {
+      toast({ title: "فشل تنفيذ الإجراء", description: err?.message || "حدث خطأ أثناء معالجة الطلب", variant: "destructive" });
+    }
   };
 
   if (!notification) return null;
@@ -110,7 +113,7 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
               </Badge>
             </div>
             <h4 className="font-semibold">{notification.title}</h4>
-            <p className="text-sm text-muted-foreground">{notification.message}</p>
+            <p className="text-sm text-muted-foreground">{notification.message?.replace(/\[DEPT_ID:[^\]]*\]/g, "").trim()}</p>
             <p className="text-xs text-muted-foreground">
               من: {notification.senderName} • <DualDateDisplay date={notification.createdAt} compact />
             </p>

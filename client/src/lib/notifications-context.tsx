@@ -559,13 +559,12 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         const entityName = isCase ? "القضية" : "الاستشارة";
         const relatedType = isCase ? "case" : "consultation";
         
-        if (responseType === "approve" && toDeptId) {
-          try {
-            const endpoint = isCase ? `/api/cases/${notification.relatedId}` : `/api/consultations/${notification.relatedId}`;
-            await apiRequest("PATCH", endpoint, { departmentId: toDeptId });
-          } catch (err) {
-            // transfer entity failed silently
+        if (responseType === "approve") {
+          if (!toDeptId) {
+            throw new Error("تعذّر تحديد القسم المستهدف للتحويل - يرجى المحاولة مجدداً");
           }
+          const endpoint = isCase ? `/api/cases/${notification.relatedId}` : `/api/consultations/${notification.relatedId}`;
+          await apiRequest("PATCH", endpoint, { departmentId: toDeptId });
         }
 
         const senderId = notification.senderId;

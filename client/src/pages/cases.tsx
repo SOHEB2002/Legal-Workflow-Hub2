@@ -523,11 +523,11 @@ export default function CasesPage() {
         (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
-      const matchesClassification = classificationFilter === "all" || 
+      const matchesClassification = classificationFilter === "all" ||
         (classificationFilter === "منظورة"
-          ? !!c.nextHearingDate
+          ? c.caseClassification === CaseClassification.PLAINTIFF_EXISTING
           : classificationFilter === "دعوى_للدراسة"
-          ? (c.caseClassification === CaseClassification.PLAINTIFF_NEW && !c.nextHearingDate)
+          ? c.caseClassification === CaseClassification.PLAINTIFF_NEW
           : c.caseClassification === classificationFilter);
       return matchesSearch && matchesStatus && matchesDept && matchesClassification;
     });
@@ -545,6 +545,12 @@ export default function CasesPage() {
   };
 
   const openTransferDialog = (caseItem: LawCase) => {
+    const currentStageIndex = CaseStagesOrder.indexOf(caseItem.currentStage);
+    const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE);
+    if (currentStageIndex >= reviewStageIndex) {
+      toast({ title: "لا يمكن تحويل القضية", description: "القضية في مرحلة متقدمة من المراجعة ولا يمكن تحويلها", variant: "destructive" });
+      return;
+    }
     setTransferCaseId(caseItem.id);
     setTransferData({ toDepartmentId: "", reason: "" });
     setShowTransferDialog(true);
@@ -631,11 +637,11 @@ export default function CasesPage() {
     permissions.canReviewCases && 
     c.currentStage === CaseStage.REVIEW_COMMITTEE;
 
-  const canClose = (c: LawCase) => 
-    permissions.canCloseCases && 
+  const canClose = (c: LawCase) =>
+    permissions.canCloseCases &&
+    c.currentStage !== CaseStage.CLOSED &&
     (c.currentStage === CaseStage.SUBMITTED || c.currentStage === CaseStage.PENDING_REVIEW ||
-     c.currentStage === CaseStage.CONCILIATION || c.currentStage === CaseStage.CONCILIATION_CLOSED ||
-     c.currentStage === CaseStage.CLOSED);
+     c.currentStage === CaseStage.CONCILIATION || c.currentStage === CaseStage.CONCILIATION_CLOSED);
 
   return (
     <div className="p-6 space-y-6">
@@ -1378,7 +1384,7 @@ export default function CasesPage() {
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في تراضي (اختياري)" className="h-8 text-sm" data-testid="input-taradi-registration" autoFocus />
                               <Button size="sm" data-testid="button-confirm-taradi" onClick={async () => {
                                 const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_تراضي", taradiNumber: registrationNumberInput }) });
-                                if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); }
+                                if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { taradiStatus: "مقيدة_في_تراضي" as any, ...(registrationNumberInput ? { taradiNumber: registrationNumberInput } : {}) }); }
                               }}>تأكيد</Button>
                               <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
                             </div>
@@ -1400,7 +1406,7 @@ export default function CasesPage() {
                                   headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
                                   body: JSON.stringify({ status: "تم_الصلح" }),
                                 });
-                                if (res.ok) { toast({ title: "تم تسجيل الصلح" }); window.location.reload(); }
+                                if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" as any }); }
                               }}
                             >
                               تم الصلح
@@ -1415,7 +1421,7 @@ export default function CasesPage() {
                                   headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
                                   body: JSON.stringify({ status: "لم_يتم_صلح" }),
                                 });
-                                if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); window.location.reload(); }
+                                if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" as any }); }
                               }}
                             >
                               لم يتم صلح
@@ -1446,7 +1452,7 @@ export default function CasesPage() {
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في الموارد البشرية (اختياري)" className="h-8 text-sm" data-testid="input-mohr-registration" autoFocus />
                               <Button size="sm" data-testid="button-confirm-mohr" onClick={async () => {
                                 const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput }) });
-                                if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); }
+                                if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد" as any, ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
                               }}>تأكيد</Button>
                               <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
                             </div>
@@ -1470,7 +1476,7 @@ export default function CasesPage() {
                                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
                                 body: JSON.stringify({}),
                               });
-                              if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); window.location.reload(); }
+                              if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية" as any, amicableSettlementDirected: true as any }); }
                             }}
                           >
                             توجيه العميل لرفعها في التسوية الودية
@@ -1487,7 +1493,7 @@ export default function CasesPage() {
                                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
                                 body: JSON.stringify({ status: "انتهت_التسوية" }),
                               });
-                              if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); window.location.reload(); }
+                              if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" as any }); }
                             }}
                           >
                             انتهاء مرحلة التسوية الودية
@@ -1511,10 +1517,10 @@ export default function CasesPage() {
                               <>
                                 <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-taradi-number"
                                   onKeyDown={async e => {
-                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { taradiNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { taradiNumber: inlineEditValue }); setInlineEditField(null); }
                                     else if (e.key === "Escape") setInlineEditField(null);
                                   }} />
-                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { taradiNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { taradiNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
                                 <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
                               </>
                             ) : (
@@ -1532,10 +1538,10 @@ export default function CasesPage() {
                               <>
                                 <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-najiz-number"
                                   onKeyDown={async e => {
-                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { najizNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { najizNumber: inlineEditValue }); setInlineEditField(null); }
                                     else if (e.key === "Escape") setInlineEditField(null);
                                   }} />
-                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { najizNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { najizNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
                                 <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
                               </>
                             ) : (
@@ -1565,8 +1571,7 @@ export default function CasesPage() {
                           <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {
                             if (!courtCaseNumberInput.trim()) { toast({ title: "يرجى إدخال رقم القضية", variant: "destructive" }); return; }
                             try {
-                              const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { caseClassification: "مدعي_قضية_مقيدة", currentStage: "تحت_النظر", courtCaseNumber: courtCaseNumberInput.trim() });
-                              queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                              await updateCase(selectedCase.id, { caseClassification: "مدعي_قضية_مقيدة" as any, currentStage: "تحت_النظر" as any, courtCaseNumber: courtCaseNumberInput.trim() });
                               toast({ title: "تم تقييد القضية في المحكمة بنجاح" });
                               setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput("");
                             } catch (e) { toast({ title: "حدث خطأ", variant: "destructive" }); }
@@ -1595,10 +1600,10 @@ export default function CasesPage() {
                               <>
                                 <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-court-case-number"
                                   onKeyDown={async e => {
-                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { courtCaseNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { courtCaseNumber: inlineEditValue }); setInlineEditField(null); }
                                     else if (e.key === "Escape") setInlineEditField(null);
                                   }} />
-                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { courtCaseNumber: inlineEditValue }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { courtCaseNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
                                 <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
                               </>
                             ) : (
@@ -1616,10 +1621,10 @@ export default function CasesPage() {
                               <>
                                 <Input type="date" value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-36" autoFocus data-testid="input-next-hearing-date"
                                   onKeyDown={async e => {
-                                    if (e.key === "Enter") { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { nextHearingDate: inlineEditValue || null }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }
+                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { nextHearingDate: inlineEditValue || null }); setInlineEditField(null); }
                                     else if (e.key === "Escape") setInlineEditField(null);
                                   }} />
-                                <Button variant="ghost" size="sm" onClick={async () => { await apiRequest("PATCH", `/api/cases/${selectedCase.id}`, { nextHearingDate: inlineEditValue || null }); queryClient.invalidateQueries({ queryKey: ["/api/cases"] }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { nextHearingDate: inlineEditValue || null }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
                                 <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
                               </>
                             ) : (

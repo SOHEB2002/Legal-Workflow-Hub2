@@ -40,7 +40,6 @@ interface CasesContextType {
 const CasesContext = createContext<CasesContextType | undefined>(undefined);
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
-const generateCaseNumber = () => `C-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
 // Helper to migrate old cases without new fields
 const migrateCase = (c: LawCase): LawCase => {
@@ -130,7 +129,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const now = new Date().toISOString();
     const initialStage: CaseStageValue = CaseStage.RECEIVED;
     const caseData = {
-      caseNumber: generateCaseNumber(),
       clientId: data.clientId || "",
       plaintiffName: data.plaintiffName || "",
       caseType: data.caseType || "عام",
@@ -210,6 +208,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const updateData: any = {
       assignedLawyers: [lawyerId],
       primaryLawyerId: lawyerId,
+      responsibleLawyerId: lawyerId,
       departmentId,
     };
     if (!isReassign) {
@@ -236,7 +235,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       CaseStage.SUBMITTED,
       user.id,
       user.name,
-      "اعتماد اللجنة - لا يوجد ملاحظات"
+      notes ? `اعتماد اللجنة - ${notes}` : "اعتماد اللجنة"
     );
     updateCase(id, {
       status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,

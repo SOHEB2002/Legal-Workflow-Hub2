@@ -19,6 +19,8 @@ import {
   MemoStatus,
   MemoType,
   CaseClassification,
+  CaseStage,
+  CaseStagesOrder,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -73,6 +75,18 @@ function canModifyCase(user: { id: string; role: string; departmentId: string | 
   if (user.role === "department_head" && caseData.departmentId === user.departmentId) return true;
   if (caseData.primaryLawyerId === user.id || caseData.responsibleLawyerId === user.id) return true;
   if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) return true;
+  return false;
+}
+
+function canViewCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  if (adminRoles.includes(user.role)) return true;
+  if (user.role === "department_head") return caseData.departmentId === user.departmentId;
+  if (user.role === "employee") {
+    return caseData.primaryLawyerId === user.id ||
+      caseData.responsibleLawyerId === user.id ||
+      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id));
+  }
   return false;
 }
 
@@ -684,7 +698,6 @@ export async function registerRoutes(
 
       if (role === "employee") {
         const filtered = allCases.filter((c: any) =>
-          c.departmentId === departmentId ||
           (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) ||
           c.primaryLawyerId === userId ||
           c.responsibleLawyerId === userId
@@ -703,6 +716,10 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) {
         return res.status(404).json({ error: "القضية غير موجودة" });
+      }
+      const user = (req as any).user;
+      if (!canViewCase(user, caseItem)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه القضية" });
       }
       res.json(caseItem);
     } catch (error) {
@@ -1047,6 +1064,12 @@ export async function registerRoutes(
         !req.body.assignedLawyers;
 
       if (isDeptTransfer) {
+        const currentStageIndex = CaseStagesOrder.indexOf(existing.currentStage as any);
+        const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE as any);
+        if (currentStageIndex >= reviewStageIndex) {
+          return res.status(400).json({ error: "لا يمكن تحويل القضية في هذه المرحلة - القضية في مرحلة متقدمة من المراجعة" });
+        }
+
         req.body.primaryLawyerId = null;
         req.body.responsibleLawyerId = null;
         req.body.assignedLawyers = [];
