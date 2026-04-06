@@ -625,6 +625,13 @@ export default function CasesPage() {
     permissions.canManageDepartment && 
     (c.currentStage === CaseStage.STUDY || c.currentStage === CaseStage.DRAFTING || c.currentStage === CaseStage.AMENDMENTS);
 
+  const canEmployeeResendToReview = (c: LawCase) =>
+    !permissions.canManageDepartment &&
+    c.currentStage === CaseStage.AMENDMENTS &&
+    user != null &&
+    (c.primaryLawyerId === user.id ||
+      (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id)));
+
   const canReview = (c: LawCase) => 
     permissions.canReviewCases && 
     c.currentStage === CaseStage.REVIEW_COMMITTEE;
@@ -1223,6 +1230,11 @@ export default function CasesPage() {
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
                   onMoveToNext={async (notes) => {
                     if (user) {
+                      if (canEmployeeResendToReview(selectedCase)) {
+                        sendToReviewCommittee(selectedCase.id);
+                        toast({ title: "تم إعادة إحالة القضية للجنة المراجعة" });
+                        return;
+                      }
                       const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
@@ -1867,6 +1879,17 @@ export default function CasesPage() {
                         </div>
                         <Button size="sm" variant="outline" data-testid={`button-send-review-details-${selectedCase.id}`} onClick={() => { handleSendToReview(selectedCase); }}>
                           <Send className="w-4 h-4 ml-1" />إرسال للمراجعة
+                        </Button>
+                      </div>
+                    )}
+                    {canEmployeeResendToReview(selectedCase) && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                        <div>
+                          <p className="font-medium text-sm">إعادة الإحالة للجنة المراجعة</p>
+                          <p className="text-xs text-muted-foreground">تم الأخذ بالملاحظات — إعادة إرسال القضية للاعتماد</p>
+                        </div>
+                        <Button size="sm" variant="outline" data-testid={`button-resend-review-details-${selectedCase.id}`} onClick={() => { sendToReviewCommittee(selectedCase.id); toast({ title: "تم إعادة إحالة القضية للجنة المراجعة" }); }}>
+                          <Send className="w-4 h-4 ml-1" />إعادة الإحالة
                         </Button>
                       </div>
                     )}

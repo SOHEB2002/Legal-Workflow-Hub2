@@ -224,7 +224,19 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
   const sendToReviewCommittee = (id: string) => {
     const lawCase = cases.find(c => c.id === id);
-    updateCase(id, { status: CaseStatus.REVIEW_COMMITTEE as CaseStatusValue });
+    if (!user) return;
+    const newTransition = createStageTransitionRecord(
+      CaseStage.REVIEW_COMMITTEE,
+      user.id,
+      user.name,
+      "إحالة للجنة المراجعة"
+    );
+    const updatedHistory = [...(lawCase?.stageHistory || []), newTransition];
+    updateCase(id, {
+      currentStage: CaseStage.REVIEW_COMMITTEE as CaseStageValue,
+      status: CaseStatus.REVIEW_COMMITTEE as CaseStatusValue,
+      stageHistory: updatedHistory,
+    });
     notifyCaseSentToReview(id, lawCase?.caseNumber || "").catch(() => {});
   };
 
