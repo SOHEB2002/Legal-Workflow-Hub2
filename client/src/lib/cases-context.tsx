@@ -14,7 +14,6 @@ interface CasesContextType {
   updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
   deleteCase: (id: string) => Promise<void>;
   assignCase: (id: string, lawyerId: string, departmentId: string) => void;
-  sendToDepartmentHead: (id: string) => void;
   sendToReviewCommittee: (id: string) => void;
   approveCase: (id: string, notes?: string) => void;
   rejectCase: (id: string, notes: string, decision: ReviewDecisionType) => void;
@@ -180,26 +179,36 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateCase = async (id: string, data: Partial<LawCase>): Promise<void> => {
-    // Optimistic update so the UI reflects changes immediately while the request is in flight.
+    // Snapshot for rollback if the request fails.
+    const previous = cases.find((c) => c.id === id);
     setCases((prev) =>
       prev.map((c) =>
         c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c
       )
     );
-    const response = await apiRequest("PATCH", `/api/cases/${id}`, data);
     try {
-      const updatedCase = await response.json();
-      setCases((prev) =>
-        prev.map((c) => c.id === id ? migrateCase(updatedCase) : c)
-      );
-    } catch {
-      // Optimistic state already applied above; nothing more to do.
+      const response = await apiRequest("PATCH", `/api/cases/${id}`, data);
+      try {
+        const updatedCase = await response.json();
+        setCases((prev) =>
+          prev.map((c) => c.id === id ? migrateCase(updatedCase) : c)
+        );
+      } catch {
+        // JSON parse failed — keep optimistic state (server confirmed the update).
+      }
+    } catch (err) {
+      // Server rejected the update — roll back to the previous state.
+      if (previous) {
+        setCases((prev) => prev.map((c) => c.id === id ? previous : c));
+      }
+      throw err;
     }
   };
 
   const deleteCase = async (id: string): Promise<void> => {
     await apiRequest("DELETE", `/api/cases/${id}`);
     setCases((prev) => prev.filter((c) => c.id !== id));
+    setComments((prev) => prev.filter((c) => c.caseId !== id));
   };
 
   const assignCase = (id: string, lawyerId: string, departmentId: string) => {
@@ -216,10 +225,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
     updateCase(id, updateData);
     notifyCaseAssigned(id, lawCase?.caseNumber || "", lawyerId).catch(() => {});
-  };
-
-  const sendToDepartmentHead = (id: string) => {
-    updateCase(id, { status: CaseStatus.DRAFTING as CaseStatusValue });
   };
 
   const sendToReviewCommittee = (id: string) => {
@@ -415,22 +420,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const addComment = async (caseId: string, userId: string, userName: string, content: string) => {
-    try {
-      const response = await apiRequest("POST", `/api/cases/${caseId}/comments`, { content });
-      const saved: CaseComment = await response.json();
-      setComments((prev) => [...prev, saved]);
-    } catch {
-      // Fallback: add locally so the UI doesn't freeze if the request fails
-      const newComment: CaseComment = {
-        id: generateId(),
-        caseId,
-        userId,
-        userName,
-        content,
-        createdAt: new Date().toISOString(),
-      };
-      setComments((prev) => [...prev, newComment]);
-    }
+    const response = await apiRequest("POST", `/api/cases/${caseId}/comments`, { content });
+    const saved: CaseComment = await response.json();
+    setComments((prev) => [...prev, saved]);
   };
 
   const getCommentsByCaseId = (caseId: string) =>
@@ -446,7 +438,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         updateCase,
         deleteCase,
         assignCase,
-        sendToDepartmentHead,
         sendToReviewCommittee,
         approveCase,
         rejectCase,

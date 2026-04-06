@@ -124,8 +124,8 @@ interface StageTransitionRule {
 
 const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // Forward transitions
-  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["admin_support", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "branch_manager"] },
   { from: "دراسة", to: "تحرير_المذكرة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
   { from: "تحرير_المذكرة", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
   { from: "إحالة_للجنة_المراجعة", to: "تم_الرفع_للدائرة", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
@@ -729,6 +729,10 @@ export async function registerRoutes(
 
   app.post("/api/cases", requireAuth, async (req, res) => {
     try {
+      const user = (req as any).user;
+      if (!["branch_manager", "admin_support"].includes(user.role)) {
+        return res.status(403).json({ error: "إنشاء القضايا متاح فقط لمدير الفرع والدعم الإداري" });
+      }
       const validatedData = insertCaseSchema.parse(req.body);
       const createdBy = req.body.createdBy || "unknown";
       const newCase = await storage.createCase(validatedData as any, createdBy);
@@ -836,7 +840,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "تجاري") {
+      if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_تراضي", "تم_الصلح", "لم_يتم_صلح"];
@@ -890,7 +894,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "عمالي") {
+      if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_الموارد", "توجيه_تسوية_ودية", "انتهت_التسوية"];
@@ -944,7 +948,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== "مدعي_قضية_جديدة" || caseItem.caseType !== "عمالي") {
+      if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       
@@ -1064,7 +1068,8 @@ export async function registerRoutes(
         !req.body.assignedLawyers;
 
       if (isDeptTransfer) {
-        const currentStageIndex = CaseStagesOrder.indexOf(existing.currentStage as any);
+        const normalizedCurrentStage = LEGACY_CASE_STAGE_MAP[existing.currentStage as string] || existing.currentStage;
+        const currentStageIndex = CaseStagesOrder.indexOf(normalizedCurrentStage as any);
         const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE as any);
         if (currentStageIndex >= reviewStageIndex) {
           return res.status(400).json({ error: "لا يمكن تحويل القضية في هذه المرحلة - القضية في مرحلة متقدمة من المراجعة" });
@@ -1138,7 +1143,10 @@ export async function registerRoutes(
           const newDeptHead = allUsers.find((u: any) =>
             u.role === "department_head" && u.departmentId === req.body.departmentId && u.isActive
           );
-          if (newDeptHead) {
+          const notifyRecipient = newDeptHead || allUsers.find((u: any) =>
+            u.role === "branch_manager" && u.isActive
+          );
+          if (notifyRecipient) {
             await storage.createNotification({
               type: "case_assigned" as any,
               priority: "high",
@@ -1147,7 +1155,7 @@ export async function registerRoutes(
               message: `تم تحويل القضية ${existing.caseNumber} إلى قسمك. يرجى إسناد محامٍ مسؤول لها.`,
               senderId: user.id,
               senderName: user.name || user.id,
-              recipientId: newDeptHead.id,
+              recipientId: notifyRecipient.id,
               requiresResponse: false,
               relatedType: "case",
               relatedId: String(req.params.id),
@@ -2549,6 +2557,11 @@ export async function registerRoutes(
   app.post("/api/cases/:id/comments", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
+      const caseItem = await storage.getCaseById(String(req.params.id));
+      if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!isAssignedLawyer(user, caseItem)) {
+        return res.status(403).json({ error: "إضافة التعليقات متاحة فقط للمحامين المسندة إليهم القضية" });
+      }
       const { content } = req.body;
       if (!content || !String(content).trim()) {
         return res.status(400).json({ error: "محتوى التعليق مطلوب" });
@@ -2574,6 +2587,11 @@ export async function registerRoutes(
 
   app.post("/api/cases/:id/notes", requireAuth, async (req: AuthRequest, res) => {
     const user = req.user!;
+    const caseItem = await storage.getCaseById(String(req.params.id));
+    if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
+    if (!isAssignedLawyer(user, caseItem)) {
+      return res.status(403).json({ error: "إضافة الملاحظات متاحة فقط للمحامين المسندة إليهم القضية" });
+    }
     const note = await storage.createCaseNote({
       ...req.body,
       caseId: String(req.params.id),

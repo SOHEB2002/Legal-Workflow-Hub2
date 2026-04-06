@@ -957,6 +957,7 @@ export interface LawCase {
   lastHearingResult: string | null;
   lastHearingDate: string | null;
   nextHearingDate: string | null;
+  nextHearingTime: string | null;
   activeMemoCount: number;
   caseClassification: CaseClassificationValue;
   previousHearingsCount: number;

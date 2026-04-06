@@ -306,7 +306,7 @@ export default function CasesPage() {
     setEditCaseId(caseItem.id);
     setEditFormData({
       clientId: caseItem.clientId || "",
-      plaintiffName: (caseItem as any).plaintiffName || "",
+      plaintiffName: caseItem.plaintiffName || "",
       caseType: (caseItem.caseType || "") as string,
       caseTypeOther: caseItem.caseTypeOther || "",
       departmentId: caseItem.departmentId || "",
@@ -324,8 +324,8 @@ export default function CasesPage() {
       previousHearingsCount: caseItem.previousHearingsCount || 0,
       currentSituation: caseItem.currentSituation || "",
       responseDeadline: caseItem.responseDeadline || "",
-      adminCaseSubType: (caseItem as any).adminCaseSubType || "",
-      prescriptionDate: (caseItem as any).prescriptionDate || "",
+      adminCaseSubType: caseItem.adminCaseSubType || "",
+      prescriptionDate: caseItem.prescriptionDate || "",
     });
     setShowEditDialog(true);
   };
@@ -741,8 +741,8 @@ export default function CasesPage() {
                   <TableCell className="text-center font-medium"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
                   <TableCell className="text-center">
                     <div>
-                      <div className="font-medium text-sm leading-snug">{(c as any).plaintiffName || getClientName(c.clientId)}</div>
-                      {(c as any).plaintiffName && getClientName(c.clientId) && (
+                      <div className="font-medium text-sm leading-snug">{c.plaintiffName || getClientName(c.clientId)}</div>
+                      {c.plaintiffName && getClientName(c.clientId) && (
                         <div className="text-xs text-muted-foreground">{getClientName(c.clientId)}</div>
                       )}
                     </div>
@@ -1281,10 +1281,10 @@ export default function CasesPage() {
                       <Label className="text-muted-foreground">العميل</Label>
                       <p className="font-medium"><BidiText>{getClientName(selectedCase.clientId)}</BidiText></p>
                     </div>
-                    {(selectedCase as any).plaintiffName && (
+                    {selectedCase.plaintiffName && (
                       <div>
                         <Label className="text-muted-foreground">اسم المدعي</Label>
-                        <p className="font-medium"><BidiText>{(selectedCase as any).plaintiffName}</BidiText></p>
+                        <p className="font-medium"><BidiText>{selectedCase.plaintiffName}</BidiText></p>
                       </div>
                     )}
                     <div>
