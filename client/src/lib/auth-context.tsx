@@ -90,6 +90,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const fresh = fetched.find(u => u.id === prev.id);
       if (!fresh) return prev;
       const merged = { ...prev, ...fresh };
+      // Only return a new reference if something actually changed, so downstream
+      // effects (e.g. fetchCases in cases-context) don't fire unnecessarily.
+      const changed = (Object.keys(merged) as (keyof typeof merged)[]).some(
+        key => merged[key] !== prev[key as keyof typeof prev]
+      );
+      if (!changed) return prev;
       localStorage.setItem("lawfirm_user", JSON.stringify(merged));
       return merged;
     });

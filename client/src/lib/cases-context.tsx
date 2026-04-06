@@ -181,6 +181,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateCase = async (id: string, data: Partial<LawCase>): Promise<void> => {
+    // Optimistic update so the UI reflects changes immediately while the request is in flight.
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c
+      )
+    );
     const response = await apiRequest("PATCH", `/api/cases/${id}`, data);
     try {
       const updatedCase = await response.json();
@@ -188,11 +194,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         prev.map((c) => c.id === id ? migrateCase(updatedCase) : c)
       );
     } catch {
-      setCases((prev) =>
-        prev.map((c) =>
-          c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c
-        )
-      );
+      // Optimistic state already applied above; nothing more to do.
     }
   };
 
