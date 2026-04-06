@@ -19,6 +19,8 @@ import {
   MemoStatus,
   MemoType,
   CaseClassification,
+  CaseStage,
+  CaseStagesOrder,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -73,6 +75,18 @@ function canModifyCase(user: { id: string; role: string; departmentId: string | 
   if (user.role === "department_head" && caseData.departmentId === user.departmentId) return true;
   if (caseData.primaryLawyerId === user.id || caseData.responsibleLawyerId === user.id) return true;
   if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) return true;
+  return false;
+}
+
+function canViewCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  if (adminRoles.includes(user.role)) return true;
+  if (user.role === "department_head") return caseData.departmentId === user.departmentId;
+  if (user.role === "employee") {
+    return caseData.primaryLawyerId === user.id ||
+      caseData.responsibleLawyerId === user.id ||
+      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id));
+  }
   return false;
 }
 
@@ -684,7 +698,6 @@ export async function registerRoutes(
 
       if (role === "employee") {
         const filtered = allCases.filter((c: any) =>
-          c.departmentId === departmentId ||
           (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) ||
           c.primaryLawyerId === userId ||
           c.responsibleLawyerId === userId
@@ -703,6 +716,10 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) {
         return res.status(404).json({ error: "القضية غير موجودة" });
+      }
+      const user = (req as any).user;
+      if (!canViewCase(user, caseItem)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه القضية" });
       }
       res.json(caseItem);
     } catch (error) {
@@ -1037,13 +1054,62 @@ export async function registerRoutes(
         req.body.assignedLawyers = [...finalAssignedLawyers, finalPrimaryLawyer];
       }
 
+      // When a case is transferred to a new department without a simultaneous
+      // lawyer assignment, clear the old lawyer so the new department can re-assign.
+      const isDeptTransfer =
+        "departmentId" in req.body &&
+        req.body.departmentId &&
+        req.body.departmentId !== existing.departmentId &&
+        !req.body.primaryLawyerId &&
+        !req.body.assignedLawyers;
+
+      if (isDeptTransfer) {
+        const currentStageIndex = CaseStagesOrder.indexOf(existing.currentStage as any);
+        const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE as any);
+        if (currentStageIndex >= reviewStageIndex) {
+          return res.status(400).json({ error: "لا يمكن تحويل القضية في هذه المرحلة - القضية في مرحلة متقدمة من المراجعة" });
+        }
+
+        req.body.primaryLawyerId = null;
+        req.body.responsibleLawyerId = null;
+        req.body.assignedLawyers = [];
+        // Also unassign the lawyer from pending hearings and active memos
+        const caseId = String(req.params.id);
+        try {
+          const caseHearings = await storage.getHearingsByCase(caseId);
+          for (const h of caseHearings) {
+            if (h.status === "قادمة") {
+              await storage.updateHearing(h.id, { attendingLawyerId: null } as any);
+            }
+          }
+          const caseMemos = await storage.getMemosByCase(caseId);
+          for (const m of caseMemos) {
+            if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
+              await storage.updateMemo(m.id, { assignedTo: null } as any);
+            }
+          }
+        } catch (e) {
+          console.error("Error clearing assignments on department transfer:", e);
+        }
+      }
+
       const updated = await storage.updateCase(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
       if (user && existing) {
         try {
-          if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
+          if (isDeptTransfer) {
+            await storage.logCaseActivity({
+              caseId: String(req.params.id),
+              userId: user.id,
+              userName: user.name || user.id,
+              actionType: "case_updated",
+              title: `تم تحويل القضية من قسم إلى آخر`,
+              previousValue: existing.departmentId || "",
+              newValue: req.body.departmentId,
+            });
+          } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
             await storage.logCaseActivity({
               caseId: String(req.params.id),
               userId: user.id,
@@ -1063,6 +1129,33 @@ export async function registerRoutes(
             });
           }
         } catch (e) {}
+      }
+
+      // Notify the new department head when a transfer lands
+      if (isDeptTransfer && updated) {
+        try {
+          const allUsers = await storage.getAllUsers();
+          const newDeptHead = allUsers.find((u: any) =>
+            u.role === "department_head" && u.departmentId === req.body.departmentId && u.isActive
+          );
+          if (newDeptHead) {
+            await storage.createNotification({
+              type: "case_assigned" as any,
+              priority: "high",
+              status: "pending",
+              title: "تم تحويل قضية لقسمك",
+              message: `تم تحويل القضية ${existing.caseNumber} إلى قسمك. يرجى إسناد محامٍ مسؤول لها.`,
+              senderId: user.id,
+              senderName: user.name || user.id,
+              recipientId: newDeptHead.id,
+              requiresResponse: false,
+              relatedType: "case",
+              relatedId: String(req.params.id),
+            });
+          }
+        } catch (e) {
+          console.error("Error sending transfer notification:", e);
+        }
       }
 
       // Cascade lawyer assignment to pending hearings and active memos
@@ -2440,6 +2533,36 @@ export async function registerRoutes(
     const total = allLogs.length;
     const paginatedLogs = allLogs.slice(offset, offset + limit);
     res.json({ data: paginatedLogs, total, page, limit });
+  });
+
+  // ==================== Case Comments ====================
+
+  app.get("/api/cases/:id/comments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const comments = await storage.getCommentsByCaseId(String(req.params.id));
+      res.json(comments);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التعليقات" });
+    }
+  });
+
+  app.post("/api/cases/:id/comments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const { content } = req.body;
+      if (!content || !String(content).trim()) {
+        return res.status(400).json({ error: "محتوى التعليق مطلوب" });
+      }
+      const comment = await storage.createCaseComment({
+        caseId: String(req.params.id),
+        userId: user.id,
+        userName: user.name,
+        content: String(content).trim(),
+      });
+      res.status(201).json(comment);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في إضافة التعليق" });
+    }
   });
 
   // ==================== Case Notes ====================

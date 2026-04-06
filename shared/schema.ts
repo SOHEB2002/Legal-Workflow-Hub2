@@ -297,6 +297,15 @@ export const caseNotes = pgTable("case_notes", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const caseComments = pgTable("case_comments", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  caseId: varchar("case_id", { length: 255 }).notNull(),
+  userId: varchar("user_id", { length: 255 }).notNull(),
+  userName: varchar("user_name", { length: 255 }).notNull(),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const legalDeadlines = pgTable("legal_deadlines", {
   id: varchar("id", { length: 255 }).primaryKey(),
   caseId: varchar("case_id", { length: 255 }).notNull(),
@@ -366,6 +375,7 @@ export const insertAttachmentDbSchema = createInsertSchema(attachments).omit({ c
 export const insertMemoDbSchema = createInsertSchema(memos).omit({ createdAt: true, updatedAt: true });
 export const insertCaseActivityLogDbSchema = createInsertSchema(caseActivityLog).omit({ createdAt: true });
 export const insertCaseNoteDbSchema = createInsertSchema(caseNotes).omit({ createdAt: true });
+export const insertCaseCommentDbSchema = createInsertSchema(caseComments).omit({ createdAt: true });
 export const insertLegalDeadlineDbSchema = createInsertSchema(legalDeadlines).omit({ createdAt: true });
 export const insertDelegationDbSchema = createInsertSchema(delegationsTable).omit({ createdAt: true });
 
@@ -384,6 +394,7 @@ export type DbAttachment = typeof attachments.$inferSelect;
 export type DbMemo = typeof memos.$inferSelect;
 export type DbCaseActivityLog = typeof caseActivityLog.$inferSelect;
 export type DbCaseNote = typeof caseNotes.$inferSelect;
+export type DbCaseComment = typeof caseComments.$inferSelect;
 export type DbLegalDeadline = typeof legalDeadlines.$inferSelect;
 export type DbDelegation = typeof delegationsTable.$inferSelect;
 
@@ -1937,6 +1948,15 @@ export const insertCaseNoteSchema = z.object({
 
 export type InsertCaseNote = z.infer<typeof insertCaseNoteSchema>;
 export type CaseNote = typeof caseNotes.$inferSelect;
+
+export const insertCaseCommentSchema = z.object({
+  caseId: z.string().min(1),
+  userId: z.string().min(1),
+  userName: z.string().min(1),
+  content: z.string().min(1, "محتوى التعليق مطلوب"),
+});
+export type InsertCaseComment = z.infer<typeof insertCaseCommentSchema>;
+export type CaseCommentRow = typeof caseComments.$inferSelect;
 
 export const insertLegalDeadlineSchema = z.object({
   caseId: z.string().min(1),

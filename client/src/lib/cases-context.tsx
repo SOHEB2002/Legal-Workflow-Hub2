@@ -24,7 +24,8 @@ interface CasesContextType {
   moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
-  addComment: (caseId: string, userId: string, userName: string, content: string) => void;
+  addComment: (caseId: string, userId: string, userName: string, content: string) => Promise<void>;
+  fetchComments: (caseId: string) => Promise<void>;
   getCommentsByCaseId: (caseId: string) => CaseComment[];
   getCaseById: (id: string) => LawCase | undefined;
   getCasesByDepartment: (departmentId: string) => LawCase[];
@@ -39,7 +40,6 @@ interface CasesContextType {
 const CasesContext = createContext<CasesContextType | undefined>(undefined);
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
-const generateCaseNumber = () => `C-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
 // Helper to migrate old cases without new fields
 const migrateCase = (c: LawCase): LawCase => {
@@ -129,7 +129,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const now = new Date().toISOString();
     const initialStage: CaseStageValue = CaseStage.RECEIVED;
     const caseData = {
-      caseNumber: generateCaseNumber(),
       clientId: data.clientId || "",
       plaintiffName: data.plaintiffName || "",
       caseType: data.caseType || "عام",
@@ -209,6 +208,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const updateData: any = {
       assignedLawyers: [lawyerId],
       primaryLawyerId: lawyerId,
+      responsibleLawyerId: lawyerId,
       departmentId,
     };
     if (!isReassign) {
@@ -247,7 +247,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       CaseStage.SUBMITTED,
       user.id,
       user.name,
-      "اعتماد اللجنة - لا يوجد ملاحظات"
+      notes ? `اعتماد اللجنة - ${notes}` : "اعتماد اللجنة"
     );
     updateCase(id, {
       status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
@@ -419,16 +419,36 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const addComment = (caseId: string, userId: string, userName: string, content: string) => {
-    const newComment: CaseComment = {
-      id: generateId(),
-      caseId,
-      userId,
-      userName,
-      content,
-      createdAt: new Date().toISOString(),
-    };
-    setComments((prev) => [newComment, ...prev]);
+  const fetchComments = async (caseId: string) => {
+    try {
+      const response = await apiRequest("GET", `/api/cases/${caseId}/comments`);
+      const data: CaseComment[] = await response.json();
+      setComments((prev) => [
+        ...prev.filter((c) => c.caseId !== caseId),
+        ...data,
+      ]);
+    } catch {
+      // fetch comments failed silently
+    }
+  };
+
+  const addComment = async (caseId: string, userId: string, userName: string, content: string) => {
+    try {
+      const response = await apiRequest("POST", `/api/cases/${caseId}/comments`, { content });
+      const saved: CaseComment = await response.json();
+      setComments((prev) => [...prev, saved]);
+    } catch {
+      // Fallback: add locally so the UI doesn't freeze if the request fails
+      const newComment: CaseComment = {
+        id: generateId(),
+        caseId,
+        userId,
+        userName,
+        content,
+        createdAt: new Date().toISOString(),
+      };
+      setComments((prev) => [...prev, newComment]);
+    }
   };
 
   const getCommentsByCaseId = (caseId: string) =>
@@ -455,6 +475,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         moveToPreviousStage,
         skipDataCompletion,
         addComment,
+        fetchComments,
         getCommentsByCaseId,
         getCaseById,
         getCasesByDepartment,
