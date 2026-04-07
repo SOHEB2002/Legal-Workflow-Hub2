@@ -1141,6 +1141,19 @@ export async function registerRoutes(
             return res.status(400).json({ error: "لا يمكن الانتقال إلى مرحلة 'تحت النظر' إلا بعد تقييد القضية في المحكمة عبر الإجراء المخصص" });
           }
         }
+        // B7: Block transition to جاهزة للرفع unless prerequisites are met
+        if (req.body.currentStage === CaseStage.SUBMITTED) {
+          if (existing.caseType === "تجاري" && existing.caseClassification === CaseClassification.PLAINTIFF_NEW) {
+            if (!(existing as any).taradiNumber || !(existing as any).taradiStatus) {
+              return res.status(400).json({ error: "يجب إتمام إجراء تراضي وإدخال رقم الطلب قبل الانتقال لمرحلة جاهزة للرفع" });
+            }
+          }
+          if (existing.caseType === "عمالي" && existing.caseClassification === CaseClassification.PLAINTIFF_NEW) {
+            if ((existing as any).mohrStatus !== "انتهت_التسوية") {
+              return res.status(400).json({ error: "يجب إتمام مرحلة وزارة الموارد البشرية قبل الانتقال لمرحلة جاهزة للرفع" });
+            }
+          }
+        }
       }
 
       // Validate assigned users are active
