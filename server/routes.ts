@@ -847,8 +847,10 @@ export async function registerRoutes(
       const { status, taradiNumber } = req.body;
       if (!status || !validStatuses.includes(status)) return res.status(400).json({ error: "حالة غير صالحة" });
       
-      const updateData: any = { taradiStatus: status };
-      if (taradiNumber && typeof taradiNumber === "string") updateData.taradiNumber = taradiNumber.substring(0, 100);
+      if (!taradiNumber || typeof taradiNumber !== "string" || !taradiNumber.trim()) {
+        return res.status(400).json({ error: "يرجى إدخال رقم الطلب في منصة تراضي" });
+      }
+      const updateData: any = { taradiStatus: status, taradiNumber: taradiNumber.trim().substring(0, 100) };
       
       const updated = await storage.updateCase(caseItem.id, updateData);
       
