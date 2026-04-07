@@ -1250,16 +1250,23 @@ export default function CasesPage() {
                       }
                     }
                   }}
-                  onSkipDataCompletion={async (notes) => {
-                    if (user) {
-                      const success = await skipDataCompletion(selectedCase.id, user.id, user.name, notes);
-                      if (success) {
-                        toast({ title: "تم تجاوز استكمال البيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
-                      } else {
-                        toast({ title: "تعذّر التجاوز", variant: "destructive" });
+                  onSkipDataCompletion={
+                    user && (
+                      user.role === "branch_manager" ||
+                      user.role === "cases_review_head" ||
+                      selectedCase.primaryLawyerId === user.id ||
+                      (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
+                    ) ? async (notes) => {
+                      if (user) {
+                        const success = await skipDataCompletion(selectedCase.id, user.id, user.name, notes);
+                        if (success) {
+                          toast({ title: "تم تجاوز استكمال البيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
+                        } else {
+                          toast({ title: "تعذّر التجاوز", variant: "destructive" });
+                        }
                       }
-                    }
-                  }}
+                    } : undefined
+                  }
                 />
               </div>
 
@@ -1581,7 +1588,11 @@ export default function CasesPage() {
                         تحويل القضية إلى منظورة
                       </h4>
                       <p className="text-xs text-muted-foreground mb-3">عند تقييد القضية في المحكمة، يتم تحويل تصنيفها إلى "منظورة" وتنتقل لمرحلة "تحت النظر"</p>
-                      {showCourtRegistrationDialog && courtRegistrationCaseId === selectedCase.id ? (
+                      {selectedCase.caseType === "تجاري" && !(selectedCase as any).taradiNumber ? (
+                        <p className="text-sm text-amber-600 font-medium" data-testid="taradi-number-required-notice">
+                          يجب إدخال رقم الطلب في منصة تراضي أولاً قبل تقييد القضية في المحكمة. يرجى إدخاله في قسم "أرقام الطلبات" أعلاه.
+                        </p>
+                      ) : showCourtRegistrationDialog && courtRegistrationCaseId === selectedCase.id ? (
                         <div className="flex items-center gap-2" dir="rtl">
                           <Input value={courtCaseNumberInput} onChange={e => setCourtCaseNumberInput(e.target.value)} placeholder="رقم القضية في المحكمة" className="h-8 text-sm" autoFocus data-testid="input-court-registration-number" />
                           <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {

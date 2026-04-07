@@ -990,6 +990,52 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/cases/:id/skip-data-completion", requireAuth, async (req, res) => {
+    try {
+      const caseItem = await storage.getCaseById(String(req.params.id));
+      if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
+      const user = (req as any).user;
+
+      const authorized =
+        user.role === "branch_manager" ||
+        user.role === "cases_review_head" ||
+        isAssignedLawyer(user, caseItem);
+      if (!authorized) {
+        return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال البيانات" });
+      }
+
+      const normalizedStage = LEGACY_CASE_STAGE_MAP[caseItem.currentStage as string] || caseItem.currentStage;
+      if (normalizedStage !== "استلام") {
+        return res.status(400).json({ error: "تجاوز مرحلة استكمال البيانات متاح فقط من مرحلة الاستلام" });
+      }
+
+      const { notes } = req.body;
+      const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال البيانات - الدعوى مكتملة";
+      const now = new Date().toISOString();
+      const existingHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
+      const stageHistory = [
+        ...existingHistory,
+        { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: user.name, notes: "تجاوز تلقائي" },
+        { stage: "دراسة", timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
+      ];
+
+      const updated = await storage.updateCase(caseItem.id, { currentStage: "دراسة", stageHistory } as any);
+
+      await storage.logCaseActivity({
+        caseId: caseItem.id,
+        userId: user.id,
+        userName: user.name,
+        actionType: "stage_changed",
+        title: "تجاوز مرحلة استكمال البيانات والانتقال مباشرةً للدراسة",
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error skipping data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تجاوز المرحلة" });
+    }
+  });
+
   app.post("/api/cases/:id/court-register", requireAuth, async (req, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
@@ -999,9 +1045,12 @@ export async function registerRoutes(
       if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW) {
         return res.status(400).json({ error: "القضية مقيدة في المحكمة بالفعل" });
       }
-      // Prerequisite: commercial cases must have taradiStatus === "لم_يتم_صلح"
+      // Prerequisite: commercial cases must have taradiStatus === "لم_يتم_صلح" and a taradi number
       if (caseItem.caseType === "تجاري" && (caseItem as any).taradiStatus !== "لم_يتم_صلح") {
         return res.status(400).json({ error: "يجب إتمام مرحلة تراضي (عدم الصلح) قبل تقييد القضية التجارية في المحكمة" });
+      }
+      if (caseItem.caseType === "تجاري" && !(caseItem as any).taradiNumber) {
+        return res.status(400).json({ error: "يجب إدخال رقم الطلب في منصة تراضي قبل تقييد القضية في المحكمة" });
       }
       // Prerequisite: labor cases must have mohrStatus === "انتهت_التسوية"
       if (caseItem.caseType === "عمالي" && (caseItem as any).mohrStatus !== "انتهت_التسوية") {

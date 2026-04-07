@@ -388,22 +388,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const normalized = normalizeCaseStage(lawCase.currentStage);
     if (normalized !== "استلام") return false;
 
-    const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification);
-    const studyIndex = stagesOrder.indexOf("دراسة");
-    if (studyIndex === -1) return false;
-
-    const targetStage = stagesOrder[studyIndex];
-    const skipNote = notes || "تم تجاوز مرحلة استكمال البيانات - الدعوى مكتملة";
-    const dataCompletionTransition = createStageTransitionRecord("استكمال_البيانات" as CaseStageValue, userId, userName, "تجاوز تلقائي");
-    const studyTransition = createStageTransitionRecord(targetStage, userId, userName, skipNote);
-
-    await updateCase(id, {
-      currentStage: targetStage,
-      stageHistory: [...lawCase.stageHistory, dataCompletionTransition, studyTransition],
-    });
-
-    return true;
+    try {
+      const response = await apiRequest("POST", `/api/cases/${id}/skip-data-completion`, { notes });
+      const updatedCase = await response.json();
+      setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const fetchComments = async (caseId: string) => {
