@@ -1064,7 +1064,7 @@ export async function registerRoutes(
       }
       const updated = await storage.updateCase(caseItem.id, {
         caseClassification: CaseClassification.PLAINTIFF_EXISTING,
-        currentStage: CaseStage.UNDER_REVIEW,
+        currentStage: CaseStage.PENDING_REVIEW,
         courtCaseNumber: courtCaseNumber.trim().substring(0, 100),
       });
       await storage.logCaseActivity({
