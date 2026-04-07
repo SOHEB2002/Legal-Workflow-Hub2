@@ -1154,6 +1154,26 @@ export async function registerRoutes(
             }
           }
         }
+        // B8: Enforce review committee decision when transitioning out of إحالة_للجنة_المراجعة
+        const normalizedExisting = LEGACY_CASE_STAGE_MAP[existing.currentStage as string] || existing.currentStage;
+        if (normalizedExisting === CaseStage.REVIEW_COMMITTEE) {
+          if (req.body.currentStage === CaseStage.SUBMITTED) {
+            if (req.body.reviewDecision !== "approved") {
+              return res.status(400).json({ error: "يجب اعتماد القضية من اللجنة قبل الانتقال" });
+            }
+            req.body.reviewDecision = "approved";
+            if (req.body.reviewNotes !== undefined) req.body.reviewNotes = req.body.reviewNotes;
+          } else if (req.body.currentStage === CaseStage.AMENDMENTS) {
+            if (req.body.reviewDecision !== "rejected" && req.body.reviewDecision !== "partial") {
+              return res.status(400).json({ error: "يجب تحديد سبب الإرجاع وإضافة ملاحظات اللجنة" });
+            }
+            if (!req.body.reviewNotes || typeof req.body.reviewNotes !== "string" || !req.body.reviewNotes.trim()) {
+              return res.status(400).json({ error: "يجب تحديد سبب الإرجاع وإضافة ملاحظات اللجنة" });
+            }
+            req.body.reviewDecision = req.body.reviewDecision;
+            req.body.reviewNotes = req.body.reviewNotes.trim();
+          }
+        }
       }
 
       // Validate assigned users are active
