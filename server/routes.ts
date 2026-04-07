@@ -1058,21 +1058,25 @@ export async function registerRoutes(
       if (caseItem.caseType === "عمالي" && (caseItem as any).mohrStatus !== "انتهت_التسوية") {
         return res.status(400).json({ error: "يجب إتمام مرحلة وزارة الموارد البشرية (انتهاء التسوية) قبل تقييد القضية العمالية في المحكمة" });
       }
-      const { courtCaseNumber } = req.body;
+      const { courtCaseNumber, najizNumber } = req.body;
       if (!courtCaseNumber || typeof courtCaseNumber !== "string" || !courtCaseNumber.trim()) {
         return res.status(400).json({ error: "يرجى إدخال رقم القضية في المحكمة" });
+      }
+      if (!najizNumber || typeof najizNumber !== "string" || !najizNumber.trim()) {
+        return res.status(400).json({ error: "يرجى إدخال رقم القيد في ناجز" });
       }
       const updated = await storage.updateCase(caseItem.id, {
         caseClassification: CaseClassification.PLAINTIFF_EXISTING,
         currentStage: CaseStage.PENDING_REVIEW,
         courtCaseNumber: courtCaseNumber.trim().substring(0, 100),
-      });
+        najizNumber: najizNumber.trim().substring(0, 100),
+      } as any);
       await storage.logCaseActivity({
         caseId: caseItem.id,
         userId: user.id,
         userName: user.name,
         actionType: "stage_changed",
-        title: `تم تقييد القضية في المحكمة - رقم القضية: ${courtCaseNumber.trim()}`,
+        title: `تم تقييد القضية في المحكمة - رقم القضية: ${courtCaseNumber.trim()} - رقم ناجز: ${najizNumber.trim()}`,
       });
       res.json(updated);
     } catch (error) {
