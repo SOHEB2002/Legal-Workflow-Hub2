@@ -20,6 +20,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Table,
   TableBody,
@@ -41,6 +50,8 @@ import {
   Trash2,
   Zap,
   Ban,
+  Check,
+  ChevronsUpDown,
 } from "lucide-react";
 import { useMemos } from "@/lib/memos-context";
 import { useCases } from "@/lib/cases-context";
@@ -127,6 +138,7 @@ export default function MemosPage() {
   const { toast } = useToast();
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [caseComboOpen, setCaseComboOpen] = useState(false);
   const [detailMemoId, setDetailMemoId] = useState<string | null>(null);
   const detailMemo = detailMemoId ? memos.find(m => m.id === detailMemoId) || null : null;
   const [submitting, setSubmitting] = useState(false);
@@ -515,27 +527,69 @@ export default function MemosPage() {
           <div className="space-y-4">
             <div>
               <Label>القضية *</Label>
-              <Select
-                value={formData.caseId}
-                onValueChange={(value) => {
-                  const selectedCase = cases.find(c => c.id === value);
-                  const autoLawyer = selectedCase?.primaryLawyerId || selectedCase?.responsibleLawyerId || "";
-                  setFormData(prev => ({ ...prev, caseId: value, assignedTo: autoLawyer }));
-                }}
-              >
-                <SelectTrigger data-testid="select-memo-case">
-                  <SelectValue placeholder="اختر القضية" />
-                </SelectTrigger>
-                <SelectContent>
-                  {cases
-                    .filter((c) => c.status !== "مغلق")
-                    .map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        <LtrInline>{c.caseNumber}</LtrInline>
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+              <Popover open={caseComboOpen} onOpenChange={setCaseComboOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={caseComboOpen}
+                    data-testid="select-memo-case"
+                    className="w-full justify-between font-normal text-right"
+                  >
+                    <span className="truncate">
+                      {formData.caseId
+                        ? (() => {
+                            const c = cases.find(x => x.id === formData.caseId);
+                            return c ? `${c.caseNumber}${c.opponentName ? ` — ${c.opponentName}` : ""}` : "اختر القضية";
+                          })()
+                        : "اختر القضية"}
+                    </span>
+                    <ChevronsUpDown className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[420px] p-0" align="start" dir="rtl">
+                  <Command
+                    filter={(value, search) => {
+                      const c = cases.find(x => x.id === value);
+                      if (!c) return 0;
+                      const haystack = `${c.caseNumber} ${c.opponentName || ""} ${c.plaintiffName || ""}`.toLowerCase();
+                      return haystack.includes(search.toLowerCase()) ? 1 : 0;
+                    }}
+                  >
+                    <CommandInput placeholder="ابحث برقم القضية أو اسم الخصم..." />
+                    <CommandList>
+                      <CommandEmpty>لا توجد نتائج</CommandEmpty>
+                      <CommandGroup>
+                        {cases
+                          .filter(c => c.status !== "مغلق")
+                          .map(c => (
+                            <CommandItem
+                              key={c.id}
+                              value={c.id}
+                              onSelect={(val) => {
+                                const selected = cases.find(x => x.id === val);
+                                const autoLawyer = selected?.primaryLawyerId || selected?.responsibleLawyerId || "";
+                                setFormData(prev => ({ ...prev, caseId: val, assignedTo: autoLawyer }));
+                                setCaseComboOpen(false);
+                              }}
+                              className="flex items-center justify-between gap-2"
+                            >
+                              <div className="flex flex-col">
+                                <LtrInline className="font-medium">{c.caseNumber}</LtrInline>
+                                {c.opponentName && (
+                                  <span className="text-xs text-muted-foreground">{c.opponentName}</span>
+                                )}
+                              </div>
+                              {formData.caseId === c.id && (
+                                <Check className="h-4 w-4 shrink-0 text-primary" />
+                              )}
+                            </CommandItem>
+                          ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div>
               <Label>نوع المذكرة *</Label>
