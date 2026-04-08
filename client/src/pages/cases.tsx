@@ -1246,6 +1246,19 @@ export default function CasesPage() {
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
+              {selectedCase.caseClassification === CaseClassification.DEFENDANT &&
+               selectedCase.nextHearingDate &&
+               new Date(selectedCase.nextHearingDate) > new Date() && (
+                <div className="flex items-start gap-3 rounded-lg border border-orange-500/60 bg-orange-500/10 px-4 py-3 text-orange-700 dark:text-orange-400" dir="rtl">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                  <p className="text-sm font-semibold">
+                    هذه القضية منظورة وفيها جلسة قادمة بتاريخ{" "}
+                    <span className="font-bold">
+                      <DualDateDisplay date={selectedCase.nextHearingDate} compact />
+                    </span>
+                  </p>
+                </div>
+              )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
                 <CaseProgressBar
