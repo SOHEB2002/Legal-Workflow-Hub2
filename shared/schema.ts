@@ -123,6 +123,7 @@ export const hearings = pgTable("hearings", {
   caseId: varchar("case_id", { length: 255 }).notNull(),
   hearingDate: varchar("hearing_date", { length: 50 }).notNull(),
   hearingTime: varchar("hearing_time", { length: 50 }).notNull(),
+  hearingType: varchar("hearing_type", { length: 50 }).default("محكمة"),
   courtName: varchar("court_name", { length: 100 }).notNull(),
   courtNameOther: varchar("court_name_other", { length: 255 }),
   courtRoom: varchar("court_room", { length: 100 }).default(""),
@@ -833,6 +834,14 @@ export const CourtType = {
 
 export type CourtTypeValue = typeof CourtType[keyof typeof CourtType];
 
+export const HearingType = {
+  COURT: "محكمة",
+  TARADI: "تراضي",
+  SETTLEMENT: "تسوية_ودية",
+} as const;
+
+export type HearingTypeValue = typeof HearingType[keyof typeof HearingType];
+
 // ==================== أنواع المذكرات ====================
 export const MemoType = {
   LAWSUIT_DRAFT: "تحرير_دعوى",
@@ -1018,6 +1027,7 @@ export interface Hearing {
   caseId: string;
   hearingDate: string;
   hearingTime: string;
+  hearingType: string;
   courtName: CourtTypeValue;
   courtNameOther: string | null;
   courtRoom: string;
@@ -1317,6 +1327,7 @@ export const insertHearingSchema = z.object({
   caseId: z.string().min(1, "القضية مطلوبة"),
   hearingDate: z.string().min(1, "تاريخ الجلسة مطلوب"),
   hearingTime: z.string().min(1, "وقت الجلسة مطلوب"),
+  hearingType: z.string().optional().default("محكمة"),
   courtName: z.enum([
     "المحكمة العامة",
     "المحكمة التجارية",

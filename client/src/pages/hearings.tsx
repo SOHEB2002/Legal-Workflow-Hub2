@@ -63,7 +63,7 @@ import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
-import { HearingStatus, HearingResult, CourtType } from "@shared/schema";
+import { HearingStatus, HearingResult, CourtType, HearingType } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -137,6 +137,7 @@ export default function HearingsPage() {
     caseId: "",
     hearingDate: "",
     hearingTime: "",
+    hearingType: HearingType.COURT,
     courtName: "المحكمة العامة" as CourtTypeValue,
     courtRoom: "",
     notes: "",
@@ -169,6 +170,7 @@ export default function HearingsPage() {
       caseId: "",
       hearingDate: "",
       hearingTime: "",
+      hearingType: HearingType.COURT,
       courtName: "المحكمة العامة",
       courtRoom: "",
       notes: "",
@@ -476,6 +478,24 @@ export default function HearingsPage() {
                     onChange={(e) => setFormData({ ...formData, hearingTime: e.target.value })}
                   />
                 </div>
+              </div>
+              <div>
+                <Label>نوع الجلسة</Label>
+                <Select
+                  value={formData.hearingType}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, hearingType: value })
+                  }
+                >
+                  <SelectTrigger data-testid="select-hearing-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={HearingType.COURT}>محكمة</SelectItem>
+                    <SelectItem value={HearingType.TARADI}>تراضي</SelectItem>
+                    <SelectItem value={HearingType.SETTLEMENT}>تسوية ودية</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>المحكمة</Label>
