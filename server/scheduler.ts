@@ -134,9 +134,8 @@ async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotif
     }
   }
 
-  const allUsers = await storage.getAllUsers();
   const admins = allUsers.filter(
-    (u) => u.role === "branch_manager" || u.role === "admin_support"
+    (u: any) => u.role === "branch_manager" || u.role === "admin_support"
   );
   admins.forEach((a) => recipientIds.push(a.id));
 
