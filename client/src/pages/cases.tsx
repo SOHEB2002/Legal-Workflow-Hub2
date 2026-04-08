@@ -827,7 +827,7 @@ export default function CasesPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              )))}
+              ))}
             </TableBody>
           </Table>
           </div>
