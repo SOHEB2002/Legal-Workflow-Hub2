@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,7 +64,7 @@ import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
-import { HearingStatus, HearingResult, CourtType } from "@shared/schema";
+import { HearingStatus, HearingResult, CourtType, HearingType } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -137,6 +138,7 @@ export default function HearingsPage() {
     caseId: "",
     hearingDate: "",
     hearingTime: "",
+    hearingType: HearingType.COURT,
     courtName: "المحكمة العامة" as CourtTypeValue,
     courtRoom: "",
     notes: "",
@@ -169,6 +171,7 @@ export default function HearingsPage() {
       caseId: "",
       hearingDate: "",
       hearingTime: "",
+      hearingType: HearingType.COURT,
       courtName: "المحكمة العامة",
       courtRoom: "",
       notes: "",
@@ -377,22 +380,34 @@ export default function HearingsPage() {
     ? users.filter(u => u.canBeAssignedCases)
     : users.filter(u => u.canBeAssignedCases && u.departmentId === filterDepartment);
 
-  const filteredHearings = hearings.filter((h) => {
-    if (filterStatus === "today") {
-      if (!isToday(new Date(h.hearingDate))) return false;
-    } else if (filterStatus !== "all") {
-      if (h.status !== filterStatus) return false;
-    }
-    if (filterDepartment !== "all") {
-      const deptId = getDepartmentForHearing(h);
-      if (deptId !== filterDepartment) return false;
-    }
-    if (filterLawyer !== "all") {
-      const lawyerId = getLawyerForHearing(h);
-      if (lawyerId !== filterLawyer) return false;
-    }
-    return true;
-  });
+  const filteredHearings = hearings
+    .filter((h) => {
+      if (filterStatus === "today") {
+        if (!isToday(new Date(h.hearingDate))) return false;
+      } else if (filterStatus !== "all") {
+        if (h.status !== filterStatus) return false;
+      }
+      if (filterDepartment !== "all") {
+        const deptId = getDepartmentForHearing(h);
+        if (deptId !== filterDepartment) return false;
+      }
+      if (filterLawyer !== "all") {
+        const lawyerId = getLawyerForHearing(h);
+        if (lawyerId !== filterLawyer) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const dateDiff = a.hearingDate.localeCompare(b.hearingDate);
+      if (dateDiff !== 0) return dateDiff;
+      return (a.hearingTime || "").localeCompare(b.hearingTime || "");
+    });
+
+  const HEARING_PAGE_SIZE = 15;
+  const [hearingPage, setHearingPage] = useState(1);
+  useEffect(() => { setHearingPage(1); }, [filterStatus, filterDepartment, filterLawyer]);
+  const hearingTotalPages = Math.max(1, Math.ceil(filteredHearings.length / HEARING_PAGE_SIZE));
+  const pagedHearings = filteredHearings.slice((hearingPage - 1) * HEARING_PAGE_SIZE, hearingPage * HEARING_PAGE_SIZE);
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
@@ -476,6 +491,24 @@ export default function HearingsPage() {
                     onChange={(e) => setFormData({ ...formData, hearingTime: e.target.value })}
                   />
                 </div>
+              </div>
+              <div>
+                <Label>نوع الجلسة</Label>
+                <Select
+                  value={formData.hearingType}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, hearingType: value })
+                  }
+                >
+                  <SelectTrigger data-testid="select-hearing-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={HearingType.COURT}>محكمة</SelectItem>
+                    <SelectItem value={HearingType.TARADI}>تراضي</SelectItem>
+                    <SelectItem value={HearingType.SETTLEMENT}>تسوية ودية</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>المحكمة</Label>
@@ -684,9 +717,7 @@ export default function HearingsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredHearings
-                    .sort((a, b) => new Date(b.hearingDate).getTime() - new Date(a.hearingDate).getTime())
-                    .map((hearing) => {
+                  {pagedHearings.map((hearing) => {
                       const caseInfo = getCaseInfo(hearing.caseId);
                       const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
                       const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
@@ -862,6 +893,11 @@ export default function HearingsPage() {
               </Table>
             </div>
           )}
+          <PaginationControls
+            currentPage={hearingPage}
+            totalPages={hearingTotalPages}
+            onPageChange={setHearingPage}
+          />
         </CardContent>
       </Card>
 

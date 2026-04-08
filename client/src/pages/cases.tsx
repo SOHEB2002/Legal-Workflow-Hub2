@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import { formatTimeAmPm } from "@/lib/date-utils";
@@ -70,6 +71,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -104,6 +106,8 @@ import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer } from "@
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
+import { useMemos } from "@/lib/memos-context";
+import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 
@@ -182,6 +186,8 @@ export default function CasesPage() {
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
+  const { getMemosByCase } = useMemos();
+  const { getTasksByCase } = useFieldTasks();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
   const lawyers = users.filter(u => u.canBeAssignedCases);
@@ -385,6 +391,7 @@ export default function CasesPage() {
     nextHearingTime: "",
     adminCaseSubType: "" as string,
     prescriptionDate: "",
+    memoRequired: false,
   });
 
   const [assignData, setAssignData] = useState({
@@ -419,6 +426,7 @@ export default function CasesPage() {
       nextHearingTime: "",
       adminCaseSubType: "",
       prescriptionDate: "",
+      memoRequired: false,
     });
   };
 
@@ -459,6 +467,7 @@ export default function CasesPage() {
       nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
       adminCaseSubType: formData.adminCaseSubType || null,
       prescriptionDate: formData.prescriptionDate || null,
+      memoRequired: formData.memoRequired,
     } as any, user.id, user.name);
     
     const classLabel = CaseClassificationLabels[formData.caseClassification as CaseClassificationValue] || "";
@@ -533,6 +542,12 @@ export default function CasesPage() {
       return matchesSearch && matchesStatus && matchesDept && matchesClassification;
     });
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, getClientName]);
+
+  const PAGE_SIZE = 15;
+  const [casePage, setCasePage] = useState(1);
+  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter]);
+  const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
+  const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
 
   const isDeptHead = user?.role === "department_head";
 
@@ -744,7 +759,7 @@ export default function CasesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredCases.map((c) => (
+              {pagedCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
                   <TableCell className="text-center font-medium"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
                   <TableCell className="text-center">
@@ -800,6 +815,11 @@ export default function CasesPage() {
             </TableBody>
           </Table>
           </div>
+          <PaginationControls
+            currentPage={casePage}
+            totalPages={casesTotalPages}
+            onPageChange={setCasePage}
+          />
         </CardContent>
       </Card>
 
@@ -1097,6 +1117,20 @@ export default function CasesPage() {
                 )}
               </>
             )}
+
+            {formData.caseClassification && (
+              <div className="flex items-center gap-2 pt-1">
+                <Checkbox
+                  id="memoRequired"
+                  checked={formData.memoRequired}
+                  onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked })}
+                  data-testid="checkbox-memo-required"
+                />
+                <Label htmlFor="memoRequired" className="text-sm cursor-pointer">
+                  مطلوب مذكرة
+                </Label>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddDialog(false)}>إلغاء</Button>
@@ -1231,6 +1265,19 @@ export default function CasesPage() {
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
+              {selectedCase.caseClassification === CaseClassification.DEFENDANT &&
+               selectedCase.nextHearingDate &&
+               new Date(selectedCase.nextHearingDate) > new Date() && (
+                <div className="flex items-start gap-3 rounded-lg border border-orange-500/60 bg-orange-500/10 px-4 py-3 text-orange-700 dark:text-orange-400" dir="rtl">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                  <p className="text-sm font-semibold">
+                    هذه القضية منظورة وفيها جلسة قادمة بتاريخ{" "}
+                    <span className="font-bold">
+                      <DualDateDisplay date={selectedCase.nextHearingDate} compact />
+                    </span>
+                  </p>
+                </div>
+              )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
                 <CaseProgressBar
@@ -1338,8 +1385,32 @@ export default function CasesPage() {
                       <Label className="text-muted-foreground">القاضي</Label>
                       <p>{selectedCase.judgeName || "-"}</p>
                     </div>
+                    <div>
+                      <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
+                      <p className="font-medium">
+                        {selectedCase.nextHearingDate
+                          ? <DualDateDisplay date={selectedCase.nextHearingDate} compact />
+                          : "-"}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">آخر جلسة</Label>
+                      <p className="font-medium">
+                        {selectedCase.lastHearingDate
+                          ? <DualDateDisplay date={selectedCase.lastHearingDate} compact />
+                          : "-"}
+                      </p>
+                    </div>
+                    {selectedCase.responseDeadline && (
+                      <div>
+                        <Label className="text-muted-foreground">مهلة الرد</Label>
+                        <p className="font-medium">
+                          <DualDateDisplay date={selectedCase.responseDeadline} compact />
+                        </p>
+                      </div>
+                    )}
                   </div>
-                  
+
                   <div className="border-t pt-4">
                     <h4 className="font-semibold mb-3">بيانات الخصم</h4>
                     <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
@@ -1886,7 +1957,13 @@ export default function CasesPage() {
                 </TabsContent>
 
                 <TabsContent value="deadlines" className="mt-4">
-                  <CaseDeadlinesTab caseId={selectedCase?.id || ""} />
+                  <CaseDeadlinesTab
+                    caseId={selectedCase?.id || ""}
+                    hearings={selectedCase ? getHearingsByCase(selectedCase.id) : []}
+                    memos={selectedCase ? getMemosByCase(selectedCase.id) : []}
+                    fieldTasks={selectedCase ? getTasksByCase(selectedCase.id) : []}
+                    responseDeadline={selectedCase?.responseDeadline ?? null}
+                  />
                 </TabsContent>
 
                 <TabsContent value="actions" className="mt-4">

@@ -86,6 +86,7 @@ export const lawCases = pgTable("law_cases", {
   taradiNumber: varchar("taradi_number", { length: 100 }),
   mohrStatus: varchar("mohr_status", { length: 50 }),
   mohrNumber: varchar("mohr_number", { length: 100 }),
+  memoRequired: boolean("memo_required").default(false),
   amicableSettlementDirected: boolean("amicable_settlement_directed").default(false),
   adminCaseSubType: varchar("admin_case_sub_type", { length: 50 }),
   prescriptionDate: varchar("prescription_date", { length: 50 }),
@@ -123,6 +124,7 @@ export const hearings = pgTable("hearings", {
   caseId: varchar("case_id", { length: 255 }).notNull(),
   hearingDate: varchar("hearing_date", { length: 50 }).notNull(),
   hearingTime: varchar("hearing_time", { length: 50 }).notNull(),
+  hearingType: varchar("hearing_type", { length: 50 }).default("محكمة"),
   courtName: varchar("court_name", { length: 100 }).notNull(),
   courtNameOther: varchar("court_name_other", { length: 255 }),
   courtRoom: varchar("court_room", { length: 100 }).default(""),
@@ -833,6 +835,14 @@ export const CourtType = {
 
 export type CourtTypeValue = typeof CourtType[keyof typeof CourtType];
 
+export const HearingType = {
+  COURT: "محكمة",
+  TARADI: "تراضي",
+  SETTLEMENT: "تسوية_ودية",
+} as const;
+
+export type HearingTypeValue = typeof HearingType[keyof typeof HearingType];
+
 // ==================== أنواع المذكرات ====================
 export const MemoType = {
   LAWSUIT_DRAFT: "تحرير_دعوى",
@@ -967,6 +977,7 @@ export interface LawCase {
   taradiNumber: string | null;
   mohrStatus: string | null;
   mohrNumber: string | null;
+  memoRequired: boolean;
   amicableSettlementDirected: boolean;
   adminCaseSubType: string | null;
   prescriptionDate: string | null;
@@ -1018,6 +1029,7 @@ export interface Hearing {
   caseId: string;
   hearingDate: string;
   hearingTime: string;
+  hearingType: string;
   courtName: CourtTypeValue;
   courtNameOther: string | null;
   courtRoom: string;
@@ -1297,6 +1309,7 @@ export const insertCaseSchema = z.object({
   responseDeadline: z.string().nullable().optional(),
   adminCaseSubType: z.enum(["تظلم", "قضية"]).nullable().optional(),
   prescriptionDate: z.string().nullable().optional(),
+  memoRequired: z.boolean().optional().default(false),
 });
 
 export type InsertCase = z.infer<typeof insertCaseSchema>;
@@ -1317,6 +1330,7 @@ export const insertHearingSchema = z.object({
   caseId: z.string().min(1, "القضية مطلوبة"),
   hearingDate: z.string().min(1, "تاريخ الجلسة مطلوب"),
   hearingTime: z.string().min(1, "وقت الجلسة مطلوب"),
+  hearingType: z.string().optional().default("محكمة"),
   courtName: z.enum([
     "المحكمة العامة",
     "المحكمة التجارية",

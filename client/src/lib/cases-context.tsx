@@ -162,6 +162,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       nextHearingTime: (data as any).nextHearingTime || null,
       adminCaseSubType: (data as any).adminCaseSubType || null,
       prescriptionDate: (data as any).prescriptionDate || null,
+      memoRequired: (data as any).memoRequired || false,
       createdBy,
     };
     
