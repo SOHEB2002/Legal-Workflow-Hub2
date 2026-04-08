@@ -1216,6 +1216,7 @@ export async function registerRoutes(
         if (req.body.currentStage === CaseStage.UNDER_REVIEW) {
           const finalClassification = req.body.caseClassification || existing.caseClassification;
           if (finalClassification !== CaseClassification.PLAINTIFF_EXISTING) {
+            console.warn(`[B6] Blocked stage transition ${existing.currentStage}→${req.body.currentStage} for case ${existing.id}: not PLAINTIFF_EXISTING`);
             return res.status(400).json({ error: "لا يمكن الانتقال إلى مرحلة 'تحت النظر' إلا بعد تقييد القضية في المحكمة عبر الإجراء المخصص" });
           }
         }
@@ -1223,11 +1224,13 @@ export async function registerRoutes(
         if (req.body.currentStage === CaseStage.SUBMITTED) {
           if (existing.caseType === "تجاري" && existing.caseClassification === CaseClassification.PLAINTIFF_NEW) {
             if (!(existing as any).taradiNumber || !(existing as any).taradiStatus) {
+              console.warn(`[B7] Blocked stage transition to SUBMITTED for case ${existing.id}: missing taradiNumber/taradiStatus (type=تجاري)`);
               return res.status(400).json({ error: "يجب إتمام إجراء تراضي وإدخال رقم الطلب قبل الانتقال لمرحلة جاهزة للرفع" });
             }
           }
           if (existing.caseType === "عمالي" && existing.caseClassification === CaseClassification.PLAINTIFF_NEW) {
             if ((existing as any).mohrStatus !== "انتهت_التسوية") {
+              console.warn(`[B7] Blocked stage transition to SUBMITTED for case ${existing.id}: mohrStatus=${(existing as any).mohrStatus} (type=عمالي)`);
               return res.status(400).json({ error: "يجب إتمام مرحلة وزارة الموارد البشرية قبل الانتقال لمرحلة جاهزة للرفع" });
             }
           }
@@ -1237,15 +1240,18 @@ export async function registerRoutes(
         if (normalizedExisting === CaseStage.REVIEW_COMMITTEE) {
           if (req.body.currentStage === CaseStage.SUBMITTED) {
             if (req.body.reviewDecision !== "approved") {
+              console.warn(`[B8] Blocked REVIEW_COMMITTEE→SUBMITTED for case ${existing.id}: reviewDecision=${req.body.reviewDecision}`);
               return res.status(400).json({ error: "يجب اعتماد القضية من اللجنة قبل الانتقال" });
             }
             req.body.reviewDecision = "approved";
             if (req.body.reviewNotes !== undefined) req.body.reviewNotes = req.body.reviewNotes;
           } else if (req.body.currentStage === CaseStage.AMENDMENTS) {
             if (req.body.reviewDecision !== "rejected" && req.body.reviewDecision !== "partial") {
+              console.warn(`[B8] Blocked REVIEW_COMMITTEE→AMENDMENTS for case ${existing.id}: reviewDecision=${req.body.reviewDecision}`);
               return res.status(400).json({ error: "يجب تحديد سبب الإرجاع وإضافة ملاحظات اللجنة" });
             }
             if (!req.body.reviewNotes || typeof req.body.reviewNotes !== "string" || !req.body.reviewNotes.trim()) {
+              console.warn(`[B8] Blocked REVIEW_COMMITTEE→AMENDMENTS for case ${existing.id}: missing reviewNotes`);
               return res.status(400).json({ error: "يجب تحديد سبب الإرجاع وإضافة ملاحظات اللجنة" });
             }
             req.body.reviewDecision = req.body.reviewDecision;
@@ -1457,6 +1463,7 @@ export async function registerRoutes(
 
       res.json(updated);
     } catch (error) {
+      console.error("[PATCH /api/cases/:id] Unhandled error:", error);
       res.status(500).json({ error: "حدث خطأ في تحديث القضية" });
     }
   });

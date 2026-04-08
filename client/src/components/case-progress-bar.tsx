@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, SkipForward } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
@@ -141,6 +141,12 @@ export function CaseProgressBar({
         })}
       </div>
 
+      {disabled && (
+        <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground py-1">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>جاري تحديث المرحلة...</span>
+        </div>
+      )}
       <div className="flex items-center justify-center gap-3 flex-wrap">
         {canGoPrev && (
           <AlertDialog>

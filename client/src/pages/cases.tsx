@@ -201,6 +201,19 @@ export default function CasesPage() {
   };
   const { toast } = useToast();
 
+  const extractApiError = (err: unknown): string => {
+    const msg = (err as any)?.message || "";
+    // format from throwIfResNotOk: "400: {"error":"..."}"
+    const match = msg.match(/^\d+: (.+)$/s);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed?.error) return parsed.error;
+      } catch {}
+    }
+    return msg || "حدث خطأ غير متوقع";
+  };
+
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
@@ -284,6 +297,7 @@ export default function CasesPage() {
   const [transferData, setTransferData] = useState({ toDepartmentId: "", reason: "" });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [caseToDelete, setCaseToDelete] = useState<any>(null);
+  const [stageTransitioning, setStageTransitioning] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editCaseId, setEditCaseId] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState({
@@ -1293,24 +1307,37 @@ export default function CasesPage() {
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
+                  disabled={stageTransitioning}
                   onMoveToNext={async (notes) => {
-                    if (user) {
+                    if (!user) return;
+                    setStageTransitioning(true);
+                    try {
                       const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
                       } else {
                         toast({ title: "لا يمكن نقل القضية", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
                       }
+                    } catch (err) {
+                      toast({ title: "فشل نقل القضية", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setStageTransitioning(false);
                     }
                   }}
                   onMoveToPrevious={async (notes) => {
-                    if (user) {
+                    if (!user) return;
+                    setStageTransitioning(true);
+                    try {
                       const success = await moveToPreviousStage(selectedCase.id, user.id, user.name, notes, user.role);
                       if (success) {
                         toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
                       } else {
                         toast({ title: "لا يمكن إرجاع القضية", description: "ليس لديك صلاحية لهذا الإرجاع", variant: "destructive" });
                       }
+                    } catch (err) {
+                      toast({ title: "فشل إرجاع القضية", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setStageTransitioning(false);
                     }
                   }}
                   onSkipDataCompletion={
@@ -1320,13 +1347,19 @@ export default function CasesPage() {
                       selectedCase.primaryLawyerId === user.id ||
                       (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
                     ) ? async (notes) => {
-                      if (user) {
+                      if (!user) return;
+                      setStageTransitioning(true);
+                      try {
                         const success = await skipDataCompletion(selectedCase.id, user.id, user.name, notes);
                         if (success) {
                           toast({ title: "تم تجاوز استكمال البيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
                         } else {
                           toast({ title: "تعذّر التجاوز", variant: "destructive" });
                         }
+                      } catch (err) {
+                        toast({ title: "تعذّر التجاوز", description: extractApiError(err), variant: "destructive" });
+                      } finally {
+                        setStageTransitioning(false);
                       }
                     } : undefined
                   }
