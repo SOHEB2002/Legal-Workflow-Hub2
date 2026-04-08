@@ -12,7 +12,7 @@ import {
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, lte, gte, sql } from "drizzle-orm";
+import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
@@ -749,12 +749,15 @@ export class DatabaseStorage implements IStorage {
   // ==================== Hearings ====================
 
   async getAllHearings(): Promise<Hearing[]> {
-    const result = await db.select().from(hearings);
+    const result = await db.select().from(hearings)
+      .orderBy(asc(hearings.hearingDate), asc(hearings.hearingTime));
     return result.map(mapDbHearing);
   }
 
   async getHearingsByCase(caseId: string): Promise<Hearing[]> {
-    const result = await db.select().from(hearings).where(eq(hearings.caseId, caseId));
+    const result = await db.select().from(hearings)
+      .where(eq(hearings.caseId, caseId))
+      .orderBy(asc(hearings.hearingDate), asc(hearings.hearingTime));
     return result.map(mapDbHearing);
   }
 

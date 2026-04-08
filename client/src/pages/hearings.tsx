@@ -379,22 +379,28 @@ export default function HearingsPage() {
     ? users.filter(u => u.canBeAssignedCases)
     : users.filter(u => u.canBeAssignedCases && u.departmentId === filterDepartment);
 
-  const filteredHearings = hearings.filter((h) => {
-    if (filterStatus === "today") {
-      if (!isToday(new Date(h.hearingDate))) return false;
-    } else if (filterStatus !== "all") {
-      if (h.status !== filterStatus) return false;
-    }
-    if (filterDepartment !== "all") {
-      const deptId = getDepartmentForHearing(h);
-      if (deptId !== filterDepartment) return false;
-    }
-    if (filterLawyer !== "all") {
-      const lawyerId = getLawyerForHearing(h);
-      if (lawyerId !== filterLawyer) return false;
-    }
-    return true;
-  });
+  const filteredHearings = hearings
+    .filter((h) => {
+      if (filterStatus === "today") {
+        if (!isToday(new Date(h.hearingDate))) return false;
+      } else if (filterStatus !== "all") {
+        if (h.status !== filterStatus) return false;
+      }
+      if (filterDepartment !== "all") {
+        const deptId = getDepartmentForHearing(h);
+        if (deptId !== filterDepartment) return false;
+      }
+      if (filterLawyer !== "all") {
+        const lawyerId = getLawyerForHearing(h);
+        if (lawyerId !== filterLawyer) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const dateDiff = a.hearingDate.localeCompare(b.hearingDate);
+      if (dateDiff !== 0) return dateDiff;
+      return (a.hearingTime || "").localeCompare(b.hearingTime || "");
+    });
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
