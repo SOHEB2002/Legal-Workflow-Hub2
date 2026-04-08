@@ -27,6 +27,7 @@ import {
   canDeleteMemos,
   insertTicketSchema,
   canManageSupportTickets,
+  insertLegalDeadlineSchema,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -1235,6 +1236,25 @@ export async function registerRoutes(
         }
       }
 
+      // Update stageHistory when stage changes
+      if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
+        const existingHistory = Array.isArray(existing.stageHistory) ? existing.stageHistory : [];
+        req.body.stageHistory = [
+          ...existingHistory,
+          {
+            stage: req.body.currentStage,
+            timestamp: new Date().toISOString(),
+            userId: user.id,
+            userName: user.name || user.id,
+            notes: req.body.stageChangeNotes || "",
+          },
+        ];
+        // Set closedAt when transitioning to مقفلة
+        if (req.body.currentStage === "مقفلة") {
+          req.body.closedAt = new Date().toISOString();
+        }
+      }
+
       const updated = await storage.updateCase(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
@@ -1350,6 +1370,9 @@ export async function registerRoutes(
               await storage.updateFieldTask(t.id, { status: "ملغي" } as any);
             }
           }
+          // Recalculate activeMemoCount after cancelling memos
+          const finalActiveCount = await getActiveMemoCount(caseId);
+          await storage.updateCase(caseId, { activeMemoCount: finalActiveCount } as any);
         } catch (e) {
           console.error("Error cleaning up related entities on case close:", e);
         }
@@ -1412,12 +1435,17 @@ export async function registerRoutes(
 
   app.patch("/api/clients/:id", requireAuth, async (req, res) => {
     try {
-      const updated = await storage.updateClient(String(req.params.id), req.body);
+      const partialClientSchema = insertClientSchema.partial();
+      const validatedData = partialClientSchema.parse(req.body);
+      const updated = await storage.updateClient(String(req.params.id), validatedData as any);
       if (!updated) {
         return res.status(404).json({ error: "العميل غير موجود" });
       }
       res.json(updated);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
       res.status(500).json({ error: "حدث خطأ في تحديث العميل" });
     }
   });
@@ -1471,6 +1499,10 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      }
+      const user = (req as any).user;
+      if (!canModifyConsultation(user, consultation)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
       res.json(consultation);
     } catch (error) {
@@ -1564,10 +1596,15 @@ export async function registerRoutes(
   app.post("/api/hearings", requireAuth, async (req, res) => {
     try {
       const validatedData = insertHearingSchema.parse(req.body);
-      if (validatedData.caseId && validatedData.caseId !== "none" && !validatedData.attendingLawyerId) {
+      if (validatedData.caseId && validatedData.caseId !== "none") {
         const relatedCase = await storage.getCaseById(validatedData.caseId);
         if (relatedCase) {
-          validatedData.attendingLawyerId = relatedCase.primaryLawyerId || relatedCase.responsibleLawyerId || null;
+          if (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived) {
+            return res.status(400).json({ error: "لا يمكن إضافة جلسات لقضية مغلقة أو مؤرشفة" });
+          }
+          if (!validatedData.attendingLawyerId) {
+            validatedData.attendingLawyerId = relatedCase.primaryLawyerId || relatedCase.responsibleLawyerId || null;
+          }
         }
       }
       const newHearing = await storage.createHearing(validatedData);
@@ -1757,21 +1794,24 @@ export async function registerRoutes(
           courtNameOther: hearing.courtNameOther,
           courtRoom: hearing.courtRoom,
           status: HearingStatus.UPCOMING,
+          attendingLawyerId: hearing.attendingLawyerId,
           notes: `جلسة مؤجلة من ${hearing.hearingDate}`,
         } as any);
         createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
 
         if (data.responseRequired && effectiveCaseId) {
           const dueDate = data.nextHearingDate;
+          const postponedCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
+          const postponeAssignee = hearing.attendingLawyerId || postponedCase?.primaryLawyerId || postponedCase?.responsibleLawyerId || reqUser.id;
           const task = await storage.createFieldTask({
             title: `إعداد رد للجلسة القادمة - ${effectiveCaseId}`,
             description: `مطلوب إعداد رد قبل الجلسة القادمة بتاريخ ${data.nextHearingDate}`,
             taskType: "متابعة_محكمة",
             caseId: effectiveCaseId,
-            assignedTo: data.userId || "admin",
+            assignedTo: postponeAssignee,
             priority: "عالي",
             dueDate,
-          } as any, "system");
+          } as any, reqUser.id);
           createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
 
           const deadlineDate = new Date(data.nextHearingDate);
@@ -1799,15 +1839,17 @@ export async function registerRoutes(
       }
 
       if (data.result === HearingResult.JUDGMENT && effectiveCaseId) {
+        const judgmentCase = await storage.getCaseById(effectiveCaseId);
+        const judgmentAssignee = hearing.attendingLawyerId || judgmentCase?.primaryLawyerId || judgmentCase?.responsibleLawyerId || reqUser.id;
         const contactTask = await storage.createFieldTask({
           title: `إبلاغ العميل بنتيجة الحكم - ${effectiveCaseId}`,
           description: `صدر حكم ${data.judgmentSide || ""} - يرجى إبلاغ العميل بالتفاصيل`,
           taskType: "زيارة_عميل",
           caseId: effectiveCaseId,
-          assignedTo: data.userId || "admin",
+          assignedTo: judgmentAssignee,
           priority: "عاجل",
           dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-        } as any, "system");
+        } as any, reqUser.id);
         createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
 
         if (!data.judgmentFinal && data.judgmentSide === "ضدنا" && data.objectionFeasible) {
@@ -1816,10 +1858,10 @@ export async function registerRoutes(
             description: `مهلة الاعتراض: ${data.objectionDeadline || "غير محددة"}`,
             taskType: "متابعة_محكمة",
             caseId: effectiveCaseId,
-            assignedTo: data.userId || "admin",
+            assignedTo: judgmentAssignee,
             priority: "عاجل",
             dueDate: data.objectionDeadline || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          } as any, "system");
+          } as any, reqUser.id);
           createdTasks.push({ type: "file_objection", id: objectionTask.id, description: "مهمة تقديم اعتراض" });
 
           const objDeadline = data.objectionDeadline || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -2012,7 +2054,8 @@ export async function registerRoutes(
 
   app.post("/api/contact-logs", requireAuth, async (req, res) => {
     try {
-      const createdBy = req.body.createdBy || "unknown";
+      const user = (req as any).user;
+      const createdBy = user.id;
       const newLog = await storage.createContactLog(req.body, createdBy);
       res.status(201).json(newLog);
     } catch (error) {
@@ -2099,6 +2142,14 @@ export async function registerRoutes(
       }
 
       const validatedData = insertMemoSchema.parse(req.body);
+
+      // Block memos for closed/archived cases
+      if (validatedData.caseId) {
+        const relatedCase = await storage.getCaseById(validatedData.caseId);
+        if (relatedCase && (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived)) {
+          return res.status(400).json({ error: "لا يمكن إضافة مذكرات لقضية مغلقة أو مؤرشفة" });
+        }
+      }
 
       // Validate assignedTo user is active
       if (validatedData.assignedTo) {
@@ -2261,8 +2312,12 @@ export async function registerRoutes(
 
   app.get("/api/notifications", requireAuth, async (req, res) => {
     try {
-      const notifications = await storage.getAllNotifications();
-      res.json(notifications);
+      const user = (req as any).user;
+      const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+      const notificationList = adminRoles.includes(user.role)
+        ? await storage.getAllNotifications()
+        : await storage.getNotificationsByRecipient(user.id);
+      res.json(notificationList);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الإشعارات" });
     }
@@ -2288,6 +2343,15 @@ export async function registerRoutes(
 
   app.patch("/api/notifications/:id", requireAuth, async (req, res) => {
     try {
+      const user = (req as any).user;
+      const adminRoles = ["branch_manager", "admin_support"];
+      if (!adminRoles.includes(user.role)) {
+        const existing = await (storage as any).getNotificationById(String(req.params.id));
+        if (!existing) return res.status(404).json({ error: "الإشعار غير موجود" });
+        if (existing.recipientId !== user.id) {
+          return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا الإشعار" });
+        }
+      }
       const updated = await storage.updateNotification(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الإشعار غير موجود" });
@@ -2522,13 +2586,17 @@ export async function registerRoutes(
       const userRole = reqUser.role;
 
       const { message, isInternal } = req.body;
+      if (!message || typeof message !== "string" || !message.trim()) {
+        return res.status(400).json({ error: "نص التعليق مطلوب" });
+      }
+      const sanitizedMessage = message.trim().substring(0, 2000);
       const comments = Array.isArray(ticket.comments) ? [...(ticket.comments as any[])] : [];
       comments.push({
         id: randomUUID(),
         userId: reqUser.id,
         userName,
         userRole,
-        message,
+        message: sanitizedMessage,
         isInternal: isInternal || false,
         createdAt: new Date().toISOString(),
       });
@@ -2541,7 +2609,16 @@ export async function registerRoutes(
 
   app.post("/api/support/tickets/:id/rate", requireAuth, async (req, res) => {
     try {
+      const reqUser = (req as any).user;
+      const existingTicket = await storage.getSupportTicketById(String(req.params.id));
+      if (!existingTicket) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      if (existingTicket.submittedBy !== reqUser.id) {
+        return res.status(403).json({ error: "لا يمكنك تقييم تذاكر الآخرين" });
+      }
       const { rating, ratingComment } = req.body;
+      if (typeof rating !== "number" || rating < 1 || rating > 5) {
+        return res.status(400).json({ error: "التقييم يجب أن يكون بين 1 و 5" });
+      }
       const ticket = await storage.updateSupportTicket(String(req.params.id), { rating, ratingComment: ratingComment || "" });
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       res.json(ticket);
@@ -2567,6 +2644,7 @@ export async function registerRoutes(
   // ==================== Lawyer Performance Stats ====================
 
   app.get("/api/stats/lawyer-performance", requireAuth, requireRole("branch_manager", "cases_review_head", "consultations_review_head", "department_head", "admin_support"), async (req: AuthRequest, res) => {
+    try {
     const user = req.user!;
     let departmentFilter = req.query.departmentId as string | undefined;
     const period = req.query.period as string || "all";
@@ -2666,18 +2744,25 @@ export async function registerRoutes(
     });
 
     res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب إحصائيات الأداء" });
+    }
   });
 
   // ==================== Case Activity Log ====================
 
   app.get("/api/cases/:id/activity", requireAuth, async (req: AuthRequest, res) => {
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-    const allLogs = await storage.getCaseActivities(String(req.params.id));
-    const offset = (page - 1) * limit;
-    const total = allLogs.length;
-    const paginatedLogs = allLogs.slice(offset, offset + limit);
-    res.json({ data: paginatedLogs, total, page, limit });
+    try {
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const allLogs = await storage.getCaseActivities(String(req.params.id));
+      const offset = (page - 1) * limit;
+      const total = allLogs.length;
+      const paginatedLogs = allLogs.slice(offset, offset + limit);
+      res.json({ data: paginatedLogs, total, page, limit });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب سجل النشاط" });
+    }
   });
 
   // ==================== Case Comments ====================
@@ -2718,166 +2803,244 @@ export async function registerRoutes(
   // ==================== Case Notes ====================
 
   app.get("/api/cases/:id/notes", requireAuth, async (req: AuthRequest, res) => {
-    const notes = await storage.getCaseNotes(String(req.params.id));
-    res.json(notes);
+    try {
+      const notes = await storage.getCaseNotes(String(req.params.id));
+      res.json(notes);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب الملاحظات" });
+    }
   });
 
   app.post("/api/cases/:id/notes", requireAuth, async (req: AuthRequest, res) => {
-    const user = req.user!;
-    const caseItem = await storage.getCaseById(String(req.params.id));
-    if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-    if (!isAssignedLawyer(user, caseItem)) {
-      return res.status(403).json({ error: "إضافة الملاحظات متاحة فقط للمحامين المسندة إليهم القضية" });
+    try {
+      const user = req.user!;
+      const caseItem = await storage.getCaseById(String(req.params.id));
+      if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!isAssignedLawyer(user, caseItem) && !canModifyCase(user, caseItem)) {
+        return res.status(403).json({ error: "إضافة الملاحظات متاحة فقط لمن له علاقة بالقضية" });
+      }
+      const { content } = req.body;
+      if (!content || !String(content).trim()) {
+        return res.status(400).json({ error: "محتوى الملاحظة مطلوب" });
+      }
+      const note = await storage.createCaseNote({
+        ...req.body,
+        content: String(content).trim().substring(0, 5000),
+        caseId: String(req.params.id),
+        userId: user.id,
+        userName: user.name,
+      });
+      await storage.logCaseActivity({
+        caseId: String(req.params.id),
+        userId: user.id,
+        userName: user.name,
+        actionType: "note_added",
+        title: "تمت إضافة ملاحظة داخلية",
+      });
+      res.json(note);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في إضافة الملاحظة" });
     }
-    const note = await storage.createCaseNote({
-      ...req.body,
-      caseId: String(req.params.id),
-      userId: user.id,
-      userName: user.name,
-    });
-    await storage.logCaseActivity({
-      caseId: String(req.params.id),
-      userId: user.id,
-      userName: user.name,
-      actionType: "note_added",
-      title: "تمت إضافة ملاحظة داخلية",
-    });
-    res.json(note);
   });
 
   app.patch("/api/case-notes/:id", requireAuth, async (req: AuthRequest, res) => {
-    const note = await storage.updateCaseNote(String(req.params.id), { ...req.body, editedAt: new Date() });
-    if (!note) return res.status(404).json({ message: "ملاحظة غير موجودة" });
-    res.json(note);
+    try {
+      const user = req.user!;
+      const adminRoles = ["branch_manager", "admin_support", "department_head", "cases_review_head"];
+      const existing = await (storage as any).getCaseNoteById(String(req.params.id));
+      if (!existing) return res.status(404).json({ message: "ملاحظة غير موجودة" });
+      if (!adminRoles.includes(user.role) && existing.userId !== user.id) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الملاحظة" });
+      }
+      const note = await storage.updateCaseNote(String(req.params.id), { ...req.body, editedAt: new Date() });
+      if (!note) return res.status(404).json({ message: "ملاحظة غير موجودة" });
+      res.json(note);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في تحديث الملاحظة" });
+    }
   });
 
   app.delete("/api/case-notes/:id", requireAuth, async (req: AuthRequest, res) => {
-    await storage.deleteCaseNote(String(req.params.id));
-    res.json({ success: true });
+    try {
+      const user = req.user!;
+      const adminRoles = ["branch_manager", "admin_support"];
+      const existing = await (storage as any).getCaseNoteById(String(req.params.id));
+      if (!existing) return res.status(404).json({ message: "ملاحظة غير موجودة" });
+      if (!adminRoles.includes(user.role) && existing.userId !== user.id) {
+        return res.status(403).json({ error: "لا تملك صلاحية حذف هذه الملاحظة" });
+      }
+      await storage.deleteCaseNote(String(req.params.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في حذف الملاحظة" });
+    }
   });
 
   // ==================== Legal Deadlines ====================
 
   app.get("/api/legal-deadlines", requireAuth, async (req: AuthRequest, res) => {
-    const caseId = req.query.caseId as string;
-    if (caseId) {
-      const deadlines = await storage.getLegalDeadlinesByCase(caseId);
-      res.json(deadlines);
-    } else {
-      const deadlines = await storage.getAllLegalDeadlines();
-      res.json(deadlines);
+    try {
+      const caseId = req.query.caseId as string;
+      if (caseId) {
+        const deadlines = await storage.getLegalDeadlinesByCase(caseId);
+        res.json(deadlines);
+      } else {
+        const deadlines = await storage.getAllLegalDeadlines();
+        res.json(deadlines);
+      }
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب المواعيد النظامية" });
     }
   });
 
   app.post("/api/legal-deadlines", requireAuth, async (req: AuthRequest, res) => {
-    const deadline = await storage.createLegalDeadline(req.body);
-    if (req.body.caseId) {
-      const user = req.user!;
-      await storage.logCaseActivity({
-        caseId: req.body.caseId,
-        userId: user.id,
-        userName: user.name,
-        actionType: "case_updated",
-        title: `تم إضافة موعد نظامي: ${req.body.title}`,
-      });
+    try {
+      const validated = insertLegalDeadlineSchema.parse(req.body);
+      const deadline = await storage.createLegalDeadline(validated);
+      if (validated.caseId) {
+        const user = req.user!;
+        await storage.logCaseActivity({
+          caseId: validated.caseId,
+          userId: user.id,
+          userName: user.name,
+          actionType: "case_updated",
+          title: `تم إضافة موعد نظامي: ${validated.title}`,
+        });
+      }
+      res.json(deadline);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      res.status(500).json({ error: "حدث خطأ في إضافة الموعد النظامي" });
     }
-    res.json(deadline);
   });
 
   app.patch("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
-    const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
-    if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
-    res.json(deadline);
+    try {
+      const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
+      if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
+      res.json(deadline);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في تحديث الموعد النظامي" });
+    }
   });
 
   app.delete("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
-    await storage.deleteLegalDeadline(String(req.params.id));
-    res.json({ success: true });
+    try {
+      await storage.deleteLegalDeadline(String(req.params.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في حذف الموعد النظامي" });
+    }
   });
 
   // ==================== Delegations ====================
 
   app.get("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
-    const delegations = await storage.getAllDelegations();
-    res.json(delegations);
+    try {
+      const delegations = await storage.getAllDelegations();
+      res.json(delegations);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التفويضات" });
+    }
   });
 
   app.post("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
-    const user = req.user!;
-    const delegation = await storage.createDelegation({
-      ...req.body,
-      fromUserId: user.id,
-    });
-    const allUsers = await storage.getAllUsers();
-    const deptHead = allUsers.find(u => u.departmentId === user.departmentId && u.role === "department_head");
-    if (deptHead) {
-      await storage.createNotification({
-        type: "delegation_requested",
-        title: "طلب تفويض جديد",
-        message: `${user.name} يطلب تفويض قضاياه إلى محامي آخر من ${req.body.startDate} إلى ${req.body.endDate}`,
-        priority: "high",
-        status: "pending",
-        senderId: user.id,
-        senderName: user.name,
-        recipientId: deptHead.id,
-        relatedType: "task",
-        relatedId: delegation.id,
-        requiresResponse: true,
+    try {
+      const user = req.user!;
+      const delegation = await storage.createDelegation({
+        ...req.body,
+        fromUserId: user.id,
       });
+      const allUsers = await storage.getAllUsers();
+      const deptHead = allUsers.find(u => u.departmentId === user.departmentId && u.role === "department_head");
+      if (deptHead) {
+        await storage.createNotification({
+          type: "delegation_requested",
+          title: "طلب تفويض جديد",
+          message: `${user.name} يطلب تفويض قضاياه إلى محامي آخر من ${req.body.startDate} إلى ${req.body.endDate}`,
+          priority: "high",
+          status: "pending",
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: deptHead.id,
+          relatedType: "task",
+          relatedId: delegation.id,
+          requiresResponse: true,
+        });
+      }
+      res.json(delegation);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في إنشاء التفويض" });
     }
-    res.json(delegation);
   });
 
   app.patch("/api/delegations/:id", requireAuth, async (req: AuthRequest, res) => {
-    const delegation = await storage.updateDelegation(String(req.params.id), req.body);
-    if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
-    res.json(delegation);
+    try {
+      const user = req.user!;
+      const adminRoles = ["branch_manager", "admin_support", "department_head"];
+      const existing = await storage.getDelegation(String(req.params.id));
+      if (!existing) return res.status(404).json({ message: "تفويض غير موجود" });
+      if (!adminRoles.includes(user.role) && existing.fromUserId !== user.id) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا التفويض" });
+      }
+      const delegation = await storage.updateDelegation(String(req.params.id), req.body);
+      if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
+      res.json(delegation);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في تحديث التفويض" });
+    }
   });
 
-  app.post("/api/delegations/:id/approve", requireAuth, async (req: AuthRequest, res) => {
-    const user = req.user!;
+  app.post("/api/delegations/:id/approve", requireAuth, requireRole("branch_manager", "department_head", "admin_support"), async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
 
-    // Check the delegation exists first and validate users are active
-    const existingDelegation = await storage.getDelegation(String(req.params.id));
-    if (!existingDelegation) return res.status(404).json({ message: "تفويض غير موجود" });
+      // Check the delegation exists first and validate users are active
+      const existingDelegation = await storage.getDelegation(String(req.params.id));
+      if (!existingDelegation) return res.status(404).json({ message: "تفويض غير موجود" });
 
-    // Validate both fromUser and toUser are active before approving
-    const { valid, inactiveUsers } = await validateAssignedUsersActive([existingDelegation.fromUserId, existingDelegation.toUserId]);
-    if (!valid) {
-      return res.status(400).json({ error: "لا يمكن اعتماد التفويض: أحد المستخدمين غير نشط" });
-    }
+      // Validate both fromUser and toUser are active before approving
+      const { valid } = await validateAssignedUsersActive([existingDelegation.fromUserId, existingDelegation.toUserId]);
+      if (!valid) {
+        return res.status(400).json({ error: "لا يمكن اعتماد التفويض: أحد المستخدمين غير نشط" });
+      }
 
-    const delegation = await storage.updateDelegation(String(req.params.id), {
-      status: "نشط",
-      approvedBy: user.id,
-      approvedAt: new Date(),
-    });
-    if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
-    const toUser = await storage.getUser(delegation.toUserId);
-    const fromUser = await storage.getUser(delegation.fromUserId);
-    if (toUser && fromUser) {
-      await storage.createNotification({
-        type: "delegation_approved",
-        title: "تم اعتماد التفويض",
-        message: `تم تفويضك على قضايا ${fromUser.name} من ${delegation.startDate} إلى ${delegation.endDate}`,
-        priority: "high",
-        status: "pending",
-        senderId: user.id,
-        senderName: user.name,
-        recipientId: toUser.id,
+      const delegation = await storage.updateDelegation(String(req.params.id), {
+        status: "نشط",
+        approvedBy: user.id,
+        approvedAt: new Date(),
       });
-      await storage.createNotification({
-        type: "delegation_approved",
-        title: "تم اعتماد التفويض",
-        message: `تمت الموافقة على تفويض قضاياك إلى ${toUser.name}`,
-        priority: "medium",
-        status: "pending",
-        senderId: user.id,
-        senderName: user.name,
-        recipientId: fromUser.id,
-      });
+      if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
+      const toUser = await storage.getUser(delegation.toUserId);
+      const fromUser = await storage.getUser(delegation.fromUserId);
+      if (toUser && fromUser) {
+        await storage.createNotification({
+          type: "delegation_approved",
+          title: "تم اعتماد التفويض",
+          message: `تم تفويضك على قضايا ${fromUser.name} من ${delegation.startDate} إلى ${delegation.endDate}`,
+          priority: "high",
+          status: "pending",
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: toUser.id,
+        });
+        await storage.createNotification({
+          type: "delegation_approved",
+          title: "تم اعتماد التفويض",
+          message: `تمت الموافقة على تفويض قضاياك إلى ${toUser.name}`,
+          priority: "medium",
+          status: "pending",
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: fromUser.id,
+        });
+      }
+      res.json(delegation);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في اعتماد التفويض" });
     }
-    res.json(delegation);
   });
 
   // ==================== Smart Search ====================

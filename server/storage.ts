@@ -7,7 +7,7 @@ import {
   type CaseCommentRow, type InsertCaseComment,
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
-  CaseStatus, CaseStage,
+  CaseStatus, CaseStage, CaseClassification,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable
 } from "@shared/schema";
@@ -306,6 +306,7 @@ function mapDbHearing(dbHearing: any): Hearing {
     adminTasksCreated: dbHearing.adminTasksCreated ?? false,
     opponentMemos: dbHearing.opponentMemos || "",
     hearingMinutes: dbHearing.hearingMinutes || "",
+    attendingLawyerId: dbHearing.attendingLawyerId || null,
     reminderSent24h: dbHearing.reminderSent24h ?? false,
     reminderSent1h: dbHearing.reminderSent1h ?? false,
     googleCalendarEventId: dbHearing.googleCalendarEventId,
@@ -793,6 +794,7 @@ export class DatabaseStorage implements IStorage {
       hearingMinutes: "",
       reminderSent24h: false,
       reminderSent1h: false,
+      attendingLawyerId: data.attendingLawyerId || null,
       googleCalendarEventId: null,
       notes: data.notes || "",
       createdAt: now,
@@ -980,6 +982,11 @@ export class DatabaseStorage implements IStorage {
     
     await db.insert(notifications).values(newNotification);
     return mapDbNotification(newNotification);
+  }
+
+  async getNotificationById(id: string): Promise<Notification | undefined> {
+    const result = await db.select().from(notifications).where(eq(notifications.id, id));
+    return result[0] ? mapDbNotification(result[0]) : undefined;
   }
 
   async updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined> {
@@ -1229,6 +1236,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ==================== Case Notes ====================
+
+  async getCaseNoteById(id: string): Promise<CaseNote | undefined> {
+    const result = await db.select().from(caseNotes).where(eq(caseNotes.id, id));
+    return result[0];
+  }
 
   async getCaseNotes(caseId: string): Promise<CaseNote[]> {
     return await db.select().from(caseNotes)
