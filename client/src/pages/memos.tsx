@@ -411,7 +411,7 @@ export default function MemosPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {filteredMemos.length === 0 ? (
+          {!isLoading && filteredMemos.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <ScrollText className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p>لا توجد مذكرات مطابقة للبحث</p>
