@@ -165,7 +165,6 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   // Forward transitions
   { from: "استلام", to: "دراسة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "دراسة", to: "إعداد_الرد", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "دراسة", to: "لجنة_المراجعة", allowedRoles: ["department_head", "branch_manager"] },
   { from: "إعداد_الرد", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
   { from: "لجنة_المراجعة", to: "جاهز", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
   { from: "لجنة_المراجعة", to: "تعديلات", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
@@ -723,14 +722,33 @@ export async function registerRoutes(
         return res.status(401).json({ error: "يجب تسجيل الدخول" });
       }
 
+      const allCases = await storage.getAllCases();
       const { role, id: userId, departmentId } = user;
 
-      if (!["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "department_head", "employee"].includes(role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لعرض القضايا" });
+      // Strip stageHistory from list responses — it can be 20-50 entries per case
+      // and is only needed in the case detail view (GET /api/cases/:id).
+      const stripForList = (cases: any[]) =>
+        cases.map(({ stageHistory: _sh, ...c }) => c);
+
+      if (["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"].includes(role)) {
+        return res.json(stripForList(allCases));
       }
 
-      const cases = await storage.getCasesByRole(role, userId, departmentId);
-      return res.json(cases);
+      if (role === "department_head") {
+        const filtered = allCases.filter((c: any) => c.departmentId === departmentId);
+        return res.json(stripForList(filtered));
+      }
+
+      if (role === "employee") {
+        const filtered = allCases.filter((c: any) =>
+          (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) ||
+          c.primaryLawyerId === userId ||
+          c.responsibleLawyerId === userId
+        );
+        return res.json(stripForList(filtered));
+      }
+
+      return res.status(403).json({ error: "ليس لديك صلاحية لعرض القضايا" });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب القضايا" });
     }
@@ -1539,14 +1557,27 @@ export async function registerRoutes(
         return res.status(401).json({ error: "يجب تسجيل الدخول" });
       }
 
+      const allConsultations = await storage.getAllConsultations();
       const { role, id: userId, departmentId } = user;
 
-      if (!["branch_manager", "admin_support", "consultations_review_head", "cases_review_head", "department_head", "employee"].includes(role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لعرض الاستشارات" });
+      if (["branch_manager", "admin_support", "consultations_review_head", "cases_review_head"].includes(role)) {
+        return res.json(allConsultations);
       }
 
-      const result = await storage.getConsultationsByRole(role, userId, departmentId);
-      return res.json(result);
+      if (role === "department_head") {
+        const filtered = allConsultations.filter((c: any) => c.departmentId === departmentId);
+        return res.json(filtered);
+      }
+
+      if (role === "employee") {
+        const filtered = allConsultations.filter((c: any) =>
+          c.departmentId === departmentId ||
+          c.assignedTo === userId
+        );
+        return res.json(filtered);
+      }
+
+      return res.status(403).json({ error: "ليس لديك صلاحية لعرض الاستشارات" });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الاستشارات" });
     }
