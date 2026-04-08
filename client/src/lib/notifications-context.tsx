@@ -349,9 +349,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     await fetchNotifications();
   }, [fetchNotifications]);
 
+  const userId = user?.id;
   useEffect(() => {
     prevCountRef.current = 0;
-    if (user) {
+    if (userId) {
       fetchNotifications();
 
       if (pollingRef.current) {
@@ -359,7 +360,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       }
       pollingRef.current = setInterval(() => {
         fetchNotifications();
-      }, 15000);
+      }, 60000);
     } else {
       setNotifications([]);
       setIsLoading(false);
@@ -371,7 +372,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         pollingRef.current = null;
       }
     };
-  }, [user, fetchNotifications]);
+  }, [userId, fetchNotifications]);
 
   useEffect(() => {
     localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));

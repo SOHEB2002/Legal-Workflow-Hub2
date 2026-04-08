@@ -57,13 +57,14 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     }
   }, []);
 
+  const userId = user?.id;
   useEffect(() => {
-    if (user) {
+    if (userId) {
       fetchConsultations();
     } else {
       setConsultations([]);
     }
-  }, [user, fetchConsultations]);
+  }, [userId, fetchConsultations]);
 
   const addConsultation = async (data: Partial<Consultation>, createdBy: string): Promise<Consultation> => {
     const consultationData = {

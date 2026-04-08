@@ -116,13 +116,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const userId = user?.id;
   useEffect(() => {
-    if (user) {
+    if (userId) {
       fetchCases();
     } else {
       setCases([]);
     }
-  }, [user, fetchCases]);
+  }, [userId, fetchCases]);
 
   const addCase = async (data: Partial<LawCase>, createdBy: string, createdByName: string): Promise<LawCase> => {
     const now = new Date().toISOString();

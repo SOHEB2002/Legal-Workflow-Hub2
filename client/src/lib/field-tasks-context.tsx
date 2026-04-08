@@ -53,10 +53,11 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
     }
   }, []);
 
+  const userId = user?.id;
   useEffect(() => {
-    if (user) fetchFieldTasks();
+    if (userId) fetchFieldTasks();
     else { setFieldTasks([]); setIsLoading(false); }
-  }, [user, fetchFieldTasks]);
+  }, [userId, fetchFieldTasks]);
 
   const addFieldTask = async (data: Partial<FieldTask>): Promise<FieldTask> => {
     const res = await apiRequest("POST", "/api/field-tasks", {
