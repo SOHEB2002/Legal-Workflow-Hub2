@@ -1450,7 +1450,7 @@ export function canAssignInDepartment(role: UserRoleType): boolean {
 }
 
 export function canAssignFieldTasks(role: UserRoleType): boolean {
-  return ["branch_manager", "cases_review_head", "consultations_review_head", "department_head"].includes(role);
+  return ["branch_manager", "admin_support"].includes(role);
 }
 
 export function canSendNotifications(role: UserRoleType): boolean {
