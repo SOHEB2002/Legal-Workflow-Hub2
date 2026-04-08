@@ -215,6 +215,7 @@ function mapDbCase(dbCase: any): LawCase {
     taradiNumber: dbCase.taradiNumber || null,
     mohrStatus: dbCase.mohrStatus || null,
     mohrNumber: dbCase.mohrNumber || null,
+    memoRequired: dbCase.memoRequired ?? false,
     amicableSettlementDirected: dbCase.amicableSettlementDirected ?? false,
     adminCaseSubType: dbCase.adminCaseSubType || null,
     prescriptionDate: dbCase.prescriptionDate || null,

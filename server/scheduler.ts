@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { storage } from "./storage";
+import { calculateSmartPriority } from "./routes";
 
 export function startScheduler() {
   console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
@@ -20,6 +21,7 @@ export function startScheduler() {
     await checkLegalDeadlines();
     await checkDelegationExpiry();
     await checkContactFollowUps();
+    await recalculateCasePriorities();
   });
 
   cron.schedule("0 7 * * 0", async () => {
@@ -622,5 +624,31 @@ async function autoArchiveClosedCases() {
     }
   } catch (error) {
     console.error("Error auto-archiving cases:", error);
+  }
+}
+
+async function recalculateCasePriorities() {
+  try {
+    console.log("Recalculating smart priorities for all active cases...");
+    const allCases = await storage.getAllCases();
+    let updated = 0;
+    for (const c of allCases) {
+      if (c.isArchived || c.currentStage === "مقفلة") continue;
+      const smartPriority = calculateSmartPriority(
+        c.caseType,
+        c.caseClassification,
+        c.memoRequired,
+        c.nextHearingDate,
+        c.priority,
+        c.responseDeadline
+      );
+      if (smartPriority !== c.priority) {
+        await storage.updateCase(c.id, { priority: smartPriority } as any);
+        updated++;
+      }
+    }
+    console.log(`Priority recalculation complete: ${updated} cases updated.`);
+  } catch (error) {
+    console.error("Error recalculating case priorities:", error);
   }
 }

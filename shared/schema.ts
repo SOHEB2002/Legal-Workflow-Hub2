@@ -977,6 +977,7 @@ export interface LawCase {
   taradiNumber: string | null;
   mohrStatus: string | null;
   mohrNumber: string | null;
+  memoRequired: boolean;
   amicableSettlementDirected: boolean;
   adminCaseSubType: string | null;
   prescriptionDate: string | null;

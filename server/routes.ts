@@ -230,6 +230,43 @@ async function getActiveMemoCount(caseId: string): Promise<number> {
   return memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
 }
 
+export function calculateSmartPriority(
+  caseType: string,
+  classification: string,
+  memoRequired: boolean,
+  nextHearingDate: string | null,
+  userSetPriority: string,
+  responseDeadline: string | null
+): string {
+  let score = 0;
+
+  if (classification === "مدعى_عليه") score += 30;
+  if (memoRequired) score += 20;
+
+  if (nextHearingDate) {
+    const days = Math.ceil((new Date(nextHearingDate).getTime() - Date.now()) / 86400000);
+    if (days < 7) score += 40;
+    else if (days < 14) score += 25;
+    else if (days < 30) score += 10;
+  }
+
+  if (responseDeadline) {
+    const days = Math.ceil((new Date(responseDeadline).getTime() - Date.now()) / 86400000);
+    if (days < 3) score += 40;
+    else if (days < 7) score += 25;
+    else if (days < 14) score += 10;
+  }
+
+  if (userSetPriority === "عاجل") score += 30;
+  else if (userSetPriority === "عالي") score += 20;
+  else if (userSetPriority === "متوسط") score += 10;
+
+  if (score >= 70) return "عاجل";
+  if (score >= 45) return "عالي";
+  if (score >= 20) return "متوسط";
+  return "منخفض";
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -740,6 +777,19 @@ export async function registerRoutes(
 
       const autoCreated: any[] = [];
       const classification = validatedData.caseClassification || "مدعي_قضية_جديدة";
+
+      const smartPriority = calculateSmartPriority(
+        validatedData.caseType || "",
+        classification,
+        !!(validatedData as any).memoRequired,
+        (req.body.nextHearingDate as string | null) || null,
+        validatedData.priority || "متوسط",
+        validatedData.responseDeadline || null
+      );
+      if (smartPriority !== newCase.priority) {
+        await storage.updateCase(newCase.id, { priority: smartPriority } as any);
+        (newCase as any).priority = smartPriority;
+      }
 
       if (classification === CaseClassification.DEFENDANT) {
         const deadlineStr = validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -1637,6 +1687,28 @@ export async function registerRoutes(
       const newHearing = await storage.createHearing(validatedData);
       const user = (req as any).user;
       const createdMemos: any[] = [];
+
+      if (validatedData.caseId && validatedData.caseId !== "none") {
+        try {
+          const linkedCase = await storage.getCaseById(validatedData.caseId);
+          if (linkedCase && !linkedCase.isArchived) {
+            const smartPriority = calculateSmartPriority(
+              linkedCase.caseType,
+              linkedCase.caseClassification,
+              linkedCase.memoRequired,
+              validatedData.hearingDate,
+              linkedCase.priority,
+              linkedCase.responseDeadline
+            );
+            if (smartPriority !== linkedCase.priority) {
+              await storage.updateCase(linkedCase.id, { priority: smartPriority } as any);
+            }
+          }
+        } catch (e) {
+          console.error("Error recalculating priority on hearing create:", e);
+        }
+      }
+
       if (user && validatedData.caseId) {
         try {
           await storage.logCaseActivity({
@@ -1711,6 +1783,25 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
+
+      if (relatedCase && !relatedCase.isArchived && req.body.hearingDate) {
+        try {
+          const smartPriority = calculateSmartPriority(
+            relatedCase.caseType,
+            relatedCase.caseClassification,
+            relatedCase.memoRequired,
+            req.body.hearingDate,
+            relatedCase.priority,
+            relatedCase.responseDeadline
+          );
+          if (smartPriority !== relatedCase.priority) {
+            await storage.updateCase(relatedCase.id, { priority: smartPriority } as any);
+          }
+        } catch (e) {
+          console.error("Error recalculating priority on hearing update:", e);
+        }
+      }
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث الجلسة" });
