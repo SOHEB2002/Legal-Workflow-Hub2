@@ -30,7 +30,8 @@ export function MemosProvider({ children }: { children: React.ReactNode }) {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+    // NOTE: Do NOT invalidate /api/cases here — memos never alter case list data
+    // and invalidating cases refetches all 254+ cases on every memo mutation.
   };
 
   const addMemo = async (data: InsertMemo & { createdBy: string }): Promise<Memo> => {

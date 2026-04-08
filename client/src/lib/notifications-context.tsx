@@ -359,7 +359,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       }
       pollingRef.current = setInterval(() => {
         fetchNotifications();
-      }, 15000);
+      }, 60000); // poll every 60s — was 15s, causing 4x the server load
     } else {
       setNotifications([]);
       setIsLoading(false);

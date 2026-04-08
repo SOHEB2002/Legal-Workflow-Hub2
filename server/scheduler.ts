@@ -58,13 +58,16 @@ function parseHearingDateTime(dateStr: string, timeStr: string | null): Date | n
   }
 }
 
-async function hasExistingNotification(
+// Synchronous helper — accepts a pre-fetched array so callers can batch
+// the getAllNotifications() call once per scheduler function instead of
+// once per loop iteration (was causing hundreds of full-table scans).
+function notificationExists(
+  cached: any[],
   relatedId: string,
   titlePattern: string,
   recipientId?: string
-): Promise<boolean> {
-  const allNotifications = await storage.getAllNotifications();
-  return allNotifications.some(
+): boolean {
+  return cached.some(
     (n) =>
       n.relatedId === relatedId &&
       n.title.includes(titlePattern) &&
@@ -74,7 +77,12 @@ async function hasExistingNotification(
 
 async function checkUnupdatedHearings() {
   try {
-    const allHearings = await storage.getAllHearings();
+    // Pre-fetch shared data ONCE — prevents N+1 inside the loop
+    const [allHearings, allUsers, allNotifications] = await Promise.all([
+      storage.getAllHearings(),
+      storage.getAllUsers(),
+      storage.getAllNotifications(),
+    ]);
     const now = new Date();
 
     for (const hearing of allHearings) {
@@ -86,23 +94,20 @@ async function checkUnupdatedHearings() {
       const hoursSinceHearing = (now.getTime() - hearingDateTime.getTime()) / (1000 * 60 * 60);
 
       if (hoursSinceHearing >= 8) {
-        const alreadySent8h = await hasExistingNotification(hearing.id, "جلسة لم تُحدَّث نتيجتها");
-        if (!alreadySent8h) {
-          await sendUnupdatedHearingAlert(hearing);
+        if (!notificationExists(allNotifications, hearing.id, "جلسة لم تُحدَّث نتيجتها")) {
+          await sendUnupdatedHearingAlert(hearing, allUsers, allNotifications);
         }
       }
 
       if (hoursSinceHearing >= 24) {
-        const alreadySent24h = await hasExistingNotification(hearing.id, "جلسة متأخرة التحديث 24 ساعة");
-        if (!alreadySent24h) {
-          await sendEscalatedHearingAlert(hearing);
+        if (!notificationExists(allNotifications, hearing.id, "جلسة متأخرة التحديث 24 ساعة")) {
+          await sendEscalatedHearingAlert(hearing, allUsers);
         }
       }
 
       if (hoursSinceHearing >= 48) {
-        const alreadySent48h = await hasExistingNotification(hearing.id, "جلسة متأخرة 48 ساعة");
-        if (!alreadySent48h) {
-          await sendFinalEscalationAlert(hearing);
+        if (!notificationExists(allNotifications, hearing.id, "جلسة متأخرة 48 ساعة")) {
+          await sendFinalEscalationAlert(hearing, allUsers);
         }
       }
     }
@@ -111,7 +116,7 @@ async function checkUnupdatedHearings() {
   }
 }
 
-async function sendUnupdatedHearingAlert(hearing: any) {
+async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotifications: any[]) {
   const caseInfo = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
   const caseLabel = caseInfo ? caseInfo.caseNumber : "غير محددة";
 
@@ -120,11 +125,10 @@ async function sendUnupdatedHearingAlert(hearing: any) {
   if (caseInfo?.responsibleLawyerId) {
     recipientIds.push(caseInfo.responsibleLawyerId);
 
-    const lawyer = await storage.getUser(caseInfo.responsibleLawyerId);
+    const lawyer = allUsers.find((u: any) => u.id === caseInfo.responsibleLawyerId);
     if (lawyer?.departmentId) {
-      const allUsers = await storage.getAllUsers();
       const deptHead = allUsers.find(
-        (u) => u.departmentId === lawyer.departmentId && u.role === "department_head"
+        (u: any) => u.departmentId === lawyer.departmentId && u.role === "department_head"
       );
       if (deptHead) recipientIds.push(deptHead.id);
     }
@@ -155,12 +159,11 @@ async function sendUnupdatedHearingAlert(hearing: any) {
   }
 }
 
-async function sendEscalatedHearingAlert(hearing: any) {
+async function sendEscalatedHearingAlert(hearing: any, allUsers: any[]) {
   const caseInfo = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
   const caseLabel = caseInfo ? caseInfo.caseNumber : "غير محددة";
 
-  const allUsers = await storage.getAllUsers();
-  const branchManager = allUsers.find((u) => u.role === "branch_manager");
+  const branchManager = allUsers.find((u: any) => u.role === "branch_manager");
 
   if (branchManager) {
     await storage.createNotification({
@@ -179,13 +182,12 @@ async function sendEscalatedHearingAlert(hearing: any) {
   }
 }
 
-async function sendFinalEscalationAlert(hearing: any) {
+async function sendFinalEscalationAlert(hearing: any, allUsers: any[]) {
   const caseInfo = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
   const caseLabel = caseInfo ? caseInfo.caseNumber : "غير محددة";
 
-  const allUsers = await storage.getAllUsers();
   const topManagement = allUsers.filter(
-    (u) => u.role === "branch_manager" || u.role === "cases_review_head"
+    (u: any) => u.role === "branch_manager" || u.role === "cases_review_head"
   );
 
   for (const manager of topManagement) {
@@ -207,7 +209,13 @@ async function sendFinalEscalationAlert(hearing: any) {
 
 async function checkUpcomingHearingReminders() {
   try {
-    const allHearings = await storage.getAllHearings();
+    // Pre-fetch once — prevents getCaseById N+1 and getAllNotifications N+1
+    const [allHearings, allCases, allNotifications] = await Promise.all([
+      storage.getAllHearings(),
+      storage.getAllCases(),
+      storage.getAllNotifications(),
+    ]);
+    const caseMap = new Map(allCases.map((c: any) => [c.id, c]));
     const now = new Date();
 
     for (const hearing of allHearings) {
@@ -219,12 +227,12 @@ async function checkUpcomingHearingReminders() {
       const hoursUntilHearing = (hearingDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
 
       if (hoursUntilHearing > 0 && hoursUntilHearing <= 48 && !hearing.reminderSent24h) {
-        const caseInfo = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
+        const caseInfo = hearing.caseId ? caseMap.get(hearing.caseId) : null;
         const recipientId = caseInfo?.responsibleLawyerId;
         if (!recipientId) continue;
         const caseLabel = caseInfo ? caseInfo.caseNumber : "";
 
-        const alreadySent48h = await hasExistingNotification(hearing.id, "تذكير: جلسة بعد", recipientId);
+        const alreadySent48h = notificationExists(allNotifications, hearing.id, "تذكير: جلسة بعد", recipientId);
 
         if (hoursUntilHearing > 24 && !alreadySent48h) {
           await storage.createNotification({
@@ -335,7 +343,14 @@ async function checkMemoDeadlines() {
 
 async function checkLegalDeadlines() {
   try {
-    const deadlines = await storage.getAllLegalDeadlines();
+    // Pre-fetch once — was calling getCaseById + getAllUsers per deadline item
+    const [deadlines, allCases, allUsers, allNotifications] = await Promise.all([
+      storage.getAllLegalDeadlines(),
+      storage.getAllCases(),
+      storage.getAllUsers(),
+      storage.getAllNotifications(),
+    ]);
+    const caseMap = new Map(allCases.map((c: any) => [c.id, c]));
     const now = new Date();
 
     for (const deadline of deadlines) {
@@ -345,13 +360,12 @@ async function checkLegalDeadlines() {
       if (isNaN(deadlineDate.getTime())) continue;
 
       const daysLeft = (deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-      const caseInfo = await storage.getCaseById(deadline.caseId);
+      const caseInfo = deadline.caseId ? caseMap.get(deadline.caseId) : null;
       const recipientId = caseInfo?.responsibleLawyerId;
       if (!recipientId) continue;
 
       if (daysLeft > 6 && daysLeft <= 7) {
-        const exists = await hasExistingNotification(deadline.id, "موعد نظامي بعد 7 أيام", recipientId);
-        if (!exists) {
+        if (!notificationExists(allNotifications, deadline.id, "موعد نظامي بعد 7 أيام", recipientId)) {
           await storage.createNotification({
             type: "legal_deadline_7_days",
             title: "تنبيه: موعد نظامي بعد 7 أيام",
@@ -368,8 +382,7 @@ async function checkLegalDeadlines() {
       }
 
       if (daysLeft > 2 && daysLeft <= 3) {
-        const exists = await hasExistingNotification(deadline.id, "موعد نظامي بعد 3 أيام", recipientId);
-        if (!exists) {
+        if (!notificationExists(allNotifications, deadline.id, "موعد نظامي بعد 3 أيام", recipientId)) {
           await storage.createNotification({
             type: "legal_deadline_3_days",
             title: "عاجل: موعد نظامي بعد 3 أيام",
@@ -386,8 +399,7 @@ async function checkLegalDeadlines() {
       }
 
       if (daysLeft > 0 && daysLeft <= 1) {
-        const exists = await hasExistingNotification(deadline.id, "موعد نظامي غداً", recipientId);
-        if (!exists) {
+        if (!notificationExists(allNotifications, deadline.id, "موعد نظامي غداً", recipientId)) {
           await storage.createNotification({
             type: "legal_deadline_1_day",
             title: "عاجل جداً: موعد نظامي غداً",
@@ -405,17 +417,15 @@ async function checkLegalDeadlines() {
       }
 
       if (daysLeft < 0) {
-        const exists = await hasExistingNotification(deadline.id, "موعد نظامي فائت", recipientId);
-        if (!exists) {
+        if (!notificationExists(allNotifications, deadline.id, "موعد نظامي فائت", recipientId)) {
           await storage.updateLegalDeadline(deadline.id, { status: "فائت" });
 
-          const allUsers = await storage.getAllUsers();
           const recipients = [recipientId];
           if (caseInfo?.departmentId) {
-            const deptHead = allUsers.find(u => u.departmentId === caseInfo.departmentId && u.role === "department_head");
+            const deptHead = allUsers.find((u: any) => u.departmentId === caseInfo.departmentId && u.role === "department_head");
             if (deptHead) recipients.push(deptHead.id);
           }
-          const branchManager = allUsers.find(u => u.role === "branch_manager");
+          const branchManager = allUsers.find((u: any) => u.role === "branch_manager");
           if (branchManager) recipients.push(branchManager.id);
 
           for (const rid of Array.from(new Set(recipients))) {
@@ -490,33 +500,34 @@ async function checkDelegationExpiry() {
 
 async function checkContactFollowUps() {
   try {
-    const allClients = await storage.getAllClients();
+    // Pre-fetch all data at once — was calling getContactLogsByClient() per client (N+1)
+    const [allClients, allContactLogs, allNotifications] = await Promise.all([
+      storage.getAllClients(),
+      storage.getAllContactLogs(),
+      storage.getAllNotifications(),
+    ]);
+    const clientMap = new Map(allClients.map((c: any) => [c.id, c]));
     const now = new Date();
     const todayStr = now.toISOString().split("T")[0];
 
-    for (const client of allClients) {
-      const contactLogs = await storage.getContactLogsByClient(client.id);
+    for (const log of allContactLogs) {
+      if (!log.nextFollowUpDate || (log.followUpStatus as string) === "تمت_المتابعة") continue;
+      if (log.nextFollowUpDate >= todayStr) continue;
 
-      for (const log of contactLogs) {
-        if (log.nextFollowUpDate && (log.followUpStatus as string) !== "تمت_المتابعة") {
-          if (log.nextFollowUpDate < todayStr) {
-            const exists = await hasExistingNotification(log.id, "متابعة تواصل متأخرة", log.createdBy);
-            if (!exists) {
-              await storage.createNotification({
-                type: "contact_followup_overdue",
-                title: "متابعة تواصل متأخرة",
-                message: `متابعة العميل ${client.individualName || client.companyName || ""} متأخرة عن الموعد (${log.nextFollowUpDate}). يرجى المتابعة.`,
-                priority: "high",
-                status: "pending",
-                senderId: "system",
-                senderName: "النظام التلقائي",
-                recipientId: log.createdBy,
-                relatedType: "case" as any,
-                relatedId: client.id,
-              });
-            }
-          }
-        }
+      const client = clientMap.get(log.clientId);
+      if (!notificationExists(allNotifications, log.id, "متابعة تواصل متأخرة", log.createdBy)) {
+        await storage.createNotification({
+          type: "contact_followup_overdue",
+          title: "متابعة تواصل متأخرة",
+          message: `متابعة العميل ${client?.individualName || client?.companyName || ""} متأخرة عن الموعد (${log.nextFollowUpDate}). يرجى المتابعة.`,
+          priority: "high",
+          status: "pending",
+          senderId: "system",
+          senderName: "النظام التلقائي",
+          recipientId: log.createdBy,
+          relatedType: "case" as any,
+          relatedId: log.clientId,
+        });
       }
     }
   } catch (error) {

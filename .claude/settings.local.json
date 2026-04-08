@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(npm run:*)",
+      "Bash(npx drizzle-kit:*)",
+      "Bash(node node_modules/.bin/drizzle-kit push)",
+      "Bash(where npm:*)",
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(grep -n \"app\\\\\\\\..*\\\\\\(/api/cases\" server/routes.ts)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

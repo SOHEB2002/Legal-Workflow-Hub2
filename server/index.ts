@@ -5,10 +5,24 @@ import { createServer } from "http";
 import { authMiddleware, csrfProtection } from "./auth";
 import { startScheduler } from "./scheduler";
 import { storage } from "./storage";
+import { pool } from "./db";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 const app = express();
 app.set("trust proxy", 1);
 const httpServer = createServer(app);
+
+// Short-lived cache for the "is this user still active?" DB check.
+// We verify once per request, but at 10+ parallel API calls on login the
+// check fires many times for the same user within milliseconds. A 30-second
+// cache cuts those redundant DB reads to virtually zero.
+const activeUserCache = new Map<string, { isActive: boolean; ts: number }>();
+const USER_CACHE_TTL_MS = 30_000;
+
+function clearActiveUserCache(userId: string) {
+  activeUserCache.delete(userId);
+}
 
 declare module "http" {
   interface IncomingMessage {
@@ -32,8 +46,19 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
   const user = (req as any).user;
   if (!user || !req.path.startsWith("/api/")) return next();
   if (["/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/emergency-reset"].includes(req.path)) return next();
+
+  const cached = activeUserCache.get(user.id);
+  if (cached && Date.now() - cached.ts < USER_CACHE_TTL_MS) {
+    if (!cached.isActive) {
+      return res.status(401).json({ error: "الحساب معطّل أو محذوف. أعد تسجيل الدخول" });
+    }
+    return next();
+  }
+
   const dbUser = await storage.getUser(user.id);
-  if (!dbUser || !dbUser.isActive) {
+  const isActive = !!(dbUser?.isActive);
+  activeUserCache.set(user.id, { isActive, ts: Date.now() });
+  if (!isActive) {
     return res.status(401).json({ error: "الحساب معطّل أو محذوف. أعد تسجيل الدخول" });
   }
   next();
@@ -77,6 +102,23 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Apply DB indexes on every startup (all statements use IF NOT EXISTS so
+  // this is fully idempotent and safe to run repeatedly).
+  try {
+    const indexSql = readFileSync(join(__dirname, "migrate-indexes.sql"), "utf8");
+    // Split on semicolons and run each statement individually
+    const statements = indexSql
+      .split(";")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !s.startsWith("--"));
+    for (const stmt of statements) {
+      await pool.query(stmt);
+    }
+    console.log("DB indexes applied successfully.");
+  } catch (err) {
+    console.error("Failed to apply DB indexes:", err);
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

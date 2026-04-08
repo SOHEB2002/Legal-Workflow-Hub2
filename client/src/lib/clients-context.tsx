@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { Client, ClientTypeValue } from "@shared/schema";
 import { ClientType } from "@shared/schema";
 import { apiRequest } from "./queryClient";
@@ -64,16 +64,9 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const retryRef = useRef(false);
   useEffect(() => {
     if (user) {
-      retryRef.current = false;
-      fetchClients().then(() => {
-        if (!retryRef.current) {
-          retryRef.current = true;
-          setTimeout(() => fetchClients(), 3000);
-        }
-      });
+      fetchClients();
     } else { setClients([]); setIsLoading(false); }
   }, [user, fetchClients]);
 

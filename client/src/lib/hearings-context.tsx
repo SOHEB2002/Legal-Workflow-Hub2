@@ -52,7 +52,8 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/field-tasks"] });
+    // NOTE: Do NOT cross-invalidate /api/field-tasks — hearing changes don't
+    // affect field tasks and this causes an unnecessary full refetch.
   };
 
   const addHearing = async (data: Partial<Hearing>): Promise<Hearing> => {

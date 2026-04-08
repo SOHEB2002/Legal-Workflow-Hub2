@@ -725,13 +725,18 @@ export async function registerRoutes(
       const allCases = await storage.getAllCases();
       const { role, id: userId, departmentId } = user;
 
+      // Strip stageHistory from list responses — it can be 20-50 entries per case
+      // and is only needed in the case detail view (GET /api/cases/:id).
+      const stripForList = (cases: any[]) =>
+        cases.map(({ stageHistory: _sh, ...c }) => c);
+
       if (["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"].includes(role)) {
-        return res.json(allCases);
+        return res.json(stripForList(allCases));
       }
 
       if (role === "department_head") {
         const filtered = allCases.filter((c: any) => c.departmentId === departmentId);
-        return res.json(filtered);
+        return res.json(stripForList(filtered));
       }
 
       if (role === "employee") {
@@ -740,7 +745,7 @@ export async function registerRoutes(
           c.primaryLawyerId === userId ||
           c.responsibleLawyerId === userId
         );
-        return res.json(filtered);
+        return res.json(stripForList(filtered));
       }
 
       return res.status(403).json({ error: "ليس لديك صلاحية لعرض القضايا" });
