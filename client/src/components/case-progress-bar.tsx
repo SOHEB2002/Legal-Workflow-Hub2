@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, SkipForward } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
@@ -23,6 +23,8 @@ interface CaseProgressBarProps {
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
+  reviewNotes?: string;
+  reviewDecision?: string;
 }
 
 export function CaseProgressBar({
@@ -33,6 +35,8 @@ export function CaseProgressBar({
   userRole,
   disabled = false,
   caseClassification,
+  reviewNotes,
+  reviewDecision,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
@@ -74,6 +78,21 @@ export function CaseProgressBar({
 
   return (
     <div className="w-full space-y-4" dir="rtl">
+      {normalizedStage === "الأخذ_بالملاحظات" && reviewNotes && reviewNotes.trim() && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 mb-4" dir="rtl">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
+            <span className="font-bold text-amber-800">تم إرجاع القضية من لجنة المراجعة</span>
+            {reviewDecision === "rejected" && (
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300">مرفوض</span>
+            )}
+            {reviewDecision === "partial" && (
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-300">اعتماد جزئي</span>
+            )}
+          </div>
+          <p className="text-amber-700 text-sm">{reviewNotes}</p>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2 overflow-x-auto pb-2">
         {stagesOrder.map((stage, index) => {
           const status = getStageStatus(index);
