@@ -51,12 +51,14 @@ function getActionIcon(actionType: string) {
 }
 
 export function CaseActivityTab({ caseId }: { caseId: string }) {
-  const { data: activities = [], isLoading } = useQuery<any[]>({
+  const { data: activities = [], isLoading, isError } = useQuery<any[]>({
     queryKey: ['/api/cases', caseId, 'activity'],
     queryFn: async () => {
       const res = await fetch(`/api/cases/${caseId}/activity`, { headers: getAuthHeaders() });
       if (!res.ok) return [];
-      return res.json();
+      const json = await res.json();
+      // Guard: server used to return { data, total, page, limit } — normalise to array
+      return Array.isArray(json) ? json : (Array.isArray(json?.data) ? json.data : []);
     },
     enabled: !!caseId && caseId.length > 0,
   });
@@ -65,7 +67,11 @@ export function CaseActivityTab({ caseId }: { caseId: string }) {
     return <div className="text-center py-8 text-muted-foreground">جاري تحميل سجل النشاط...</div>;
   }
 
-  if (activities.length === 0) {
+  if (isError) {
+    return <div className="text-center py-8 text-destructive">تعذّر تحميل سجل النشاط</div>;
+  }
+
+  if (!Array.isArray(activities) || activities.length === 0) {
     return <div className="text-center py-8 text-muted-foreground">لا يوجد نشاط مسجل بعد</div>;
   }
 

@@ -2871,13 +2871,8 @@ export async function registerRoutes(
 
   app.get("/api/cases/:id/activity", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-      const allLogs = await storage.getCaseActivities(String(req.params.id));
-      const offset = (page - 1) * limit;
-      const total = allLogs.length;
-      const paginatedLogs = allLogs.slice(offset, offset + limit);
-      res.json({ data: paginatedLogs, total, page, limit });
+      const logs = await storage.getCaseActivities(String(req.params.id));
+      res.json(logs);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب سجل النشاط" });
     }
