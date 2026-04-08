@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -317,6 +318,12 @@ export default function MemosPage() {
     });
   }, [memos, cases, filterStatus, filterDept, filterPriority, searchQuery]);
 
+  const MEMO_PAGE_SIZE = 15;
+  const [memoPage, setMemoPage] = useState(1);
+  useEffect(() => { setMemoPage(1); }, [filterStatus, filterDept, filterPriority, searchQuery]);
+  const memoTotalPages = Math.max(1, Math.ceil(filteredMemos.length / MEMO_PAGE_SIZE));
+  const pagedMemos = filteredMemos.slice((memoPage - 1) * MEMO_PAGE_SIZE, memoPage * MEMO_PAGE_SIZE);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -426,7 +433,7 @@ export default function MemosPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredMemos
+                  {pagedMemos
                     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
                     .map((memo) => {
                       const caseDetails = getCaseDetails(memo.caseId);
@@ -516,6 +523,11 @@ export default function MemosPage() {
               </Table>
             </div>
           )}
+          <PaginationControls
+            currentPage={memoPage}
+            totalPages={memoTotalPages}
+            onPageChange={setMemoPage}
+          />
         </CardContent>
       </Card>
 

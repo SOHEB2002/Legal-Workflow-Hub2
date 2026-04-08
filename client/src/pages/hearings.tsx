@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -402,6 +403,12 @@ export default function HearingsPage() {
       return (a.hearingTime || "").localeCompare(b.hearingTime || "");
     });
 
+  const HEARING_PAGE_SIZE = 15;
+  const [hearingPage, setHearingPage] = useState(1);
+  useEffect(() => { setHearingPage(1); }, [filterStatus, filterDepartment, filterLawyer]);
+  const hearingTotalPages = Math.max(1, Math.ceil(filteredHearings.length / HEARING_PAGE_SIZE));
+  const pagedHearings = filteredHearings.slice((hearingPage - 1) * HEARING_PAGE_SIZE, hearingPage * HEARING_PAGE_SIZE);
+
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
     if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "" };
@@ -710,9 +717,7 @@ export default function HearingsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredHearings
-                    .sort((a, b) => new Date(b.hearingDate).getTime() - new Date(a.hearingDate).getTime())
-                    .map((hearing) => {
+                  {pagedHearings.map((hearing) => {
                       const caseInfo = getCaseInfo(hearing.caseId);
                       const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
                       const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
@@ -888,6 +893,11 @@ export default function HearingsPage() {
               </Table>
             </div>
           )}
+          <PaginationControls
+            currentPage={hearingPage}
+            totalPages={hearingTotalPages}
+            onPageChange={setHearingPage}
+          />
         </CardContent>
       </Card>
 

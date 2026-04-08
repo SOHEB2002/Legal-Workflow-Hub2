@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import { formatTimeAmPm } from "@/lib/date-utils";
@@ -542,6 +543,12 @@ export default function CasesPage() {
     });
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, getClientName]);
 
+  const PAGE_SIZE = 15;
+  const [casePage, setCasePage] = useState(1);
+  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter]);
+  const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
+  const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
+
   const isDeptHead = user?.role === "department_head";
 
   const openAssignDialog = (caseItem: LawCase) => {
@@ -745,7 +752,7 @@ export default function CasesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredCases.map((c) => (
+              {pagedCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
                   <TableCell className="text-center font-medium"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
                   <TableCell className="text-center">
@@ -801,6 +808,11 @@ export default function CasesPage() {
             </TableBody>
           </Table>
           </div>
+          <PaginationControls
+            currentPage={casePage}
+            totalPages={casesTotalPages}
+            onPageChange={setCasePage}
+          />
         </CardContent>
       </Card>
 
