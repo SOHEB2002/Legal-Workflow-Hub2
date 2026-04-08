@@ -42,6 +42,7 @@ import {
   ClipboardList,
   Upload,
   AlertTriangle,
+  Trash2,
 } from "lucide-react";
 import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useCases } from "@/lib/cases-context";
@@ -65,7 +66,7 @@ import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 export default function FieldTasksPage() {
   const { user, permissions, users } = useAuth();
-  const { fieldTasks, addFieldTask, startTask, completeTask, cancelTask } = useFieldTasks();
+  const { fieldTasks, addFieldTask, startTask, completeTask, cancelTask, deleteFieldTask } = useFieldTasks();
   const { cases } = useCases();
   const { consultations } = useConsultations();
   const activeUsers = users.filter(u => u.isActive);
@@ -75,6 +76,8 @@ export default function FieldTasksPage() {
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [selectedTask, setSelectedTask] = useState<FieldTask | null>(null);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState<FieldTask | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
@@ -160,6 +163,19 @@ export default function FieldTasksPage() {
   const handleCancelTask = (task: FieldTask) => {
     cancelTask(task.id);
     toast({ title: "تم إلغاء المهمة" });
+  };
+
+  const openDeleteDialog = (task: FieldTask) => {
+    setTaskToDelete(task);
+    setShowDeleteDialog(true);
+  };
+
+  const handleDeleteTask = async () => {
+    if (!taskToDelete) return;
+    await deleteFieldTask(taskToDelete.id);
+    toast({ title: "تم حذف المهمة بنجاح" });
+    setShowDeleteDialog(false);
+    setTaskToDelete(null);
   };
 
   const openCompleteDialog = (task: FieldTask) => {
@@ -548,6 +564,22 @@ export default function FieldTasksPage() {
                               <TooltipContent>إلغاء المهمة</TooltipContent>
                             </Tooltip>
                           )}
+
+                        {canManageFieldTasks && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                data-testid={`button-delete-${task.id}`}
+                                onClick={() => openDeleteDialog(task)}
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>حذف المهمة</TooltipContent>
+                          </Tooltip>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -715,6 +747,33 @@ export default function FieldTasksPage() {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">تأكيد حذف المهمة</DialogTitle>
+          </DialogHeader>
+          <div className="py-2 text-sm text-muted-foreground">
+            هل أنت متأكد من حذف المهمة{" "}
+            <span className="font-semibold text-foreground">"{taskToDelete?.title}"</span>؟
+            <br />
+            لا يمكن التراجع عن هذا الإجراء.
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
+              إلغاء
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid="button-confirm-delete-task"
+              onClick={handleDeleteTask}
+            >
+              <Trash2 className="w-4 h-4 ml-1" />
+              حذف
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
