@@ -70,6 +70,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -385,6 +386,7 @@ export default function CasesPage() {
     nextHearingTime: "",
     adminCaseSubType: "" as string,
     prescriptionDate: "",
+    memoRequired: false,
   });
 
   const [assignData, setAssignData] = useState({
@@ -419,6 +421,7 @@ export default function CasesPage() {
       nextHearingTime: "",
       adminCaseSubType: "",
       prescriptionDate: "",
+      memoRequired: false,
     });
   };
 
@@ -459,6 +462,7 @@ export default function CasesPage() {
       nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
       adminCaseSubType: formData.adminCaseSubType || null,
       prescriptionDate: formData.prescriptionDate || null,
+      memoRequired: formData.memoRequired,
     } as any, user.id, user.name);
     
     const classLabel = CaseClassificationLabels[formData.caseClassification as CaseClassificationValue] || "";
@@ -1089,6 +1093,20 @@ export default function CasesPage() {
                   </div>
                 )}
               </>
+            )}
+
+            {formData.caseClassification && (
+              <div className="flex items-center gap-2 pt-1">
+                <Checkbox
+                  id="memoRequired"
+                  checked={formData.memoRequired}
+                  onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked })}
+                  data-testid="checkbox-memo-required"
+                />
+                <Label htmlFor="memoRequired" className="text-sm cursor-pointer">
+                  مطلوب مذكرة
+                </Label>
+              </div>
             )}
           </div>
           <DialogFooter>

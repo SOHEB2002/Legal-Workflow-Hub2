@@ -86,6 +86,7 @@ export const lawCases = pgTable("law_cases", {
   taradiNumber: varchar("taradi_number", { length: 100 }),
   mohrStatus: varchar("mohr_status", { length: 50 }),
   mohrNumber: varchar("mohr_number", { length: 100 }),
+  memoRequired: boolean("memo_required").default(false),
   amicableSettlementDirected: boolean("amicable_settlement_directed").default(false),
   adminCaseSubType: varchar("admin_case_sub_type", { length: 50 }),
   prescriptionDate: varchar("prescription_date", { length: 50 }),
@@ -1307,6 +1308,7 @@ export const insertCaseSchema = z.object({
   responseDeadline: z.string().nullable().optional(),
   adminCaseSubType: z.enum(["تظلم", "قضية"]).nullable().optional(),
   prescriptionDate: z.string().nullable().optional(),
+  memoRequired: z.boolean().optional().default(false),
 });
 
 export type InsertCase = z.infer<typeof insertCaseSchema>;
