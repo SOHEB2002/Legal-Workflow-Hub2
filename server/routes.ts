@@ -2261,17 +2261,25 @@ export async function registerRoutes(
 
       const validatedData = insertMemoSchema.parse(req.body);
 
-      // Block memos for closed/archived cases
+      // Block memos for closed/archived cases; also resolve assignedTo from case
+      let resolvedAssignedTo = validatedData.assignedTo || "";
       if (validatedData.caseId) {
         const relatedCase = await storage.getCaseById(validatedData.caseId);
         if (relatedCase && (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived)) {
           return res.status(400).json({ error: "لا يمكن إضافة مذكرات لقضية مغلقة أو مؤرشفة" });
         }
+        if (relatedCase && (!resolvedAssignedTo || user.role === "admin_support")) {
+          resolvedAssignedTo =
+            relatedCase.primaryLawyerId ||
+            relatedCase.responsibleLawyerId ||
+            user.id;
+        }
       }
+      if (!resolvedAssignedTo) resolvedAssignedTo = user.id;
 
       // Validate assignedTo user is active
-      if (validatedData.assignedTo) {
-        const { valid, inactiveUsers } = await validateAssignedUsersActive([validatedData.assignedTo]);
+      if (resolvedAssignedTo) {
+        const { valid } = await validateAssignedUsersActive([resolvedAssignedTo]);
         if (!valid) {
           return res.status(400).json({ error: "المحامي المكلف غير نشط أو غير موجود" });
         }
@@ -2279,6 +2287,7 @@ export async function registerRoutes(
 
       const memo = await storage.createMemo({
         ...validatedData,
+        assignedTo: resolvedAssignedTo,
         createdBy: user.id,
       });
 
