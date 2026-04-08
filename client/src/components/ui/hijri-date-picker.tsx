@@ -189,13 +189,13 @@ function HijriCalendarGrid({ selectedDate, onSelect }: HijriCalendarGridProps) {
   return (
     <div className="p-3" dir="rtl">
       <div className="flex items-center justify-between mb-4">
-        <Button variant="outline" size="icon" className="h-7 w-7" onClick={goToNextMonth}>
+        <Button variant="outline" size="icon" className="h-7 w-7" onClick={goToPrevMonth}>
           <ChevronRight className="h-4 w-4" />
         </Button>
         <div className="text-sm font-medium">
           {HIJRI_MONTHS[viewMonth - 1]} {viewYear} هـ
         </div>
-        <Button variant="outline" size="icon" className="h-7 w-7" onClick={goToPrevMonth}>
+        <Button variant="outline" size="icon" className="h-7 w-7" onClick={goToNextMonth}>
           <ChevronLeft className="h-4 w-4" />
         </Button>
       </div>
