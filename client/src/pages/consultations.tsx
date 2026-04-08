@@ -210,7 +210,7 @@ export default function ConsultationsPage() {
   };
 
   const handleSendToReview = (consultation: Consultation) => {
-    sendToReviewCommittee(consultation.id);
+    sendToReviewCommittee(consultation.id, user?.role);
     toast({ title: "تم إرسال الاستشارة للمراجعة" });
   };
 
@@ -482,9 +482,15 @@ export default function ConsultationsPage() {
                               </>
                             )}
                           {consultation.status === ConsultationStatus.READY && permissions.canCloseCases && (
-                            <DropdownMenuItem data-testid={`button-deliver-${consultation.id}`} onClick={() => markDelivered(consultation.id)}>
+                            <DropdownMenuItem data-testid={`button-deliver-${consultation.id}`} onClick={() => { markDelivered(consultation.id, user?.role); toast({ title: "تم تسليم الاستشارة" }); }}>
                               <FileText className="w-4 h-4 ml-2" />
                               تسليم الاستشارة
+                            </DropdownMenuItem>
+                          )}
+                          {consultation.status === ConsultationStatus.DELIVERED && permissions.canCloseCases && (
+                            <DropdownMenuItem data-testid={`button-close-consultation-${consultation.id}`} onClick={() => { closeConsultation(consultation.id, user?.role); toast({ title: "تم إقفال الاستشارة" }); }}>
+                              <XCircle className="w-4 h-4 ml-2" />
+                              إقفال الاستشارة
                             </DropdownMenuItem>
                           )}
                           {isDeptHead && consultation.departmentId === user?.departmentId && (

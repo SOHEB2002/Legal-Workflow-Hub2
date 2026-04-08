@@ -165,6 +165,7 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   // Forward transitions
   { from: "استلام", to: "دراسة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "دراسة", to: "إعداد_الرد", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
+  { from: "دراسة", to: "لجنة_المراجعة", allowedRoles: ["department_head", "branch_manager"] },
   { from: "إعداد_الرد", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
   { from: "لجنة_المراجعة", to: "جاهز", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
   { from: "لجنة_المراجعة", to: "تعديلات", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },

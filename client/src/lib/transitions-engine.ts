@@ -254,6 +254,14 @@ const CONSULTATION_TRANSITIONS: TransitionRule[] = [
     label: "تحديد الموظف وإسناد المهمة",
   },
   {
+    from: ConsultationStatus.STUDY,
+    to: ConsultationStatus.REVIEW_COMMITTEE,
+    allowedRoles: [UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
+    requiresAssignment: true,
+    autoActions: [{ type: "assign_to_review_committee" }],
+    label: "إرسال مباشر للمراجعة",
+  },
+  {
     from: ConsultationStatus.PREPARING_RESPONSE,
     to: ConsultationStatus.REVIEW_COMMITTEE,
     allowedRoles: [UserRole.EMPLOYEE, UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
