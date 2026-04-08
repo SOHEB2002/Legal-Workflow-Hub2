@@ -105,6 +105,8 @@ import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer } from "@
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
+import { useMemos } from "@/lib/memos-context";
+import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 
@@ -183,6 +185,8 @@ export default function CasesPage() {
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
+  const { getMemosByCase } = useMemos();
+  const { getTasksByCase } = useFieldTasks();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
   const lawyers = users.filter(u => u.canBeAssignedCases);
@@ -1349,8 +1353,32 @@ export default function CasesPage() {
                       <Label className="text-muted-foreground">القاضي</Label>
                       <p>{selectedCase.judgeName || "-"}</p>
                     </div>
+                    <div>
+                      <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
+                      <p className="font-medium">
+                        {selectedCase.nextHearingDate
+                          ? <DualDateDisplay date={selectedCase.nextHearingDate} compact />
+                          : "-"}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">آخر جلسة</Label>
+                      <p className="font-medium">
+                        {selectedCase.lastHearingDate
+                          ? <DualDateDisplay date={selectedCase.lastHearingDate} compact />
+                          : "-"}
+                      </p>
+                    </div>
+                    {selectedCase.responseDeadline && (
+                      <div>
+                        <Label className="text-muted-foreground">مهلة الرد</Label>
+                        <p className="font-medium">
+                          <DualDateDisplay date={selectedCase.responseDeadline} compact />
+                        </p>
+                      </div>
+                    )}
                   </div>
-                  
+
                   <div className="border-t pt-4">
                     <h4 className="font-semibold mb-3">بيانات الخصم</h4>
                     <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
@@ -1897,7 +1925,13 @@ export default function CasesPage() {
                 </TabsContent>
 
                 <TabsContent value="deadlines" className="mt-4">
-                  <CaseDeadlinesTab caseId={selectedCase?.id || ""} />
+                  <CaseDeadlinesTab
+                    caseId={selectedCase?.id || ""}
+                    hearings={selectedCase ? getHearingsByCase(selectedCase.id) : []}
+                    memos={selectedCase ? getMemosByCase(selectedCase.id) : []}
+                    fieldTasks={selectedCase ? getTasksByCase(selectedCase.id) : []}
+                    responseDeadline={selectedCase?.responseDeadline ?? null}
+                  />
                 </TabsContent>
 
                 <TabsContent value="actions" className="mt-4">

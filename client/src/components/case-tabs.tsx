@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import {
   Clock, FileText, Pin, AlertTriangle, Calendar, Plus, Trash2, Edit3, Save,
-  MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, Star,
+  MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, Star, ClipboardList,
 } from "lucide-react";
 import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels } from "@shared/schema";
 import { LtrInline } from "@/components/ui/bidi-text";
@@ -275,7 +275,15 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
   );
 }
 
-export function CaseDeadlinesTab({ caseId }: { caseId: string }) {
+interface CaseDeadlinesTabProps {
+  caseId: string;
+  hearings?: any[];
+  memos?: any[];
+  fieldTasks?: any[];
+  responseDeadline?: string | null;
+}
+
+export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], fieldTasks = [], responseDeadline }: CaseDeadlinesTabProps) {
   const { toast } = useToast();
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({
@@ -296,6 +304,92 @@ export function CaseDeadlinesTab({ caseId }: { caseId: string }) {
     },
     enabled: !!caseId && caseId.length > 0,
   });
+
+  // Build unified timeline from all sources
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const timelineItems: { date: string; label: string; subLabel: string; icon: any; urgency: "overdue" | "soon" | "normal" }[] = [];
+
+  const classify = (dateStr: string): "overdue" | "soon" | "normal" => {
+    const d = new Date(dateStr);
+    const days = Math.ceil((d.getTime() - today.getTime()) / 86400000);
+    if (days < 0) return "overdue";
+    if (days <= 7) return "soon";
+    return "normal";
+  };
+
+  // Hearing dates (upcoming only in the timeline)
+  for (const h of hearings) {
+    if (h.hearingDate && h.status !== "ملغية" && h.status !== "مؤجلة") {
+      timelineItems.push({
+        date: h.hearingDate,
+        label: `جلسة — ${h.courtName || ""}`,
+        subLabel: h.status === "تمت" ? "تمت" : "قادمة",
+        icon: Gavel,
+        urgency: classify(h.hearingDate),
+      });
+    }
+  }
+
+  // Memo deadlines
+  for (const m of memos) {
+    if (m.deadline && m.status !== "معتمدة" && m.status !== "مرفوعة" && m.status !== "ملغاة") {
+      timelineItems.push({
+        date: m.deadline,
+        label: m.title || "مذكرة",
+        subLabel: m.status || "",
+        icon: FileText,
+        urgency: classify(m.deadline),
+      });
+    }
+  }
+
+  // Response deadline from case
+  if (responseDeadline) {
+    timelineItems.push({
+      date: responseDeadline,
+      label: "مهلة الرد",
+      subLabel: "موعد نهائي للرد",
+      icon: AlertTriangle,
+      urgency: classify(responseDeadline),
+    });
+  }
+
+  // Legal deadlines
+  for (const d of deadlines) {
+    if (d.deadlineDate && d.status !== "مكتمل" && d.status !== "فائت") {
+      timelineItems.push({
+        date: d.deadlineDate,
+        label: d.title || DeadlineTypeLabels[d.deadlineType] || d.deadlineType,
+        subLabel: "موعد نظامي",
+        icon: Calendar,
+        urgency: classify(d.deadlineDate),
+      });
+    }
+  }
+
+  // Field task due dates
+  for (const t of fieldTasks) {
+    if (t.dueDate && t.status !== "مكتملة" && t.status !== "ملغاة") {
+      timelineItems.push({
+        date: t.dueDate,
+        label: t.title || "مهمة ميدانية",
+        subLabel: t.status || "",
+        icon: ClipboardList,
+        urgency: classify(t.dueDate),
+      });
+    }
+  }
+
+  // Sort by date, nearest first
+  timelineItems.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  const urgencyClass = (u: string) => {
+    if (u === "overdue") return "border-destructive/50 bg-destructive/5 text-destructive";
+    if (u === "soon") return "border-yellow-500/50 bg-yellow-50/10 text-yellow-700 dark:text-yellow-400";
+    return "border-border bg-muted/20";
+  };
 
   const addDeadlineMutation = useMutation({
     mutationFn: async () => {
@@ -355,12 +449,44 @@ export function CaseDeadlinesTab({ caseId }: { caseId: string }) {
 
   return (
     <div className="space-y-4" dir="rtl">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium">المواعيد النظامية</h3>
-        <Button size="sm" onClick={() => setShowAdd(!showAdd)} data-testid="button-add-deadline">
-          <Plus className="h-4 w-4 ml-1" />
-          إضافة موعد
-        </Button>
+      {/* Unified timeline */}
+      <div>
+        <h3 className="text-sm font-semibold mb-2">جدول المواعيد الموحد</h3>
+        {timelineItems.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-4">لا توجد مواعيد قادمة</p>
+        ) : (
+          <div className="space-y-2 max-h-[260px] overflow-y-auto">
+            {timelineItems.map((item, i) => {
+              const Icon = item.icon;
+              const daysLeft = Math.ceil((new Date(item.date).getTime() - today.getTime()) / 86400000);
+              return (
+                <div key={i} className={`flex items-center gap-3 p-2.5 rounded-md border text-sm ${urgencyClass(item.urgency)}`}>
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">{item.label}</p>
+                    <p className="text-xs opacity-70">{item.subLabel}</p>
+                  </div>
+                  <div className="text-left shrink-0">
+                    <DualDateDisplay date={item.date} compact />
+                    <p className="text-xs text-center mt-0.5">
+                      {daysLeft < 0 ? `متأخر ${Math.abs(daysLeft)} يوم` : daysLeft === 0 ? "اليوم" : `بعد ${daysLeft} يوم`}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t pt-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">المواعيد النظامية</h3>
+          <Button size="sm" onClick={() => setShowAdd(!showAdd)} data-testid="button-add-deadline">
+            <Plus className="h-4 w-4 ml-1" />
+            إضافة موعد
+          </Button>
+        </div>
       </div>
 
       {showAdd && (
