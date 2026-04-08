@@ -162,15 +162,16 @@ function getPriorityColor(priority: PriorityType) {
 }
 
 export default function CasesPage() {
-  const { 
-    cases, 
+  const {
+    cases,
+    isLoading: casesLoading,
     comments,
-    addCase, 
-    updateCase, 
-    assignCase, 
-    sendToReviewCommittee, 
-    approveCase, 
-    rejectCase, 
+    addCase,
+    updateCase,
+    assignCase,
+    sendToReviewCommittee,
+    approveCase,
+    rejectCase,
     closeCase,
     deleteCase,
     moveToNextStage,
@@ -752,7 +753,22 @@ export default function CasesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pagedCases.map((c) => (
+              {casesLoading ? (
+                <TableRow>
+                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
+                    <div className="flex items-center justify-center gap-2">
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                      <span>جاري التحميل...</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : pagedCases.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
+                    لا توجد قضايا مطابقة للبحث
+                  </TableCell>
+                </TableRow>
+              ) : pagedCases.map((c) => (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
                   <TableCell className="text-center font-medium"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
                   <TableCell className="text-center">
@@ -804,7 +820,7 @@ export default function CasesPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+              )))}
             </TableBody>
           </Table>
           </div>
