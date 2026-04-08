@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
@@ -215,6 +215,13 @@ export default function CasesPage() {
   };
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchQuery(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => setDebouncedSearch(value), 300);
+  }, []);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
 
@@ -540,12 +547,12 @@ export default function CasesPage() {
   };
 
   const filteredCases = useMemo(() => {
+    const query = debouncedSearch.toLowerCase();
     return cases.filter((c) => {
-      const clientName = c.clientId ? getClientName(c.clientId) : "";
-      const matchesSearch =
-        c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
+      const matchesSearch = !query ||
+        c.caseNumber.toLowerCase().includes(query) ||
+        (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(query)) ||
+        (c.clientId && getClientName(c.clientId).toLowerCase().includes(query));
       const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
@@ -556,7 +563,7 @@ export default function CasesPage() {
           : c.caseClassification === classificationFilter);
       return matchesSearch && matchesStatus && matchesDept && matchesClassification;
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, getClientName]);
+  }, [cases, debouncedSearch, statusFilter, deptFilter, classificationFilter, getClientName]);
 
   const PAGE_SIZE = 15;
   const [casePage, setCasePage] = useState(1);
@@ -706,7 +713,7 @@ export default function CasesPage() {
                 data-testid="input-search"
                 placeholder="بحث برقم القضية أو اسم العميل..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="pr-10"
               />
             </div>

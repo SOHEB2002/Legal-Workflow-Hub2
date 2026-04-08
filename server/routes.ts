@@ -723,28 +723,14 @@ export async function registerRoutes(
         return res.status(401).json({ error: "يجب تسجيل الدخول" });
       }
 
-      const allCases = await storage.getAllCases();
       const { role, id: userId, departmentId } = user;
 
-      if (["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"].includes(role)) {
-        return res.json(allCases);
+      if (!["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "department_head", "employee"].includes(role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لعرض القضايا" });
       }
 
-      if (role === "department_head") {
-        const filtered = allCases.filter((c: any) => c.departmentId === departmentId);
-        return res.json(filtered);
-      }
-
-      if (role === "employee") {
-        const filtered = allCases.filter((c: any) =>
-          (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) ||
-          c.primaryLawyerId === userId ||
-          c.responsibleLawyerId === userId
-        );
-        return res.json(filtered);
-      }
-
-      return res.status(403).json({ error: "ليس لديك صلاحية لعرض القضايا" });
+      const cases = await storage.getCasesByRole(role, userId, departmentId);
+      return res.json(cases);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب القضايا" });
     }
@@ -1553,27 +1539,14 @@ export async function registerRoutes(
         return res.status(401).json({ error: "يجب تسجيل الدخول" });
       }
 
-      const allConsultations = await storage.getAllConsultations();
       const { role, id: userId, departmentId } = user;
 
-      if (["branch_manager", "admin_support", "consultations_review_head", "cases_review_head"].includes(role)) {
-        return res.json(allConsultations);
+      if (!["branch_manager", "admin_support", "consultations_review_head", "cases_review_head", "department_head", "employee"].includes(role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لعرض الاستشارات" });
       }
 
-      if (role === "department_head") {
-        const filtered = allConsultations.filter((c: any) => c.departmentId === departmentId);
-        return res.json(filtered);
-      }
-
-      if (role === "employee") {
-        const filtered = allConsultations.filter((c: any) =>
-          c.departmentId === departmentId ||
-          c.assignedTo === userId
-        );
-        return res.json(filtered);
-      }
-
-      return res.status(403).json({ error: "ليس لديك صلاحية لعرض الاستشارات" });
+      const result = await storage.getConsultationsByRole(role, userId, departmentId);
+      return res.json(result);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الاستشارات" });
     }

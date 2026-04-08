@@ -29,6 +29,7 @@ export interface IStorage {
 
   // Cases
   getAllCases(): Promise<LawCase[]>;
+  getCasesByRole(role: string, userId: string, departmentId?: string): Promise<LawCase[]>;
   getCaseById(id: string): Promise<LawCase | undefined>;
   createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase>;
   updateCase(id: string, data: Partial<LawCase>): Promise<LawCase | undefined>;
@@ -43,6 +44,7 @@ export interface IStorage {
 
   // Consultations
   getAllConsultations(): Promise<Consultation[]>;
+  getConsultationsByRole(role: string, userId: string, departmentId?: string): Promise<Consultation[]>;
   getConsultationById(id: string): Promise<Consultation | undefined>;
   createConsultation(data: Partial<Consultation>, createdBy: string): Promise<Consultation>;
   updateConsultation(id: string, data: Partial<Consultation>): Promise<Consultation | undefined>;
@@ -518,6 +520,27 @@ export class DatabaseStorage implements IStorage {
     return result.map(mapDbCase);
   }
 
+  async getCasesByRole(role: string, userId: string, departmentId?: string): Promise<LawCase[]> {
+    if (["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"].includes(role)) {
+      return this.getAllCases();
+    }
+    if (role === "department_head" && departmentId) {
+      const result = await db.select().from(lawCases)
+        .where(eq(lawCases.departmentId, departmentId))
+        .orderBy(desc(lawCases.updatedAt));
+      return result.map(mapDbCase);
+    }
+    if (role === "employee") {
+      const result = await db.select().from(lawCases)
+        .where(
+          sql`(${lawCases.primaryLawyerId} = ${userId} OR ${lawCases.responsibleLawyerId} = ${userId} OR ${lawCases.assignedLawyers}::jsonb @> ${JSON.stringify([userId])}::jsonb)`
+        )
+        .orderBy(desc(lawCases.updatedAt));
+      return result.map(mapDbCase);
+    }
+    return [];
+  }
+
   async getCaseById(id: string): Promise<LawCase | undefined> {
     const result = await db.select().from(lawCases).where(eq(lawCases.id, id));
     return result[0] ? mapDbCase(result[0]) : undefined;
@@ -686,6 +709,25 @@ export class DatabaseStorage implements IStorage {
   async getAllConsultations(): Promise<Consultation[]> {
     const result = await db.select().from(consultations);
     return result.map(mapDbConsultation);
+  }
+
+  async getConsultationsByRole(role: string, userId: string, departmentId?: string): Promise<Consultation[]> {
+    if (["branch_manager", "admin_support", "consultations_review_head", "cases_review_head"].includes(role)) {
+      return this.getAllConsultations();
+    }
+    if (role === "department_head" && departmentId) {
+      const result = await db.select().from(consultations)
+        .where(eq(consultations.departmentId, departmentId));
+      return result.map(mapDbConsultation);
+    }
+    if (role === "employee") {
+      const conditions = departmentId
+        ? sql`(${consultations.departmentId} = ${departmentId} OR ${consultations.assignedTo} = ${userId})`
+        : eq(consultations.assignedTo, userId);
+      const result = await db.select().from(consultations).where(conditions);
+      return result.map(mapDbConsultation);
+    }
+    return [];
   }
 
   async getConsultationById(id: string): Promise<Consultation | undefined> {

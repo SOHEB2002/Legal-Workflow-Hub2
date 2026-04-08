@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -104,6 +104,13 @@ export default function ConsultationsPage() {
   const consultationReviewStandards = getStandardsByType("legal_consultation");
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchQuery(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => setDebouncedSearch(value), 300);
+  }, []);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
@@ -251,15 +258,17 @@ export default function ConsultationsPage() {
     resetForm();
   };
 
-  const filteredConsultations = consultations.filter((consultation) => {
-    const clientName = getClientName(consultation.clientId);
-    const matchesSearch =
-      consultation.consultationNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      clientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      consultation.questionSummary.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === "all" || consultation.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const filteredConsultations = useMemo(() => {
+    const query = debouncedSearch.toLowerCase();
+    return consultations.filter((consultation) => {
+      const matchesSearch = !query ||
+        consultation.consultationNumber.toLowerCase().includes(query) ||
+        getClientName(consultation.clientId).toLowerCase().includes(query) ||
+        consultation.questionSummary.toLowerCase().includes(query);
+      const matchesStatus = statusFilter === "all" || consultation.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [consultations, debouncedSearch, statusFilter, getClientName]);
 
   return (
     <div className="p-6 space-y-6">
@@ -365,7 +374,7 @@ export default function ConsultationsPage() {
                 data-testid="input-search-consultations"
                 placeholder="بحث برقم الاستشارة أو العميل..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="pr-10"
               />
             </div>
