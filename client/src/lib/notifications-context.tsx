@@ -15,6 +15,7 @@ import type {
 import { NotificationType, NotificationPriority, NotificationStatus, DigestMode } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "./auth-context";
+import { useWebSocket, type WSEvent } from "./useWebSocket";
 
 const TEMPLATES_STORAGE_KEY = "lawfirm_notification_templates";
 const PREFERENCES_STORAGE_KEY = "lawfirm_notification_preferences";
@@ -349,6 +350,39 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     await fetchNotifications();
   }, [fetchNotifications]);
 
+  // WebSocket handler: real-time notification updates
+  const handleWSEvent = useCallback((event: WSEvent) => {
+    switch (event.type) {
+      case "notification:new":
+        if (event.payload) {
+          setNotifications((prev) => [event.payload, ...prev]);
+          setHasNewNotifications(true);
+          prevCountRef.current += 1;
+        }
+        break;
+      case "notification:updated":
+        if (event.payload) {
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === event.payload.id ? event.payload : n))
+          );
+        }
+        break;
+      case "notification:deleted":
+        if (event.payload?.id) {
+          setNotifications((prev) => prev.filter((n) => n.id !== event.payload.id));
+        }
+        break;
+      case "notification:all-read":
+        setNotifications((prev) =>
+          prev.map((n) => ({ ...n, isRead: true, readAt: n.readAt || new Date().toISOString(), status: "read" as any }))
+        );
+        break;
+    }
+  }, []);
+
+  // Connect WebSocket only when user is logged in
+  const { isConnected } = useWebSocket(user ? handleWSEvent : () => {});
+
   useEffect(() => {
     prevCountRef.current = 0;
     if (user) {
@@ -357,9 +391,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
       }
+      // With WebSocket active, polling is a fallback only — increase to 10 minutes
       pollingRef.current = setInterval(() => {
         fetchNotifications();
-      }, 300000); // poll every 5 minutes — notifications are not time-critical enough for 60s
+      }, isConnected ? 600000 : 300000);
     } else {
       setNotifications([]);
       setIsLoading(false);
@@ -371,7 +406,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         pollingRef.current = null;
       }
     };
-  }, [user, fetchNotifications]);
+  }, [user, fetchNotifications, isConnected]);
 
   useEffect(() => {
     localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));

@@ -36,6 +36,7 @@ import rateLimit from "express-rate-limit";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { sendToUser, broadcastToAdmins } from "./websocket";
 
 interface AuthRequest extends Request {
   user?: {
@@ -2480,6 +2481,12 @@ export async function registerRoutes(
   app.post("/api/notifications", requireAuth, async (req, res) => {
     try {
       const newNotification = await storage.createNotification(req.body);
+      // Real-time push to recipient + admins
+      const wsEvent = { type: "notification:new", payload: newNotification };
+      if (newNotification.recipientId) {
+        sendToUser(newNotification.recipientId, wsEvent);
+      }
+      broadcastToAdmins(wsEvent);
       res.status(201).json(newNotification);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في إنشاء الإشعار" });
@@ -2501,6 +2508,11 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "الإشعار غير موجود" });
       }
+      // Push update to the notification recipient
+      const wsEvent = { type: "notification:updated", payload: updated };
+      if (updated.recipientId) {
+        sendToUser(updated.recipientId, wsEvent);
+      }
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث الإشعار" });
@@ -2509,7 +2521,10 @@ export async function registerRoutes(
 
   app.delete("/api/notifications/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      await storage.deleteNotification(String(req.params.id));
+      const notifId = String(req.params.id);
+      await storage.deleteNotification(notifId);
+      // Notify admins about deletion
+      broadcastToAdmins({ type: "notification:deleted", payload: { id: notifId } });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الإشعار" });
@@ -2535,6 +2550,8 @@ export async function registerRoutes(
           })
         )
       );
+      // Push mark-all-read event to the user's other tabs
+      sendToUser(userId, { type: "notification:all-read" });
       res.json({ success: true, count: unread.length });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث الإشعارات" });
