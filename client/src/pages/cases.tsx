@@ -1156,7 +1156,7 @@ export default function CasesPage() {
 
             {formData.memoRequired && (
               <div>
-                <Label>مهلة الرد (تاريخ)</Label>
+                <Label>تاريخ استحقاق المذكرة</Label>
                 <HijriDatePicker
                   value={formData.responseDeadline}
                   onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
@@ -1453,14 +1453,7 @@ export default function CasesPage() {
                           : "-"}
                       </p>
                     </div>
-                    {selectedCase.responseDeadline && (
-                      <div>
-                        <Label className="text-muted-foreground">مهلة الرد</Label>
-                        <p className="font-medium">
-                          <DualDateDisplay date={selectedCase.responseDeadline} compact />
-                        </p>
-                      </div>
-                    )}
+                    
                   </div>
 
                   <div className="border-t pt-4">
@@ -2470,16 +2463,7 @@ export default function CasesPage() {
                 />
               </div>
             </div>
-            {editFormData.caseClassification === CaseClassification.DEFENDANT && (
-              <div>
-                <Label>موعد الرد</Label>
-                <HijriDatePicker
-                  value={editFormData.responseDeadline}
-                  onChange={(v) => setEditFormData({ ...editFormData, responseDeadline: v })}
-                  data-testid="edit-response-deadline"
-                />
-              </div>
-            )}
+            
           </div>
           <DialogFooter className="gap-2 mt-4">
             <Button variant="outline" onClick={() => setShowEditDialog(false)} data-testid="button-cancel-edit">

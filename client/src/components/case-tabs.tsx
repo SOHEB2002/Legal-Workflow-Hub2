@@ -345,16 +345,7 @@ export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], fieldTasks
     }
   }
 
-  // Response deadline from case
-  if (responseDeadline) {
-    timelineItems.push({
-      date: responseDeadline,
-      label: "مهلة الرد",
-      subLabel: "موعد نهائي للرد",
-      icon: AlertTriangle,
-      urgency: classify(responseDeadline),
-    });
-  }
+  
 
   // Legal deadlines
   for (const d of deadlines) {
