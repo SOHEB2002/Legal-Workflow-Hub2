@@ -931,18 +931,11 @@ export default function CasesPage() {
                     }`}
                   >
                     <Swords className="h-6 w-6 text-red-600" />
-                    <span className="text-xs font-medium text-center">منظورة (مدعى عليه)</span>
+                    <span className="text-xs font-medium text-center">مدعى عليه</span>
                   </button>
                 </div>
               )}
             </div>
-
-            {formData.caseClassification === CaseClassification.DEFENDANT && (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
-                <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
-                <span className="text-xs text-red-700 dark:text-red-400">سيتم إنشاء مذكرة جوابية عاجلة وإشعار فوري تلقائيًا</span>
-              </div>
-            )}
 
             {formData.caseClassification && (
               <>
@@ -1123,17 +1116,6 @@ export default function CasesPage() {
                   </>
                 )}
 
-                {formData.caseClassification === CaseClassification.DEFENDANT && (
-                  <div>
-                    <Label>مهلة الرد (تاريخ)</Label>
-                    <HijriDatePicker
-                      value={formData.responseDeadline}
-                      onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
-                      data-testid="input-response-deadline"
-                    />
-                  </div>
-                )}
-
                 {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -1163,12 +1145,23 @@ export default function CasesPage() {
                 <Checkbox
                   id="memoRequired"
                   checked={formData.memoRequired}
-                  onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked })}
+                  onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked, responseDeadline: !checked ? "" : formData.responseDeadline })}
                   data-testid="checkbox-memo-required"
                 />
                 <Label htmlFor="memoRequired" className="text-sm cursor-pointer">
                   مطلوب مذكرة
                 </Label>
+              </div>
+            )}
+
+            {formData.memoRequired && (
+              <div>
+                <Label>مهلة الرد (تاريخ)</Label>
+                <HijriDatePicker
+                  value={formData.responseDeadline}
+                  onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
+                  data-testid="input-response-deadline"
+                />
               </div>
             )}
           </div>
