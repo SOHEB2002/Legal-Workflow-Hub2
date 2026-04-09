@@ -56,18 +56,21 @@ export function ContactsProvider({ children }: { children: ReactNode }) {
   const addContact = async (contactData: Omit<ContactLog, "id" | "createdAt" | "updatedAt">): Promise<ContactLog> => {
     const res = await apiRequest("POST", "/api/contact-logs", contactData);
     const newContact = await res.json();
-    await fetchContacts();
+    // Optimistic update — no extra GET /api/contact-logs round-trip needed
+    setContacts(prev => [newContact, ...prev]);
     return newContact;
   };
 
   const updateContact = async (id: string, data: Partial<ContactLog>): Promise<void> => {
     await apiRequest("PATCH", `/api/contact-logs/${id}`, data);
-    await fetchContacts();
+    setContacts(prev =>
+      prev.map(c => c.id === id ? { ...c, ...data } : c)
+    );
   };
 
   const deleteContact = async (id: string): Promise<void> => {
     await apiRequest("DELETE", `/api/contact-logs/${id}`);
-    await fetchContacts();
+    setContacts(prev => prev.filter(c => c.id !== id));
   };
 
   const getContactById = (id: string): ContactLog | undefined => {

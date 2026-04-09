@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { User, UserRoleType } from "@shared/schema";
+import { startApiCallCounter } from "@/lib/queryClient";
 import { 
   canManageAllCases, 
   canManageAllConsultations, 
@@ -89,13 +90,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!prev) return prev;
       const fresh = fetched.find(u => u.id === prev.id);
       if (!fresh) return prev;
-      const merged = { ...prev, ...fresh };
-      // Only return a new reference if something actually changed, so downstream
-      // effects (e.g. fetchCases in cases-context) don't fire unnecessarily.
-      const changed = (Object.keys(merged) as (keyof typeof merged)[]).some(
-        key => merged[key] !== prev[key as keyof typeof prev]
+      // IMPORTANT: Only compare auth-relevant fields, NOT timestamps like updatedAt/createdAt.
+      // Comparing all fields caused a cascade where all 9 data contexts re-fetched on every
+      // page reload (because updatedAt always differs between localStorage and server).
+      const authFields = [
+        "role", "isActive", "departmentId", "name", "username", "email",
+        "phone", "canBeAssignedCases", "canBeAssignedConsultations",
+        "avatar", "mustChangePassword", "supervisorId",
+      ] as const;
+      const changed = authFields.some(
+        key => (fresh as any)[key] !== (prev as any)[key]
       );
       if (!changed) return prev;
+      const merged = { ...prev, ...fresh };
       localStorage.setItem("lawfirm_user", JSON.stringify(merged));
       return merged;
     });
@@ -220,6 +227,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const data = await res.json();
       if (data.user) {
+        startApiCallCounter(); // measure all /api/* calls in the next 30 seconds
         setUser(data.user);
         if (data.token) {
           localStorage.setItem("lawfirm_token", data.token);
