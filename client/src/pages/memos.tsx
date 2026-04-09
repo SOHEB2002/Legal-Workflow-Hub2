@@ -315,6 +315,10 @@ export default function MemosPage() {
       const matchesPriority = filterPriority === "all" || m.priority === filterPriority;
       const matchesSearch = !searchQuery || m.title.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesStatus && matchesDept && matchesPriority && matchesSearch;
+    }).sort((a, b) => {
+      const dateA = a.deadline ? new Date(a.deadline).getTime() : Infinity;
+      const dateB = b.deadline ? new Date(b.deadline).getTime() : Infinity;
+      return dateA - dateB;
     });
   }, [memos, cases, filterStatus, filterDept, filterPriority, searchQuery]);
 
@@ -434,7 +438,6 @@ export default function MemosPage() {
                 </TableHeader>
                 <TableBody>
                   {pagedMemos
-                    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
                     .map((memo) => {
                       const caseDetails = getCaseDetails(memo.caseId);
                       return (
