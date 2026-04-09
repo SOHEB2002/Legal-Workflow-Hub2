@@ -564,11 +564,12 @@ export default function MemosPage() {
                     filter={(value, search) => {
                       const c = cases.find(x => x.id === value);
                       if (!c) return 0;
-                      const haystack = `${c.caseNumber} ${c.opponentName || ""} ${c.plaintiffName || ""}`.toLowerCase();
+                      const clientName = c.clientId ? getClientName(c.clientId) : "";
+                      const haystack = `${c.caseNumber} ${c.opponentName || ""} ${c.plaintiffName || ""} ${clientName}`.toLowerCase();
                       return haystack.includes(search.toLowerCase()) ? 1 : 0;
                     }}
                   >
-                    <CommandInput placeholder="ابحث برقم القضية أو اسم الخصم..." />
+                    <CommandInput placeholder="ابحث برقم القضية أو اسم الخصم أو العميل..." className="text-right" dir="rtl" />
                     <CommandList>
                       <CommandEmpty>لا توجد نتائج</CommandEmpty>
                       <CommandGroup>
@@ -584,12 +585,12 @@ export default function MemosPage() {
                                 setFormData(prev => ({ ...prev, caseId: val, assignedTo: autoLawyer }));
                                 setCaseComboOpen(false);
                               }}
-                              className="flex items-center justify-between gap-2"
+                              className="flex items-center justify-between gap-2" dir="rtl"
                             >
-                              <div className="flex flex-col">
+                              <div className="flex flex-col items-start text-right">
                                 <LtrInline className="font-medium">{c.caseNumber}</LtrInline>
-                                {c.opponentName && (
-                                  <span className="text-xs text-muted-foreground">{c.opponentName}</span>
+                                {(c.opponentName || c.clientId) && (
+                                  <span className="text-xs text-muted-foreground">{c.clientId ? getClientName(c.clientId) : c.opponentName}</span>
                                 )}
                               </div>
                               {formData.caseId === c.id && (
