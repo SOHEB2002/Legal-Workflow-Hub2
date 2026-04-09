@@ -64,7 +64,8 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
       assignedBy: data.assignedBy || "",
     });
     const newTask = await res.json();
-    await fetchFieldTasks();
+    // Optimistic update — no extra GET /api/field-tasks round-trip needed
+    setFieldTasks(prev => [newTask, ...prev]);
     if (newTask.assignedTo) {
       notifyFieldTaskAssigned(newTask.id, newTask.title, newTask.assignedTo).catch(() => {});
     }
@@ -73,19 +74,23 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
 
   const updateFieldTask = async (id: string, data: Partial<FieldTask>): Promise<void> => {
     await apiRequest("PATCH", `/api/field-tasks/${id}`, data);
-    await fetchFieldTasks();
+    setFieldTasks(prev =>
+      prev.map(t => t.id === id ? { ...t, ...data } : t)
+    );
   };
 
   const deleteFieldTask = async (id: string): Promise<void> => {
     await apiRequest("DELETE", `/api/field-tasks/${id}`);
-    await fetchFieldTasks();
+    setFieldTasks(prev => prev.filter(t => t.id !== id));
   };
 
   const startTask = async (id: string): Promise<void> => {
     await apiRequest("PATCH", `/api/field-tasks/${id}`, {
       status: FieldTaskStatus.IN_PROGRESS,
     });
-    await fetchFieldTasks();
+    setFieldTasks(prev =>
+      prev.map(t => t.id === id ? { ...t, status: FieldTaskStatus.IN_PROGRESS } : t)
+    );
   };
 
   const completeTask = async (
@@ -94,21 +99,26 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
     proofDescription: string,
     proofFileLink: string
   ): Promise<void> => {
-    await apiRequest("PATCH", `/api/field-tasks/${id}`, {
+    const updateData = {
       status: FieldTaskStatus.COMPLETED,
       completedAt: new Date().toISOString(),
       completionNotes: notes,
       proofDescription,
       proofFileLink,
-    });
-    await fetchFieldTasks();
+    };
+    await apiRequest("PATCH", `/api/field-tasks/${id}`, updateData);
+    setFieldTasks(prev =>
+      prev.map(t => t.id === id ? { ...t, ...updateData } : t)
+    );
   };
 
   const cancelTask = async (id: string): Promise<void> => {
     await apiRequest("PATCH", `/api/field-tasks/${id}`, {
       status: FieldTaskStatus.CANCELLED,
     });
-    await fetchFieldTasks();
+    setFieldTasks(prev =>
+      prev.map(t => t.id === id ? { ...t, status: FieldTaskStatus.CANCELLED } : t)
+    );
   };
 
   const getTaskById = (id: string) => {

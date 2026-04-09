@@ -73,6 +73,7 @@ export interface IStorage {
 
   // Notifications
   getAllNotifications(): Promise<Notification[]>;
+  getRecentNotifications(limit: number): Promise<Notification[]>;
   getNotificationsByRecipient(recipientId: string): Promise<Notification[]>;
   createNotification(data: Partial<Notification>): Promise<Notification>;
   updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
@@ -949,6 +950,13 @@ export class DatabaseStorage implements IStorage {
 
   async getAllNotifications(): Promise<Notification[]> {
     const result = await db.select().from(notifications);
+    return result.map(mapDbNotification);
+  }
+
+  async getRecentNotifications(limit: number): Promise<Notification[]> {
+    const result = await db.select().from(notifications)
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit);
     return result.map(mapDbNotification);
   }
 

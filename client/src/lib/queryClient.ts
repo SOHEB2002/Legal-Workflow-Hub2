@@ -134,3 +134,42 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+// ============================================================
+// API Call Counter — diagnostics
+// Call startApiCallCounter() right after login to measure how
+// many fetch('/api/...') calls are made in the first 30 seconds.
+// Results are printed to the browser console.
+// ============================================================
+let _origFetch: typeof fetch | null = null;
+let _apiCallCount = 0;
+let _apiCounterTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function startApiCallCounter() {
+  if (_origFetch) return; // already running
+  _apiCallCount = 0;
+  _origFetch = window.fetch;
+  (window as any).fetch = ((...args: Parameters<typeof fetch>) => {
+    const url =
+      typeof args[0] === "string"
+        ? args[0]
+        : (args[0] as Request).url;
+    if (url.startsWith("/api/")) {
+      _apiCallCount++;
+      console.log(`[API #${_apiCallCount}] ${url}`);
+    }
+    return _origFetch!(...args);
+  }) as typeof fetch;
+
+  if (_apiCounterTimer) clearTimeout(_apiCounterTimer);
+  _apiCounterTimer = setTimeout(() => {
+    console.log(
+      `%c[API Counter] TOTAL /api/* calls in first 30s: ${_apiCallCount}`,
+      "color: red; font-size: 14px; font-weight: bold"
+    );
+    if (_origFetch) {
+      (window as any).fetch = _origFetch;
+      _origFetch = null;
+    }
+  }, 30_000);
+}

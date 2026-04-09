@@ -2453,8 +2453,14 @@ export async function registerRoutes(
     try {
       const user = (req as any).user;
       const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+      // Admin roles previously fetched the entire notifications table with getAllNotifications(),
+      // which grows unboundedly (scheduler + workflow actions create many rows). The default
+      // is now the 200 most recent. Pass ?all=true only when the full history is needed
+      // (e.g., the notification management dashboard).
       const notificationList = adminRoles.includes(user.role)
-        ? await storage.getAllNotifications()
+        ? req.query.all === "true"
+          ? await storage.getAllNotifications()
+          : await storage.getRecentNotifications(200)
         : await storage.getNotificationsByRecipient(user.id);
       res.json(notificationList);
     } catch (error) {
