@@ -405,12 +405,13 @@ export default function UsersPage() {
       }
     }
 
-    const newIsActive = !userToToggle.isActive;
+    // Only call auth-context's toggleUserStatus — it handles the PATCH + refetchUsers.
+    // toggleUserStatusExtended was a duplicate that caused 2 PATCH + 2 GET /api/users
+    // per toggle, feeding the auth cascade and inflating analytics by ~2x.
+    // extendedUsers in users-context derives status from isActive, so it updates
+    // automatically once refetchUsers() syncs authUsers.
     toggleUserStatus(userToToggle.id);
-    
-    const newStatus = newIsActive ? UserStatus.ACTIVE : UserStatus.INACTIVE;
-    toggleUserStatusExtended(userToToggle.id, newStatus);
-    
+
     toast({
       title: userToToggle.isActive ? "تم تعطيل المستخدم" : "تم تفعيل المستخدم",
     });
