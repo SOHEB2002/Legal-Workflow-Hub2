@@ -558,6 +558,8 @@ export default function CasesPage() {
       const matchesClassification = classificationFilter === "all" ||
         (classificationFilter === "منظورة"
           ? c.caseClassification === CaseClassification.PLAINTIFF_EXISTING
+          : classificationFilter === "مدعى_عليه"
+          ? c.caseClassification === CaseClassification.DEFENDANT
           : classificationFilter === "دعوى_للدراسة"
           ? c.caseClassification === CaseClassification.PLAINTIFF_NEW
           : c.caseClassification === classificationFilter);
@@ -746,7 +748,8 @@ export default function CasesPage() {
               <SelectContent>
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
                 <SelectItem value="دعوى_للدراسة">دعوى للدراسة</SelectItem>
-                <SelectItem value="منظورة">منظورة</SelectItem>
+                <SelectItem value="منظورة">منظورة - مدعي</SelectItem>
+                <SelectItem value="مدعى_عليه">منظورة - مدعى عليه</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -928,7 +931,7 @@ export default function CasesPage() {
                     }`}
                   >
                     <Swords className="h-6 w-6 text-red-600" />
-                    <span className="text-xs font-medium text-center">مدعى عليه</span>
+                    <span className="text-xs font-medium text-center">منظورة (مدعى عليه)</span>
                   </button>
                 </div>
               )}

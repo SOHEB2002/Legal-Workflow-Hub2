@@ -270,15 +270,15 @@ export default function DashboardPage() {
             <div className="grid grid-cols-3 gap-4 text-center">
               <div className="space-y-1">
                 <p className="text-2xl font-bold text-[#345774]">{classificationStats.plaintiffNew}</p>
-                <p className="text-xs text-muted-foreground">مدعي - جديدة</p>
+                <p className="text-xs text-muted-foreground">دعوى للدراسة</p>
               </div>
               <div className="space-y-1">
                 <p className="text-2xl font-bold text-blue-600">{classificationStats.plaintiffExisting}</p>
-                <p className="text-xs text-muted-foreground">مدعي - مقيدة</p>
+                <p className="text-xs text-muted-foreground">منظورة - مدعي</p>
               </div>
               <div className="space-y-1">
                 <p className="text-2xl font-bold text-red-600">{classificationStats.defendant}</p>
-                <p className="text-xs text-muted-foreground">مدعى عليه</p>
+                <p className="text-xs text-muted-foreground">منظورة - مدعى عليه</p>
               </div>
             </div>
           </CardContent>
