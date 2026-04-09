@@ -19,7 +19,9 @@ function getCurrentUser(): { id: string; name: string; role: string } | null {
 
 let cachedUsers: User[] | null = null;
 let cacheTimestamp = 0;
-const CACHE_TTL = 30000;
+// 30s was causing ~1,900 /api/users calls/week across all workflow trigger actions.
+// 5 minutes is plenty — the users list changes infrequently.
+const CACHE_TTL = 300000;
 
 async function getUsers(): Promise<User[]> {
   const now = Date.now();

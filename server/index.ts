@@ -8,6 +8,7 @@ import { storage } from "./storage";
 import { pool } from "./db";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { setupWebSocket } from "./websocket";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -119,6 +120,7 @@ app.use((req, res, next) => {
     console.error("Failed to apply DB indexes:", err);
   }
 
+  setupWebSocket(httpServer);
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
