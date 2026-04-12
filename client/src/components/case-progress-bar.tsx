@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
+import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, type CaseTypeValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,6 +23,7 @@ interface CaseProgressBarProps {
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
+  caseType?: CaseTypeValue;
   reviewNotes?: string;
   reviewDecision?: string;
 }
@@ -35,17 +36,15 @@ export function CaseProgressBar({
   userRole,
   disabled = false,
   caseClassification,
+  caseType,
   reviewNotes,
   reviewDecision,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
-  const legacyStageMap: Record<string, CaseStageValue> = {
-    "رفع_للدائرة": "تم_الرفع_للدائرة" as CaseStageValue,
-  };
-  const normalizedStage = legacyStageMap[currentStage] || currentStage;
-  const effectiveClassification = caseClassification || "مدعي_قضية_جديدة";
-  const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue);
+  const normalizedStage = currentStage;
+  const effectiveClassification = caseClassification || "قضية_جديدة";
+  const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
   const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;
@@ -124,7 +123,7 @@ export function CaseProgressBar({
                       : "text-muted-foreground"
                   }`}
                 >
-                  {getStageLabel(stage, effectiveClassification as CaseClassificationValue)}
+                  {getStageLabel(stage)}
                 </span>
               </div>
               {index < stagesOrder.length - 1 && (

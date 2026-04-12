@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
@@ -113,32 +113,55 @@ import { ReviewChecklist } from "@/components/review-checklist";
 
 function getStageColor(stage: CaseStageValue | string) {
   switch (stage) {
-    case CaseStage.RECEIVED:
+    case CaseStage.RECEPTION:
       return "bg-primary/20 text-primary border-primary/30";
+    case CaseStage.PRESCRIPTION_DATE:
     case CaseStage.DATA_COMPLETION:
       return "bg-amber-500/20 text-amber-600 border-amber-500/30";
     case CaseStage.STUDY:
       return "bg-accent/20 text-accent border-accent/30";
+    case CaseStage.SETTLEMENT_DIRECTION:
+    case CaseStage.AWAITING_SETTLEMENT:
+      return "bg-yellow-500/20 text-yellow-600 border-yellow-500/30";
+    case CaseStage.GRIEVANCE_DRAFTING:
+    case CaseStage.GRIEVANCE_INTERNAL_REVIEW:
+    case CaseStage.GRIEVANCE_SUBMITTED:
+    case CaseStage.GRIEVANCE_AWAITING:
+      return "bg-purple-500/20 text-purple-600 border-purple-500/30";
     case CaseStage.DRAFTING:
+    case CaseStage.MEMO_DRAFTING:
       return "bg-blue-500/20 text-blue-600 border-blue-500/30";
+    case CaseStage.INTERNAL_REVIEW:
+      return "bg-indigo-500/20 text-indigo-600 border-indigo-500/30";
     case CaseStage.REVIEW_COMMITTEE:
       return "bg-secondary/20 text-secondary-foreground border-secondary/30";
-    case CaseStage.AMENDMENTS:
+    case CaseStage.TAKING_NOTES:
       return "bg-destructive/20 text-destructive border-destructive/30";
-    case CaseStage.SUBMITTED:
+    case CaseStage.READY_TO_SUBMIT:
       return "bg-green-500/20 text-green-600 border-green-500/30";
-    case CaseStage.PENDING_REVIEW:
+    case CaseStage.TARADI_REGISTRATION:
+    case CaseStage.TARADI_REVIEW:
+    case CaseStage.NAJIZ_REGISTRATION:
+    case CaseStage.NAJIZ_REVIEW:
+    case CaseStage.MOEEN_REGISTRATION:
+    case CaseStage.MOEEN_REVIEW:
       return "bg-violet-500/20 text-violet-600 border-violet-500/30";
     case CaseStage.CONCILIATION:
       return "bg-cyan-500/20 text-cyan-600 border-cyan-500/30";
     case CaseStage.CONCILIATION_CLOSED:
       return "bg-teal-500/20 text-teal-600 border-teal-500/30";
     case CaseStage.UNDER_REVIEW:
+    case CaseStage.APPEAL_PENDING:
       return "bg-orange-500/20 text-orange-600 border-orange-500/30";
     case CaseStage.PRIMARY_JUDGMENT:
       return "bg-red-500/20 text-red-600 border-red-500/30";
     case CaseStage.FINAL_JUDGMENT:
       return "bg-rose-600/20 text-rose-700 border-rose-600/30";
+    case CaseStage.STRUCK_OFF:
+      return "bg-red-700/20 text-red-800 border-red-700/30";
+    case CaseStage.COLLECTION:
+      return "bg-emerald-500/20 text-emerald-600 border-emerald-500/30";
+    case CaseStage.ARCHIVED:
     case CaseStage.CLOSED:
       return "bg-muted text-muted-foreground border-muted";
     default:
@@ -215,13 +238,6 @@ export default function CasesPage() {
   };
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchQuery(value);
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = setTimeout(() => setDebouncedSearch(value), 300);
-  }, []);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
 
@@ -229,7 +245,7 @@ export default function CasesPage() {
     const params = new URLSearchParams(window.location.search);
     const s = params.get("status");
     if (s === "pending_review") setStatusFilter(CaseStage.REVIEW_COMMITTEE);
-    else if (s === "ready") setStatusFilter(CaseStage.SUBMITTED);
+    else if (s === "ready") setStatusFilter(CaseStage.READY_TO_SUBMIT);
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -305,6 +321,10 @@ export default function CasesPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [caseToDelete, setCaseToDelete] = useState<any>(null);
   const [stageTransitioning, setStageTransitioning] = useState(false);
+  const [showEarlyCloseDialog, setShowEarlyCloseDialog] = useState(false);
+  const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
+  const [earlyCloseReason, setEarlyCloseReason] = useState("");
+  const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editCaseId, setEditCaseId] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState({
@@ -459,7 +479,7 @@ export default function CasesPage() {
       return;
     }
     
-    const isPlaintiffNew = formData.caseClassification === CaseClassification.PLAINTIFF_NEW;
+    const isPlaintiffNew = formData.caseClassification === CaseClassification.CASE_NEW;
     if (isPlaintiffNew && formData.caseType === "إداري") {
       if (!formData.adminCaseSubType) {
         toast({ title: "يرجى تحديد نوع القضية الإدارية (تظلم / قضية)", variant: "destructive" });
@@ -547,25 +567,19 @@ export default function CasesPage() {
   };
 
   const filteredCases = useMemo(() => {
-    const query = debouncedSearch.toLowerCase();
     return cases.filter((c) => {
-      const matchesSearch = !query ||
-        c.caseNumber.toLowerCase().includes(query) ||
-        (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(query)) ||
-        (c.clientId && getClientName(c.clientId).toLowerCase().includes(query));
+      const clientName = c.clientId ? getClientName(c.clientId) : "";
+      const matchesSearch =
+        c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
-        (classificationFilter === "منظورة"
-          ? c.caseClassification === CaseClassification.PLAINTIFF_EXISTING
-          : classificationFilter === "مدعى_عليه"
-          ? c.caseClassification === CaseClassification.DEFENDANT
-          : classificationFilter === "دعوى_للدراسة"
-          ? c.caseClassification === CaseClassification.PLAINTIFF_NEW
-          : c.caseClassification === classificationFilter);
+        c.caseClassification === classificationFilter;
       return matchesSearch && matchesStatus && matchesDept && matchesClassification;
     });
-  }, [cases, debouncedSearch, statusFilter, deptFilter, classificationFilter, getClientName]);
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, getClientName]);
 
   const PAGE_SIZE = 15;
   const [casePage, setCasePage] = useState(1);
@@ -671,14 +685,7 @@ export default function CasesPage() {
 
   const canSendToReview = (c: LawCase) => 
     permissions.canManageDepartment && 
-    (c.currentStage === CaseStage.STUDY || c.currentStage === CaseStage.DRAFTING || c.currentStage === CaseStage.AMENDMENTS);
-
-  const canEmployeeResendToReview = (c: LawCase) =>
-    !permissions.canManageDepartment &&
-    c.currentStage === CaseStage.AMENDMENTS &&
-    user != null &&
-    (c.primaryLawyerId === user.id ||
-      (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id)));
+    (c.currentStage === CaseStage.STUDY || c.currentStage === CaseStage.DRAFTING || c.currentStage === CaseStage.TAKING_NOTES);
 
   const canReview = (c: LawCase) => 
     permissions.canReviewCases && 
@@ -687,7 +694,7 @@ export default function CasesPage() {
   const canClose = (c: LawCase) =>
     permissions.canCloseCases &&
     c.currentStage !== CaseStage.CLOSED &&
-    (c.currentStage === CaseStage.SUBMITTED || c.currentStage === CaseStage.PENDING_REVIEW ||
+    (c.currentStage === CaseStage.READY_TO_SUBMIT || c.currentStage === CaseStage.UNDER_REVIEW ||
      c.currentStage === CaseStage.CONCILIATION || c.currentStage === CaseStage.CONCILIATION_CLOSED);
 
   return (
@@ -715,7 +722,7 @@ export default function CasesPage() {
                 data-testid="input-search"
                 placeholder="بحث برقم القضية أو اسم العميل..."
                 value={searchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 className="pr-10"
               />
             </div>
@@ -747,9 +754,8 @@ export default function CasesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
-                <SelectItem value="دعوى_للدراسة">دعوى للدراسة</SelectItem>
-                <SelectItem value="منظورة">منظورة - مدعي</SelectItem>
-                <SelectItem value="مدعى_عليه">منظورة - مدعى عليه</SelectItem>
+                <SelectItem value="قضية_جديدة">قضية جديدة</SelectItem>
+                <SelectItem value="قضية_مقيدة">قضية مقيدة</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -813,11 +819,11 @@ export default function CasesPage() {
                   <TableCell className="text-center text-sm">{c.opponentName || "-"}</TableCell>
                   <TableCell className="text-center">
                     <Badge variant="outline" className={`text-xs inline-flex text-center justify-center ${
-                      c.caseClassification === CaseClassification.DEFENDANT
+                      c.caseClassification === CaseClassification.CASE_EXISTING
                         ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
                         : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                     }`}>
-                      {c.caseClassification === CaseClassification.DEFENDANT ? "مدعى عليه" : "مدعي"}
+                      {c.caseClassification === CaseClassification.CASE_EXISTING ? "مدعى عليه" : "مدعي"}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-center">
@@ -825,7 +831,7 @@ export default function CasesPage() {
                   </TableCell>
                   <TableCell className="text-center">
                     <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
-                      {getStageLabel(c.currentStage, c.caseClassification as CaseClassificationValue)}
+                      {getStageLabel(c.currentStage)}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
@@ -874,65 +880,54 @@ export default function CasesPage() {
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  data-testid="classification-plaintiff-new"
+                  data-testid="classification-case-new"
                   onClick={() => {
-                    setClassificationGroup("study");
-                    setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_NEW, previousHearingsCount: 0, currentSituation: "", responseDeadline: "" });
+                    setClassificationGroup("new");
+                    setFormData({ ...formData, caseClassification: CaseClassification.CASE_NEW, previousHearingsCount: 0, currentSituation: "", responseDeadline: "", clientRole: "" as any });
                   }}
                   className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                    classificationGroup === "study"
+                    formData.caseClassification === CaseClassification.CASE_NEW
                       ? "border-[#D4AF37] bg-[#D4AF37]/10"
                       : "border-border hover-elevate"
                   }`}
                 >
                   <FileText className="h-6 w-6 text-[#345774]" />
-                  <span className="text-xs font-medium text-center">دعوى للدراسة</span>
+                  <span className="text-xs font-medium text-center">قضية جديدة (للرفع)</span>
                 </button>
                 <button
                   type="button"
-                  data-testid="classification-registered"
+                  data-testid="classification-case-existing"
                   onClick={() => {
-                    setClassificationGroup("registered");
-                    setFormData({ ...formData, caseClassification: "" as any });
+                    setClassificationGroup("existing");
+                    setFormData({ ...formData, caseClassification: CaseClassification.CASE_EXISTING });
                   }}
                   className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                    classificationGroup === "registered"
+                    formData.caseClassification === CaseClassification.CASE_EXISTING
                       ? "border-[#345774] bg-[#345774]/10"
                       : "border-border hover-elevate"
                   }`}
                 >
                   <Scale className="h-6 w-6 text-[#345774]" />
-                  <span className="text-xs font-medium text-center">منظورة</span>
+                  <span className="text-xs font-medium text-center">قضية مقيدة (منظورة)</span>
                 </button>
               </div>
-              {classificationGroup === "registered" && (
-                <div className="grid grid-cols-2 gap-3 mt-3">
-                  <button
-                    type="button"
-                    data-testid="classification-plaintiff-existing"
-                    onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.PLAINTIFF_EXISTING, responseDeadline: "" })}
-                    className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                      formData.caseClassification === CaseClassification.PLAINTIFF_EXISTING
-                        ? "border-[#D4AF37] bg-[#D4AF37]/10"
-                        : "border-border hover-elevate"
-                    }`}
-                  >
-                    <Shield className="h-6 w-6 text-blue-600" />
-                    <span className="text-xs font-medium text-center">مدعي</span>
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="classification-defendant"
-                    onClick={() => setFormData({ ...formData, caseClassification: CaseClassification.DEFENDANT, previousHearingsCount: 0, currentSituation: "", priority: "عاجل" })}
-                    className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                      formData.caseClassification === CaseClassification.DEFENDANT
-                        ? "border-red-500 bg-red-500/10"
-                        : "border-border hover-elevate"
-                    }`}
-                  >
-                    <Swords className="h-6 w-6 text-red-600" />
-                    <span className="text-xs font-medium text-center">مدعى عليه</span>
-                  </button>
+              {formData.caseClassification === CaseClassification.CASE_EXISTING && (
+                <div className="space-y-3 mt-3">
+                  <div>
+                    <Label>صفة العميل <span className="text-red-500">*</span></Label>
+                    <Select
+                      value={(formData as any).clientRole || ""}
+                      onValueChange={(value) => setFormData({ ...formData, clientRole: value } as any)}
+                    >
+                      <SelectTrigger data-testid="select-client-role">
+                        <SelectValue placeholder="اختر صفة العميل" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="مدعي">مدعي</SelectItem>
+                        <SelectItem value="مدعى_عليه">مدعى عليه</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               )}
             </div>
@@ -1021,7 +1016,7 @@ export default function CasesPage() {
                   />
                 </div>
 
-                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                {formData.caseClassification !== CaseClassification.CASE_NEW && (
                   <div>
                     <Label>رقم القضية</Label>
                     <SmartInput
@@ -1034,7 +1029,7 @@ export default function CasesPage() {
                   </div>
                 )}
 
-                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                {formData.caseClassification !== CaseClassification.CASE_NEW && (
                   <div>
                     <Label>اسم المحكمة</Label>
                     <SmartInput
@@ -1047,7 +1042,7 @@ export default function CasesPage() {
                   </div>
                 )}
 
-                {formData.caseClassification === CaseClassification.PLAINTIFF_NEW && (
+                {formData.caseClassification === CaseClassification.CASE_NEW && (
                   <>
                     {formData.caseType === "تجاري" && (
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
@@ -1086,12 +1081,23 @@ export default function CasesPage() {
                             data-testid="input-prescription-date"
                           />
                         </div>
+                        <div className="flex items-center gap-2 pt-1">
+                          <Checkbox
+                            id="grievanceRequired"
+                            checked={(formData as any).grievanceRequired || false}
+                            onCheckedChange={(checked) => setFormData({ ...formData, grievanceRequired: !!checked } as any)}
+                            data-testid="checkbox-grievance-required"
+                          />
+                          <Label htmlFor="grievanceRequired" className="text-sm cursor-pointer">
+                            مطلوب تظلم
+                          </Label>
+                        </div>
                       </>
                     )}
                   </>
                 )}
 
-                {formData.caseClassification === CaseClassification.PLAINTIFF_EXISTING && (
+                {formData.caseClassification === CaseClassification.CASE_EXISTING && (
                   <>
                     <div>
                       <Label>عدد الجلسات السابقة</Label>
@@ -1113,10 +1119,20 @@ export default function CasesPage() {
                         rows={2}
                       />
                     </div>
+                    {(formData as any).clientRole === "مدعى_عليه" && (
+                      <div>
+                        <Label>مهلة الرد (تاريخ)</Label>
+                        <HijriDatePicker
+                          value={formData.responseDeadline}
+                          onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
+                          data-testid="input-response-deadline"
+                        />
+                      </div>
+                    )}
                   </>
                 )}
 
-                {formData.caseClassification !== CaseClassification.PLAINTIFF_NEW && (
+                {formData.caseClassification !== CaseClassification.CASE_NEW && (
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label>تاريخ الجلسة القادمة (اختياري)</Label>
@@ -1145,23 +1161,12 @@ export default function CasesPage() {
                 <Checkbox
                   id="memoRequired"
                   checked={formData.memoRequired}
-                  onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked, responseDeadline: !checked ? "" : formData.responseDeadline })}
+                  onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked })}
                   data-testid="checkbox-memo-required"
                 />
                 <Label htmlFor="memoRequired" className="text-sm cursor-pointer">
                   مطلوب مذكرة
                 </Label>
-              </div>
-            )}
-
-            {formData.memoRequired && (
-              <div>
-                <Label>تاريخ استحقاق المذكرة</Label>
-                <HijriDatePicker
-                  value={formData.responseDeadline}
-                  onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
-                  data-testid="input-response-deadline"
-                />
               </div>
             )}
           </div>
@@ -1298,7 +1303,7 @@ export default function CasesPage() {
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
-              {selectedCase.caseClassification === CaseClassification.DEFENDANT &&
+              {selectedCase.caseClassification === CaseClassification.CASE_EXISTING &&
                selectedCase.nextHearingDate &&
                new Date(selectedCase.nextHearingDate) > new Date() && (
                 <div className="flex items-start gap-3 rounded-lg border border-orange-500/60 bg-orange-500/10 px-4 py-3 text-orange-700 dark:text-orange-400" dir="rtl">
@@ -1317,6 +1322,7 @@ export default function CasesPage() {
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
+                  caseType={selectedCase.caseType as CaseTypeValue}
                   disabled={stageTransitioning}
                   onMoveToNext={async (notes) => {
                     if (!user) return;
@@ -1453,7 +1459,14 @@ export default function CasesPage() {
                           : "-"}
                       </p>
                     </div>
-                    
+                    {selectedCase.responseDeadline && (
+                      <div>
+                        <Label className="text-muted-foreground">مهلة الرد</Label>
+                        <p className="font-medium">
+                          <DualDateDisplay date={selectedCase.responseDeadline} compact />
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="border-t pt-4">
@@ -1479,7 +1492,68 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
+                  {(selectedCase as any).clientRole && (
+                    <div className="border-t pt-4">
+                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
+                        <div>
+                          <Label className="text-muted-foreground">صفة العميل</Label>
+                          <p className="font-medium">{(selectedCase as any).clientRole === "مدعى_عليه" ? "مدعى عليه" : "مدعي"}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedCase.currentStage === "مشطوبة" && (selectedCase as any).struckOffReopenDeadline && (
+                    <div className="border-t pt-4">
+                      <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
+                        <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
+                        <div>
+                          <span className="text-sm font-medium text-red-700 dark:text-red-400">القضية مشطوبة</span>
+                          <p className="text-xs text-red-600 dark:text-red-400">
+                            الموعد النهائي لإعادة القيد: {(selectedCase as any).struckOffReopenDeadline}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedCase.currentStage === "مقفلة" && (selectedCase as any).closureReason && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3">سبب الإغلاق</h4>
+                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
+                        <div>
+                          <Label className="text-muted-foreground">السبب</Label>
+                          <p className="font-medium">{(selectedCase as any).closureReason === "أخرى" ? (selectedCase as any).closureReasonOther || "أخرى" : (selectedCase as any).closureReason?.replace(/_/g, " ")}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {(selectedCase as any).grievanceRequired && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-3">بيانات التظلم</h4>
+                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
+                        <div>
+                          <Label className="text-muted-foreground">مطلوب تظلم</Label>
+                          <p className="font-medium">نعم</p>
+                        </div>
+                        {(selectedCase as any).grievanceDate && (
+                          <div>
+                            <Label className="text-muted-foreground">تاريخ التظلم</Label>
+                            <p className="font-medium">{(selectedCase as any).grievanceDate}</p>
+                          </div>
+                        )}
+                        {(selectedCase as any).grievanceResult && (
+                          <div>
+                            <Label className="text-muted-foreground">نتيجة التظلم</Label>
+                            <p className="font-medium">{(selectedCase as any).grievanceResult}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedCase.caseClassification === CaseClassification.CASE_NEW && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
@@ -1495,7 +1569,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "تجاري" && (
+                  {selectedCase.caseClassification === CaseClassification.CASE_NEW && selectedCase.caseType === "تجاري" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل منصة تراضي</h4>
                       <div className="space-y-3">
@@ -1563,7 +1637,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW && selectedCase.caseType === "عمالي" && (
+                  {selectedCase.caseClassification === CaseClassification.CASE_NEW && selectedCase.caseType === "عمالي" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل وزارة الموارد البشرية</h4>
                       <div className="space-y-3">
@@ -1634,7 +1708,7 @@ export default function CasesPage() {
                     </div>
                   )}
                   
-                  {CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.SUBMITTED) && (
+                  {CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.READY_TO_SUBMIT) && (
                     selectedCase.caseType === "تجاري" || selectedCase.caseType === "عمالي"
                   ) && (
                     <div className="border-t pt-4">
@@ -1700,8 +1774,8 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_NEW &&
-                    CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.SUBMITTED) &&
+                  {selectedCase.caseClassification === CaseClassification.CASE_NEW &&
+                    CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.READY_TO_SUBMIT) &&
                     (user?.role === "branch_manager" || user?.role === "admin_support") &&
                     (selectedCase.caseType !== "تجاري" || (selectedCase as any).taradiStatus === "لم_يتم_صلح") &&
                     (selectedCase.caseType !== "عمالي" || (selectedCase as any).mohrStatus === "انتهت_التسوية") && (
@@ -1738,7 +1812,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.PLAINTIFF_EXISTING && (
+                  {selectedCase.caseClassification === CaseClassification.CASE_EXISTING && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
                         <span className="w-2 h-2 rounded-full bg-violet-500 inline-block"></span>
@@ -2035,17 +2109,6 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {canEmployeeResendToReview(selectedCase) && (
-                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
-                        <div>
-                          <p className="font-medium text-sm">إعادة الإحالة للجنة المراجعة</p>
-                          <p className="text-xs text-muted-foreground">تم الأخذ بالملاحظات — إعادة إرسال القضية للاعتماد</p>
-                        </div>
-                        <Button size="sm" variant="outline" data-testid={`button-resend-review-details-${selectedCase.id}`} onClick={() => { sendToReviewCommittee(selectedCase.id); toast({ title: "تم إعادة إحالة القضية للجنة المراجعة" }); }}>
-                          <Send className="w-4 h-4 ml-1" />إعادة الإحالة
-                        </Button>
-                      </div>
-                    )}
                     {canReview(selectedCase) && (
                       <>
                         <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
@@ -2086,6 +2149,17 @@ export default function CasesPage() {
                           </div>
                         </div>
                       </>
+                    )}
+                    {user?.role === "admin_support" && selectedCase.currentStage !== "مقفلة" && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20">
+                        <div>
+                          <p className="font-medium text-sm text-red-700 dark:text-red-400">إغلاق مبكر</p>
+                          <p className="text-xs text-muted-foreground">إغلاق القضية من أي مرحلة (الدعم الإداري فقط)</p>
+                        </div>
+                        <Button size="sm" variant="outline" className="border-red-500 text-red-600 hover:bg-red-50" data-testid={`button-early-close-${selectedCase.id}`} onClick={() => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); }}>
+                          <Archive className="w-4 h-4 ml-1" />إغلاق القضية
+                        </Button>
+                      </div>
                     )}
                     {canClose(selectedCase) && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
@@ -2315,6 +2389,68 @@ export default function CasesPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <Dialog open={showEarlyCloseDialog} onOpenChange={(open) => { setShowEarlyCloseDialog(open); if (!open) { setEarlyCloseCase(null); setEarlyCloseReason(""); setEarlyCloseReasonOther(""); } }}>
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>إغلاق القضية</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>سبب الإغلاق <span className="text-red-500">*</span></Label>
+              <Select value={earlyCloseReason} onValueChange={setEarlyCloseReason}>
+                <SelectTrigger data-testid="select-closure-reason">
+                  <SelectValue placeholder="اختر سبب الإغلاق" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="عدم_تجديد_العقد">عدم تجديد العقد</SelectItem>
+                  <SelectItem value="سداد_الخصم">سداد الخصم</SelectItem>
+                  <SelectItem value="تنازل_العميل">تنازل العميل</SelectItem>
+                  <SelectItem value="أخرى">أخرى</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {earlyCloseReason === "أخرى" && (
+              <div>
+                <Label>توضيح السبب <span className="text-red-500">*</span></Label>
+                <Textarea
+                  value={earlyCloseReasonOther}
+                  onChange={(e) => setEarlyCloseReasonOther(e.target.value)}
+                  placeholder="اكتب سبب الإغلاق..."
+                  data-testid="input-closure-reason-other"
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEarlyCloseDialog(false)}>إلغاء</Button>
+            <Button
+              variant="destructive"
+              data-testid="button-confirm-early-close"
+              disabled={!earlyCloseReason || (earlyCloseReason === "أخرى" && !earlyCloseReasonOther.trim())}
+              onClick={async () => {
+                if (!earlyCloseCase) return;
+                try {
+                  await updateCase(earlyCloseCase.id, {
+                    currentStage: "مقفلة" as any,
+                    closureReason: earlyCloseReason,
+                    closureReasonOther: earlyCloseReason === "أخرى" ? earlyCloseReasonOther.trim() : "",
+                  } as any);
+                  toast({ title: "تم إغلاق القضية بنجاح" });
+                  setShowEarlyCloseDialog(false);
+                  setEarlyCloseCase(null);
+                  setEarlyCloseReason("");
+                  setEarlyCloseReasonOther("");
+                } catch (err) {
+                  toast({ title: "فشل إغلاق القضية", description: extractApiError(err), variant: "destructive" });
+                }
+              }}
+            >
+              تأكيد الإغلاق
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showEditDialog} onOpenChange={(open) => { setShowEditDialog(open); if (!open) setEditCaseId(null); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
@@ -2463,7 +2599,16 @@ export default function CasesPage() {
                 />
               </div>
             </div>
-            
+            {editFormData.caseClassification === CaseClassification.CASE_EXISTING && (
+              <div>
+                <Label>موعد الرد</Label>
+                <HijriDatePicker
+                  value={editFormData.responseDeadline}
+                  onChange={(v) => setEditFormData({ ...editFormData, responseDeadline: v })}
+                  data-testid="edit-response-deadline"
+                />
+              </div>
+            )}
           </div>
           <DialogFooter className="gap-2 mt-4">
             <Button variant="outline" onClick={() => setShowEditDialog(false)} data-testid="button-cancel-edit">
