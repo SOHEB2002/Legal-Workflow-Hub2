@@ -98,6 +98,8 @@ export const lawCases = pgTable("law_cases", {
   appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
   moeenNumber: varchar("moeen_number", { length: 100 }),
   clientRole: varchar("client_role", { length: 50 }),
+  closureReason: varchar("closure_reason", { length: 255 }),
+  closureReasonOther: varchar("closure_reason_other", { length: 500 }),
   isArchived: boolean("is_archived").default(false),
   archivedAt: timestamp("archived_at"),
   archivedBy: varchar("archived_by", { length: 255 }),
@@ -759,6 +761,8 @@ export function getStageLabel(stage: CaseStageValue): string {
   return CaseStageLabels[stage] || stage;
 }
 
+// ملاحظة: يمكن الانتقال من أي مرحلة إلى "مقفلة" بواسطة الدعم الإداري فقط (إغلاق مبكر) - يتم التحقق في routes.ts
+
 // سجل انتقال المراحل
 export interface CaseStageTransition {
   stage: CaseStageValue;
@@ -767,6 +771,23 @@ export interface CaseStageTransition {
   userName: string;
   notes: string;
 }
+
+// ==================== أسباب الإغلاق ====================
+export const ClosureReason = {
+  CONTRACT_NOT_RENEWED: "عدم_تجديد_العقد",
+  OPPONENT_PAID: "سداد_الخصم",
+  CLIENT_WAIVER: "تنازل_العميل",
+  OTHER: "أخرى",
+} as const;
+
+export type ClosureReasonValue = typeof ClosureReason[keyof typeof ClosureReason];
+
+export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
+  "عدم_تجديد_العقد": "عدم تجديد العقد",
+  "سداد_الخصم": "سداد الخصم",
+  "تنازل_العميل": "تنازل العميل",
+  "أخرى": "أخرى",
+};
 
 // ==================== الأولوية ====================
 export const Priority = {
@@ -1097,6 +1118,8 @@ export interface LawCase {
   archivedBy: string | null;
   archiveReason: string | null;
   autoArchiveDate: string | null;
+  closureReason: string | null;
+  closureReasonOther: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
