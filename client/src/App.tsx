@@ -1,6 +1,7 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useState, useCallback } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
+import { RefreshCw } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -99,6 +100,25 @@ function Router() {
   );
 }
 
+function RefreshButton() {
+  const [spinning, setSpinning] = useState(false);
+  const handleRefresh = useCallback(() => {
+    setSpinning(true);
+    queryClient.invalidateQueries();
+    setTimeout(() => setSpinning(false), 800);
+  }, []);
+  return (
+    <button
+      onClick={handleRefresh}
+      className="inline-flex items-center justify-center rounded-md w-9 h-9 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+      title="تحديث البيانات"
+      data-testid="button-refresh"
+    >
+      <RefreshCw className={`w-4 h-4 ${spinning ? "animate-spin" : ""}`} />
+    </button>
+  );
+}
+
 function AuthenticatedLayout() {
   const style = {
     "--sidebar-width": "16rem",
@@ -114,6 +134,7 @@ function AuthenticatedLayout() {
             <SidebarTrigger data-testid="button-sidebar-toggle" />
             <GlobalSearch />
             <div className="flex-1" />
+            <RefreshButton />
             <NotificationsBell />
             <RecentVisitsDropdown />
             <FavoritesDropdown />
