@@ -140,7 +140,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "branch_manager"] },
 
   // Skip data completion
-  { from: "استلام", to: "دراسة", allowedRoles: ["department_head", "branch_manager"] },
+  { from: "استلام", to: "دراسة", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
 
   // ==================== GENERAL PATH (after ready_to_submit) ====================
   { from: "جاهزة_للرفع", to: "الرفع_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
