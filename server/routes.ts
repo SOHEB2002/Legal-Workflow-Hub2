@@ -308,7 +308,7 @@ export function calculateSmartPriority(
 ): string {
   let score = 0;
 
-  if (classification === "مدعى_عليه") score += 30;
+  if (classification === "قضية_مقيدة") score += 30;
   if (memoRequired) score += 20;
 
   if (nextHearingDate) {
@@ -849,7 +849,7 @@ export async function registerRoutes(
       const newCase = await storage.createCase(validatedData as any, createdBy);
 
       const autoCreated: any[] = [];
-      const classification = validatedData.caseClassification || "مدعي_قضية_جديدة";
+      const classification = validatedData.caseClassification || "قضية_جديدة";
 
       const smartPriority = calculateSmartPriority(
         validatedData.caseType || "",
@@ -864,7 +864,9 @@ export async function registerRoutes(
         (newCase as any).priority = smartPriority;
       }
 
-      if (classification === CaseClassification.DEFENDANT) {
+      // Auto-create memo for existing cases where client is defendant
+      const isDefendant = classification === CaseClassification.CASE_EXISTING && req.body.clientRole === "مدعى_عليه";
+      if (isDefendant) {
         const deadlineStr = validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
         const casePriority = validatedData.priority || "متوسط";
         try {
@@ -922,7 +924,7 @@ export async function registerRoutes(
         }
       }
 
-      if (classification !== CaseClassification.DEFENDANT && req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
+      if (!isDefendant && req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
         try {
           const hearing = await storage.createHearing({
             caseId: newCase.id,
@@ -940,7 +942,6 @@ export async function registerRoutes(
 
       if (req.body.memoRequired) {
         try {
-          const isDefendant = classification === CaseClassification.DEFENDANT;
           const memoTitle = isDefendant
             ? `مذكرة جوابية — قضية رقم ${newCase.caseNumber}`
             : `مذكرة — قضية رقم ${newCase.caseNumber}`;
