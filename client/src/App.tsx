@@ -102,11 +102,19 @@ function Router() {
 
 function RefreshButton() {
   const [spinning, setSpinning] = useState(false);
+  const lastClickRef = useState(() => ({ time: 0 }))[0];
   const handleRefresh = useCallback(() => {
+    const now = Date.now();
+    if (now - lastClickRef.time < 2000) {
+      window.location.reload();
+      return;
+    }
+    lastClickRef.time = now;
     setSpinning(true);
-    queryClient.invalidateQueries();
+    queryClient.clear();
+    queryClient.refetchQueries();
     setTimeout(() => setSpinning(false), 800);
-  }, []);
+  }, [lastClickRef]);
   return (
     <button
       onClick={handleRefresh}
