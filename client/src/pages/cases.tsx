@@ -1156,17 +1156,29 @@ export default function CasesPage() {
               </>
             )}
 
-            {formData.caseClassification && (
-              <div className="flex items-center gap-2 pt-1">
-                <Checkbox
-                  id="memoRequired"
-                  checked={formData.memoRequired}
-                  onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked })}
-                  data-testid="checkbox-memo-required"
-                />
-                <Label htmlFor="memoRequired" className="text-sm cursor-pointer">
-                  مطلوب مذكرة
-                </Label>
+            {formData.caseClassification === CaseClassification.CASE_EXISTING && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 pt-1">
+                  <Checkbox
+                    id="memoRequired"
+                    checked={formData.memoRequired}
+                    onCheckedChange={(checked) => setFormData({ ...formData, memoRequired: !!checked })}
+                    data-testid="checkbox-memo-required"
+                  />
+                  <Label htmlFor="memoRequired" className="text-sm cursor-pointer">
+                    مطلوب مذكرة
+                  </Label>
+                </div>
+                {formData.memoRequired && (
+                  <div>
+                    <Label>مهلة الرد <span className="text-red-500">*</span></Label>
+                    <HijriDatePicker
+                      value={formData.responseDeadline}
+                      onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
+                      data-testid="input-memo-deadline"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
