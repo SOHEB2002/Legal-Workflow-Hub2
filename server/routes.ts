@@ -1451,6 +1451,21 @@ export async function registerRoutes(
         if (req.body.currentStage === "مقفلة") {
           req.body.closedAt = new Date().toISOString();
         }
+
+        // Struck-off reopen: clear struckOff fields when reopening
+        if (existing.currentStage === "مشطوبة" && (req.body.currentStage === "منظورة" || req.body.currentStage === "منظورة_استئناف")) {
+          req.body.struckOffDate = null;
+          req.body.struckOffReopenDeadline = null;
+          try {
+            await storage.logCaseActivity({
+              caseId: String(req.params.id),
+              userId: user.id,
+              userName: user.name || user.id,
+              actionType: "stage_changed",
+              title: "تم إعادة قيد القضية",
+            });
+          } catch (e) {}
+        }
       }
 
       const updated = await storage.updateCase(String(req.params.id), req.body);
@@ -1810,6 +1825,45 @@ export async function registerRoutes(
       const user = (req as any).user;
       const createdMemos: any[] = [];
 
+      // Auto-stage transition based on hearing type
+      if (validatedData.caseId && validatedData.caseId !== "none") {
+        try {
+          const caseForStage = await storage.getCaseById(validatedData.caseId);
+          if (caseForStage && !caseForStage.isArchived && caseForStage.currentStage !== "مقفلة") {
+            const hearingType = validatedData.hearingType || "محكمة";
+            const currentStage = caseForStage.currentStage as string;
+
+            if (hearingType === "تراضي" || hearingType === "تسوية_ودية") {
+              const conciliationFromStages = ["قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_تراضي", "أغلق_طلب_الصلح"];
+              if (conciliationFromStages.includes(currentStage)) {
+                const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
+                await storage.updateCase(caseForStage.id, {
+                  currentStage: "مداولة_الصلح",
+                  stageHistory: [
+                    ...stageHistory,
+                    { stage: "مداولة_الصلح", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة صلح" },
+                  ],
+                } as any);
+              }
+            } else if (hearingType === "محكمة") {
+              const courtFromStages = ["أغلق_طلب_الصلح", "قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_معين"];
+              if (courtFromStages.includes(currentStage)) {
+                const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
+                await storage.updateCase(caseForStage.id, {
+                  currentStage: "منظورة",
+                  stageHistory: [
+                    ...stageHistory,
+                    { stage: "منظورة", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة محكمة" },
+                  ],
+                } as any);
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error auto-transitioning stage on hearing create:", e);
+        }
+      }
+
       if (validatedData.caseId && validatedData.caseId !== "none") {
         try {
           const linkedCase = await storage.getCaseById(validatedData.caseId);
@@ -1953,7 +2007,7 @@ export async function registerRoutes(
       }
 
       const data = hearingResultSchema.parse(req.body);
-      
+
       const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
 
       if (!hearing.caseId && effectiveCaseId) {
@@ -1964,20 +2018,20 @@ export async function registerRoutes(
       const updateData: any = {
         result: data.result,
         resultDetails: data.resultDetails || "",
-        status: data.result === HearingResult.POSTPONEMENT ? HearingStatus.POSTPONED : HearingStatus.COMPLETED,
+        status: (data.result === HearingResult.POSTPONEMENT || data.result === HearingResult.NEW_SESSION)
+          ? HearingStatus.POSTPONED : HearingStatus.COMPLETED,
       };
 
+      // Judgment hearing data
       if (data.result === HearingResult.JUDGMENT) {
-        updateData.judgmentSide = data.judgmentSide || null;
+        updateData.judgmentSide = data.judgmentType || data.judgmentSide || null;
         updateData.judgmentFinal = data.judgmentFinal ?? null;
         updateData.objectionFeasible = data.objectionFeasible ?? null;
         updateData.objectionDeadline = data.objectionDeadline || null;
-        if (!data.judgmentFinal && data.judgmentSide === "ضدنا" && data.objectionFeasible) {
-          updateData.objectionStatus = "بانتظار_القرار";
-        }
       }
 
-      if (data.result === HearingResult.POSTPONEMENT) {
+      // Postponement / new session data
+      if (data.result === HearingResult.POSTPONEMENT || data.result === HearingResult.NEW_SESSION) {
         updateData.nextHearingDate = data.nextHearingDate || null;
         updateData.nextHearingTime = data.nextHearingTime || null;
         updateData.responseRequired = data.responseRequired ?? false;
@@ -2002,128 +2056,317 @@ export async function registerRoutes(
 
       const createdTasks: any[] = [];
       const createdMemos: any[] = [];
+      let existingCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
+      const isAppealStage = existingCase?.currentStage === "منظورة_استئناف";
 
-      if (effectiveCaseId) {
+      if (effectiveCaseId && existingCase) {
         const caseUpdate: any = {
           lastHearingResult: data.result,
           lastHearingDate: hearing.hearingDate,
         };
-        if (data.result === HearingResult.POSTPONEMENT && data.nextHearingDate) {
-          caseUpdate.nextHearingDate = data.nextHearingDate;
+
+        // ==================== PATH A: NEW SESSION (موعد_جديد) ====================
+        if (data.result === HearingResult.NEW_SESSION) {
+          // Case stays at current stage
+          if (data.nextHearingDate) {
+            caseUpdate.nextHearingDate = data.nextHearingDate;
+          }
+          await storage.updateCase(effectiveCaseId, caseUpdate);
+
+          // Auto-create next hearing
+          if (data.nextHearingDate) {
+            const newHearing = await storage.createHearing({
+              caseId: effectiveCaseId,
+              hearingDate: data.nextHearingDate,
+              hearingTime: data.nextHearingTime || hearing.hearingTime,
+              courtName: hearing.courtName,
+              courtNameOther: hearing.courtNameOther,
+              courtRoom: hearing.courtRoom,
+              status: HearingStatus.UPCOMING,
+              attendingLawyerId: hearing.attendingLawyerId,
+              notes: `موعد جديد من جلسة ${hearing.hearingDate}`,
+            } as any);
+            createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
+          }
+
+          // Auto-create memo if memoRequired
+          if (data.memoRequired && existingCase.primaryLawyerId) {
+            const memo = await storage.createMemo({
+              caseId: effectiveCaseId,
+              hearingId: hearingId,
+              memoType: MemoType.RESPONSE,
+              title: `مذكرة — قضية رقم ${existingCase.caseNumber}`,
+              description: `مذكرة مطلوبة بناءً على نتيجة الجلسة بتاريخ ${hearing.hearingDate}`,
+              priority: "عالي",
+              assignedTo: existingCase.primaryLawyerId,
+              createdBy: "system",
+              deadline: data.nextHearingDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              status: "لم_تبدأ",
+              isAutoGenerated: true,
+              autoGenerateReason: "موعد_جديد_مع_مذكرة",
+            });
+            createdMemos.push({ type: "response_memo", id: memo.id, description: "مذكرة تلقائية" });
+            const activeCount = await getActiveMemoCount(effectiveCaseId);
+            await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
+          }
         }
-        if (data.result === HearingResult.JUDGMENT) {
-          const targetStage = data.judgmentFinal ? "محكوم_حكم_نهائي" : "محكوم_حكم_ابتدائي";
-          const existingCase = await storage.getCaseById(effectiveCaseId);
-          if (existingCase) {
-            const currentStageNormalized = existingCase.currentStage === "رفع_للدائرة" ? "تم_الرفع_للدائرة" : existingCase.currentStage;
-            const allowedFromStages = ["تم_الرفع_للدائرة", "قيد_التدقيق", "مداولة_الصلح", "أغلق_طلب_الصلح", "تحت_النظر", "محكوم_حكم_ابتدائي"];
-            if (allowedFromStages.includes(currentStageNormalized) && currentStageNormalized !== targetStage) {
-              caseUpdate.currentStage = targetStage;
+
+        // ==================== PATH B: JUDGMENT (حكم) ====================
+        else if (data.result === HearingResult.JUDGMENT) {
+          const judgmentType = data.judgmentType || data.judgmentSide || null;
+          // For appeal hearings, judgment is always final
+          const isFinal = isAppealStage ? true : (data.judgmentFinal ?? false);
+          const needsAppeal = data.needsAppeal ?? false;
+
+          // Validate required fields
+          if (!judgmentType) {
+            return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
+          }
+
+          const lawyerAssignee = hearing.attendingLawyerId || existingCase.primaryLawyerId || existingCase.responsibleLawyerId || reqUser.id;
+
+          if (isFinal) {
+            // === FINAL JUDGMENTS ===
+            if (judgmentType === "لصالحنا" || judgmentType === "جزئي") {
+              // Cases 1 & 3: final + for us or partial → collection
+              caseUpdate.currentStage = "محكوم_حكم_نهائي";
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+
+              // Auto-create collection task
+              const allUsers = await storage.getAllUsers();
+              const adminSupport = allUsers.find((u: any) => u.role === "admin_support" && u.isActive);
+              const collectionTask = await storage.createFieldTask({
+                title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
+                description: `صدر حكم نهائي ${judgmentType} - يرجى إعداد خطاب تحصيل`,
+                taskType: "متابعة_محكمة",
+                caseId: effectiveCaseId,
+                assignedTo: adminSupport?.id || reqUser.id,
+                priority: "عاجل",
+                dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              } as any, reqUser.id);
+              createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
+
+              // Transition to collection
+              const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
+              await storage.updateCase(effectiveCaseId, {
+                currentStage: "تحصيل",
+                stageHistory: [
+                  ...stageHistory,
+                  { stage: "محكوم_حكم_نهائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: `حكم نهائي ${judgmentType}` },
+                  { stage: "تحصيل", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "انتقال تلقائي بعد حكم نهائي" },
+                ],
+              } as any);
+            } else if (judgmentType === "ضدنا") {
+              // Case 2: final + against us → close
+              caseUpdate.currentStage = "محكوم_حكم_نهائي";
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+
+              const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
+              await storage.updateCase(effectiveCaseId, {
+                currentStage: "مقفلة",
+                closureReason: "حكم_نهائي_ضدنا",
+                closedAt: new Date().toISOString(),
+                stageHistory: [
+                  ...stageHistory,
+                  { stage: "محكوم_حكم_نهائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: "حكم نهائي ضدنا" },
+                  { stage: "مقفلة", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "إغلاق تلقائي — حكم نهائي ضدنا" },
+                ],
+              } as any);
+            }
+          } else {
+            // === PRIMARY (ابتدائي) JUDGMENTS ===
+            caseUpdate.currentStage = "محكوم_حكم_ابتدائي";
+
+            if (judgmentType === "لصالحنا") {
+              // Case 4: primary + for us → wait for opponent appeal
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+            } else if (judgmentType === "ضدنا") {
+              if (needsAppeal) {
+                // Case 5: primary + against us + needs appeal → flag for appeal
+                await storage.updateCase(effectiveCaseId, caseUpdate);
+                await storage.logCaseActivity({
+                  caseId: effectiveCaseId,
+                  userId: reqUser.id,
+                  userName: reqUser.name || reqUser.id,
+                  actionType: "case_updated",
+                  title: "القضية تحتاج اعتراض (استئناف)",
+                });
+              } else {
+                // Case 6: primary + against us + no appeal → close
+                await storage.updateCase(effectiveCaseId, caseUpdate);
+                const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
+                await storage.updateCase(effectiveCaseId, {
+                  currentStage: "مقفلة",
+                  closureReason: "حكم_ابتدائي_بدون_اعتراض",
+                  closedAt: new Date().toISOString(),
+                  stageHistory: [
+                    ...stageHistory,
+                    { stage: "محكوم_حكم_ابتدائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: "حكم ابتدائي ضدنا" },
+                    { stage: "مقفلة", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "إغلاق تلقائي — حكم ابتدائي ضدنا بدون اعتراض" },
+                  ],
+                } as any);
+              }
+            } else if (judgmentType === "جزئي") {
+              if (needsAppeal) {
+                // Case 7: primary + partial + needs appeal → flag for appeal
+                await storage.updateCase(effectiveCaseId, caseUpdate);
+                await storage.logCaseActivity({
+                  caseId: effectiveCaseId,
+                  userId: reqUser.id,
+                  userName: reqUser.name || reqUser.id,
+                  actionType: "case_updated",
+                  title: "القضية تحتاج اعتراض (استئناف) — حكم جزئي",
+                });
+              } else {
+                // Case 8: primary + partial + no appeal → wait for opponent
+                await storage.updateCase(effectiveCaseId, caseUpdate);
+              }
+            }
+          }
+
+          // Always create client contact task for judgments
+          const contactTask = await storage.createFieldTask({
+            title: `إبلاغ العميل بنتيجة الحكم — قضية رقم ${existingCase.caseNumber}`,
+            description: `صدر حكم ${judgmentType || ""} (${isFinal ? "نهائي" : "ابتدائي"}) - يرجى إبلاغ العميل بالتفاصيل`,
+            taskType: "زيارة_عميل",
+            caseId: effectiveCaseId,
+            assignedTo: lawyerAssignee,
+            priority: "عاجل",
+            dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          } as any, reqUser.id);
+          createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
+        }
+
+        // ==================== PATH C: STRUCK OFF (شطب) ====================
+        else if (data.result === HearingResult.DISMISSAL) {
+          const todayStr = new Date().toISOString().split("T")[0];
+          const reopenDeadline = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+          caseUpdate.currentStage = "مشطوبة";
+          caseUpdate.struckOffDate = todayStr;
+          caseUpdate.struckOffReopenDeadline = reopenDeadline;
+          await storage.updateCase(effectiveCaseId, caseUpdate);
+
+          await storage.logCaseActivity({
+            caseId: effectiveCaseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            actionType: "stage_changed",
+            title: `تم شطب القضية — الموعد النهائي لإعادة القيد: ${reopenDeadline}`,
+          });
+
+          // Notify department_head and primaryLawyerId
+          const allUsers = await storage.getAllUsers();
+          const notifyIds: string[] = [];
+          if (existingCase.primaryLawyerId) notifyIds.push(existingCase.primaryLawyerId);
+          const deptHead = allUsers.find((u: any) => u.departmentId === existingCase!.departmentId && u.role === "department_head" && u.isActive);
+          if (deptHead) notifyIds.push(deptHead.id);
+
+          for (const rid of Array.from(new Set(notifyIds))) {
+            await storage.createNotification({
+              type: "stage_changed" as any,
+              priority: "urgent",
+              status: "pending",
+              title: "تم شطب قضية",
+              message: `تم شطب القضية رقم ${existingCase.caseNumber}. الموعد النهائي لإعادة القيد: ${reopenDeadline}. يرجى اتخاذ الإجراء المناسب.`,
+              senderId: reqUser.id,
+              senderName: reqUser.name || reqUser.id,
+              recipientId: rid,
+              relatedType: "case",
+              relatedId: effectiveCaseId,
+              requiresResponse: true,
+            });
+          }
+        }
+
+        // ==================== CONCILIATION: SETTLEMENT REACHED (تم_الصلح) ====================
+        else if (data.result === HearingResult.SETTLEMENT_REACHED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "تم_الصلح")) {
+          // Auto-create collection task
+          const allUsers = await storage.getAllUsers();
+          const adminSupport = allUsers.find((u: any) => u.role === "admin_support" && u.isActive);
+          const collectionTask = await storage.createFieldTask({
+            title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
+            description: `تم الصلح - يرجى إعداد خطاب تحصيل`,
+            taskType: "متابعة_محكمة",
+            caseId: effectiveCaseId,
+            assignedTo: adminSupport?.id || reqUser.id,
+            priority: "عاجل",
+            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+          } as any, reqUser.id);
+          createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
+
+          caseUpdate.currentStage = "تحصيل";
+          await storage.updateCase(effectiveCaseId, caseUpdate);
+        }
+
+        // ==================== CONCILIATION: SETTLEMENT FAILED (لم_يتم_الصلح) ====================
+        else if (data.result === HearingResult.SETTLEMENT_FAILED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "لم_يتم_الصلح")) {
+          caseUpdate.currentStage = "أغلق_طلب_الصلح";
+          await storage.updateCase(effectiveCaseId, caseUpdate);
+        }
+
+        // ==================== POSTPONEMENT (تأجيل) ====================
+        else if (data.result === HearingResult.POSTPONEMENT) {
+          if (data.nextHearingDate) {
+            caseUpdate.nextHearingDate = data.nextHearingDate;
+          }
+          await storage.updateCase(effectiveCaseId, caseUpdate);
+
+          if (data.nextHearingDate) {
+            const newHearing = await storage.createHearing({
+              caseId: effectiveCaseId,
+              hearingDate: data.nextHearingDate,
+              hearingTime: data.nextHearingTime || hearing.hearingTime,
+              courtName: hearing.courtName,
+              courtNameOther: hearing.courtNameOther,
+              courtRoom: hearing.courtRoom,
+              status: HearingStatus.UPCOMING,
+              attendingLawyerId: hearing.attendingLawyerId,
+              notes: `جلسة مؤجلة من ${hearing.hearingDate}`,
+            } as any);
+            createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
+
+            if (data.responseRequired) {
+              const dueDate = data.nextHearingDate;
+              const postponeAssignee = hearing.attendingLawyerId || existingCase.primaryLawyerId || existingCase.responsibleLawyerId || reqUser.id;
+              const task = await storage.createFieldTask({
+                title: `إعداد رد للجلسة القادمة - ${existingCase.caseNumber}`,
+                description: `مطلوب إعداد رد قبل الجلسة القادمة بتاريخ ${data.nextHearingDate}`,
+                taskType: "متابعة_محكمة",
+                caseId: effectiveCaseId,
+                assignedTo: postponeAssignee,
+                priority: "عالي",
+                dueDate,
+              } as any, reqUser.id);
+              createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
+
+              const deadlineDate = new Date(data.nextHearingDate);
+              deadlineDate.setDate(deadlineDate.getDate() - 3);
+              const memoAssignee = existingCase.primaryLawyerId || existingCase.responsibleLawyerId || data.userId || "1";
+              const memo = await storage.createMemo({
+                caseId: effectiveCaseId,
+                hearingId: hearingId,
+                memoType: MemoType.RESPONSE,
+                title: `مذكرة جوابية - جلسة ${data.nextHearingDate}`,
+                description: `مذكرة جوابية مطلوبة قبل الجلسة القادمة بتاريخ ${data.nextHearingDate}`,
+                priority: "عالي",
+                assignedTo: memoAssignee,
+                createdBy: "system",
+                deadline: deadlineDate.toISOString().split("T")[0],
+                isAutoGenerated: true,
+                autoGenerateReason: "تأجيل_مع_رد",
+              });
+              createdMemos.push({ type: "response_memo", id: memo.id, description: "مذكرة جوابية تلقائية" });
+
+              const activeCount = await getActiveMemoCount(effectiveCaseId);
+              await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
             }
           }
         }
-        await storage.updateCase(effectiveCaseId, caseUpdate);
-      }
 
-      if (data.result === HearingResult.POSTPONEMENT && data.nextHearingDate) {
-        const newHearing = await storage.createHearing({
-          caseId: effectiveCaseId,
-          hearingDate: data.nextHearingDate,
-          hearingTime: data.nextHearingTime || hearing.hearingTime,
-          courtName: hearing.courtName,
-          courtNameOther: hearing.courtNameOther,
-          courtRoom: hearing.courtRoom,
-          status: HearingStatus.UPCOMING,
-          attendingLawyerId: hearing.attendingLawyerId,
-          notes: `جلسة مؤجلة من ${hearing.hearingDate}`,
-        } as any);
-        createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
-
-        if (data.responseRequired && effectiveCaseId) {
-          const dueDate = data.nextHearingDate;
-          const postponedCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
-          const postponeAssignee = hearing.attendingLawyerId || postponedCase?.primaryLawyerId || postponedCase?.responsibleLawyerId || reqUser.id;
-          const task = await storage.createFieldTask({
-            title: `إعداد رد للجلسة القادمة - ${effectiveCaseId}`,
-            description: `مطلوب إعداد رد قبل الجلسة القادمة بتاريخ ${data.nextHearingDate}`,
-            taskType: "متابعة_محكمة",
-            caseId: effectiveCaseId,
-            assignedTo: postponeAssignee,
-            priority: "عالي",
-            dueDate,
-          } as any, reqUser.id);
-          createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
-
-          const deadlineDate = new Date(data.nextHearingDate);
-          deadlineDate.setDate(deadlineDate.getDate() - 3);
-          const relatedCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
-          const memoAssignee = relatedCase?.primaryLawyerId || relatedCase?.responsibleLawyerId || data.userId || "1";
-          const memo = await storage.createMemo({
-            caseId: effectiveCaseId,
-            hearingId: hearingId,
-            memoType: MemoType.RESPONSE,
-            title: `مذكرة جوابية - جلسة ${data.nextHearingDate}`,
-            description: `مذكرة جوابية مطلوبة قبل الجلسة القادمة بتاريخ ${data.nextHearingDate}`,
-            priority: "عالي",
-            assignedTo: memoAssignee,
-            createdBy: "system",
-            deadline: deadlineDate.toISOString().split("T")[0],
-            isAutoGenerated: true,
-            autoGenerateReason: "تأجيل_مع_رد",
-          });
-          createdMemos.push({ type: "response_memo", id: memo.id, description: "مذكرة جوابية تلقائية" });
-
-          const activeCount = await getActiveMemoCount(effectiveCaseId);
-          await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
-        }
-      }
-
-      if (data.result === HearingResult.JUDGMENT && effectiveCaseId) {
-        const judgmentCase = await storage.getCaseById(effectiveCaseId);
-        const judgmentAssignee = hearing.attendingLawyerId || judgmentCase?.primaryLawyerId || judgmentCase?.responsibleLawyerId || reqUser.id;
-        const contactTask = await storage.createFieldTask({
-          title: `إبلاغ العميل بنتيجة الحكم - ${effectiveCaseId}`,
-          description: `صدر حكم ${data.judgmentSide || ""} - يرجى إبلاغ العميل بالتفاصيل`,
-          taskType: "زيارة_عميل",
-          caseId: effectiveCaseId,
-          assignedTo: judgmentAssignee,
-          priority: "عاجل",
-          dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-        } as any, reqUser.id);
-        createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
-
-        if (!data.judgmentFinal && data.judgmentSide === "ضدنا" && data.objectionFeasible) {
-          const objectionTask = await storage.createFieldTask({
-            title: `تقديم اعتراض على الحكم - ${effectiveCaseId}`,
-            description: `مهلة الاعتراض: ${data.objectionDeadline || "غير محددة"}`,
-            taskType: "متابعة_محكمة",
-            caseId: effectiveCaseId,
-            assignedTo: judgmentAssignee,
-            priority: "عاجل",
-            dueDate: data.objectionDeadline || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          } as any, reqUser.id);
-          createdTasks.push({ type: "file_objection", id: objectionTask.id, description: "مهمة تقديم اعتراض" });
-
-          const objDeadline = data.objectionDeadline || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-          const objCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
-          const objAssignee = objCase?.primaryLawyerId || objCase?.responsibleLawyerId || data.userId || "1";
-          const memo = await storage.createMemo({
-            caseId: effectiveCaseId,
-            hearingId: hearingId,
-            memoType: MemoType.OBJECTION,
-            title: `لائحة اعتراضية - حكم ${hearing.hearingDate}`,
-            description: `لائحة اعتراضية على الحكم الصادر بتاريخ ${hearing.hearingDate}. مهلة الاعتراض: ${objDeadline}`,
-            priority: "عاجل",
-            assignedTo: objAssignee,
-            createdBy: "system",
-            deadline: objDeadline,
-            isAutoGenerated: true,
-            autoGenerateReason: "حكم_ضدنا_قابل_للاعتراض",
-          });
-          createdMemos.push({ type: "objection_memo", id: memo.id, description: "لائحة اعتراضية تلقائية" });
-
-          const activeCount = await getActiveMemoCount(effectiveCaseId);
-          await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
+        // ==================== OTHER / DEFAULT ====================
+        else {
+          await storage.updateCase(effectiveCaseId, caseUpdate);
         }
       }
 

@@ -777,6 +777,9 @@ export const ClosureReason = {
   CONTRACT_NOT_RENEWED: "عدم_تجديد_العقد",
   OPPONENT_PAID: "سداد_الخصم",
   CLIENT_WAIVER: "تنازل_العميل",
+  JUDGMENT_AGAINST: "حكم_نهائي_ضدنا",
+  PRIMARY_NO_APPEAL: "حكم_ابتدائي_بدون_اعتراض",
+  STRUCK_OFF_EXPIRED: "شطب_بدون_إعادة_قيد",
   OTHER: "أخرى",
 } as const;
 
@@ -786,6 +789,9 @@ export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
   "عدم_تجديد_العقد": "عدم تجديد العقد",
   "سداد_الخصم": "سداد الخصم",
   "تنازل_العميل": "تنازل العميل",
+  "حكم_نهائي_ضدنا": "حكم نهائي ضدنا",
+  "حكم_ابتدائي_بدون_اعتراض": "حكم ابتدائي بدون اعتراض",
+  "شطب_بدون_إعادة_قيد": "شطب بدون إعادة قيد",
   "أخرى": "أخرى",
 };
 
@@ -870,9 +876,12 @@ export type HearingStatusValue = typeof HearingStatus[keyof typeof HearingStatus
 
 // ==================== نتائج الجلسات ====================
 export const HearingResult = {
+  NEW_SESSION: "موعد_جديد",
   POSTPONEMENT: "تأجيل",
   JUDGMENT: "حكم",
   SETTLEMENT: "صلح",
+  SETTLEMENT_REACHED: "تم_الصلح",
+  SETTLEMENT_FAILED: "لم_يتم_الصلح",
   DISMISSAL: "شطب",
   OTHER: "أخرى",
 } as const;
@@ -1482,15 +1491,25 @@ export const insertHearingSchema = z.object({
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
 
 export const hearingResultSchema = z.object({
-  result: z.enum(["تأجيل", "حكم", "صلح", "شطب", "أخرى"]),
+  result: z.enum(["موعد_جديد", "تأجيل", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "أخرى"]),
   resultDetails: z.string().optional().default(""),
-  judgmentSide: z.enum(["لصالحنا", "ضدنا"]).nullable().optional(),
+  // Judgment fields
+  judgmentType: z.enum(["لصالحنا", "ضدنا", "جزئي"]).nullable().optional(),
   judgmentFinal: z.boolean().nullable().optional(),
+  needsAppeal: z.boolean().nullable().optional(),
+  // Legacy judgment fields (kept for compatibility)
+  judgmentSide: z.enum(["لصالحنا", "ضدنا"]).nullable().optional(),
   objectionFeasible: z.boolean().nullable().optional(),
   objectionDeadline: z.string().nullable().optional(),
+  // Session/postponement fields
   nextHearingDate: z.string().nullable().optional(),
   nextHearingTime: z.string().nullable().optional(),
   responseRequired: z.boolean().optional().default(false),
+  // New session fields
+  memoRequired: z.boolean().optional().default(false),
+  opponentResponseRequired: z.boolean().optional().default(false),
+  // Conciliation result
+  conciliationResult: z.enum(["تم_الصلح", "لم_يتم_الصلح"]).nullable().optional(),
   userId: z.string().optional(),
   caseId: z.string().nullable().optional(),
 });

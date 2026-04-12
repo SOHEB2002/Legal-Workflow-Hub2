@@ -22,6 +22,7 @@ export function startScheduler() {
     await checkDelegationExpiry();
     await checkContactFollowUps();
     await recalculateCasePriorities();
+    await checkStruckOffExpiry();
   });
 
   cron.schedule("0 7 * * 0", async () => {
@@ -635,6 +636,90 @@ async function autoArchiveClosedCases() {
     }
   } catch (error) {
     console.error("Error auto-archiving cases:", error);
+  }
+}
+
+async function checkStruckOffExpiry() {
+  try {
+    console.log("Checking struck-off cases for auto-closure...");
+    const allCases = await storage.getAllCases();
+    const todayStr = new Date().toISOString().split("T")[0];
+    let closed = 0;
+
+    for (const caseItem of allCases) {
+      if ((caseItem.currentStage as string) !== "مشطوبة") continue;
+      const deadline = (caseItem as any).struckOffReopenDeadline;
+      if (!deadline || deadline >= todayStr) continue;
+
+      // Auto-close: deadline passed
+      const stageHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
+      await storage.updateCase(caseItem.id, {
+        currentStage: "مقفلة",
+        closureReason: "شطب_بدون_إعادة_قيد",
+        closedAt: new Date().toISOString(),
+        stageHistory: [
+          ...stageHistory,
+          { stage: "مقفلة", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "إغلاق تلقائي — انتهاء مهلة إعادة القيد بعد الشطب" },
+        ],
+      } as any);
+
+      // Cancel pending hearings, memos, field tasks
+      try {
+        const hearings = await storage.getHearingsByCase(caseItem.id);
+        for (const h of hearings) {
+          if (h.status === "قادمة") {
+            await storage.updateHearing(h.id, { status: "ملغية" });
+          }
+        }
+        const memos = await storage.getMemosByCase(caseItem.id);
+        for (const m of memos) {
+          if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
+            await storage.updateMemo(m.id, { status: "ملغاة" } as any);
+          }
+        }
+        const tasks = await storage.getFieldTasksByCase(caseItem.id);
+        for (const t of tasks) {
+          if (t.status === "قيد_التنفيذ" || t.status === "قيد_الانتظار") {
+            await storage.updateFieldTask(t.id, { status: "ملغي" } as any);
+          }
+        }
+      } catch (e) {
+        console.error(`Error cleaning up entities for struck-off case ${caseItem.id}:`, e);
+      }
+
+      // Notify department_head and primaryLawyerId
+      try {
+        const allUsers = await storage.getAllUsers();
+        const notifyIds: string[] = [];
+        if (caseItem.primaryLawyerId) notifyIds.push(caseItem.primaryLawyerId);
+        const deptHead = allUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
+        if (deptHead) notifyIds.push(deptHead.id);
+
+        for (const rid of Array.from(new Set(notifyIds))) {
+          await storage.createNotification({
+            type: "stage_changed" as any,
+            priority: "high",
+            status: "pending",
+            title: "إغلاق تلقائي — شطب بدون إعادة قيد",
+            message: `تم إغلاق القضية رقم ${caseItem.caseNumber} تلقائياً لانتهاء مهلة إعادة القيد بعد الشطب (${deadline}).`,
+            senderId: "system",
+            senderName: "النظام التلقائي",
+            recipientId: rid,
+            relatedType: "case",
+            relatedId: caseItem.id,
+          });
+        }
+      } catch (e) {
+        console.error(`Error notifying for struck-off closure ${caseItem.id}:`, e);
+      }
+
+      closed++;
+    }
+    if (closed > 0) {
+      console.log(`Struck-off auto-closure: ${closed} cases closed.`);
+    }
+  } catch (error) {
+    console.error("Error checking struck-off expiry:", error);
   }
 }
 
