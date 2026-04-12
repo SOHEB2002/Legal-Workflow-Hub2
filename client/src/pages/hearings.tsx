@@ -736,11 +736,11 @@ export default function HearingsPage() {
                               <p className="text-sm font-medium">{caseInfo.plaintiff || caseInfo.client || "-"}</p>
                               {caseInfo.classification && (
                                 <Badge variant="outline" className={`text-xs ${
-                                  caseInfo.classification === "مدعى_عليه"
-                                    ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
+                                  caseInfo.classification === "قضية_مقيدة"
+                                    ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"
                                     : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                                 }`}>
-                                  {caseInfo.classification === "مدعى_عليه" ? "مدعى عليه" : "مدعي"}
+                                  {caseInfo.classification === "قضية_مقيدة" ? "قضية مقيدة" : "قضية جديدة"}
                                 </Badge>
                               )}
                             </div>

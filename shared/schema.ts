@@ -1445,7 +1445,7 @@ export const insertCaseSchema = z.object({
   opponentNotes: z.string().optional().default(""),
   whatsappGroupLink: z.string().optional().default(""),
   googleDriveFolderId: z.string().optional().default(""),
-  caseClassification: z.enum(["مدعي_قضية_جديدة", "مدعي_قضية_مقيدة", "مدعى_عليه"]).default("مدعي_قضية_جديدة"),
+  caseClassification: z.enum(["قضية_جديدة", "قضية_مقيدة"]).default("قضية_جديدة"),
   previousHearingsCount: z.number().optional().default(0),
   currentSituation: z.string().optional().default(""),
   responseDeadline: z.string().nullable().optional(),
