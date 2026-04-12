@@ -43,11 +43,11 @@ export default function PerformanceDashboard() {
   const workloads = getWorkloadOverview();
   const bottlenecks = getBottleneckReport();
 
-  const completedCases = cases.filter(c => c.currentStage === CaseStage.SUBMITTED).length;
+  const completedCases = cases.filter(c => c.currentStage === CaseStage.CLOSED).length;
   const completedConsultations = consultations.filter(c => c.status === ConsultationStatus.CLOSED || c.status === ConsultationStatus.DELIVERED).length;
   const totalCompleted = completedCases + completedConsultations;
 
-  const activeCases = cases.filter(c => c.currentStage !== CaseStage.SUBMITTED).length;
+  const activeCases = cases.filter(c => c.currentStage !== CaseStage.CLOSED).length;
   const activeConsultations = consultations.filter(c => c.status !== ConsultationStatus.CLOSED && c.status !== ConsultationStatus.DELIVERED).length;
 
   const avgCompletionTime = workloads.length > 0

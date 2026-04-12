@@ -102,10 +102,9 @@ export default function DashboardPage() {
   }, [getUpcomingHearings]);
 
   const classificationStats = useMemo(() => {
-    const plaintiffNew = cases.filter(c => (c.caseClassification || CaseClassification.PLAINTIFF_NEW) === CaseClassification.PLAINTIFF_NEW).length;
-    const plaintiffExisting = cases.filter(c => c.caseClassification === CaseClassification.PLAINTIFF_EXISTING).length;
-    const defendant = cases.filter(c => c.caseClassification === CaseClassification.DEFENDANT).length;
-    return { plaintiffNew, plaintiffExisting, defendant, total: cases.length };
+    const caseNew = cases.filter(c => (c.caseClassification || CaseClassification.CASE_NEW) === CaseClassification.CASE_NEW).length;
+    const caseExisting = cases.filter(c => c.caseClassification === CaseClassification.CASE_EXISTING).length;
+    return { caseNew, caseExisting, total: cases.length };
   }, [cases]);
 
   const recentCases = useMemo(() => {
@@ -267,18 +266,14 @@ export default function DashboardPage() {
             <CardTitle className="text-sm font-medium">القضايا حسب التصنيف</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="grid grid-cols-2 gap-4 text-center">
               <div className="space-y-1">
-                <p className="text-2xl font-bold text-[#345774]">{classificationStats.plaintiffNew}</p>
-                <p className="text-xs text-muted-foreground">مدعي - جديدة</p>
+                <p className="text-2xl font-bold text-[#345774]">{classificationStats.caseNew}</p>
+                <p className="text-xs text-muted-foreground">قضية جديدة</p>
               </div>
               <div className="space-y-1">
-                <p className="text-2xl font-bold text-blue-600">{classificationStats.plaintiffExisting}</p>
-                <p className="text-xs text-muted-foreground">مدعي - مقيدة</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-2xl font-bold text-red-600">{classificationStats.defendant}</p>
-                <p className="text-xs text-muted-foreground">مدعى عليه</p>
+                <p className="text-2xl font-bold text-blue-600">{classificationStats.caseExisting}</p>
+                <p className="text-xs text-muted-foreground">قضية مقيدة</p>
               </div>
             </div>
           </CardContent>

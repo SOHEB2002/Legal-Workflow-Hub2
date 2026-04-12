@@ -43,7 +43,7 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 // Helper to migrate old cases without new fields
 const migrateCase = (c: LawCase): LawCase => {
   if (!c.currentStage) {
-    c.currentStage = normalizeCaseStage(c.status as CaseStageValue) || CaseStage.RECEIVED;
+    c.currentStage = normalizeCaseStage(c.status as CaseStageValue) || CaseStage.RECEPTION;
   }
   if (!c.stageHistory) {
     c.stageHistory = [{ stage: c.currentStage, timestamp: c.createdAt, userId: c.createdBy, userName: "النظام", notes: "تهجير البيانات" }];
@@ -55,7 +55,7 @@ const migrateCase = (c: LawCase): LawCase => {
     c.circuitNumber = "";
   }
   if (!c.caseClassification) {
-    c.caseClassification = CaseClassification.PLAINTIFF_NEW;
+    c.caseClassification = CaseClassification.CASE_NEW;
   }
   if (c.previousHearingsCount === undefined) {
     c.previousHearingsCount = 0;
@@ -126,7 +126,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
   const addCase = async (data: Partial<LawCase>, createdBy: string, createdByName: string): Promise<LawCase> => {
     const now = new Date().toISOString();
-    const initialStage: CaseStageValue = CaseStage.RECEIVED;
+    const initialStage: CaseStageValue = CaseStage.RECEPTION;
     const caseData = {
       clientId: data.clientId || "",
       plaintiffName: data.plaintiffName || "",
@@ -154,7 +154,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       reviewDecision: null,
       reviewActionTaken: null,
       priority: data.priority || Priority.MEDIUM,
-      caseClassification: data.caseClassification || CaseClassification.PLAINTIFF_NEW,
+      caseClassification: data.caseClassification || CaseClassification.CASE_NEW,
       previousHearingsCount: data.previousHearingsCount || 0,
       currentSituation: data.currentSituation || "",
       responseDeadline: data.responseDeadline || null,
@@ -163,6 +163,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       adminCaseSubType: (data as any).adminCaseSubType || null,
       prescriptionDate: (data as any).prescriptionDate || null,
       memoRequired: (data as any).memoRequired || false,
+      clientRole: (data as any).clientRole || null,
+      grievanceRequired: (data as any).grievanceRequired || false,
       createdBy,
     };
     
@@ -238,14 +240,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const lawCase = cases.find(c => c.id === id);
     if (!lawCase || !user) return;
     const newTransition = createStageTransitionRecord(
-      CaseStage.SUBMITTED,
+      CaseStage.READY_TO_SUBMIT,
       user.id,
       user.name,
       notes ? `اعتماد اللجنة - ${notes}` : "اعتماد اللجنة"
     );
     updateCase(id, {
       status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
-      currentStage: CaseStage.SUBMITTED,
+      currentStage: CaseStage.READY_TO_SUBMIT,
       stageHistory: [...(lawCase.stageHistory || []), newTransition],
       reviewDecision: "approved" as ReviewDecisionType,
       reviewNotes: notes || "",
@@ -256,14 +258,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const lawCase = cases.find(c => c.id === id);
     if (!lawCase || !user) return;
     const newTransition = createStageTransitionRecord(
-      CaseStage.AMENDMENTS,
+      CaseStage.TAKING_NOTES,
       user.id,
       user.name,
       notes || "إرجاع بملاحظات اللجنة"
     );
     updateCase(id, {
       status: CaseStatus.AMENDMENTS as CaseStatusValue,
-      currentStage: CaseStage.AMENDMENTS,
+      currentStage: CaseStage.TAKING_NOTES,
       stageHistory: [...(lawCase.stageHistory || []), newTransition],
       reviewDecision: decision,
       reviewNotes: notes,
@@ -311,7 +313,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (!lawCase) return false;
 
     if (userRole) {
-      const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue);
+      const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue);
       if (!validation.allowed) {
         console.warn("انتقال مرفوض:", validation.reason);
         return false;
@@ -319,8 +321,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
-    const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification);
+    const effectiveClassification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
+    const stagesOrder = getStagesForClassification(effectiveClassification, lawCase.caseType);
     const currentIndex = stagesOrder.indexOf(normalized);
     if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) return false;
 
@@ -351,7 +353,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (!lawCase) return false;
 
     if (userRole) {
-      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue);
+      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue);
       if (!validation.allowed) {
         console.warn("إرجاع مرفوض:", validation.reason);
         return false;
@@ -359,8 +361,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
-    const effectiveClassification = (lawCase.caseClassification || CaseClassification.PLAINTIFF_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification);
+    const effectiveClassification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
+    const stagesOrder = getStagesForClassification(effectiveClassification, lawCase.caseType);
     const currentIndex = stagesOrder.indexOf(normalized);
     if (currentIndex <= 0) return false;
 
@@ -372,7 +374,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       stageHistory: [...lawCase.stageHistory, newTransition],
     });
 
-    if (prevStage === CaseStage.AMENDMENTS) {
+    if (prevStage === CaseStage.TAKING_NOTES) {
       const responsibleId = lawCase.responsibleLawyerId || lawCase.primaryLawyerId;
       if (responsibleId) {
         notifyCaseReturnedForRevision(lawCase.id, lawCase.caseNumber, responsibleId, notes).catch(() => {});
