@@ -78,7 +78,7 @@ export const lawCases = pgTable("law_cases", {
   lastHearingDate: varchar("last_hearing_date", { length: 50 }),
   nextHearingDate: varchar("next_hearing_date", { length: 50 }),
   activeMemoCount: integer("active_memo_count").default(0),
-  caseClassification: varchar("case_classification", { length: 50 }).notNull().default("مدعي_قضية_جديدة"),
+  caseClassification: varchar("case_classification", { length: 50 }).notNull().default("قضية_جديدة"),
   previousHearingsCount: integer("previous_hearings_count").default(0),
   currentSituation: text("current_situation").default(""),
   responseDeadline: varchar("response_deadline", { length: 50 }),
@@ -90,6 +90,14 @@ export const lawCases = pgTable("law_cases", {
   amicableSettlementDirected: boolean("amicable_settlement_directed").default(false),
   adminCaseSubType: varchar("admin_case_sub_type", { length: 50 }),
   prescriptionDate: varchar("prescription_date", { length: 50 }),
+  grievanceRequired: boolean("grievance_required").default(false),
+  grievanceDate: varchar("grievance_date", { length: 50 }),
+  grievanceResult: varchar("grievance_result", { length: 50 }),
+  struckOffDate: varchar("struck_off_date", { length: 50 }),
+  struckOffReopenDeadline: varchar("struck_off_reopen_deadline", { length: 50 }),
+  appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
+  moeenNumber: varchar("moeen_number", { length: 100 }),
+  clientRole: varchar("client_role", { length: 50 }),
   isArchived: boolean("is_archived").default(false),
   archivedAt: timestamp("archived_at"),
   archivedBy: varchar("archived_by", { length: 255 }),
@@ -448,17 +456,15 @@ export type CaseTypeValue = typeof CaseType[keyof typeof CaseType];
 
 // ==================== تصنيف القضية ====================
 export const CaseClassification = {
-  PLAINTIFF_NEW: "مدعي_قضية_جديدة",
-  PLAINTIFF_EXISTING: "مدعي_قضية_مقيدة",
-  DEFENDANT: "مدعى_عليه",
+  CASE_NEW: "قضية_جديدة",
+  CASE_EXISTING: "قضية_مقيدة",
 } as const;
 
 export type CaseClassificationValue = typeof CaseClassification[keyof typeof CaseClassification];
 
 export const CaseClassificationLabels: Record<CaseClassificationValue, string> = {
-  "مدعي_قضية_جديدة": "دعوى للدراسة",
-  "مدعي_قضية_مقيدة": "منظورة",
-  "مدعى_عليه": "منظورة",
+  "قضية_جديدة": "قضية جديدة",
+  "قضية_مقيدة": "قضية مقيدة",
 };
 
 // ==================== حالات منصة تراضي (تجاري) ====================
@@ -528,19 +534,37 @@ export const CaseStatusLabels: Record<CaseStatusValue, string> = {
 
 // ==================== مراحل القضية ====================
 export const CaseStage = {
-  RECEIVED: "استلام",
+  RECEPTION: "استلام",
+  PRESCRIPTION_DATE: "تحديد_تاريخ_التقادم",
   DATA_COMPLETION: "استكمال_البيانات",
   STUDY: "دراسة",
-  DRAFTING: "تحرير_المذكرة",
+  SETTLEMENT_DIRECTION: "توجيه_العميل_بالتسوية",
+  AWAITING_SETTLEMENT: "بانتظار_رفع_العميل_للتسوية",
+  GRIEVANCE_DRAFTING: "تحرير_صيغة_التظلم",
+  GRIEVANCE_INTERNAL_REVIEW: "مراجعة_داخلية_للتظلم",
+  GRIEVANCE_SUBMITTED: "تقديم_التظلم",
+  GRIEVANCE_AWAITING: "انتظار_رد_التظلم",
+  DRAFTING: "تحرير_صحيفة_الدعوى",
+  MEMO_DRAFTING: "تحرير_مذكرة_جوابية",
+  INTERNAL_REVIEW: "مراجعة_داخلية",
   REVIEW_COMMITTEE: "إحالة_للجنة_المراجعة",
-  AMENDMENTS: "الأخذ_بالملاحظات",
-  SUBMITTED: "تم_الرفع_للدائرة",
-  PENDING_REVIEW: "قيد_التدقيق",
+  TAKING_NOTES: "الأخذ_بالملاحظات",
+  READY_TO_SUBMIT: "جاهزة_للرفع",
+  TARADI_REGISTRATION: "رفع_بمنصة_تراضي",
+  TARADI_REVIEW: "قيد_التدقيق_في_تراضي",
   CONCILIATION: "مداولة_الصلح",
   CONCILIATION_CLOSED: "أغلق_طلب_الصلح",
-  UNDER_REVIEW: "تحت_النظر",
+  NAJIZ_REGISTRATION: "الرفع_في_ناجز",
+  NAJIZ_REVIEW: "قيد_التدقيق_في_ناجز",
+  MOEEN_REGISTRATION: "الرفع_في_معين",
+  MOEEN_REVIEW: "قيد_التدقيق_في_معين",
+  UNDER_REVIEW: "منظورة",
   PRIMARY_JUDGMENT: "محكوم_حكم_ابتدائي",
+  APPEAL_PENDING: "منظورة_استئناف",
   FINAL_JUDGMENT: "محكوم_حكم_نهائي",
+  STRUCK_OFF: "مشطوبة",
+  COLLECTION: "تحصيل",
+  ARCHIVED: "مؤرشفة",
   CLOSED: "مقفلة",
 } as const;
 
@@ -548,112 +572,190 @@ export type CaseStageValue = typeof CaseStage[keyof typeof CaseStage];
 
 export const CaseStageLabels: Record<CaseStageValue, string> = {
   "استلام": "استلام",
+  "تحديد_تاريخ_التقادم": "تحديد تاريخ التقادم",
   "استكمال_البيانات": "استكمال البيانات",
   "دراسة": "دراسة",
-  "تحرير_المذكرة": "تحرير صحيفة الدعوى",
+  "توجيه_العميل_بالتسوية": "توجيه العميل بالتسوية",
+  "بانتظار_رفع_العميل_للتسوية": "بانتظار رفع العميل للتسوية",
+  "تحرير_صيغة_التظلم": "تحرير صيغة التظلم",
+  "مراجعة_داخلية_للتظلم": "مراجعة داخلية للتظلم",
+  "تقديم_التظلم": "تقديم التظلم",
+  "انتظار_رد_التظلم": "انتظار رد التظلم",
+  "تحرير_صحيفة_الدعوى": "تحرير صحيفة الدعوى",
+  "تحرير_مذكرة_جوابية": "تحرير مذكرة جوابية",
+  "مراجعة_داخلية": "مراجعة داخلية",
   "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
   "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
-  "تم_الرفع_للدائرة": "جاهزة للرفع",
-  "قيد_التدقيق": "قيد التدقيق",
+  "جاهزة_للرفع": "جاهزة للرفع",
+  "رفع_بمنصة_تراضي": "رفع بمنصة تراضي",
+  "قيد_التدقيق_في_تراضي": "قيد التدقيق في تراضي",
   "مداولة_الصلح": "مداولة الصلح",
   "أغلق_طلب_الصلح": "أغلق طلب الصلح",
-  "تحت_النظر": "تحت النظر",
+  "الرفع_في_ناجز": "الرفع في ناجز",
+  "قيد_التدقيق_في_ناجز": "قيد التدقيق في ناجز",
+  "الرفع_في_معين": "الرفع في معين",
+  "قيد_التدقيق_في_معين": "قيد التدقيق في معين",
+  "منظورة": "منظورة",
   "محكوم_حكم_ابتدائي": "محكوم حكم ابتدائي",
+  "منظورة_استئناف": "منظورة استئناف",
   "محكوم_حكم_نهائي": "محكوم حكم نهائي",
+  "مشطوبة": "مشطوبة",
+  "تحصيل": "تحصيل",
+  "مؤرشفة": "مؤرشفة",
   "مقفلة": "مقفلة",
 };
 
 export const CaseStagesOrder: CaseStageValue[] = [
   "استلام",
+  "تحديد_تاريخ_التقادم",
   "استكمال_البيانات",
   "دراسة",
-  "تحرير_المذكرة",
+  "توجيه_العميل_بالتسوية",
+  "بانتظار_رفع_العميل_للتسوية",
+  "تحرير_صيغة_التظلم",
+  "مراجعة_داخلية_للتظلم",
+  "تقديم_التظلم",
+  "انتظار_رد_التظلم",
+  "تحرير_صحيفة_الدعوى",
+  "تحرير_مذكرة_جوابية",
+  "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
-  "تم_الرفع_للدائرة",
-  "قيد_التدقيق",
+  "جاهزة_للرفع",
+  "رفع_بمنصة_تراضي",
+  "قيد_التدقيق_في_تراضي",
   "مداولة_الصلح",
   "أغلق_طلب_الصلح",
-  "تحت_النظر",
+  "الرفع_في_ناجز",
+  "قيد_التدقيق_في_ناجز",
+  "الرفع_في_معين",
+  "قيد_التدقيق_في_معين",
+  "منظورة",
   "محكوم_حكم_ابتدائي",
+  "منظورة_استئناف",
   "محكوم_حكم_نهائي",
+  "مشطوبة",
+  "تحصيل",
+  "مؤرشفة",
   "مقفلة",
 ];
 
-// ==================== مراحل القضية حسب التصنيف ====================
+// ==================== مراحل القضية حسب التصنيف والقسم ====================
 
-export const PlaintiffNewStages: CaseStageValue[] = [
+export const PlaintiffNewGeneralStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
-  "تحرير_المذكرة",
+  "تحرير_صحيفة_الدعوى",
+  "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
-  "تم_الرفع_للدائرة",
-  "قيد_التدقيق",
+  "جاهزة_للرفع",
+  "الرفع_في_ناجز",
+  "قيد_التدقيق_في_ناجز",
   "مداولة_الصلح",
   "أغلق_طلب_الصلح",
+  "منظورة",
 ];
 
-export const PlaintiffExistingStages: CaseStageValue[] = [
+export const PlaintiffNewCommercialStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
-  "تحرير_المذكرة",
+  "تحرير_صحيفة_الدعوى",
+  "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
-  "تم_الرفع_للدائرة",
-  "تحت_النظر",
-  "محكوم_حكم_ابتدائي",
-  "محكوم_حكم_نهائي",
+  "جاهزة_للرفع",
+  "رفع_بمنصة_تراضي",
+  "قيد_التدقيق_في_تراضي",
+  "مداولة_الصلح",
+  "أغلق_طلب_الصلح",
+  "الرفع_في_ناجز",
+  "قيد_التدقيق_في_ناجز",
+  "منظورة",
 ];
 
-export const DefendantStages: CaseStageValue[] = [
+export const PlaintiffNewLaborStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
-  "تحرير_المذكرة",
+  "توجيه_العميل_بالتسوية",
+  "بانتظار_رفع_العميل_للتسوية",
+  "مداولة_الصلح",
+  "أغلق_طلب_الصلح",
+  "تحرير_صحيفة_الدعوى",
+  "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
-  "تم_الرفع_للدائرة",
-  "تحت_النظر",
-  "محكوم_حكم_ابتدائي",
-  "محكوم_حكم_نهائي",
+  "الرفع_في_ناجز",
+  "قيد_التدقيق_في_ناجز",
+  "منظورة",
 ];
 
-export function getStagesForClassification(classification: CaseClassificationValue): CaseStageValue[] {
-  switch (classification) {
-    case "مدعي_قضية_جديدة": return PlaintiffNewStages;
-    case "مدعي_قضية_مقيدة": return PlaintiffExistingStages;
-    case "مدعى_عليه": return DefendantStages;
-    default: return PlaintiffNewStages;
+export const PlaintiffNewAdminStages: CaseStageValue[] = [
+  "استلام",
+  "تحديد_تاريخ_التقادم",
+  "استكمال_البيانات",
+  "دراسة",
+  "تحرير_صيغة_التظلم",
+  "مراجعة_داخلية_للتظلم",
+  "تقديم_التظلم",
+  "انتظار_رد_التظلم",
+  "تحرير_صحيفة_الدعوى",
+  "مراجعة_داخلية",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "الرفع_في_معين",
+  "قيد_التدقيق_في_معين",
+  "منظورة",
+];
+
+export const ExistingCaseStages: CaseStageValue[] = [
+  "استلام",
+  "استكمال_البيانات",
+  "تحرير_مذكرة_جوابية",
+  "مراجعة_داخلية",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "دراسة",
+  "تحرير_صحيفة_الدعوى",
+  "مراجعة_داخلية",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "منظورة",
+];
+
+export const PostTrialStages: CaseStageValue[] = [
+  "منظورة",
+  "محكوم_حكم_ابتدائي",
+  "منظورة_استئناف",
+  "محكوم_حكم_نهائي",
+  "مشطوبة",
+  "تحصيل",
+  "مؤرشفة",
+  "مقفلة",
+];
+
+export function getStagesForClassification(classification: CaseClassificationValue, caseType?: CaseTypeValue): CaseStageValue[] {
+  if (classification === "قضية_مقيدة") {
+    return ExistingCaseStages;
   }
-}
 
-export function getStageLabel(stage: CaseStageValue, classification?: CaseClassificationValue): string {
-  const commonLabels: Partial<Record<CaseStageValue, string>> = {
-    "استلام": "استلام",
-    "استكمال_البيانات": "استكمال البيانات",
-    "دراسة": "دراسة",
-    "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
-    "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
-    "مقفلة": "مقفلة",
-  };
-
-  if (commonLabels[stage]) return commonLabels[stage]!;
-
-  if (stage === "تحرير_المذكرة") {
-    switch (classification) {
-      case "مدعي_قضية_جديدة": return "تحرير صحيفة الدعوى";
-      case "مدعي_قضية_مقيدة": return "تحرير صحيفة الدعوى";
-      case "مدعى_عليه": return "تحرير المذكرة الجوابية";
+  if (classification === "قضية_جديدة") {
+    switch (caseType) {
+      case "عام": return PlaintiffNewGeneralStages;
+      case "تجاري": return PlaintiffNewCommercialStages;
+      case "عمالي": return PlaintiffNewLaborStages;
+      case "إداري": return PlaintiffNewAdminStages;
+      default: return PlaintiffNewGeneralStages;
     }
   }
 
-  if (stage === "تم_الرفع_للدائرة") {
-    return "جاهزة للرفع";
-  }
+  return PlaintiffNewGeneralStages;
+}
 
+export function getStageLabel(stage: CaseStageValue): string {
   return CaseStageLabels[stage] || stage;
 }
 
@@ -982,6 +1084,14 @@ export interface LawCase {
   adminCaseSubType: string | null;
   prescriptionDate: string | null;
   najizNumber: string;
+  grievanceRequired: boolean;
+  grievanceDate: string | null;
+  grievanceResult: string | null;
+  struckOffDate: string | null;
+  struckOffReopenDeadline: string | null;
+  appealLawyerId: string | null;
+  moeenNumber: string | null;
+  clientRole: string | null;
   isArchived: boolean;
   archivedAt: string | null;
   archivedBy: string | null;
