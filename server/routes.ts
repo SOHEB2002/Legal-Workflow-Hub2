@@ -21,6 +21,8 @@ import {
   CaseClassification,
   CaseStage,
   CaseStagesOrder,
+  getStagesForClassification,
+  type CaseTypeValue,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -125,41 +127,83 @@ interface StageTransitionRule {
 }
 
 const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
-  // Forward transitions
-  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "branch_manager"] },
-  { from: "دراسة", to: "تحرير_المذكرة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "تحرير_المذكرة", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "إحالة_للجنة_المراجعة", to: "تم_الرفع_للدائرة", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
-  { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "department_head", "branch_manager"] },
-  { from: "الأخذ_بالملاحظات", to: "إحالة_للجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "الأخذ_بالملاحظات", to: "تم_الرفع_للدائرة", allowedRoles: ["department_head", "branch_manager"] },
-  // دعوى للدراسة: من جاهزة للرفع إلى مسار الصلح
-  { from: "تم_الرفع_للدائرة", to: "قيد_التدقيق", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "قيد_التدقيق", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  // ==================== COMMON TRANSITIONS ====================
+  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["department_head", "branch_manager"] },
+  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
+  { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
+  { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer"] },
+  { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "branch_manager"] },
+
+  // Skip data completion
+  { from: "استلام", to: "دراسة", allowedRoles: ["department_head", "branch_manager"] },
+
+  // ==================== GENERAL PATH (after ready_to_submit) ====================
+  { from: "جاهزة_للرفع", to: "الرفع_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "الرفع_في_ناجز", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer"] },
+  { from: "قيد_التدقيق_في_ناجز", to: "الرفع_في_ناجز", allowedRoles: ["assigned_lawyer"] },
+  { from: "قيد_التدقيق_في_ناجز", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "أغلق_طلب_الصلح", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "قيد_التدقيق", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  // منظورة: من جاهزة للرفع إلى تحت النظر وما بعده
-  { from: "تم_الرفع_للدائرة", to: "تحت_النظر", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "تحت_النظر", to: "محكوم_حكم_ابتدائي", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "محكوم_حكم_ابتدائي", to: "محكوم_حكم_نهائي", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "محكوم_حكم_نهائي", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "تحت_النظر", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "تم_الرفع_للدائرة", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  // Backward transitions
-  { from: "استكمال_البيانات", to: "استلام", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "دراسة", to: "استكمال_البيانات", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "تحرير_المذكرة", to: "دراسة", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "إحالة_للجنة_المراجعة", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "cases_review_head", "department_head"] },
-  { from: "الأخذ_بالملاحظات", to: "تحرير_المذكرة", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "تم_الرفع_للدائرة", to: "الأخذ_بالملاحظات", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "قيد_التدقيق", to: "تم_الرفع_للدائرة", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
-  { from: "مداولة_الصلح", to: "قيد_التدقيق", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
-  { from: "أغلق_طلب_الصلح", to: "مداولة_الصلح", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
-  { from: "تحت_النظر", to: "تم_الرفع_للدائرة", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
-  { from: "محكوم_حكم_ابتدائي", to: "تحت_النظر", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
-  { from: "محكوم_حكم_نهائي", to: "محكوم_حكم_ابتدائي", allowedRoles: ["branch_manager", "department_head", "admin_support"] },
+  { from: "أغلق_طلب_الصلح", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+
+  // ==================== COMMERCIAL PATH (taradi then najiz) ====================
+  { from: "جاهزة_للرفع", to: "رفع_بمنصة_تراضي", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "رفع_بمنصة_تراضي", to: "قيد_التدقيق_في_تراضي", allowedRoles: ["assigned_lawyer"] },
+  { from: "قيد_التدقيق_في_تراضي", to: "رفع_بمنصة_تراضي", allowedRoles: ["assigned_lawyer"] },
+  { from: "قيد_التدقيق_في_تراضي", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+
+  // ==================== LABOR PATH (settlement before drafting) ====================
+  { from: "دراسة", to: "توجيه_العميل_بالتسوية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "توجيه_العميل_بالتسوية", to: "بانتظار_رفع_العميل_للتسوية", allowedRoles: ["department_head", "assigned_lawyer"] },
+  { from: "بانتظار_رفع_العميل_للتسوية", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "أغلق_طلب_الصلح", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer"] },
+
+  // ==================== ADMIN PATH (prescription date + grievance) ====================
+  { from: "استلام", to: "تحديد_تاريخ_التقادم", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
+  { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
+  { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer"] },
+  { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "انتظار_رد_التظلم", to: "تحصيل", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "انتظار_رد_التظلم", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "جاهزة_للرفع", to: "الرفع_في_معين", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "الرفع_في_معين", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer"] },
+  { from: "قيد_التدقيق_في_معين", to: "الرفع_في_معين", allowedRoles: ["assigned_lawyer"] },
+  { from: "قيد_التدقيق_في_معين", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+
+  // ==================== EXISTING CASE PATH (memo before study) ====================
+  { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
+  { from: "الأخذ_بالملاحظات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer"] },
+  { from: "الأخذ_بالملاحظات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
+
+  // ==================== POST-TRIAL TRANSITIONS ====================
+  { from: "منظورة", to: "محكوم_حكم_ابتدائي", allowedRoles: ["assigned_lawyer"] },
+  { from: "منظورة", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer"] },
+  { from: "منظورة", to: "مشطوبة", allowedRoles: ["assigned_lawyer"] },
+
+  { from: "محكوم_حكم_ابتدائي", to: "منظورة_استئناف", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "محكوم_حكم_ابتدائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
+
+  { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer"] },
+  { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer"] },
+
+  { from: "محكوم_حكم_نهائي", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "محكوم_حكم_نهائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
+
+  { from: "تحصيل", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+
+  { from: "مشطوبة", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مشطوبة", to: "منظورة_استئناف", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مشطوبة", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 ];
 
 const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
@@ -179,11 +223,6 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   { from: "جاهز", to: "تعديلات", allowedRoles: ["branch_manager", "department_head"] },
 ];
 
-// Legacy stage name mapping
-const LEGACY_CASE_STAGE_MAP: Record<string, string> = {
-  "رفع_للدائرة": "تم_الرفع_للدائرة",
-};
-
 function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   if (entityData.primaryLawyerId === user.id || entityData.responsibleLawyerId === user.id) return true;
   if (entityData.assignedTo === user.id) return true;
@@ -199,24 +238,52 @@ function validateStageTransition(
   user?: { id: string },
   entityData?: any
 ): { allowed: boolean; reason?: string } {
-  const normalizedCurrent = entityType === "case"
-    ? (LEGACY_CASE_STAGE_MAP[currentStage] || currentStage)
-    : currentStage;
-
-  if (normalizedCurrent === targetStage) {
+  if (currentStage === targetStage) {
     return { allowed: false, reason: "العنصر في نفس المرحلة المطلوبة" };
   }
 
-  const rules = entityType === "case" ? ALLOWED_CASE_TRANSITIONS : ALLOWED_CONSULTATION_TRANSITIONS;
-  const rule = rules.find(r => r.from === normalizedCurrent && r.to === targetStage);
-
-  if (!rule) {
-    return { allowed: false, reason: `لا يمكن الانتقال من "${normalizedCurrent}" إلى "${targetStage}"` };
+  // Early closure: admin_support can move any stage to مقفلة
+  if (entityType === "case" && targetStage === "مقفلة" && userRole === "admin_support") {
+    return { allowed: true };
   }
 
   const effectiveRoles = [userRole];
   if (entityType === "case" && user && entityData && isAssignedLawyer(user, entityData)) {
     effectiveRoles.push("assigned_lawyer");
+  }
+
+  // Rollback logic for cases
+  if (entityType === "case" && entityData) {
+    const classification = entityData.caseClassification as string;
+    const caseType = entityData.caseType as CaseTypeValue;
+    const stages = getStagesForClassification(classification as any, caseType);
+    const currentIdx = stages.indexOf(currentStage as any);
+    const targetIdx = stages.indexOf(targetStage as any);
+
+    if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
+      // This is a rollback
+      const isLawyer = effectiveRoles.includes("assigned_lawyer");
+      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+
+      if (isHeadOrManager) {
+        return { allowed: true }; // can go back to ANY previous stage
+      }
+      if (isLawyer && targetIdx === currentIdx - 1) {
+        return { allowed: true }; // can only go back ONE stage
+      }
+      if (isLawyer && targetIdx < currentIdx - 1) {
+        return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
+      }
+      return { allowed: false, reason: "ليس لديك صلاحية للرجوع في المراحل" };
+    }
+  }
+
+  // Forward transitions: check ALLOWED_CASE_TRANSITIONS or ALLOWED_CONSULTATION_TRANSITIONS
+  const rules = entityType === "case" ? ALLOWED_CASE_TRANSITIONS : ALLOWED_CONSULTATION_TRANSITIONS;
+  const rule = rules.find(r => r.from === currentStage && r.to === targetStage);
+
+  if (!rule) {
+    return { allowed: false, reason: `لا يمكن الانتقال من "${currentStage}" إلى "${targetStage}"` };
   }
 
   if (!effectiveRoles.some(role => rule.allowedRoles.includes(role))) {
@@ -924,7 +991,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW || caseItem.caseType !== "تجاري") {
+      if (caseItem.caseClassification !== CaseClassification.CASE_NEW || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_تراضي", "تم_الصلح", "لم_يتم_صلح"];
@@ -980,7 +1047,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW || caseItem.caseType !== "عمالي") {
+      if (caseItem.caseClassification !== CaseClassification.CASE_NEW || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_الموارد", "توجيه_تسوية_ودية", "انتهت_التسوية"];
@@ -1034,7 +1101,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW || caseItem.caseType !== "عمالي") {
+      if (caseItem.caseClassification !== CaseClassification.CASE_NEW || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       
@@ -1090,8 +1157,7 @@ export async function registerRoutes(
         return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال البيانات" });
       }
 
-      const normalizedStage = LEGACY_CASE_STAGE_MAP[caseItem.currentStage as string] || caseItem.currentStage;
-      if (normalizedStage !== "استلام") {
+      if (caseItem.currentStage !== "استلام") {
         return res.status(400).json({ error: "تجاوز مرحلة استكمال البيانات متاح فقط من مرحلة الاستلام" });
       }
 
@@ -1128,7 +1194,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canEditCaseData(user)) return res.status(403).json({ error: "لا تملك صلاحية تقييد القضية في المحكمة" });
-      if (caseItem.caseClassification !== CaseClassification.PLAINTIFF_NEW) {
+      if (caseItem.caseClassification !== CaseClassification.CASE_NEW) {
         return res.status(400).json({ error: "القضية مقيدة في المحكمة بالفعل" });
       }
       // Prerequisite: commercial cases must have taradiStatus === "لم_يتم_صلح" and a taradi number
@@ -1150,8 +1216,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يرجى إدخال رقم القيد في ناجز" });
       }
       const updated = await storage.updateCase(caseItem.id, {
-        caseClassification: CaseClassification.PLAINTIFF_EXISTING,
-        currentStage: CaseStage.PENDING_REVIEW,
+        caseClassification: CaseClassification.CASE_EXISTING,
+        currentStage: CaseStage.UNDER_REVIEW,
         courtCaseNumber: courtCaseNumber.trim().substring(0, 100),
         najizNumber: najizNumber.trim().substring(0, 100),
       } as any);
@@ -1218,49 +1284,93 @@ export async function registerRoutes(
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
-        // B6: Block SUBMITTED→UNDER_REVIEW via PATCH — must go through court-register endpoint
-        if (req.body.currentStage === CaseStage.UNDER_REVIEW) {
-          const finalClassification = req.body.caseClassification || existing.caseClassification;
-          if (finalClassification !== CaseClassification.PLAINTIFF_EXISTING) {
-            console.warn(`[B6] Blocked stage transition ${existing.currentStage}→${req.body.currentStage} for case ${existing.id}: not PLAINTIFF_EXISTING`);
-            return res.status(400).json({ error: "لا يمكن الانتقال إلى مرحلة 'تحت النظر' إلا بعد تقييد القضية في المحكمة عبر الإجراء المخصص" });
+        // === EARLY CLOSURE VALIDATION ===
+        if (req.body.currentStage === "مقفلة" && user.role === "admin_support") {
+          if (!req.body.closureReason) {
+            return res.status(400).json({ error: "يجب تحديد سبب الإغلاق" });
+          }
+          if (req.body.closureReason === "أخرى" && (!req.body.closureReasonOther || !req.body.closureReasonOther.trim())) {
+            return res.status(400).json({ error: "يجب توضيح سبب الإغلاق عند اختيار 'أخرى'" });
           }
         }
-        // B7: Block transition to جاهزة للرفع unless prerequisites are met
-        if (req.body.currentStage === CaseStage.SUBMITTED) {
-          if (existing.caseType === "تجاري" && existing.caseClassification === CaseClassification.PLAINTIFF_NEW) {
-            if (!(existing as any).taradiNumber || !(existing as any).taradiStatus) {
-              console.warn(`[B7] Blocked stage transition to SUBMITTED for case ${existing.id}: missing taradiNumber/taradiStatus (type=تجاري)`);
-              return res.status(400).json({ error: "يجب إتمام إجراء تراضي وإدخال رقم الطلب قبل الانتقال لمرحلة جاهزة للرفع" });
-            }
+
+        // === FIELD VALIDATION BEFORE SPECIFIC STAGES ===
+        const targetStage = req.body.currentStage;
+
+        // Before دراسة: require opponentName, caseType, departmentId, primaryLawyerId
+        if (targetStage === "دراسة") {
+          const merged = { ...existing, ...req.body };
+          if (!merged.opponentName) return res.status(400).json({ error: "يجب إدخال اسم الخصم قبل الانتقال لمرحلة الدراسة" });
+          if (!merged.caseType) return res.status(400).json({ error: "يجب تحديد نوع القضية قبل الانتقال لمرحلة الدراسة" });
+          if (!merged.departmentId) return res.status(400).json({ error: "يجب تحديد القسم قبل الانتقال لمرحلة الدراسة" });
+          if (!merged.primaryLawyerId) return res.status(400).json({ error: "يجب تعيين محامي رئيسي قبل الانتقال لمرحلة الدراسة" });
+        }
+
+        // Before الرفع_في_ناجز: require najizNumber
+        if (targetStage === "الرفع_في_ناجز") {
+          const najiz = req.body.najizNumber || (existing as any).najizNumber;
+          if (!najiz) return res.status(400).json({ error: "يجب إدخال رقم القيد في ناجز" });
+        }
+
+        // Before رفع_بمنصة_تراضي: require taradiNumber
+        if (targetStage === "رفع_بمنصة_تراضي") {
+          const taradi = req.body.taradiNumber || (existing as any).taradiNumber;
+          if (!taradi) return res.status(400).json({ error: "يجب إدخال رقم الطلب في منصة تراضي" });
+        }
+
+        // Before الرفع_في_معين: require moeenNumber
+        if (targetStage === "الرفع_في_معين") {
+          const moeen = req.body.moeenNumber || (existing as any).moeenNumber;
+          if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
+        }
+
+        // Before تقديم_التظلم: require grievanceDate
+        if (targetStage === "تقديم_التظلم") {
+          const gDate = req.body.grievanceDate || (existing as any).grievanceDate;
+          if (!gDate) return res.status(400).json({ error: "يجب تحديد تاريخ التظلم" });
+        }
+
+        // From تحديد_تاريخ_التقادم to next: require prescriptionDate
+        if (existing.currentStage === "تحديد_تاريخ_التقادم") {
+          const pDate = req.body.prescriptionDate || (existing as any).prescriptionDate;
+          if (!pDate) return res.status(400).json({ error: "يجب تحديد تاريخ التقادم" });
+        }
+
+        // When الأخذ_بالملاحظات to جاهزة_للرفع: require reviewDecision
+        if (existing.currentStage === "الأخذ_بالملاحظات" && targetStage === "جاهزة_للرفع") {
+          if (!req.body.reviewDecision) return res.status(400).json({ error: "يجب تحديد قرار المراجعة" });
+        }
+
+        // === JUDGMENT RESULT HANDLING ===
+        if (targetStage === "محكوم_حكم_ابتدائي" || targetStage === "محكوم_حكم_نهائي") {
+          if (!req.body.judgmentType || !["لصالحنا", "ضدنا", "جزئي"].includes(req.body.judgmentType)) {
+            return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
           }
-          if (existing.caseType === "عمالي" && existing.caseClassification === CaseClassification.PLAINTIFF_NEW) {
-            if ((existing as any).mohrStatus !== "انتهت_التسوية") {
-              console.warn(`[B7] Blocked stage transition to SUBMITTED for case ${existing.id}: mohrStatus=${(existing as any).mohrStatus} (type=عمالي)`);
-              return res.status(400).json({ error: "يجب إتمام مرحلة وزارة الموارد البشرية قبل الانتقال لمرحلة جاهزة للرفع" });
+          if (req.body.judgmentFinal === undefined || typeof req.body.judgmentFinal !== "boolean") {
+            return res.status(400).json({ error: "يجب تحديد ما إذا كان الحكم نهائياً أم ابتدائياً" });
+          }
+          // For ابتدائي + جزئي: require needsAppeal
+          if (targetStage === "محكوم_حكم_ابتدائي" && req.body.judgmentType === "جزئي") {
+            if (req.body.needsAppeal === undefined || typeof req.body.needsAppeal !== "boolean") {
+              return res.status(400).json({ error: "يجب تحديد ما إذا كانت القضية بحاجة لاعتراض (استئناف)" });
             }
           }
         }
-        // B8: Enforce review committee decision when transitioning out of إحالة_للجنة_المراجعة
-        const normalizedExisting = LEGACY_CASE_STAGE_MAP[existing.currentStage as string] || existing.currentStage;
-        if (normalizedExisting === CaseStage.REVIEW_COMMITTEE) {
-          if (req.body.currentStage === CaseStage.SUBMITTED) {
+
+        // === REVIEW COMMITTEE DECISION ENFORCEMENT ===
+        if (existing.currentStage === CaseStage.REVIEW_COMMITTEE) {
+          if (targetStage === CaseStage.READY_TO_SUBMIT) {
             if (req.body.reviewDecision !== "approved") {
-              console.warn(`[B8] Blocked REVIEW_COMMITTEE→SUBMITTED for case ${existing.id}: reviewDecision=${req.body.reviewDecision}`);
               return res.status(400).json({ error: "يجب اعتماد القضية من اللجنة قبل الانتقال" });
             }
             req.body.reviewDecision = "approved";
-            if (req.body.reviewNotes !== undefined) req.body.reviewNotes = req.body.reviewNotes;
-          } else if (req.body.currentStage === CaseStage.AMENDMENTS) {
+          } else if (targetStage === CaseStage.TAKING_NOTES) {
             if (req.body.reviewDecision !== "rejected" && req.body.reviewDecision !== "partial") {
-              console.warn(`[B8] Blocked REVIEW_COMMITTEE→AMENDMENTS for case ${existing.id}: reviewDecision=${req.body.reviewDecision}`);
               return res.status(400).json({ error: "يجب تحديد سبب الإرجاع وإضافة ملاحظات اللجنة" });
             }
             if (!req.body.reviewNotes || typeof req.body.reviewNotes !== "string" || !req.body.reviewNotes.trim()) {
-              console.warn(`[B8] Blocked REVIEW_COMMITTEE→AMENDMENTS for case ${existing.id}: missing reviewNotes`);
               return res.status(400).json({ error: "يجب تحديد سبب الإرجاع وإضافة ملاحظات اللجنة" });
             }
-            req.body.reviewDecision = req.body.reviewDecision;
             req.body.reviewNotes = req.body.reviewNotes.trim();
           }
         }
@@ -1295,8 +1405,7 @@ export async function registerRoutes(
         !req.body.assignedLawyers;
 
       if (isDeptTransfer) {
-        const normalizedCurrentStage = LEGACY_CASE_STAGE_MAP[existing.currentStage as string] || existing.currentStage;
-        const currentStageIndex = CaseStagesOrder.indexOf(normalizedCurrentStage as any);
+        const currentStageIndex = CaseStagesOrder.indexOf(existing.currentStage as any);
         const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE as any);
         if (currentStageIndex >= reviewStageIndex) {
           return res.status(400).json({ error: "لا يمكن تحويل القضية في هذه المرحلة - القضية في مرحلة متقدمة من المراجعة" });
