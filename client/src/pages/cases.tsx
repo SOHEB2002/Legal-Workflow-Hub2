@@ -1330,6 +1330,7 @@ export default function CasesPage() {
               )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
+                {console.log("[cases.tsx DEBUG] selectedCase.caseType =", selectedCase.caseType, "| caseClassification =", selectedCase.caseClassification)}
                 <CaseProgressBar
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}

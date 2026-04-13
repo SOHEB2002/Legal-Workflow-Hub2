@@ -45,6 +45,12 @@ export function CaseProgressBar({
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قضية_جديدة";
   const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
+  console.log("[CaseProgressBar DEBUG]", {
+    caseClassification,
+    effectiveClassification,
+    caseType,
+    stagesOrder,
+  });
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
   const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;
