@@ -24,6 +24,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Check, ChevronsUpDown } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -111,10 +121,11 @@ export default function HearingsPage() {
   const { cases, getCaseById } = useCases();
   const { getClientName } = useClients();
   const { user, users } = useAuth();
-  const { departments } = useDepartments();
+  const { departments, getDepartmentName } = useDepartments();
   const { toast } = useToast();
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [caseComboOpen, setCaseComboOpen] = useState(false);
   const [detailHearingId, setDetailHearingId] = useState<string | null>(null);
   const detailHearing = detailHearingId ? hearings.find(h => h.id === detailHearingId) || null : null;
   const [resultDialogHearing, setResultDialogHearing] = useState<Hearing | null>(null);
@@ -156,16 +167,20 @@ export default function HearingsPage() {
     const caseId = params.get("caseId") || "";
     const type = params.get("type") as HearingTypeValue | null;
     if (!caseId && !type) return;
+    const c = caseId ? cases.find((x) => x.id === caseId) : undefined;
     setFormData((prev) => ({
       ...prev,
       caseId: caseId || prev.caseId,
       hearingType: type && Object.values(HearingType).includes(type) ? type : prev.hearingType,
+      attendingLawyerId: c?.primaryLawyerId || c?.responsibleLawyerId || prev.attendingLawyerId,
+      courtName: (c?.courtName as any) || prev.courtName,
     }));
     setIsAddDialogOpen(true);
     // Strip the query so refresh/back doesn't re-open the dialog.
     const cleanUrl = window.location.pathname;
     window.history.replaceState(null, "", cleanUrl);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cases.length]);
 
   const [resultForm, setResultForm] = useState({
     result: "" as string,
@@ -227,8 +242,8 @@ export default function HearingsPage() {
 
   const handleAddHearing = async () => {
     if (!formData.hearingDate || !formData.hearingTime) return;
-    if (formData.responseRequired && (!formData.caseId || formData.caseId === "none")) {
-      toast({ title: "يجب اختيار القضية المرتبطة لإنشاء المذكرة", variant: "destructive" });
+    if (!formData.caseId || formData.caseId === "none") {
+      toast({ title: "يجب اختيار القضية المرتبطة بالجلسة", variant: "destructive" });
       return;
     }
     setSubmitting(true);
@@ -470,29 +485,105 @@ export default function HearingsPage() {
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label>القضية (اختياري)</Label>
-                <Select
-                  value={formData.caseId}
-                  onValueChange={(value) => {
-                    const selectedCase = getCaseById(value);
-                    const autoLawyer = selectedCase?.primaryLawyerId || selectedCase?.responsibleLawyerId || "";
-                    setFormData(prev => ({ ...prev, caseId: value, attendingLawyerId: autoLawyer }));
-                  }}
-                >
-                  <SelectTrigger data-testid="select-case">
-                    <SelectValue placeholder="اختر القضية" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">بدون قضية</SelectItem>
-                    {cases
-                      .filter((c) => c.status !== "مغلق")
-                      .map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.caseNumber} - {getClientName(c.clientId)}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
+                <Label>القضية *</Label>
+                <Popover open={caseComboOpen} onOpenChange={setCaseComboOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={caseComboOpen}
+                      data-testid="select-case"
+                      className="w-full justify-between font-normal text-right"
+                    >
+                      <span className="truncate">
+                        {formData.caseId
+                          ? (() => {
+                              const c = cases.find(x => x.id === formData.caseId);
+                              return c ? `${c.caseNumber}${c.opponentName ? ` — ${c.opponentName}` : ""}` : "اختر القضية";
+                            })()
+                          : "اختر القضية"}
+                      </span>
+                      <ChevronsUpDown className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[420px] p-0" align="start" dir="rtl">
+                    <Command
+                      filter={(value, search) => {
+                        const c = cases.find(x => x.id === value);
+                        if (!c) return 0;
+                        const haystack = `${c.caseNumber} ${c.opponentName || ""} ${c.plaintiffName || ""}`.toLowerCase();
+                        return haystack.includes(search.toLowerCase()) ? 1 : 0;
+                      }}
+                    >
+                      <CommandInput placeholder="ابحث برقم القضية أو اسم الخصم..." />
+                      <CommandList>
+                        <CommandEmpty>لا توجد نتائج</CommandEmpty>
+                        <CommandGroup>
+                          {cases
+                            .filter(c => c.status !== "مغلق" && c.currentStage !== "مقفلة" && !(c as any).isArchived)
+                            .map(c => (
+                              <CommandItem
+                                key={c.id}
+                                value={c.id}
+                                onSelect={(val) => {
+                                  const selected = cases.find(x => x.id === val);
+                                  if (!selected) return;
+                                  const autoLawyer = selected.primaryLawyerId || selected.responsibleLawyerId || "";
+                                  // Auto-derive hearing type from the case's current stage.
+                                  const stage = selected.currentStage;
+                                  let autoType: string = HearingType.COURT;
+                                  if (stage === "مداولة_الصلح" || stage === "قيد_التدقيق_في_تراضي") {
+                                    autoType = HearingType.TARADI;
+                                  } else if (
+                                    stage === "بانتظار_رفع_العميل_للتسوية" ||
+                                    stage === "توجيه_العميل_بالتسوية" ||
+                                    stage === "أغلق_طلب_الصلح"
+                                  ) {
+                                    autoType = HearingType.SETTLEMENT;
+                                  }
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    caseId: val,
+                                    attendingLawyerId: autoLawyer,
+                                    hearingType: autoType as any,
+                                    courtName: (selected.courtName || prev.courtName) as any,
+                                  }));
+                                  setCaseComboOpen(false);
+                                }}
+                                className="flex items-center justify-between gap-2"
+                              >
+                                <div className="flex flex-col">
+                                  <LtrInline className="font-medium">{c.caseNumber}</LtrInline>
+                                  {c.opponentName && (
+                                    <span className="text-xs text-muted-foreground">{c.opponentName}</span>
+                                  )}
+                                </div>
+                                {formData.caseId === c.id && (
+                                  <Check className="h-4 w-4 shrink-0 text-primary" />
+                                )}
+                              </CommandItem>
+                            ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {formData.caseId && (() => {
+                  const c = cases.find(x => x.id === formData.caseId);
+                  if (!c) return null;
+                  return (
+                    <div className="mt-2 rounded-md border bg-muted/40 p-2 text-xs space-y-1" dir="rtl">
+                      <div>
+                        <span className="text-muted-foreground">المرحلة:</span>{" "}
+                        <span className="font-medium">{c.currentStage}</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">القسم:</span>{" "}
+                        <span className="font-medium">{getDepartmentName(c.departmentId || "")}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -943,11 +1034,22 @@ export default function HearingsPage() {
                   <SelectValue placeholder="اختر النتيجة" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="تأجيل">تأجيل</SelectItem>
-                  <SelectItem value="حكم">حكم</SelectItem>
-                  <SelectItem value="صلح">صلح</SelectItem>
-                  <SelectItem value="شطب">شطب</SelectItem>
-                  <SelectItem value="أخرى">أخرى</SelectItem>
+                  {resultDialogHearing?.hearingType === HearingType.TARADI ||
+                  resultDialogHearing?.hearingType === HearingType.SETTLEMENT ? (
+                    <>
+                      <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
+                      <SelectItem value="لم_يتم_الصلح">لم يتم الصلح</SelectItem>
+                      <SelectItem value="تأجيل">تأجيل</SelectItem>
+                    </>
+                  ) : (
+                    <>
+                      <SelectItem value="تأجيل">تأجيل</SelectItem>
+                      <SelectItem value="حكم">حكم</SelectItem>
+                      <SelectItem value="صلح">صلح</SelectItem>
+                      <SelectItem value="شطب">شطب</SelectItem>
+                      <SelectItem value="أخرى">أخرى</SelectItem>
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </div>
