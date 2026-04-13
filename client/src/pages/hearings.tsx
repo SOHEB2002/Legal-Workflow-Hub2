@@ -64,7 +64,7 @@ import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
-import { HearingStatus, HearingResult, CourtType, HearingType } from "@shared/schema";
+import { HearingStatus, HearingResult, CourtType, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -145,6 +145,27 @@ export default function HearingsPage() {
     responseRequired: false,
     attendingLawyerId: "",
   });
+
+  // Open the add-hearing dialog prefilled when navigated here from another
+  // page with ?action=create&caseId=...&type=... (e.g. after a platform-review
+  // accept in cases.tsx prompts to add a hearing).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("action") !== "create") return;
+    const caseId = params.get("caseId") || "";
+    const type = params.get("type") as HearingTypeValue | null;
+    if (!caseId && !type) return;
+    setFormData((prev) => ({
+      ...prev,
+      caseId: caseId || prev.caseId,
+      hearingType: type && Object.values(HearingType).includes(type) ? type : prev.hearingType,
+    }));
+    setIsAddDialogOpen(true);
+    // Strip the query so refresh/back doesn't re-open the dialog.
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState(null, "", cleanUrl);
+  }, []);
 
   const [resultForm, setResultForm] = useState({
     result: "" as string,
