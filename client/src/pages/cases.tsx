@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { useLocation } from "wouter";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
@@ -320,7 +321,14 @@ export default function CasesPage() {
   const [transferData, setTransferData] = useState({ toDepartmentId: "", reason: "" });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [caseToDelete, setCaseToDelete] = useState<any>(null);
+  const [, setLocation] = useLocation();
   const [stageTransitioning, setStageTransitioning] = useState(false);
+  const [hearingPrompt, setHearingPrompt] = useState<{
+    caseId: string;
+    hearingType: "تراضي" | "محكمة";
+    title: string;
+    description: string;
+  } | null>(null);
   const [showEarlyCloseDialog, setShowEarlyCloseDialog] = useState(false);
   const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
@@ -1466,10 +1474,31 @@ export default function CasesPage() {
                       const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
+                        // Prompt the user to add the hearing that the accepted
+                        // platform transition implies. Labor cases that have
+                        // already been through settlement (أغلق_طلب_الصلح in
+                        // history) don't need another hearing prompt at ناجز.
+                        const deptName = getDepartmentName(selectedCase.departmentId || "");
+                        const hasSettlementInHistory = Array.isArray(selectedCase.stageHistory) &&
+                          selectedCase.stageHistory.some((h: any) => h.stage === "أغلق_طلب_الصلح");
+                        const laborAlreadySettled = deptName === "عمالي" && hasSettlementInHistory;
                         if (stageBefore === "قيد_التدقيق_في_تراضي") {
-                          toast({
-                            title: "يرجى إضافة جلسة تراضي",
-                            description: "يرجى إضافة جلسة تراضي لنقل القضية لمرحلة مداولة الصلح",
+                          setHearingPrompt({
+                            caseId: selectedCase.id,
+                            hearingType: "تراضي",
+                            title: "هل تريد إضافة موعد جلسة تراضي الآن؟",
+                            description: "تم قبول الطلب في منصة تراضي. يرجى إضافة موعد جلسة التراضي.",
+                          });
+                        } else if (
+                          (stageBefore === "قيد_التدقيق_في_ناجز" ||
+                            stageBefore === "قيد_التدقيق_في_معين") &&
+                          !laborAlreadySettled
+                        ) {
+                          setHearingPrompt({
+                            caseId: selectedCase.id,
+                            hearingType: "محكمة",
+                            title: "هل تريد إضافة موعد جلسة محكمة الآن؟",
+                            description: "تم قبول القضية في المحكمة. يرجى إضافة موعد الجلسة القادمة.",
                           });
                         }
                       } else {
@@ -2974,6 +3003,45 @@ export default function CasesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!hearingPrompt} onOpenChange={(open) => { if (!open) setHearingPrompt(null); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{hearingPrompt?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{hearingPrompt?.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel
+              onClick={() => {
+                const kind = hearingPrompt?.hearingType === "تراضي" ? "تراضي" : "محكمة";
+                toast({
+                  title: `يرجى إضافة جلسة ${kind} لاحقاً`,
+                  description: "يمكنك إضافة الجلسة من صفحة الجلسات في أي وقت.",
+                });
+                setHearingPrompt(null);
+              }}
+              data-testid="button-hearing-prompt-later"
+            >
+              لاحقاً
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!hearingPrompt) return;
+                const params = new URLSearchParams({
+                  action: "create",
+                  caseId: hearingPrompt.caseId,
+                  type: hearingPrompt.hearingType,
+                });
+                setHearingPrompt(null);
+                setLocation(`/hearings?${params.toString()}`);
+              }}
+              data-testid="button-hearing-prompt-add"
+            >
+              نعم، إضافة جلسة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
