@@ -12,7 +12,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 
 interface CaseProgressBarProps {
@@ -75,16 +75,6 @@ export function CaseProgressBar({
     setSkipNotes("");
   };
 
-  const currentStageRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    currentStageRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest",
-      inline: "center",
-    });
-  }, [currentIndex, stagesOrder.length]);
-
   return (
     <div className="w-full space-y-4" dir="rtl">
       {normalizedStage === "الأخذ_بالملاحظات" && reviewNotes && reviewNotes.trim() && (
@@ -102,21 +92,17 @@ export function CaseProgressBar({
           <p className="text-amber-700 text-sm">{reviewNotes}</p>
         </div>
       )}
-      <div className="flex items-center gap-2 overflow-x-auto scroll-smooth pb-2 scrollbar-hide">
+      <div className="flex items-center justify-between gap-2 overflow-x-auto pb-2">
         {stagesOrder.map((stage, index) => {
           const status = getStageStatus(index);
-          const isCurrent = status === "current";
           return (
-            <div key={stage} className="flex items-center shrink-0">
-              <div
-                ref={isCurrent ? currentStageRef : undefined}
-                className="flex flex-col items-center shrink-0"
-              >
+            <div key={stage} className="flex items-center flex-1 min-w-0">
+              <div className="flex flex-col items-center flex-1">
                 <div
                   className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all ${
                     status === "completed"
                       ? "bg-green-500 text-white"
-                      : isCurrent
+                      : status === "current"
                       ? "bg-accent text-accent-foreground ring-4 ring-accent/30"
                       : "bg-muted text-muted-foreground"
                   }`}
@@ -130,7 +116,7 @@ export function CaseProgressBar({
                 </div>
                 <span
                   className={`mt-2 text-xs text-center break-words max-w-[72px] leading-tight ${
-                    isCurrent
+                    status === "current"
                       ? "font-bold text-accent"
                       : status === "completed"
                       ? "text-green-600 dark:text-green-400"
@@ -142,8 +128,10 @@ export function CaseProgressBar({
               </div>
               {index < stagesOrder.length - 1 && (
                 <div
-                  className={`h-1 w-8 mx-1 rounded shrink-0 ${
-                    index < currentIndex ? "bg-green-500" : "bg-muted"
+                  className={`h-1 flex-1 mx-1 rounded ${
+                    index < currentIndex
+                      ? "bg-green-500"
+                      : "bg-muted"
                   }`}
                 />
               )}
