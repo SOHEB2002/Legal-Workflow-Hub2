@@ -111,7 +111,8 @@ export function CaseProgressBar({
       ? { kind: "معين", requireCourtNumber: true }
       : null;
   const isAtPlatformReview = !!platformReviewInfo;
-  const canActOnPlatformReview = isAtPlatformReview && (isAssignedLawyer || isHeadOrManagerRole);
+  const canActOnPlatformReview =
+    isAtPlatformReview && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
   const canActOnInternalReview = isReviewerActor || isHeadOrManager;
