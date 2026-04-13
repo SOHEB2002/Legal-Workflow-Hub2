@@ -5,6 +5,7 @@ import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
 import { useAuth } from "./auth-context";
+import { useDepartments } from "./departments-context";
 
 interface CasesContextType {
   cases: LawCase[];
@@ -74,6 +75,15 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [comments, setComments] = useState<CaseComment[]>([]);
   const { user } = useAuth();
+  const { getDepartmentName } = useDepartments();
+
+  // Resolve the department label (e.g. "تجاري" / "عام" / "إداري") from the
+  // case's departmentId so getStagesForClassification picks the correct path.
+  // lawCase.caseType holds the case sub-type (e.g. "بيع وتوريد") and must NOT
+  // be used here — that's how we ended up on the general path for commercial
+  // cases and got "يجب إدخال رقم القيد في ناجز".
+  const resolveCasePath = (lawCase: LawCase) =>
+    getDepartmentName(lawCase.departmentId || "") as any;
 
   const fetchCases = useCallback(async () => {
     try {
@@ -322,7 +332,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
     const effectiveClassification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification, lawCase.caseType);
+    const stagesOrder = getStagesForClassification(effectiveClassification, resolveCasePath(lawCase));
     const currentIndex = stagesOrder.indexOf(normalized);
     if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) return false;
 
@@ -374,7 +384,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
     const effectiveClassification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification, lawCase.caseType);
+    const stagesOrder = getStagesForClassification(effectiveClassification, resolveCasePath(lawCase));
     const currentIndex = stagesOrder.indexOf(normalized);
     if (currentIndex <= 0) return false;
 

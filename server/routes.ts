@@ -1334,8 +1334,23 @@ export async function registerRoutes(
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
-        // Use merged case data for validation when classification also changes simultaneously
-        const mergedCase = { ...existing, ...req.body };
+        // Use merged case data for validation when classification also changes simultaneously.
+        // IMPORTANT: caseType on the row holds the case sub-type (e.g. "بيع وتوريد"),
+        // NOT the department label — but validateStageTransition's rollback logic
+        // calls getStagesForClassification(classification, caseType) to pick the
+        // path array. Override caseType on the merged copy with the resolved
+        // department name so commercial/admin/general paths are selected correctly.
+        const mergedCase: any = { ...existing, ...req.body };
+        try {
+          const dept = (existing as any).departmentId
+            ? await storage.getDepartmentById((existing as any).departmentId)
+            : null;
+          if (dept?.name) {
+            mergedCase.caseType = dept.name;
+          }
+        } catch (e) {
+          console.error("[PATCH cases] failed to resolve department for path routing", e);
+        }
         const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
