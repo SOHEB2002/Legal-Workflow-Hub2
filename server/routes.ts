@@ -1350,6 +1350,28 @@ export async function registerRoutes(
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
+        // DEBUG: surface exactly what's being validated and which rules could match.
+        console.log("[PATCH cases] stage transition attempt", {
+          caseId: String(req.params.id),
+          currentStage: existing.currentStage,
+          targetStage: req.body.currentStage,
+          userRole: user?.role,
+          userId: user?.id,
+          primaryLawyerId: existing.primaryLawyerId,
+          isAssignedLawyer:
+            existing.primaryLawyerId === user?.id ||
+            existing.responsibleLawyerId === user?.id ||
+            (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(user?.id)),
+          internalReviewerId: (existing as any).internalReviewerId,
+        });
+        const matchingRules = ALLOWED_CASE_TRANSITIONS.filter(
+          (r) => r.from === existing.currentStage,
+        );
+        console.log(
+          `[PATCH cases] ALLOWED_CASE_TRANSITIONS from "${existing.currentStage}":`,
+          matchingRules,
+        );
+
         // Use merged case data for validation when classification also changes simultaneously.
         // IMPORTANT: caseType on the row holds the case sub-type (e.g. "بيع وتوريد"),
         // NOT the department label — but validateStageTransition's rollback logic
@@ -1368,6 +1390,15 @@ export async function registerRoutes(
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
         const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase);
+        console.log("[PATCH cases] validateStageTransition result", {
+          caseId: String(req.params.id),
+          from: existing.currentStage,
+          to: req.body.currentStage,
+          userRole: user?.role,
+          mergedCaseType: mergedCase.caseType,
+          allowed: stageCheck.allowed,
+          reason: stageCheck.reason,
+        });
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -1436,6 +1467,31 @@ export async function registerRoutes(
         ) {
           req.body.platformReviewNotes = "";
           req.body.platformReviewResubmitted = false;
+        }
+
+        // Platform-specific caseNumber replacement on acceptance:
+        // - Accepting out of قيد_التدقيق_في_تراضي: the taradi request number
+        //   IS the case number in that platform, so caseNumber := taradiNumber.
+        // - Finalising labor settlement (out of أغلق_طلب_الصلح) when mohrNumber
+        //   is recorded: caseNumber := mohrNumber.
+        // (ناجز/معين acceptance still goes through storage.updateCase, which
+        // syncs caseNumber := courtCaseNumber from the request body.)
+        if (
+          existing.currentStage === "قيد_التدقيق_في_تراضي" &&
+          targetStage !== existing.currentStage
+        ) {
+          const taradi = req.body.taradiNumber || (existing as any).taradiNumber;
+          if (taradi && String(taradi).trim()) {
+            req.body.caseNumber = String(taradi).trim();
+          }
+        }
+        if (
+          existing.currentStage === "أغلق_طلب_الصلح" &&
+          targetStage !== existing.currentStage &&
+          (existing as any).mohrNumber &&
+          String((existing as any).mohrNumber).trim()
+        ) {
+          req.body.caseNumber = String((existing as any).mohrNumber).trim();
         }
 
         // Before تقديم_التظلم: require grievanceDate
