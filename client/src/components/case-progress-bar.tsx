@@ -126,8 +126,7 @@ export function CaseProgressBar({
         )}
         <div
           ref={scrollContainerRef}
-          className="flex-1 flex items-center gap-1 overflow-x-auto scroll-smooth pb-2 px-1 [&::-webkit-scrollbar]:hidden"
-          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+          className="flex-1 flex items-center gap-0.5 overflow-x-auto scroll-smooth pb-1 px-1 scrollbar-hide"
         >
           {stagesOrder.map((stage, index) => {
             const status = getStageStatus(index);
@@ -168,7 +167,7 @@ export function CaseProgressBar({
                 </div>
                 {index < stagesOrder.length - 1 && (
                   <div
-                    className={`h-1 w-6 mx-1 rounded shrink-0 ${
+                    className={`h-1 w-4 mx-0.5 rounded shrink-0 ${
                       index < currentIndex ? "bg-green-500" : "bg-muted"
                     }`}
                   />
