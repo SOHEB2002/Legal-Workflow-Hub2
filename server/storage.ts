@@ -226,6 +226,7 @@ function mapDbCase(dbCase: any): LawCase {
     struckOffDate: dbCase.struckOffDate || null,
     struckOffReopenDeadline: dbCase.struckOffReopenDeadline || null,
     appealLawyerId: dbCase.appealLawyerId || null,
+    internalReviewerId: dbCase.internalReviewerId || null,
     moeenNumber: dbCase.moeenNumber || null,
     clientRole: dbCase.clientRole || null,
     closureReason: dbCase.closureReason || null,

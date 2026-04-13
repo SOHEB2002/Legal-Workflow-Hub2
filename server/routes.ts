@@ -1470,6 +1470,32 @@ export async function registerRoutes(
         }
       }
 
+      // When moving to مراجعة_داخلية, require internalReviewerId and validate it
+      if (
+        req.body.currentStage === "مراجعة_داخلية" &&
+        existing.currentStage !== "مراجعة_داخلية"
+      ) {
+        const reviewerId = req.body.internalReviewerId;
+        if (!reviewerId || typeof reviewerId !== "string") {
+          return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
+        }
+        try {
+          const reviewer = await storage.getUser(reviewerId);
+          if (!reviewer || !reviewer.isActive) {
+            return res.status(400).json({ error: "المراجع الداخلي المختار غير صالح" });
+          }
+          if (reviewer.role === "admin_support") {
+            return res.status(400).json({ error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" });
+          }
+          const targetDeptId = req.body.departmentId || existing.departmentId;
+          if (targetDeptId && reviewer.departmentId !== targetDeptId) {
+            return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم القضية" });
+          }
+        } catch (e) {
+          console.error("[PATCH cases] reviewer validation failed", e);
+        }
+      }
+
       // Update stageHistory when stage changes
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
         const existingHistory = Array.isArray(existing.stageHistory) ? existing.stageHistory : [];
@@ -1540,6 +1566,32 @@ export async function registerRoutes(
             });
           }
         } catch (e) {}
+      }
+
+      // Notify the selected internal reviewer when transitioning to مراجعة_داخلية
+      if (
+        updated &&
+        req.body.currentStage === "مراجعة_داخلية" &&
+        existing.currentStage !== "مراجعة_داخلية" &&
+        req.body.internalReviewerId
+      ) {
+        try {
+          await storage.createNotification({
+            type: "case_assigned" as any,
+            priority: "high",
+            status: "pending",
+            title: "إسناد مراجعة داخلية",
+            message: `تم إسنادك لمراجعة القضية رقم ${updated.caseNumber} مراجعة داخلية`,
+            senderId: user.id,
+            senderName: user.name || user.id,
+            recipientId: req.body.internalReviewerId,
+            requiresResponse: false,
+            relatedType: "case",
+            relatedId: String(req.params.id),
+          });
+        } catch (e) {
+          console.error("[PATCH cases] internal reviewer notification failed", e);
+        }
       }
 
       // Notify the new department head when a transfer lands

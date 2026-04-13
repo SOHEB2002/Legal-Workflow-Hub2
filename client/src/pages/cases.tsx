@@ -1336,11 +1336,19 @@ export default function CasesPage() {
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
                   caseType={getDepartmentName(selectedCase.departmentId || "") as CaseTypeValue}
                   disabled={stageTransitioning}
-                  onMoveToNext={async (notes) => {
+                  eligibleInternalReviewers={users
+                    .filter(u =>
+                      u.isActive &&
+                      u.role !== "admin_support" &&
+                      u.departmentId === selectedCase.departmentId &&
+                      u.id !== user?.id
+                    )
+                    .map(u => ({ id: u.id, name: u.name }))}
+                  onMoveToNext={async (notes, internalReviewerId) => {
                     if (!user) return;
                     setStageTransitioning(true);
                     try {
-                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role);
+                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
                       } else {
@@ -1495,6 +1503,15 @@ export default function CasesPage() {
                     </div>
                   </div>
                   
+                  {selectedCase.currentStage === "مراجعة_داخلية" && (selectedCase as any).internalReviewerId && (
+                    <div className="border-t pt-4">
+                      <h4 className="font-semibold mb-2">المراجع الداخلي</h4>
+                      <p className="p-3 bg-muted rounded-md">
+                        {users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name || "غير معروف"}
+                      </p>
+                    </div>
+                  )}
+
                   {selectedCase.reviewNotes && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3 text-destructive">ملاحظات المراجعة</h4>

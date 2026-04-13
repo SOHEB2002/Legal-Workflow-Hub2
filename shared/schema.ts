@@ -96,6 +96,7 @@ export const lawCases = pgTable("law_cases", {
   struckOffDate: varchar("struck_off_date", { length: 50 }),
   struckOffReopenDeadline: varchar("struck_off_reopen_deadline", { length: 50 }),
   appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
+  internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
   moeenNumber: varchar("moeen_number", { length: 100 }),
   clientRole: varchar("client_role", { length: 50 }),
   closureReason: varchar("closure_reason", { length: 255 }),
@@ -1120,6 +1121,7 @@ export interface LawCase {
   struckOffDate: string | null;
   struckOffReopenDeadline: string | null;
   appealLawyerId: string | null;
+  internalReviewerId: string | null;
   moeenNumber: string | null;
   clientRole: string | null;
   isArchived: boolean;
