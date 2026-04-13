@@ -811,6 +811,9 @@ export const ReviewDecision = {
   APPROVED: "approved",
   REJECTED: "rejected",
   PARTIAL: "partial",
+  NOTES_APPLIED: "تم_الأخذ_بالملاحظات",
+  NOTES_PARTIAL: "تم_الأخذ_جزئياً",
+  NOTES_NOT_APPLIED: "لم_يتم_الأخذ",
 } as const;
 
 export type ReviewDecisionType = typeof ReviewDecision[keyof typeof ReviewDecision];
@@ -819,6 +822,9 @@ export const ReviewDecisionLabels: Record<ReviewDecisionType, string> = {
   approved: "معتمد",
   rejected: "مرفوض",
   partial: "اعتماد جزئي",
+  "تم_الأخذ_بالملاحظات": "تم الأخذ بالملاحظات",
+  "تم_الأخذ_جزئياً": "تم الأخذ بالملاحظات جزئياً",
+  "لم_يتم_الأخذ": "لم يتم الأخذ بالملاحظات",
 };
 
 // ==================== أنواع العملاء ====================

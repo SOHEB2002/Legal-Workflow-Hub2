@@ -1398,9 +1398,15 @@ export async function registerRoutes(
           if (!pDate) return res.status(400).json({ error: "يجب تحديد تاريخ التقادم" });
         }
 
-        // When الأخذ_بالملاحظات to جاهزة_للرفع: require reviewDecision
+        // When الأخذ_بالملاحظات to جاهزة_للرفع: require reviewDecision describing
+        // how the lawyer addressed the committee notes (one of three values).
         if (existing.currentStage === "الأخذ_بالملاحظات" && targetStage === "جاهزة_للرفع") {
-          if (!req.body.reviewDecision) return res.status(400).json({ error: "يجب تحديد قرار المراجعة" });
+          const allowedDecisions = ["تم_الأخذ_بالملاحظات", "تم_الأخذ_جزئياً", "لم_يتم_الأخذ"];
+          if (!req.body.reviewDecision || !allowedDecisions.includes(req.body.reviewDecision)) {
+            return res.status(400).json({
+              error: "يجب تحديد كيفية الأخذ بملاحظات اللجنة (تم/جزئياً/لم يتم)",
+            });
+          }
         }
 
         // === JUDGMENT RESULT HANDLING ===

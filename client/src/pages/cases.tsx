@@ -1328,29 +1328,45 @@ export default function CasesPage() {
                   </p>
                 </div>
               )}
-              {selectedCase.currentStage === "تحرير_صحيفة_الدعوى" &&
+              {(selectedCase.currentStage === "تحرير_صحيفة_الدعوى" ||
+                selectedCase.currentStage === "الأخذ_بالملاحظات") &&
                 selectedCase.reviewNotes &&
                 selectedCase.reviewNotes.trim() && (
-                  <div
-                    className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4 mb-4 shadow-sm"
-                    dir="rtl"
-                    data-testid="banner-internal-review-notes"
-                  >
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="w-6 h-6 text-amber-700 shrink-0 mt-0.5" />
-                      <div className="flex-1">
-                        <h4 className="font-bold text-amber-900 mb-1">ملاحظات المراجع الداخلي</h4>
-                        {(selectedCase as any).internalReviewerId && (
-                          <p className="text-xs text-amber-700 mb-2">
-                            المراجع: {users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name || "غير معروف"}
-                          </p>
-                        )}
-                        <p className="text-sm text-amber-900 whitespace-pre-wrap">
-                          {selectedCase.reviewNotes}
-                        </p>
+                  (() => {
+                    const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
+                    const title = isCommittee ? "ملاحظات لجنة المراجعة" : "ملاحظات المراجع الداخلي";
+                    let reviewerName: string | undefined;
+                    if (isCommittee) {
+                      const lastEntry = [...(selectedCase.stageHistory || [])]
+                        .reverse()
+                        .find((h: any) => h.stage === "الأخذ_بالملاحظات") as any;
+                      reviewerName = lastEntry?.userName;
+                    } else if ((selectedCase as any).internalReviewerId) {
+                      reviewerName = users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name;
+                    }
+                    return (
+                      <div
+                        className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4 mb-4 shadow-sm"
+                        dir="rtl"
+                        data-testid="banner-review-notes"
+                      >
+                        <div className="flex items-start gap-3">
+                          <AlertTriangle className="w-6 h-6 text-amber-700 shrink-0 mt-0.5" />
+                          <div className="flex-1">
+                            <h4 className="font-bold text-amber-900 mb-1">{title}</h4>
+                            {reviewerName && (
+                              <p className="text-xs text-amber-700 mb-2">
+                                المراجع: {reviewerName}
+                              </p>
+                            )}
+                            <p className="text-sm text-amber-900 whitespace-pre-wrap">
+                              {selectedCase.reviewNotes}
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
+                    );
+                  })()
                 )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
@@ -1362,6 +1378,12 @@ export default function CasesPage() {
                   disabled={stageTransitioning}
                   currentUserId={user?.id}
                   caseInternalReviewerId={(selectedCase as any).internalReviewerId || null}
+                  isAssignedLawyer={
+                    !!user && (
+                      selectedCase.primaryLawyerId === user.id ||
+                      (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
+                    )
+                  }
                   eligibleInternalReviewers={users
                     .filter(u =>
                       u.isActive &&
@@ -1370,11 +1392,11 @@ export default function CasesPage() {
                       u.id !== user?.id
                     )
                     .map(u => ({ id: u.id, name: u.name }))}
-                  onMoveToNext={async (notes, internalReviewerId) => {
+                  onMoveToNext={async (notes, internalReviewerId, reviewDecision) => {
                     if (!user) return;
                     setStageTransitioning(true);
                     try {
-                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId);
+                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
                       } else {
@@ -2147,30 +2169,43 @@ export default function CasesPage() {
                 </TabsContent>
 
                 <TabsContent value="notes" className="mt-4 space-y-4">
-                  {selectedCase?.reviewNotes && selectedCase.reviewNotes.trim() && (
-                    <div
-                      className="border border-amber-300 bg-amber-50 rounded-lg p-4"
-                      dir="rtl"
-                      data-testid="notes-tab-internal-review"
-                    >
-                      <div className="flex items-center gap-2 mb-2">
-                        <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
-                        <h4 className="font-bold text-amber-900">ملاحظات المراجعة الداخلية</h4>
+                  {selectedCase?.reviewNotes && selectedCase.reviewNotes.trim() && (() => {
+                    const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
+                    const title = isCommittee ? "ملاحظات لجنة المراجعة" : "ملاحظات المراجعة الداخلية";
+                    const history = (selectedCase.stageHistory || []) as any[];
+                    let reviewerName: string | undefined;
+                    let timestamp: string | undefined;
+                    if (isCommittee) {
+                      const entry = [...history].reverse().find((h: any) => h.stage === "الأخذ_بالملاحظات");
+                      reviewerName = entry?.userName;
+                      timestamp = entry?.timestamp;
+                    } else {
+                      if ((selectedCase as any).internalReviewerId) {
+                        reviewerName = users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name;
+                      }
+                      const entry = [...history].reverse().find((h: any) => h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم");
+                      timestamp = entry?.timestamp;
+                    }
+                    return (
+                      <div
+                        className="border border-amber-300 bg-amber-50 rounded-lg p-4"
+                        dir="rtl"
+                        data-testid="notes-tab-review"
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
+                          <h4 className="font-bold text-amber-900">{title}</h4>
+                        </div>
+                        {(reviewerName || timestamp) && (
+                          <p className="text-xs text-amber-700 mb-2">
+                            {reviewerName ? `المراجع: ${reviewerName}` : ""}
+                            {timestamp ? ` — ${new Date(timestamp).toLocaleString("ar")}` : ""}
+                          </p>
+                        )}
+                        <p className="text-sm text-amber-900 whitespace-pre-wrap">{selectedCase.reviewNotes}</p>
                       </div>
-                      {(selectedCase as any).internalReviewerId && (
-                        <p className="text-xs text-amber-700 mb-2">
-                          المراجع: {users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name || "غير معروف"}
-                          {(() => {
-                            const lastSendBack = [...(selectedCase.stageHistory || [])]
-                              .reverse()
-                              .find((h: any) => h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم");
-                            return lastSendBack?.timestamp ? ` — ${new Date(lastSendBack.timestamp).toLocaleString("ar")}` : "";
-                          })()}
-                        </p>
-                      )}
-                      <p className="text-sm text-amber-900 whitespace-pre-wrap">{selectedCase.reviewNotes}</p>
-                    </div>
-                  )}
+                    );
+                  })()}
                   <CaseNotesTab caseId={selectedCase?.id || ""} />
                 </TabsContent>
 
@@ -2187,30 +2222,54 @@ export default function CasesPage() {
                 <TabsContent value="actions" className="mt-4">
                   <div className="space-y-3">
                     {(() => {
-                      const sendBackEntry = [...(selectedCase.stageHistory || [])]
-                        .reverse()
-                        .find((h: any) =>
-                          (h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم") &&
-                          h.notes && String(h.notes).trim()
-                        ) as any;
-                      if (!sendBackEntry) return null;
-                      return (
+                      const history = [...(selectedCase.stageHistory || [])].reverse() as any[];
+                      const internalEntry = history.find((h: any) =>
+                        (h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم") &&
+                        h.notes && String(h.notes).trim()
+                      );
+                      const committeeEntry = history.find((h: any) =>
+                        h.stage === "الأخذ_بالملاحظات" && h.notes && String(h.notes).trim()
+                      ) || (selectedCase.currentStage === "الأخذ_بالملاحظات" && selectedCase.reviewNotes
+                        ? history.find((h: any) => h.stage === "الأخذ_بالملاحظات")
+                        : null);
+                      const blocks: Array<{ key: string; title: string; name: string; ts?: string; notes: string }> = [];
+                      if (committeeEntry) {
+                        blocks.push({
+                          key: "committee",
+                          title: "إرجاع من لجنة المراجعة",
+                          name: committeeEntry.userName || "لجنة المراجعة",
+                          ts: committeeEntry.timestamp,
+                          notes: committeeEntry.notes || selectedCase.reviewNotes || "",
+                        });
+                      }
+                      if (internalEntry) {
+                        blocks.push({
+                          key: "internal",
+                          title: "إرجاع من المراجعة الداخلية",
+                          name: internalEntry.userName || "المراجع الداخلي",
+                          ts: internalEntry.timestamp,
+                          notes: internalEntry.notes,
+                        });
+                      }
+                      if (blocks.length === 0) return null;
+                      return blocks.map((b) => (
                         <div
+                          key={b.key}
                           className="border-r-4 border-amber-500 bg-amber-50 rounded-lg p-4"
                           dir="rtl"
-                          data-testid="actions-tab-internal-review-timeline"
+                          data-testid={`actions-tab-${b.key}-review-timeline`}
                         >
                           <div className="flex items-center gap-2 mb-1">
                             <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
-                            <span className="font-semibold text-amber-900 text-sm">إرجاع من المراجعة الداخلية</span>
+                            <span className="font-semibold text-amber-900 text-sm">{b.title}</span>
                           </div>
                           <p className="text-xs text-amber-700 mb-2">
-                            {sendBackEntry.userName || "المراجع الداخلي"}
-                            {sendBackEntry.timestamp ? ` — ${new Date(sendBackEntry.timestamp).toLocaleString("ar")}` : ""}
+                            {b.name}
+                            {b.ts ? ` — ${new Date(b.ts).toLocaleString("ar")}` : ""}
                           </p>
-                          <p className="text-sm text-amber-900 whitespace-pre-wrap">{sendBackEntry.notes}</p>
+                          <p className="text-sm text-amber-900 whitespace-pre-wrap">{b.notes}</p>
                         </div>
-                      );
+                      ));
                     })()}
                     {canAssign(selectedCase) && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">

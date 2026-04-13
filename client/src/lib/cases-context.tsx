@@ -20,7 +20,7 @@ interface CasesContextType {
   markReadyToSubmit: (id: string) => void;
   markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
-  moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
+  moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string, reviewDecision?: string) => Promise<boolean>;
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
   addComment: (caseId: string, userId: string, userName: string, content: string) => Promise<void>;
@@ -308,7 +308,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const getCasesByClient = (clientId: string) =>
     cases.filter((c) => c.clientId === clientId);
 
-  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string, internalReviewerId?: string): Promise<boolean> => {
+  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string, internalReviewerId?: string, reviewDecision?: string): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
@@ -336,6 +336,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
     if ((nextStage === "مراجعة_داخلية" || nextStage === "مراجعة_داخلية_للتظلم") && internalReviewerId) {
       updateData.internalReviewerId = internalReviewerId;
+    }
+
+    if (normalized === "الأخذ_بالملاحظات" && nextStage === "جاهزة_للرفع" && reviewDecision) {
+      updateData.reviewDecision = reviewDecision;
     }
 
     if (nextStage === "مقفلة") {
