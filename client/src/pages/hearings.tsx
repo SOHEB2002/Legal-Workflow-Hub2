@@ -447,13 +447,24 @@ export default function HearingsPage() {
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
-    if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "" };
+    if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "", clientRole: "" };
+    const rawRole = (caseData as any).clientRole as string | undefined;
+    // For new (un-court-registered) cases, the firm always represents the
+    // plaintiff side, regardless of whether clientRole was filled in.
+    const clientRole = caseData.caseClassification === "قضية_جديدة"
+      ? "مدعي"
+      : rawRole === "مدعى_عليه"
+      ? "مدعى عليه"
+      : rawRole === "مدعي"
+      ? "مدعي"
+      : "";
     return {
       number: caseData.caseNumber,
       client: getClientName(caseData.clientId),
       plaintiff: (caseData as any).plaintiffName || "",
       opponent: caseData.opponentName || "",
       classification: caseData.caseClassification || "",
+      clientRole,
     };
   };
 
@@ -810,8 +821,9 @@ export default function HearingsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="text-center">التاريخ والوقت</TableHead>
-                    <TableHead className="text-center">العميل / صفة العميل</TableHead>
-                    <TableHead className="text-center">الخصم</TableHead>
+                    <TableHead className="text-center">اسم المدعي</TableHead>
+                    <TableHead className="text-center">اسم المدعى عليه</TableHead>
+                    <TableHead className="text-center">صفة العميل</TableHead>
                     <TableHead className="text-center">القضية والمحكمة</TableHead>
                     <TableHead className="text-center">الحالة / النتيجة</TableHead>
                     <TableHead className="text-center">الإجراءات</TableHead>
@@ -833,21 +845,17 @@ export default function HearingsPage() {
                             </div>
                           </TableCell>
                           <TableCell className="text-center">
-                            <div className="flex flex-col items-center gap-1">
-                              <p className="text-sm font-medium">{caseInfo.plaintiff || caseInfo.client || "-"}</p>
-                              {caseInfo.classification && (
-                                <Badge variant="outline" className={`text-xs ${
-                                  caseInfo.classification === "قضية_مقيدة"
-                                    ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"
-                                    : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
-                                }`}>
-                                  {caseInfo.classification === "قضية_مقيدة" ? "قضية مقيدة" : "قضية جديدة"}
-                                </Badge>
-                              )}
-                            </div>
+                            <span className="text-sm"><BidiText>{caseInfo.plaintiff || "-"}</BidiText></span>
                           </TableCell>
                           <TableCell className="text-center">
-                            <span className="text-sm">{caseInfo.opponent || "-"}</span>
+                            <span className="text-sm"><BidiText>{caseInfo.opponent || "-"}</BidiText></span>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {caseInfo.clientRole ? (
+                              <Badge variant="outline" className="text-xs">{caseInfo.clientRole}</Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">-</span>
+                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             <div className="flex flex-col items-center gap-1">
