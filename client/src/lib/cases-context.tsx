@@ -77,13 +77,31 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const { getDepartmentName } = useDepartments();
 
-  // Resolve the department label (e.g. "تجاري" / "عام" / "إداري") from the
-  // case's departmentId so getStagesForClassification picks the correct path.
-  // lawCase.caseType holds the case sub-type (e.g. "بيع وتوريد") and must NOT
-  // be used here — that's how we ended up on the general path for commercial
-  // cases and got "يجب إدخال رقم القيد في ناجز".
-  const resolveCasePath = (lawCase: LawCase) =>
-    getDepartmentName(lawCase.departmentId || "") as any;
+  // Resolve the stage-order array for a case. Department resolution via
+  // getDepartmentName is the primary path ("تجاري" / "عام" / "عمالي" /
+  // "إداري"), but it returns "غير محدد" for any id that isn't in its
+  // hard-coded list — which silently routed commercial cases onto the
+  // general path and made moveToNextStage return false with no PATCH when
+  // the current stage (e.g. قيد_التدقيق_في_تراضي) didn't exist in that
+  // path. To make the client robust against department resolution failures,
+  // if the primary lookup doesn't contain the case's current stage we fall
+  // back to every known path and pick the first one that does.
+  const resolveStagesOrderForCase = (lawCase: LawCase): CaseStageValue[] => {
+    const classification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
+    const deptLabel = getDepartmentName(lawCase.departmentId || "");
+    const primary = getStagesForClassification(classification, deptLabel as any);
+    if (primary.indexOf(lawCase.currentStage) >= 0) return primary;
+    const candidates = [
+      getStagesForClassification(classification, "تجاري" as any),
+      getStagesForClassification(classification, "عام" as any),
+      getStagesForClassification(classification, "عمالي" as any),
+      getStagesForClassification(classification, "إداري" as any),
+    ];
+    for (const c of candidates) {
+      if (c.indexOf(lawCase.currentStage) >= 0) return c;
+    }
+    return primary;
+  };
 
   const fetchCases = useCallback(async () => {
     try {
@@ -331,10 +349,26 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
+    const stagesOrder = resolveStagesOrderForCase(lawCase);
     const effectiveClassification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification, resolveCasePath(lawCase));
     const currentIndex = stagesOrder.indexOf(normalized);
-    if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) return false;
+    if (currentIndex === -1) {
+      console.error("[moveToNextStage] current stage not found in any path", {
+        caseId: id,
+        currentStage: lawCase.currentStage,
+        normalized,
+        departmentId: lawCase.departmentId,
+        classification: effectiveClassification,
+      });
+      return false;
+    }
+    if (currentIndex >= stagesOrder.length - 1) {
+      console.warn("[moveToNextStage] already at last stage of its path", {
+        caseId: id,
+        currentStage: lawCase.currentStage,
+      });
+      return false;
+    }
 
     const nextStage = stagesOrder[currentIndex + 1];
     const newTransition = createStageTransitionRecord(nextStage, userId, userName, notes);
@@ -383,8 +417,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
 
     const normalized = normalizeCaseStage(lawCase.currentStage);
-    const effectiveClassification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
-    const stagesOrder = getStagesForClassification(effectiveClassification, resolveCasePath(lawCase));
+    const stagesOrder = resolveStagesOrderForCase(lawCase);
     const currentIndex = stagesOrder.indexOf(normalized);
     if (currentIndex <= 0) return false;
 
