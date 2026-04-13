@@ -199,6 +199,7 @@ function mapDbCase(dbCase: any): LawCase {
     whatsappGroupLink: dbCase.whatsappGroupLink || "",
     googleDriveFolderId: dbCase.googleDriveFolderId || "",
     reviewNotes: dbCase.reviewNotes || "",
+    platformReviewNotes: dbCase.platformReviewNotes || "",
     reviewDecision: dbCase.reviewDecision,
     reviewActionTaken: dbCase.reviewActionTaken,
     priority: dbCase.priority || "متوسط",

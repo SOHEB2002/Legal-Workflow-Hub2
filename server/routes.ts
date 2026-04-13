@@ -1411,6 +1411,17 @@ export async function registerRoutes(
           }
         }
 
+        // Clear platformReviewNotes when leaving any platform-review stage —
+        // acceptance means the platform has no remaining notes.
+        if (
+          (existing.currentStage === "قيد_التدقيق_في_تراضي" ||
+            existing.currentStage === "قيد_التدقيق_في_ناجز" ||
+            existing.currentStage === "قيد_التدقيق_في_معين") &&
+          targetStage !== existing.currentStage
+        ) {
+          req.body.platformReviewNotes = "";
+        }
+
         // Before تقديم_التظلم: require grievanceDate
         if (targetStage === "تقديم_التظلم") {
           const gDate = req.body.grievanceDate || (existing as any).grievanceDate;

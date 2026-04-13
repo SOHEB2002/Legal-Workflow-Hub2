@@ -1329,25 +1329,12 @@ export default function CasesPage() {
                 </div>
               )}
               {(selectedCase.currentStage === "تحرير_صحيفة_الدعوى" ||
-                selectedCase.currentStage === "الأخذ_بالملاحظات" ||
-                selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
-                selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
-                selectedCase.currentStage === "قيد_التدقيق_في_معين") &&
+                selectedCase.currentStage === "الأخذ_بالملاحظات") &&
                 selectedCase.reviewNotes &&
                 selectedCase.reviewNotes.trim() && (
                   (() => {
                     const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
-                    const isPlatform =
-                      selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
-                      selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
-                      selectedCase.currentStage === "قيد_التدقيق_في_معين";
-                    const title = isPlatform
-                      ? selectedCase.currentStage === "قيد_التدقيق_في_تراضي"
-                        ? "ملاحظات منصة تراضي"
-                        : selectedCase.currentStage === "قيد_التدقيق_في_ناجز"
-                        ? "ملاحظات منصة ناجز"
-                        : "ملاحظات منصة معين"
-                      : isCommittee
+                    const title = isCommittee
                       ? "ملاحظات لجنة المراجعة"
                       : "ملاحظات المراجع الداخلي";
                     let reviewerName: string | undefined;
@@ -1383,6 +1370,43 @@ export default function CasesPage() {
                     );
                   })()
                 )}
+
+              {(selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
+                selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
+                selectedCase.currentStage === "قيد_التدقيق_في_معين") && (
+                <div
+                  className="bg-indigo-50 border-2 border-indigo-400 rounded-lg p-4 mb-4 shadow-sm"
+                  dir="rtl"
+                  data-testid="banner-platform-review-notes"
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-6 h-6 text-indigo-700 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="font-bold text-indigo-900 mb-1">
+                        {selectedCase.currentStage === "قيد_التدقيق_في_تراضي"
+                          ? "ملاحظات منصة تراضي"
+                          : selectedCase.currentStage === "قيد_التدقيق_في_ناجز"
+                          ? "ملاحظات منصة ناجز"
+                          : "ملاحظات منصة معين"}
+                      </h4>
+                      {(selectedCase as any).platformReviewNotes && String((selectedCase as any).platformReviewNotes).trim() ? (
+                        <>
+                          <p className="text-xs text-indigo-700 mb-2 font-semibold">
+                            حالة الطلب: يوجد ملاحظات من المنصة
+                          </p>
+                          <p className="text-sm text-indigo-900 whitespace-pre-wrap">
+                            {(selectedCase as any).platformReviewNotes}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-indigo-700">
+                          حالة الطلب: قيد الانتظار — لا توجد ملاحظات من المنصة حتى الآن.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
                 <CaseProgressBar
@@ -1451,7 +1475,7 @@ export default function CasesPage() {
                     setStageTransitioning(true);
                     try {
                       await updateCase(selectedCase.id, {
-                        reviewNotes: platformNotes,
+                        platformReviewNotes: platformNotes,
                       } as any);
                       toast({ title: "تم حفظ ملاحظات المنصة" });
                     } catch (err) {
@@ -2229,6 +2253,22 @@ export default function CasesPage() {
                 </TabsContent>
 
                 <TabsContent value="notes" className="mt-4 space-y-4">
+                  {(selectedCase as any)?.platformReviewNotes &&
+                    String((selectedCase as any).platformReviewNotes).trim() && (
+                      <div
+                        className="border border-indigo-300 bg-indigo-50 rounded-lg p-4"
+                        dir="rtl"
+                        data-testid="notes-tab-platform-review"
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="w-5 h-5 text-indigo-700 shrink-0" />
+                          <h4 className="font-bold text-indigo-900">ملاحظات المنصة</h4>
+                        </div>
+                        <p className="text-sm text-indigo-900 whitespace-pre-wrap">
+                          {(selectedCase as any).platformReviewNotes}
+                        </p>
+                      </div>
+                    )}
                   {selectedCase?.reviewNotes && selectedCase.reviewNotes.trim() && (() => {
                     const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
                     const title = isCommittee ? "ملاحظات لجنة المراجعة" : "ملاحظات المراجعة الداخلية";
