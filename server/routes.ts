@@ -2067,6 +2067,11 @@ export async function registerRoutes(
           if (caseForStage && !caseForStage.isArchived && caseForStage.currentStage !== "مقفلة") {
             const hearingType = validatedData.hearingType || "محكمة";
             const currentStage = caseForStage.currentStage as string;
+            console.log("[POST hearings] auto-stage check", {
+              caseId: caseForStage.id,
+              currentStage,
+              hearingType,
+            });
 
             if (hearingType === "تراضي" || hearingType === "تسوية_ودية") {
               const conciliationFromStages = ["قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_تراضي", "أغلق_طلب_الصلح"];
@@ -2079,9 +2084,15 @@ export async function registerRoutes(
                     { stage: "مداولة_الصلح", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة صلح" },
                   ],
                 } as any);
+                console.log("[POST hearings] auto-stage → مداولة_الصلح");
               }
             } else if (hearingType === "محكمة") {
-              const courtFromStages = ["أغلق_طلب_الصلح", "قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_معين"];
+              const courtFromStages = [
+                "أغلق_طلب_الصلح",
+                "قيد_التدقيق_في_ناجز",
+                "قيد_التدقيق_في_معين",
+                "قيد_التدقيق_في_تراضي",
+              ];
               if (courtFromStages.includes(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
                 await storage.updateCase(caseForStage.id, {
@@ -2091,11 +2102,12 @@ export async function registerRoutes(
                     { stage: "منظورة", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة محكمة" },
                   ],
                 } as any);
+                console.log("[POST hearings] auto-stage → منظورة");
               }
             }
           }
         } catch (e) {
-          console.error("Error auto-transitioning stage on hearing create:", e);
+          console.error("[POST hearings] auto-stage failed", e);
         }
       }
 

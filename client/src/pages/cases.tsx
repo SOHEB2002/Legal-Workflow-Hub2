@@ -2544,17 +2544,6 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {canClose(selectedCase) && (
-                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
-                        <div>
-                          <p className="font-medium text-sm">إغلاق القضية</p>
-                          <p className="text-xs text-muted-foreground">إغلاق القضية وأرشفتها</p>
-                        </div>
-                        <Button size="sm" variant="outline" className="border-orange-500 text-orange-600" data-testid={`button-close-details-${selectedCase.id}`} onClick={() => { handleClose(selectedCase); }}>
-                          <Archive className="w-4 h-4 ml-1" />إغلاق
-                        </Button>
-                      </div>
-                    )}
                     {isDeptHead && selectedCase.departmentId === user?.departmentId && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
                         <div>
