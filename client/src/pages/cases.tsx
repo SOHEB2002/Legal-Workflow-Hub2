@@ -1329,12 +1329,27 @@ export default function CasesPage() {
                 </div>
               )}
               {(selectedCase.currentStage === "تحرير_صحيفة_الدعوى" ||
-                selectedCase.currentStage === "الأخذ_بالملاحظات") &&
+                selectedCase.currentStage === "الأخذ_بالملاحظات" ||
+                selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
+                selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
+                selectedCase.currentStage === "قيد_التدقيق_في_معين") &&
                 selectedCase.reviewNotes &&
                 selectedCase.reviewNotes.trim() && (
                   (() => {
                     const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
-                    const title = isCommittee ? "ملاحظات لجنة المراجعة" : "ملاحظات المراجع الداخلي";
+                    const isPlatform =
+                      selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
+                      selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
+                      selectedCase.currentStage === "قيد_التدقيق_في_معين";
+                    const title = isPlatform
+                      ? selectedCase.currentStage === "قيد_التدقيق_في_تراضي"
+                        ? "ملاحظات منصة تراضي"
+                        : selectedCase.currentStage === "قيد_التدقيق_في_ناجز"
+                        ? "ملاحظات منصة ناجز"
+                        : "ملاحظات منصة معين"
+                      : isCommittee
+                      ? "ملاحظات لجنة المراجعة"
+                      : "ملاحظات المراجع الداخلي";
                     let reviewerName: string | undefined;
                     if (isCommittee) {
                       const lastEntry = [...(selectedCase.stageHistory || [])]
@@ -1394,11 +1409,18 @@ export default function CasesPage() {
                     .map(u => ({ id: u.id, name: u.name }))}
                   onMoveToNext={async (notes, internalReviewerId, reviewDecision, extraFields) => {
                     if (!user) return;
+                    const stageBefore = selectedCase.currentStage;
                     setStageTransitioning(true);
                     try {
                       const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
+                        if (stageBefore === "قيد_التدقيق_في_تراضي") {
+                          toast({
+                            title: "يرجى إضافة جلسة تراضي",
+                            description: "يرجى إضافة جلسة تراضي لنقل القضية لمرحلة مداولة الصلح",
+                          });
+                        }
                       } else {
                         toast({ title: "لا يمكن نقل القضية", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
                       }
@@ -1420,6 +1442,20 @@ export default function CasesPage() {
                       }
                     } catch (err) {
                       toast({ title: "فشل إرجاع القضية", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setStageTransitioning(false);
+                    }
+                  }}
+                  onPlatformReviewAddNotes={async (platformNotes) => {
+                    if (!user) return;
+                    setStageTransitioning(true);
+                    try {
+                      await updateCase(selectedCase.id, {
+                        reviewNotes: platformNotes,
+                      } as any);
+                      toast({ title: "تم حفظ ملاحظات المنصة" });
+                    } catch (err) {
+                      toast({ title: "تعذّر حفظ الملاحظات", description: extractApiError(err), variant: "destructive" });
                     } finally {
                       setStageTransitioning(false);
                     }
@@ -1553,6 +1589,30 @@ export default function CasesPage() {
                         <p className="font-medium">
                           <DualDateDisplay date={selectedCase.responseDeadline} compact />
                         </p>
+                      </div>
+                    )}
+                    {(selectedCase as any).taradiNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم الطلب في تراضي</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).taradiNumber}</LtrInline></p>
+                      </div>
+                    )}
+                    {(selectedCase as any).najizNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم القيد في ناجز</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).najizNumber}</LtrInline></p>
+                      </div>
+                    )}
+                    {(selectedCase as any).moeenNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم القيد في معين</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).moeenNumber}</LtrInline></p>
+                      </div>
+                    )}
+                    {(selectedCase as any).mohrNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم التسوية</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).mohrNumber}</LtrInline></p>
                       </div>
                     )}
                   </div>

@@ -21,6 +21,7 @@ interface CaseProgressBarProps {
   onMoveToPrevious: (notes: string, internalReviewerId?: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
+  onPlatformReviewAddNotes?: (notes: string) => void;
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
@@ -39,6 +40,7 @@ export function CaseProgressBar({
   onMoveToPrevious,
   onSkipDataCompletion,
   onInternalReviewSendBack,
+  onPlatformReviewAddNotes,
   userRole,
   disabled = false,
   caseClassification,
@@ -55,6 +57,8 @@ export function CaseProgressBar({
   const [selectedReviewerId, setSelectedReviewerId] = useState("");
   const [sendBackNotes, setSendBackNotes] = useState("");
   const [platformNumber, setPlatformNumber] = useState("");
+  const [courtCaseNumber, setCourtCaseNumber] = useState("");
+  const [platformNotes, setPlatformNotes] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قضية_جديدة";
   const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
@@ -97,6 +101,17 @@ export function CaseProgressBar({
   const isAtCommitteeNotes = normalizedStage === "الأخذ_بالملاحظات";
   const isHeadOrManagerRole = userRole === "department_head" || userRole === "branch_manager";
   const canActOnCommitteeNotes = isAtCommitteeNotes && (isAssignedLawyer || isHeadOrManagerRole);
+
+  const platformReviewInfo: { kind: "تراضي" | "ناجز" | "معين"; requireCourtNumber: boolean } | null =
+    normalizedStage === "قيد_التدقيق_في_تراضي"
+      ? { kind: "تراضي", requireCourtNumber: false }
+      : normalizedStage === "قيد_التدقيق_في_ناجز"
+      ? { kind: "ناجز", requireCourtNumber: true }
+      : normalizedStage === "قيد_التدقيق_في_معين"
+      ? { kind: "معين", requireCourtNumber: true }
+      : null;
+  const isAtPlatformReview = !!platformReviewInfo;
+  const canActOnPlatformReview = isAtPlatformReview && (isAssignedLawyer || isHeadOrManagerRole);
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
   const canActOnInternalReview = isReviewerActor || isHeadOrManager;
@@ -130,6 +145,22 @@ export function CaseProgressBar({
 
   const handleCommitteeNotesDecision = (decision: string) => {
     onMoveToNext("", undefined, decision);
+  };
+
+  const handlePlatformReviewAccept = () => {
+    if (!platformReviewInfo) return;
+    if (platformReviewInfo.requireCourtNumber && !courtCaseNumber.trim()) return;
+    const extraFields = platformReviewInfo.requireCourtNumber
+      ? { courtCaseNumber: courtCaseNumber.trim() }
+      : undefined;
+    onMoveToNext("", undefined, undefined, extraFields);
+    setCourtCaseNumber("");
+  };
+
+  const handlePlatformReviewAddNotes = () => {
+    if (!onPlatformReviewAddNotes || !platformNotes.trim()) return;
+    onPlatformReviewAddNotes(platformNotes.trim());
+    setPlatformNotes("");
   };
 
   const handleMovePrev = () => {
@@ -218,6 +249,102 @@ export function CaseProgressBar({
         <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground py-1">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>جاري تحديث المرحلة...</span>
+        </div>
+      )}
+
+      {canActOnPlatformReview && platformReviewInfo && (
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                data-testid="button-platform-review-accept"
+              >
+                <Check className="w-4 h-4 ml-1" />
+                تم القبول
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  تأكيد قبول {platformReviewInfo.kind === "تراضي" ? "منصة تراضي" : platformReviewInfo.kind === "ناجز" ? "منصة ناجز" : "منصة معين"}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {platformReviewInfo.requireCourtNumber
+                    ? "يرجى إدخال رقم الدعوى في المحكمة. سيتم استبدال رقم القضية بهذا الرقم."
+                    : "سيتم الانتقال إلى المرحلة التالية."}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              {platformReviewInfo.requireCourtNumber && (
+                <div className="mt-3 space-y-1" dir="rtl">
+                  <label className="text-sm font-semibold">
+                    رقم الدعوى في المحكمة <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={courtCaseNumber}
+                    onChange={(e) => setCourtCaseNumber(e.target.value)}
+                    placeholder="أدخل رقم الدعوى الصادر من المحكمة"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    data-testid="input-court-case-number"
+                  />
+                </div>
+              )}
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel onClick={() => setCourtCaseNumber("")}>إلغاء</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handlePlatformReviewAccept}
+                  disabled={platformReviewInfo.requireCourtNumber && !courtCaseNumber.trim()}
+                >
+                  تأكيد القبول
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {onPlatformReviewAddNotes && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={disabled}
+                  className="border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+                  data-testid="button-platform-review-notes"
+                >
+                  <AlertTriangle className="w-4 h-4 ml-1" />
+                  يوجد ملاحظات من المنصة
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>ملاحظات من المنصة</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    سيتم حفظ الملاحظات وإبقاء القضية في نفس المرحلة لحين المعالجة وإعادة التقديم.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <Textarea
+                  placeholder="اكتب ملاحظات المنصة..."
+                  value={platformNotes}
+                  onChange={(e) => setPlatformNotes(e.target.value)}
+                  className="mt-2"
+                  data-testid="input-platform-notes"
+                />
+                <AlertDialogFooter className="gap-2">
+                  <AlertDialogCancel onClick={() => setPlatformNotes("")}>إلغاء</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handlePlatformReviewAddNotes}
+                    disabled={!platformNotes.trim()}
+                  >
+                    حفظ الملاحظات
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
       )}
 
@@ -486,7 +613,7 @@ export function CaseProgressBar({
           </AlertDialog>
         )}
 
-        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && (
+        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtPlatformReview && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button

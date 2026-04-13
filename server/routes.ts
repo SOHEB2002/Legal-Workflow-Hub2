@@ -146,14 +146,16 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
 
   // ==================== GENERAL PATH (after ready_to_submit) ====================
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "قيد_التدقيق_في_ناجز", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "قيد_التدقيق_في_ناجز", to: "مداولة_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  { from: "قيد_التدقيق_في_ناجز", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 
   // ==================== COMMERCIAL PATH (taradi then najiz) ====================
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_تراضي", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "قيد_التدقيق_في_تراضي", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "قيد_التدقيق_في_تراضي", to: "مداولة_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
   // ==================== LABOR PATH (settlement before drafting) ====================
   { from: "دراسة", to: "توجيه_العميل_بالتسوية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
@@ -172,7 +174,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "انتظار_رد_التظلم", to: "تحصيل", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "انتظار_رد_التظلم", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "قيد_التدقيق_في_معين", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "قيد_التدقيق_في_معين", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
   // ==================== EXISTING CASE PATH (memo before study) ====================
   { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
@@ -1390,6 +1392,23 @@ export async function registerRoutes(
         if (targetStage === "قيد_التدقيق_في_معين") {
           const moeen = req.body.moeenNumber || (existing as any).moeenNumber;
           if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
+        }
+
+        // Accepting out of a najiz/moeen review stage: the lawyer must enter
+        // the court-issued case number, which then replaces caseNumber.
+        // (تراضي doesn't require this — the taradi number itself is the
+        // platform's case number.)
+        if (
+          (existing.currentStage === "قيد_التدقيق_في_ناجز" ||
+            existing.currentStage === "قيد_التدقيق_في_معين") &&
+          targetStage !== existing.currentStage
+        ) {
+          const courtCaseNumber = typeof req.body.courtCaseNumber === "string"
+            ? req.body.courtCaseNumber.trim()
+            : "";
+          if (!courtCaseNumber) {
+            return res.status(400).json({ error: "يرجى إدخال رقم الدعوى في المحكمة" });
+          }
         }
 
         // Before تقديم_التظلم: require grievanceDate
