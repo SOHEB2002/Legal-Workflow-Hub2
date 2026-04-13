@@ -75,23 +75,15 @@ export function CaseProgressBar({
     setSkipNotes("");
   };
 
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const currentStageRef = useRef<HTMLDivElement>(null);
-  const showScrollArrows = stagesOrder.length > 10;
 
   useEffect(() => {
-    if (currentStageRef.current && scrollContainerRef.current) {
-      currentStageRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
-    }
+    currentStageRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "center",
+    });
   }, [currentIndex, stagesOrder.length]);
-
-  const scrollByAmount = (delta: number) => {
-    scrollContainerRef.current?.scrollBy({ left: delta, behavior: "smooth" });
-  };
 
   return (
     <div className="w-full space-y-4" dir="rtl">
@@ -110,85 +102,54 @@ export function CaseProgressBar({
           <p className="text-amber-700 text-sm">{reviewNotes}</p>
         </div>
       )}
-      <div className="relative flex items-center">
-        {showScrollArrows && (
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-7 w-7 shrink-0 rounded-full shadow-sm"
-            onClick={() => scrollByAmount(150)}
-            data-testid="button-scroll-stages-right"
-            aria-label="تمرير لليمين"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        )}
-        <div
-          ref={scrollContainerRef}
-          className="flex-1 flex items-center gap-0.5 overflow-x-auto scroll-smooth pb-1 px-1 scrollbar-hide"
-        >
-          {stagesOrder.map((stage, index) => {
-            const status = getStageStatus(index);
-            const isCurrent = status === "current";
-            return (
-              <div key={stage} className="flex items-center shrink-0">
+      <div className="flex items-center gap-2 overflow-x-auto scroll-smooth pb-2 scrollbar-hide">
+        {stagesOrder.map((stage, index) => {
+          const status = getStageStatus(index);
+          const isCurrent = status === "current";
+          return (
+            <div key={stage} className="flex items-center shrink-0">
+              <div
+                ref={isCurrent ? currentStageRef : undefined}
+                className="flex flex-col items-center shrink-0"
+              >
                 <div
-                  ref={isCurrent ? currentStageRef : undefined}
-                  className="flex flex-col items-center shrink-0"
+                  className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all ${
+                    status === "completed"
+                      ? "bg-green-500 text-white"
+                      : isCurrent
+                      ? "bg-accent text-accent-foreground ring-4 ring-accent/30"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                  data-testid={`stage-indicator-${index}`}
                 >
-                  <div
-                    className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                      status === "completed"
-                        ? "bg-green-500 text-white"
-                        : isCurrent
-                        ? "bg-accent text-accent-foreground ring-4 ring-accent/30"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                    data-testid={`stage-indicator-${index}`}
-                  >
-                    {status === "completed" ? (
-                      <Check className="w-4 h-4" />
-                    ) : (
-                      index + 1
-                    )}
-                  </div>
-                  <span
-                    className={`mt-1 text-[10px] text-center break-words max-w-[60px] leading-tight ${
-                      isCurrent
-                        ? "font-bold text-accent"
-                        : status === "completed"
-                        ? "text-green-600 dark:text-green-400"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {getStageLabel(stage)}
-                  </span>
+                  {status === "completed" ? (
+                    <Check className="w-5 h-5" />
+                  ) : (
+                    index + 1
+                  )}
                 </div>
-                {index < stagesOrder.length - 1 && (
-                  <div
-                    className={`h-1 w-4 mx-0.5 rounded shrink-0 ${
-                      index < currentIndex ? "bg-green-500" : "bg-muted"
-                    }`}
-                  />
-                )}
+                <span
+                  className={`mt-2 text-xs text-center break-words max-w-[72px] leading-tight ${
+                    isCurrent
+                      ? "font-bold text-accent"
+                      : status === "completed"
+                      ? "text-green-600 dark:text-green-400"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {getStageLabel(stage)}
+                </span>
               </div>
-            );
-          })}
-        </div>
-        {showScrollArrows && (
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-7 w-7 shrink-0 rounded-full shadow-sm"
-            onClick={() => scrollByAmount(-150)}
-            data-testid="button-scroll-stages-left"
-            aria-label="تمرير لليسار"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-        )}
+              {index < stagesOrder.length - 1 && (
+                <div
+                  className={`h-1 w-8 mx-1 rounded shrink-0 ${
+                    index < currentIndex ? "bg-green-500" : "bg-muted"
+                  }`}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {disabled && (
