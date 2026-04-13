@@ -21,7 +21,7 @@ interface CasesContextType {
   markReadyToSubmit: (id: string) => void;
   markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
-  moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>) => Promise<boolean>;
+  moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>, explicitTargetStage?: string) => Promise<boolean>;
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
   addComment: (caseId: string, userId: string, userName: string, content: string) => Promise<void>;
@@ -336,41 +336,48 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const getCasesByClient = (clientId: string) =>
     cases.filter((c) => c.clientId === clientId);
 
-  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>): Promise<boolean> => {
+  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>, explicitTargetStage?: string): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
-    if (userRole) {
-      const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue);
-      if (!validation.allowed) {
-        console.warn("انتقال مرفوض:", validation.reason);
+    const normalized = normalizeCaseStage(lawCase.currentStage);
+
+    // If the caller passed an explicit target stage (e.g. CaseProgressBar's
+    // accept buttons that know exactly which stage to go to), trust it and
+    // skip both validateCaseForward and the stagesOrder lookup. The server
+    // is authoritative on which transitions are legal.
+    let nextStage: CaseStageValue;
+    if (explicitTargetStage) {
+      nextStage = explicitTargetStage as CaseStageValue;
+    } else {
+      if (userRole) {
+        const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue);
+        if (!validation.allowed) {
+          console.warn("انتقال مرفوض:", validation.reason);
+          return false;
+        }
+      }
+      const stagesOrder = resolveStagesOrderForCase(lawCase);
+      const currentIndex = stagesOrder.indexOf(normalized);
+      if (currentIndex === -1) {
+        console.error("[moveToNextStage] current stage not found in any path", {
+          caseId: id,
+          currentStage: lawCase.currentStage,
+          normalized,
+          departmentId: lawCase.departmentId,
+        });
         return false;
       }
+      if (currentIndex >= stagesOrder.length - 1) {
+        console.warn("[moveToNextStage] already at last stage of its path", {
+          caseId: id,
+          currentStage: lawCase.currentStage,
+        });
+        return false;
+      }
+      nextStage = stagesOrder[currentIndex + 1];
     }
 
-    const normalized = normalizeCaseStage(lawCase.currentStage);
-    const stagesOrder = resolveStagesOrderForCase(lawCase);
-    const effectiveClassification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
-    const currentIndex = stagesOrder.indexOf(normalized);
-    if (currentIndex === -1) {
-      console.error("[moveToNextStage] current stage not found in any path", {
-        caseId: id,
-        currentStage: lawCase.currentStage,
-        normalized,
-        departmentId: lawCase.departmentId,
-        classification: effectiveClassification,
-      });
-      return false;
-    }
-    if (currentIndex >= stagesOrder.length - 1) {
-      console.warn("[moveToNextStage] already at last stage of its path", {
-        caseId: id,
-        currentStage: lawCase.currentStage,
-      });
-      return false;
-    }
-
-    const nextStage = stagesOrder[currentIndex + 1];
     const newTransition = createStageTransitionRecord(nextStage, userId, userName, notes);
 
     const updateData: Record<string, unknown> = {

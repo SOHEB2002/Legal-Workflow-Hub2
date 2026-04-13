@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface CaseProgressBarProps {
   currentStage: CaseStageValue;
-  onMoveToNext: (notes: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>) => void;
+  onMoveToNext: (notes: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>, explicitTargetStage?: string) => void;
   onMoveToPrevious: (notes: string, internalReviewerId?: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
@@ -158,7 +158,18 @@ export function CaseProgressBar({
     const extraFields = platformReviewInfo.requireCourtNumber
       ? { courtCaseNumber: courtCaseNumber.trim() }
       : undefined;
-    onMoveToNext("", undefined, undefined, extraFields);
+    // Explicit target per platform — don't let moveToNextStage guess from
+    // the stages array, because the client-side stage resolver has been
+    // unreliable for commercial paths.
+    const target =
+      normalizedStage === "قيد_التدقيق_في_تراضي"
+        ? "مداولة_الصلح"
+        : normalizedStage === "قيد_التدقيق_في_ناجز"
+        ? "منظورة"
+        : normalizedStage === "قيد_التدقيق_في_معين"
+        ? "منظورة"
+        : undefined;
+    onMoveToNext("", undefined, undefined, extraFields, target);
     setCourtCaseNumber("");
   };
 
