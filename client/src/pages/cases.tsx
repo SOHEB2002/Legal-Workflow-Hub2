@@ -1334,7 +1334,9 @@ export default function CasesPage() {
                 selectedCase.reviewNotes.trim() && (
                   (() => {
                     const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
-                    const title = isCommittee ? "ملاحظات لجنة المراجعة" : "ملاحظات المراجع الداخلي";
+                    const title = isCommittee
+                      ? "ملاحظات لجنة المراجعة"
+                      : "ملاحظات المراجع الداخلي";
                     let reviewerName: string | undefined;
                     if (isCommittee) {
                       const lastEntry = [...(selectedCase.stageHistory || [])]
@@ -1368,6 +1370,43 @@ export default function CasesPage() {
                     );
                   })()
                 )}
+
+              {(selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
+                selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
+                selectedCase.currentStage === "قيد_التدقيق_في_معين") && (
+                <div
+                  className="bg-indigo-50 border-2 border-indigo-400 rounded-lg p-4 mb-4 shadow-sm"
+                  dir="rtl"
+                  data-testid="banner-platform-review-notes"
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-6 h-6 text-indigo-700 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="font-bold text-indigo-900 mb-1">
+                        {selectedCase.currentStage === "قيد_التدقيق_في_تراضي"
+                          ? "ملاحظات منصة تراضي"
+                          : selectedCase.currentStage === "قيد_التدقيق_في_ناجز"
+                          ? "ملاحظات منصة ناجز"
+                          : "ملاحظات منصة معين"}
+                      </h4>
+                      {(selectedCase as any).platformReviewNotes && String((selectedCase as any).platformReviewNotes).trim() ? (
+                        <>
+                          <p className="text-xs text-indigo-700 mb-2 font-semibold">
+                            حالة الطلب: يوجد ملاحظات من المنصة
+                          </p>
+                          <p className="text-sm text-indigo-900 whitespace-pre-wrap">
+                            {(selectedCase as any).platformReviewNotes}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-indigo-700">
+                          حالة الطلب: قيد الانتظار — لا توجد ملاحظات من المنصة حتى الآن.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
                 <CaseProgressBar
@@ -1394,11 +1433,18 @@ export default function CasesPage() {
                     .map(u => ({ id: u.id, name: u.name }))}
                   onMoveToNext={async (notes, internalReviewerId, reviewDecision, extraFields) => {
                     if (!user) return;
+                    const stageBefore = selectedCase.currentStage;
                     setStageTransitioning(true);
                     try {
                       const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
+                        if (stageBefore === "قيد_التدقيق_في_تراضي") {
+                          toast({
+                            title: "يرجى إضافة جلسة تراضي",
+                            description: "يرجى إضافة جلسة تراضي لنقل القضية لمرحلة مداولة الصلح",
+                          });
+                        }
                       } else {
                         toast({ title: "لا يمكن نقل القضية", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
                       }
@@ -1420,6 +1466,20 @@ export default function CasesPage() {
                       }
                     } catch (err) {
                       toast({ title: "فشل إرجاع القضية", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setStageTransitioning(false);
+                    }
+                  }}
+                  onPlatformReviewAddNotes={async (platformNotes) => {
+                    if (!user) return;
+                    setStageTransitioning(true);
+                    try {
+                      await updateCase(selectedCase.id, {
+                        platformReviewNotes: platformNotes,
+                      } as any);
+                      toast({ title: "تم حفظ ملاحظات المنصة" });
+                    } catch (err) {
+                      toast({ title: "تعذّر حفظ الملاحظات", description: extractApiError(err), variant: "destructive" });
                     } finally {
                       setStageTransitioning(false);
                     }
@@ -1553,6 +1613,30 @@ export default function CasesPage() {
                         <p className="font-medium">
                           <DualDateDisplay date={selectedCase.responseDeadline} compact />
                         </p>
+                      </div>
+                    )}
+                    {(selectedCase as any).taradiNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم الطلب في تراضي</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).taradiNumber}</LtrInline></p>
+                      </div>
+                    )}
+                    {(selectedCase as any).najizNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم القيد في ناجز</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).najizNumber}</LtrInline></p>
+                      </div>
+                    )}
+                    {(selectedCase as any).moeenNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم القيد في معين</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).moeenNumber}</LtrInline></p>
+                      </div>
+                    )}
+                    {(selectedCase as any).mohrNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم التسوية</Label>
+                        <p className="font-medium"><LtrInline>{(selectedCase as any).mohrNumber}</LtrInline></p>
                       </div>
                     )}
                   </div>
@@ -2169,6 +2253,22 @@ export default function CasesPage() {
                 </TabsContent>
 
                 <TabsContent value="notes" className="mt-4 space-y-4">
+                  {(selectedCase as any)?.platformReviewNotes &&
+                    String((selectedCase as any).platformReviewNotes).trim() && (
+                      <div
+                        className="border border-indigo-300 bg-indigo-50 rounded-lg p-4"
+                        dir="rtl"
+                        data-testid="notes-tab-platform-review"
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="w-5 h-5 text-indigo-700 shrink-0" />
+                          <h4 className="font-bold text-indigo-900">ملاحظات المنصة</h4>
+                        </div>
+                        <p className="text-sm text-indigo-900 whitespace-pre-wrap">
+                          {(selectedCase as any).platformReviewNotes}
+                        </p>
+                      </div>
+                    )}
                   {selectedCase?.reviewNotes && selectedCase.reviewNotes.trim() && (() => {
                     const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
                     const title = isCommittee ? "ملاحظات لجنة المراجعة" : "ملاحظات المراجعة الداخلية";

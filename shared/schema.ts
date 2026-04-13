@@ -67,6 +67,7 @@ export const lawCases = pgTable("law_cases", {
   whatsappGroupLink: varchar("whatsapp_group_link", { length: 500 }).default(""),
   googleDriveFolderId: varchar("google_drive_folder_id", { length: 255 }).default(""),
   reviewNotes: text("review_notes").default(""),
+  platformReviewNotes: text("platform_review_notes").default(""),
   reviewDecision: varchar("review_decision", { length: 50 }),
   reviewActionTaken: text("review_action_taken"),
   priority: varchar("priority", { length: 50 }).notNull().default("متوسط"),
@@ -1095,6 +1096,7 @@ export interface LawCase {
   whatsappGroupLink: string;
   googleDriveFolderId: string;
   reviewNotes: string;
+  platformReviewNotes: string;
   reviewDecision: ReviewDecisionType | null;
   reviewActionTaken: string | null;
   priority: PriorityType;
