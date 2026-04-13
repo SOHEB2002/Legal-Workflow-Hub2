@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface CaseProgressBarProps {
   currentStage: CaseStageValue;
-  onMoveToNext: (notes: string) => void;
+  onMoveToNext: (notes: string, internalReviewerId?: string) => void;
   onMoveToPrevious: (notes: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
   userRole: UserRoleType;
@@ -26,6 +26,7 @@ interface CaseProgressBarProps {
   caseType?: CaseTypeValue;
   reviewNotes?: string;
   reviewDecision?: string;
+  eligibleInternalReviewers?: Array<{ id: string; name: string }>;
 }
 
 export function CaseProgressBar({
@@ -39,9 +40,11 @@ export function CaseProgressBar({
   caseType,
   reviewNotes,
   reviewDecision,
+  eligibleInternalReviewers = [],
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
+  const [selectedReviewerId, setSelectedReviewerId] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قضية_جديدة";
   const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
@@ -60,9 +63,15 @@ export function CaseProgressBar({
     return "upcoming";
   };
 
+  const nextStage = stagesOrder[currentIndex + 1];
+  const nextIsInternalReview = nextStage === "مراجعة_داخلية";
+  const canConfirmNext = !nextIsInternalReview || !!selectedReviewerId;
+
   const handleMoveNext = () => {
-    onMoveToNext(notes);
+    if (nextIsInternalReview && !selectedReviewerId) return;
+    onMoveToNext(notes, nextIsInternalReview ? selectedReviewerId : undefined);
     setNotes("");
+    setSelectedReviewerId("");
   };
 
   const handleMovePrev = () => {
@@ -237,6 +246,25 @@ export function CaseProgressBar({
                   <strong>{getStageLabel(stagesOrder[currentIndex + 1], effectiveClassification as CaseClassificationValue)}</strong>؟
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              {nextIsInternalReview && (
+                <div className="mt-3 space-y-1" dir="rtl">
+                  <label className="text-sm font-semibold">اختر المراجع الداخلي <span className="text-red-500">*</span></label>
+                  <select
+                    value={selectedReviewerId}
+                    onChange={(e) => setSelectedReviewerId(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    data-testid="select-internal-reviewer"
+                  >
+                    <option value="">-- اختر مراجعاً --</option>
+                    {eligibleInternalReviewers.map((r) => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </select>
+                  {eligibleInternalReviewers.length === 0 && (
+                    <p className="text-xs text-red-600">لا يوجد مراجعون مؤهلون في هذا القسم</p>
+                  )}
+                </div>
+              )}
               <Textarea
                 placeholder="ملاحظات (اختياري)"
                 value={notes}
@@ -245,8 +273,8 @@ export function CaseProgressBar({
                 data-testid="input-stage-notes-next"
               />
               <AlertDialogFooter className="gap-2">
-                <AlertDialogCancel onClick={() => setNotes("")}>إلغاء</AlertDialogCancel>
-                <AlertDialogAction onClick={handleMoveNext}>تأكيد</AlertDialogAction>
+                <AlertDialogCancel onClick={() => { setNotes(""); setSelectedReviewerId(""); }}>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={handleMoveNext} disabled={!canConfirmNext}>تأكيد</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

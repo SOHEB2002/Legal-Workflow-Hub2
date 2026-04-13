@@ -20,7 +20,7 @@ interface CasesContextType {
   markReadyToSubmit: (id: string) => void;
   markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
-  moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
+  moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
   addComment: (caseId: string, userId: string, userName: string, content: string) => Promise<void>;
@@ -308,7 +308,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const getCasesByClient = (clientId: string) =>
     cases.filter((c) => c.clientId === clientId);
 
-  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string): Promise<boolean> => {
+  const moveToNextStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string, internalReviewerId?: string): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
@@ -333,6 +333,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       currentStage: nextStage,
       stageHistory: [...lawCase.stageHistory, newTransition],
     };
+
+    if (nextStage === "مراجعة_داخلية" && internalReviewerId) {
+      updateData.internalReviewerId = internalReviewerId;
+    }
 
     if (nextStage === "مقفلة") {
       updateData.status = CaseStatus.CLOSED as CaseStatusValue;
