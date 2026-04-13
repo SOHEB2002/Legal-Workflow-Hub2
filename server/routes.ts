@@ -1181,7 +1181,12 @@ export async function registerRoutes(
         title: "تجاوز مرحلة استكمال البيانات والانتقال مباشرةً للدراسة",
       });
 
-      res.json(updated);
+      if (!updated) {
+        console.error("[skip-data-completion] storage.updateCase returned undefined for case", caseItem.id);
+        return res.status(500).json({ error: "فشل تحديث القضية" });
+      }
+      console.log("[skip-data-completion] success", { caseId: caseItem.id, newStage: updated.currentStage, userId: user.id, role: user.role });
+      res.status(200).json(updated);
     } catch (error) {
       console.error("Error skipping data completion:", error);
       res.status(500).json({ error: "حدث خطأ في تجاوز المرحلة" });

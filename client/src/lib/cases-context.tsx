@@ -385,22 +385,21 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const skipDataCompletion = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
-    const lawCase = cases.find((c) => c.id === id);
-    if (!lawCase) return false;
-
-    const normalized = normalizeCaseStage(lawCase.currentStage);
-    if (normalized !== "استلام") return false;
-
     try {
       const response = await apiRequest("POST", `/api/cases/${id}/skip-data-completion`, { notes });
+      console.log("[skipDataCompletion] response status:", response.status);
       try {
         const updatedCase = await response.json();
-        setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
-      } catch {
-        // server transition succeeded; local state refresh failed — ignore
+        console.log("[skipDataCompletion] response body currentStage:", updatedCase?.currentStage);
+        if (updatedCase && updatedCase.id) {
+          setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
+        }
+      } catch (parseErr) {
+        console.warn("[skipDataCompletion] response parse failed, but server accepted the transition", parseErr);
       }
       return true;
-    } catch {
+    } catch (err) {
+      console.error("[skipDataCompletion] request failed", err);
       return false;
     }
   };
