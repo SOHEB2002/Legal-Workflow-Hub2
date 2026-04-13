@@ -1411,8 +1411,9 @@ export async function registerRoutes(
           }
         }
 
-        // Clear platformReviewNotes when leaving any platform-review stage —
-        // acceptance means the platform has no remaining notes.
+        // Clear platform-review state when leaving any platform-review stage —
+        // acceptance means the platform has no remaining notes and no pending
+        // resubmission flag.
         if (
           (existing.currentStage === "قيد_التدقيق_في_تراضي" ||
             existing.currentStage === "قيد_التدقيق_في_ناجز" ||
@@ -1420,6 +1421,7 @@ export async function registerRoutes(
           targetStage !== existing.currentStage
         ) {
           req.body.platformReviewNotes = "";
+          req.body.platformReviewResubmitted = false;
         }
 
         // Before تقديم_التظلم: require grievanceDate

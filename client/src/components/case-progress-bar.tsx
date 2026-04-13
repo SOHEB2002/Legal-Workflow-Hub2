@@ -22,6 +22,8 @@ interface CaseProgressBarProps {
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
   onPlatformReviewAddNotes?: (notes: string) => void;
+  onPlatformReviewResubmit?: () => void;
+  hasPlatformNotes?: boolean;
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
@@ -41,6 +43,8 @@ export function CaseProgressBar({
   onSkipDataCompletion,
   onInternalReviewSendBack,
   onPlatformReviewAddNotes,
+  onPlatformReviewResubmit,
+  hasPlatformNotes = false,
   userRole,
   disabled = false,
   caseClassification,
@@ -305,6 +309,36 @@ export function CaseProgressBar({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+
+          {hasPlatformNotes && onPlatformReviewResubmit && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={disabled}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  data-testid="button-platform-review-resubmit"
+                >
+                  <SkipForward className="w-4 h-4 ml-1" />
+                  تم إعادة التقديم
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>تأكيد إعادة التقديم</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    سيتم مسح ملاحظات المنصة وتحديث الحالة إلى
+                    "تم إعادة التقديم — بانتظار رد المنصة". القضية ستبقى في نفس المرحلة.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter className="gap-2">
+                  <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                  <AlertDialogAction onClick={onPlatformReviewResubmit}>تأكيد</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
 
           {onPlatformReviewAddNotes && (
             <AlertDialog>

@@ -830,9 +830,24 @@ export default function CasesPage() {
                     <Badge variant="outline" className="inline-flex justify-center">{c.caseType || "-"}</Badge>
                   </TableCell>
                   <TableCell className="text-center">
-                    <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
-                      {getStageLabel(c.currentStage)}
-                    </Badge>
+                    <div className="inline-flex items-center gap-1">
+                      <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
+                        {getStageLabel(c.currentStage)}
+                      </Badge>
+                      {(c.currentStage === "قيد_التدقيق_في_تراضي" ||
+                        c.currentStage === "قيد_التدقيق_في_ناجز" ||
+                        c.currentStage === "قيد_التدقيق_في_معين") &&
+                        (c as any).platformReviewNotes &&
+                        String((c as any).platformReviewNotes).trim() && (
+                          <span
+                            className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 border border-amber-400"
+                            title="يوجد ملاحظات من المنصة"
+                            data-testid={`platform-notes-indicator-${c.id}`}
+                          >
+                            <AlertTriangle className="w-3 h-3 text-amber-700" />
+                          </span>
+                        )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
                   <TableCell className="text-center">
@@ -1389,20 +1404,32 @@ export default function CasesPage() {
                           ? "ملاحظات منصة ناجز"
                           : "ملاحظات منصة معين"}
                       </h4>
-                      {(selectedCase as any).platformReviewNotes && String((selectedCase as any).platformReviewNotes).trim() ? (
-                        <>
-                          <p className="text-xs text-indigo-700 mb-2 font-semibold">
-                            حالة الطلب: يوجد ملاحظات من المنصة
+                      {(() => {
+                        const notes = (selectedCase as any).platformReviewNotes;
+                        const resubmitted = !!(selectedCase as any).platformReviewResubmitted;
+                        if (notes && String(notes).trim()) {
+                          return (
+                            <>
+                              <p className="text-xs text-indigo-700 mb-2 font-semibold">
+                                حالة الطلب: يوجد ملاحظات — بحاجة لاستكمال
+                              </p>
+                              <p className="text-sm text-indigo-900 whitespace-pre-wrap">{notes}</p>
+                            </>
+                          );
+                        }
+                        if (resubmitted) {
+                          return (
+                            <p className="text-xs text-indigo-700">
+                              حالة الطلب: تم إعادة التقديم — بانتظار رد المنصة
+                            </p>
+                          );
+                        }
+                        return (
+                          <p className="text-xs text-indigo-700">
+                            حالة الطلب: بانتظار رد المنصة
                           </p>
-                          <p className="text-sm text-indigo-900 whitespace-pre-wrap">
-                            {(selectedCase as any).platformReviewNotes}
-                          </p>
-                        </>
-                      ) : (
-                        <p className="text-xs text-indigo-700">
-                          حالة الطلب: قيد الانتظار — لا توجد ملاحظات من المنصة حتى الآن.
-                        </p>
-                      )}
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1470,16 +1497,39 @@ export default function CasesPage() {
                       setStageTransitioning(false);
                     }
                   }}
+                  hasPlatformNotes={
+                    !!(selectedCase as any).platformReviewNotes &&
+                    String((selectedCase as any).platformReviewNotes).trim().length > 0
+                  }
                   onPlatformReviewAddNotes={async (platformNotes) => {
                     if (!user) return;
                     setStageTransitioning(true);
                     try {
                       await updateCase(selectedCase.id, {
                         platformReviewNotes: platformNotes,
+                        platformReviewResubmitted: false,
                       } as any);
                       toast({ title: "تم حفظ ملاحظات المنصة" });
                     } catch (err) {
                       toast({ title: "تعذّر حفظ الملاحظات", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setStageTransitioning(false);
+                    }
+                  }}
+                  onPlatformReviewResubmit={async () => {
+                    if (!user) return;
+                    setStageTransitioning(true);
+                    try {
+                      await updateCase(selectedCase.id, {
+                        platformReviewNotes: "",
+                        platformReviewResubmitted: true,
+                      } as any);
+                      toast({
+                        title: "تم إعادة التقديم بنجاح",
+                        description: "بانتظار رد المنصة",
+                      });
+                    } catch (err) {
+                      toast({ title: "تعذّر تسجيل إعادة التقديم", description: extractApiError(err), variant: "destructive" });
                     } finally {
                       setStageTransitioning(false);
                     }
@@ -1637,6 +1687,26 @@ export default function CasesPage() {
                       <div>
                         <Label className="text-muted-foreground">رقم التسوية</Label>
                         <p className="font-medium"><LtrInline>{(selectedCase as any).mohrNumber}</LtrInline></p>
+                      </div>
+                    )}
+                    {(selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
+                      selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
+                      selectedCase.currentStage === "قيد_التدقيق_في_معين") && (
+                      <div>
+                        <Label className="text-muted-foreground">حالة الطلب في المنصة</Label>
+                        <p className="font-medium">
+                          {(() => {
+                            const notes = (selectedCase as any).platformReviewNotes;
+                            const resubmitted = !!(selectedCase as any).platformReviewResubmitted;
+                            if (notes && String(notes).trim()) {
+                              return <span className="text-amber-700">يوجد ملاحظات — بحاجة لاستكمال</span>;
+                            }
+                            if (resubmitted) {
+                              return <span className="text-blue-700">تم إعادة التقديم — بانتظار رد المنصة</span>;
+                            }
+                            return <span className="text-muted-foreground">بانتظار رد المنصة</span>;
+                          })()}
+                        </p>
                       </div>
                     )}
                   </div>
