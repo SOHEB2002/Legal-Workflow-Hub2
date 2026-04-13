@@ -150,7 +150,8 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "قيد_التدقيق_في_ناجز", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 
   // ==================== COMMERCIAL PATH (taradi then najiz) ====================

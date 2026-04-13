@@ -86,12 +86,16 @@ export function CaseProgressBar({
   const prevStage = stagesOrder[currentIndex - 1];
   const prevIsInternalReview = prevStage === "مراجعة_داخلية" || prevStage === "مراجعة_داخلية_للتظلم";
 
+  // Any forward transition INTO a قيد_التدقيق_* stage requires the matching
+  // platform number, regardless of which source stage we're moving from
+  // (جاهزة_للرفع for the first review, أغلق_طلب_الصلح for the post-settlement
+  // najiz/moeen review, etc.).
   const platformFieldInfo: { field: "taradiNumber" | "najizNumber" | "moeenNumber"; label: string; placeholder: string } | null =
-    normalizedStage === "جاهزة_للرفع" && nextStage === "قيد_التدقيق_في_تراضي"
+    nextStage === "قيد_التدقيق_في_تراضي"
       ? { field: "taradiNumber", label: "رقم الطلب في تراضي", placeholder: "أدخل رقم الطلب في منصة تراضي" }
-      : normalizedStage === "جاهزة_للرفع" && nextStage === "قيد_التدقيق_في_ناجز"
+      : nextStage === "قيد_التدقيق_في_ناجز"
       ? { field: "najizNumber", label: "رقم القيد في ناجز", placeholder: "أدخل رقم القيد في ناجز" }
-      : normalizedStage === "جاهزة_للرفع" && nextStage === "قيد_التدقيق_في_معين"
+      : nextStage === "قيد_التدقيق_في_معين"
       ? { field: "moeenNumber", label: "رقم القيد في معين", placeholder: "أدخل رقم القيد في معين" }
       : null;
 
@@ -127,11 +131,15 @@ export function CaseProgressBar({
     const extraFields = platformFieldInfo
       ? { [platformFieldInfo.field]: platformNumber.trim() }
       : undefined;
+    // Always pass nextStage explicitly so the cases-context never has to
+    // recompute the path — that resolver was unreliable for some commercial
+    // and post-settlement transitions and silently dropped the PATCH.
     onMoveToNext(
       notes,
       nextIsInternalReview ? selectedReviewerId : undefined,
       undefined,
       extraFields,
+      nextStage,
     );
     setNotes("");
     setSelectedReviewerId("");
