@@ -1296,7 +1296,7 @@ export default function CasesPage() {
       </Dialog>
 
       <Dialog open={showDetailsDialog} onOpenChange={(open) => { setShowDetailsDialog(open); if (!open) setActiveTab("info"); }}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" dir="rtl">
+        <DialogContent className="max-w-7xl max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <div className="flex items-center justify-between">
               <DialogTitle>تفاصيل القضية <LtrInline>{selectedCase?.caseNumber}</LtrInline></DialogTitle>

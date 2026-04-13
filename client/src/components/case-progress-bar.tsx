@@ -12,7 +12,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 
 interface CaseProgressBarProps {
@@ -75,6 +75,24 @@ export function CaseProgressBar({
     setSkipNotes("");
   };
 
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const currentStageRef = useRef<HTMLDivElement>(null);
+  const showScrollArrows = stagesOrder.length > 10;
+
+  useEffect(() => {
+    if (currentStageRef.current && scrollContainerRef.current) {
+      currentStageRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "center",
+      });
+    }
+  }, [currentIndex, stagesOrder.length]);
+
+  const scrollByAmount = (delta: number) => {
+    scrollContainerRef.current?.scrollBy({ left: delta, behavior: "smooth" });
+  };
+
   return (
     <div className="w-full space-y-4" dir="rtl">
       {normalizedStage === "الأخذ_بالملاحظات" && reviewNotes && reviewNotes.trim() && (
@@ -92,52 +110,86 @@ export function CaseProgressBar({
           <p className="text-amber-700 text-sm">{reviewNotes}</p>
         </div>
       )}
-      <div className="flex items-center justify-between gap-2 overflow-x-auto pb-2">
-        {stagesOrder.map((stage, index) => {
-          const status = getStageStatus(index);
-          return (
-            <div key={stage} className="flex items-center flex-1 min-w-0">
-              <div className="flex flex-col items-center flex-1">
+      <div className="relative flex items-center">
+        {showScrollArrows && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-7 w-7 shrink-0 rounded-full shadow-sm"
+            onClick={() => scrollByAmount(150)}
+            data-testid="button-scroll-stages-right"
+            aria-label="تمرير لليمين"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+        )}
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 flex items-center gap-1 overflow-x-auto scroll-smooth pb-2 px-1 [&::-webkit-scrollbar]:hidden"
+          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+        >
+          {stagesOrder.map((stage, index) => {
+            const status = getStageStatus(index);
+            const isCurrent = status === "current";
+            return (
+              <div key={stage} className="flex items-center shrink-0">
                 <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all ${
-                    status === "completed"
-                      ? "bg-green-500 text-white"
-                      : status === "current"
-                      ? "bg-accent text-accent-foreground ring-4 ring-accent/30"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                  data-testid={`stage-indicator-${index}`}
+                  ref={isCurrent ? currentStageRef : undefined}
+                  className="flex flex-col items-center shrink-0"
                 >
-                  {status === "completed" ? (
-                    <Check className="w-5 h-5" />
-                  ) : (
-                    index + 1
-                  )}
+                  <div
+                    className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                      status === "completed"
+                        ? "bg-green-500 text-white"
+                        : isCurrent
+                        ? "bg-accent text-accent-foreground ring-4 ring-accent/30"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                    data-testid={`stage-indicator-${index}`}
+                  >
+                    {status === "completed" ? (
+                      <Check className="w-4 h-4" />
+                    ) : (
+                      index + 1
+                    )}
+                  </div>
+                  <span
+                    className={`mt-1 text-[10px] text-center break-words max-w-[60px] leading-tight ${
+                      isCurrent
+                        ? "font-bold text-accent"
+                        : status === "completed"
+                        ? "text-green-600 dark:text-green-400"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {getStageLabel(stage)}
+                  </span>
                 </div>
-                <span
-                  className={`mt-2 text-xs text-center break-words max-w-[72px] leading-tight ${
-                    status === "current"
-                      ? "font-bold text-accent"
-                      : status === "completed"
-                      ? "text-green-600 dark:text-green-400"
-                      : "text-muted-foreground"
-                  }`}
-                >
-                  {getStageLabel(stage)}
-                </span>
+                {index < stagesOrder.length - 1 && (
+                  <div
+                    className={`h-1 w-6 mx-1 rounded shrink-0 ${
+                      index < currentIndex ? "bg-green-500" : "bg-muted"
+                    }`}
+                  />
+                )}
               </div>
-              {index < stagesOrder.length - 1 && (
-                <div
-                  className={`h-1 flex-1 mx-1 rounded ${
-                    index < currentIndex
-                      ? "bg-green-500"
-                      : "bg-muted"
-                  }`}
-                />
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
+        {showScrollArrows && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-7 w-7 shrink-0 rounded-full shadow-sm"
+            onClick={() => scrollByAmount(-150)}
+            data-testid="button-scroll-stages-left"
+            aria-label="تمرير لليسار"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+        )}
       </div>
 
       {disabled && (
