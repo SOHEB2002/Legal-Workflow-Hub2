@@ -1304,7 +1304,21 @@ export async function registerRoutes(
       const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
         "courtName", "courtCaseNumber", "judgeName", "circuitNumber", "opponentName", "opponentLawyer", "opponentPhone", "opponentNotes",
         "caseClassification", "previousHearingsCount", "currentSituation", "responseDeadline", "adminCaseSubType", "prescriptionDate", "priority"];
-      const hasDataFields = Object.keys(req.body).some(k => caseDataFields.includes(k));
+
+      // When the case is being accepted out of قيد_التدقيق_في_ناجز /
+      // قيد_التدقيق_في_معين, courtCaseNumber is supplied as part of the
+      // stage-transition payload (not a free-form data edit), so it must not
+      // trigger the canEditCaseData gate. The assigned lawyer is allowed to
+      // record the court-issued number in that flow.
+      const isCourtAcceptTransition =
+        (existing.currentStage === "قيد_التدقيق_في_ناجز" ||
+          existing.currentStage === "قيد_التدقيق_في_معين") &&
+        typeof req.body.currentStage === "string" &&
+        req.body.currentStage !== existing.currentStage;
+      const effectiveDataFields = isCourtAcceptTransition
+        ? caseDataFields.filter((f) => f !== "courtCaseNumber")
+        : caseDataFields;
+      const hasDataFields = Object.keys(req.body).some((k) => effectiveDataFields.includes(k));
 
       if (hasDataFields && !canEditCaseData(user)) {
         return res.status(403).json({ error: "تعديل بيانات القضية متاح فقط لمدير الفرع والدعم الإداري" });
