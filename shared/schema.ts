@@ -1179,7 +1179,7 @@ export interface Hearing {
   hearingDate: string;
   hearingTime: string;
   hearingType: string;
-  courtName: CourtTypeValue;
+  courtName: string;
   courtNameOther: string | null;
   courtRoom: string;
   status: HearingStatusValue;
@@ -1480,14 +1480,7 @@ export const insertHearingSchema = z.object({
   hearingDate: z.string().min(1, "تاريخ الجلسة مطلوب"),
   hearingTime: z.string().min(1, "وقت الجلسة مطلوب"),
   hearingType: z.string().optional().default("محكمة"),
-  courtName: z.enum([
-    "المحكمة العامة",
-    "المحكمة التجارية",
-    "المحكمة العمالية",
-    "المحكمة الإدارية",
-    "المحكمة الجزائية",
-    "أخرى",
-  ]),
+  courtName: z.string().min(1, "يرجى إدخال اسم المحكمة"),
   courtNameOther: z.string().nullable().optional(),
   courtRoom: z.string().optional().default(""),
   notes: z.string().optional().default(""),
