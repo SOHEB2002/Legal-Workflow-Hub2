@@ -21,7 +21,7 @@ interface CasesContextType {
   markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
   moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
-  moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string) => Promise<boolean>;
+  moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
   addComment: (caseId: string, userId: string, userName: string, content: string) => Promise<void>;
   fetchComments: (caseId: string) => Promise<void>;
@@ -352,7 +352,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const moveToPreviousStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string): Promise<boolean> => {
+  const moveToPreviousStage = async (id: string, userId: string, userName: string, notes: string = "", userRole?: string, internalReviewerId?: string): Promise<boolean> => {
     const lawCase = cases.find((c) => c.id === id);
     if (!lawCase) return false;
 
@@ -373,10 +373,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const prevStage = stagesOrder[currentIndex - 1];
     const newTransition = createStageTransitionRecord(prevStage, userId, userName, notes || "إرجاع للمرحلة السابقة");
 
-    await updateCase(id, {
+    const prevUpdateData: Record<string, unknown> = {
       currentStage: prevStage,
       stageHistory: [...lawCase.stageHistory, newTransition],
-    });
+    };
+    if ((prevStage === "مراجعة_داخلية" || prevStage === "مراجعة_داخلية_للتظلم") && internalReviewerId) {
+      prevUpdateData.internalReviewerId = internalReviewerId;
+    }
+    await updateCase(id, prevUpdateData);
 
     if (prevStage === CaseStage.TAKING_NOTES) {
       const responsibleId = lawCase.responsibleLawyerId || lawCase.primaryLawyerId;

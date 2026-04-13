@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 interface CaseProgressBarProps {
   currentStage: CaseStageValue;
   onMoveToNext: (notes: string, internalReviewerId?: string) => void;
-  onMoveToPrevious: (notes: string) => void;
+  onMoveToPrevious: (notes: string, internalReviewerId?: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
   userRole: UserRoleType;
@@ -72,7 +72,10 @@ export function CaseProgressBar({
 
   const nextStage = stagesOrder[currentIndex + 1];
   const nextIsInternalReview = nextStage === "مراجعة_داخلية" || nextStage === "مراجعة_داخلية_للتظلم";
+  const prevStage = stagesOrder[currentIndex - 1];
+  const prevIsInternalReview = prevStage === "مراجعة_داخلية" || prevStage === "مراجعة_داخلية_للتظلم";
   const canConfirmNext = !nextIsInternalReview || !!selectedReviewerId;
+  const canConfirmPrev = !prevIsInternalReview || !!(selectedReviewerId || caseInternalReviewerId);
 
   const isAtInternalReview =
     normalizedStage === "مراجعة_داخلية" || normalizedStage === "مراجعة_داخلية_للتظلم";
@@ -98,8 +101,15 @@ export function CaseProgressBar({
   };
 
   const handleMovePrev = () => {
-    onMoveToPrevious(notes);
+    if (prevIsInternalReview) {
+      const reviewerToUse = selectedReviewerId || caseInternalReviewerId || undefined;
+      if (!reviewerToUse) return;
+      onMoveToPrevious(notes, reviewerToUse);
+    } else {
+      onMoveToPrevious(notes);
+    }
     setNotes("");
+    setSelectedReviewerId("");
   };
 
   const handleSkip = () => {
@@ -278,6 +288,30 @@ export function CaseProgressBar({
                   هل أنت متأكد من إرجاع القضية للمرحلة السابقة؟
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              {prevIsInternalReview && (
+                <div className="mt-3 space-y-1" dir="rtl">
+                  <label className="text-sm font-semibold">المراجع الداخلي <span className="text-red-500">*</span></label>
+                  <select
+                    value={selectedReviewerId || caseInternalReviewerId || ""}
+                    onChange={(e) => setSelectedReviewerId(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    data-testid="select-internal-reviewer-prev"
+                  >
+                    <option value="">-- اختر مراجعاً --</option>
+                    {eligibleInternalReviewers.map((r) => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </select>
+                  {caseInternalReviewerId && !selectedReviewerId && (
+                    <p className="text-xs text-muted-foreground">
+                      سيُعاد استخدام المراجع السابق ما لم يتم تغييره.
+                    </p>
+                  )}
+                  {eligibleInternalReviewers.length === 0 && !caseInternalReviewerId && (
+                    <p className="text-xs text-red-600">لا يوجد مراجعون مؤهلون في هذا القسم</p>
+                  )}
+                </div>
+              )}
               <Textarea
                 placeholder="سبب الإرجاع (اختياري)"
                 value={notes}
@@ -286,8 +320,8 @@ export function CaseProgressBar({
                 data-testid="input-stage-notes"
               />
               <AlertDialogFooter className="gap-2">
-                <AlertDialogCancel onClick={() => setNotes("")}>إلغاء</AlertDialogCancel>
-                <AlertDialogAction onClick={handleMovePrev}>تأكيد</AlertDialogAction>
+                <AlertDialogCancel onClick={() => { setNotes(""); setSelectedReviewerId(""); }}>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={handleMovePrev} disabled={!canConfirmPrev}>تأكيد</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

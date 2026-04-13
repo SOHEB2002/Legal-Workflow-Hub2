@@ -1386,11 +1386,11 @@ export default function CasesPage() {
                       setStageTransitioning(false);
                     }
                   }}
-                  onMoveToPrevious={async (notes) => {
+                  onMoveToPrevious={async (notes, internalReviewerId) => {
                     if (!user) return;
                     setStageTransitioning(true);
                     try {
-                      const success = await moveToPreviousStage(selectedCase.id, user.id, user.name, notes, user.role);
+                      const success = await moveToPreviousStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId);
                       if (success) {
                         toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
                       } else {
