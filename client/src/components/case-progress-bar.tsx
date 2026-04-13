@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface CaseProgressBarProps {
   currentStage: CaseStageValue;
-  onMoveToNext: (notes: string, internalReviewerId?: string, reviewDecision?: string) => void;
+  onMoveToNext: (notes: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>) => void;
   onMoveToPrevious: (notes: string, internalReviewerId?: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
@@ -54,6 +54,7 @@ export function CaseProgressBar({
   const [skipNotes, setSkipNotes] = useState("");
   const [selectedReviewerId, setSelectedReviewerId] = useState("");
   const [sendBackNotes, setSendBackNotes] = useState("");
+  const [platformNumber, setPlatformNumber] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قضية_جديدة";
   const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
@@ -76,7 +77,19 @@ export function CaseProgressBar({
   const nextIsInternalReview = nextStage === "مراجعة_داخلية" || nextStage === "مراجعة_داخلية_للتظلم";
   const prevStage = stagesOrder[currentIndex - 1];
   const prevIsInternalReview = prevStage === "مراجعة_داخلية" || prevStage === "مراجعة_داخلية_للتظلم";
-  const canConfirmNext = !nextIsInternalReview || !!selectedReviewerId;
+
+  const platformFieldInfo: { field: "taradiNumber" | "najizNumber" | "moeenNumber"; label: string; placeholder: string } | null =
+    normalizedStage === "جاهزة_للرفع" && nextStage === "قيد_التدقيق_في_تراضي"
+      ? { field: "taradiNumber", label: "رقم الطلب في تراضي", placeholder: "أدخل رقم الطلب في منصة تراضي" }
+      : normalizedStage === "جاهزة_للرفع" && nextStage === "قيد_التدقيق_في_ناجز"
+      ? { field: "najizNumber", label: "رقم القيد في ناجز", placeholder: "أدخل رقم القيد في ناجز" }
+      : normalizedStage === "جاهزة_للرفع" && nextStage === "قيد_التدقيق_في_معين"
+      ? { field: "moeenNumber", label: "رقم القيد في معين", placeholder: "أدخل رقم القيد في معين" }
+      : null;
+
+  const canConfirmNext =
+    (!nextIsInternalReview || !!selectedReviewerId) &&
+    (!platformFieldInfo || !!platformNumber.trim());
   const canConfirmPrev = !prevIsInternalReview || !!(selectedReviewerId || caseInternalReviewerId);
 
   const isAtInternalReview =
@@ -90,9 +103,19 @@ export function CaseProgressBar({
 
   const handleMoveNext = () => {
     if (nextIsInternalReview && !selectedReviewerId) return;
-    onMoveToNext(notes, nextIsInternalReview ? selectedReviewerId : undefined);
+    if (platformFieldInfo && !platformNumber.trim()) return;
+    const extraFields = platformFieldInfo
+      ? { [platformFieldInfo.field]: platformNumber.trim() }
+      : undefined;
+    onMoveToNext(
+      notes,
+      nextIsInternalReview ? selectedReviewerId : undefined,
+      undefined,
+      extraFields,
+    );
     setNotes("");
     setSelectedReviewerId("");
+    setPlatformNumber("");
   };
 
   const handleInternalReviewApprove = () => {
@@ -502,6 +525,21 @@ export function CaseProgressBar({
                   )}
                 </div>
               )}
+              {platformFieldInfo && (
+                <div className="mt-3 space-y-1" dir="rtl">
+                  <label className="text-sm font-semibold">
+                    {platformFieldInfo.label} <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={platformNumber}
+                    onChange={(e) => setPlatformNumber(e.target.value)}
+                    placeholder={platformFieldInfo.placeholder}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    data-testid={`input-${platformFieldInfo.field}`}
+                  />
+                </div>
+              )}
               <Textarea
                 placeholder="ملاحظات (اختياري)"
                 value={notes}
@@ -510,7 +548,11 @@ export function CaseProgressBar({
                 data-testid="input-stage-notes-next"
               />
               <AlertDialogFooter className="gap-2">
-                <AlertDialogCancel onClick={() => { setNotes(""); setSelectedReviewerId(""); }}>إلغاء</AlertDialogCancel>
+                <AlertDialogCancel
+                  onClick={() => { setNotes(""); setSelectedReviewerId(""); setPlatformNumber(""); }}
+                >
+                  إلغاء
+                </AlertDialogCancel>
                 <AlertDialogAction onClick={handleMoveNext} disabled={!canConfirmNext}>تأكيد</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

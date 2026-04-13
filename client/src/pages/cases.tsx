@@ -1392,11 +1392,11 @@ export default function CasesPage() {
                       u.id !== user?.id
                     )
                     .map(u => ({ id: u.id, name: u.name }))}
-                  onMoveToNext={async (notes, internalReviewerId, reviewDecision) => {
+                  onMoveToNext={async (notes, internalReviewerId, reviewDecision, extraFields) => {
                     if (!user) return;
                     setStageTransitioning(true);
                     try {
-                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision);
+                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
                       } else {
