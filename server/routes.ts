@@ -145,18 +145,14 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استلام", to: "دراسة", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
 
   // ==================== GENERAL PATH (after ready_to_submit) ====================
-  { from: "جاهزة_للرفع", to: "الرفع_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "الرفع_في_ناجز", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer"] },
-  { from: "قيد_التدقيق_في_ناجز", to: "الرفع_في_ناجز", allowedRoles: ["assigned_lawyer"] },
+  { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_ناجز", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 
   // ==================== COMMERCIAL PATH (taradi then najiz) ====================
-  { from: "جاهزة_للرفع", to: "رفع_بمنصة_تراضي", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "رفع_بمنصة_تراضي", to: "قيد_التدقيق_في_تراضي", allowedRoles: ["assigned_lawyer"] },
-  { from: "قيد_التدقيق_في_تراضي", to: "رفع_بمنصة_تراضي", allowedRoles: ["assigned_lawyer"] },
+  { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_تراضي", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_تراضي", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 
   // ==================== LABOR PATH (settlement before drafting) ====================
@@ -175,9 +171,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "انتظار_رد_التظلم", to: "تحصيل", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "انتظار_رد_التظلم", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "جاهزة_للرفع", to: "الرفع_في_معين", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "الرفع_في_معين", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer"] },
-  { from: "قيد_التدقيق_في_معين", to: "الرفع_في_معين", allowedRoles: ["assigned_lawyer"] },
+  { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_معين", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 
   // ==================== EXISTING CASE PATH (memo before study) ====================
@@ -1368,20 +1362,17 @@ export async function registerRoutes(
           if (!merged.primaryLawyerId) return res.status(400).json({ error: "يجب تعيين محامي رئيسي قبل الانتقال لمرحلة الدراسة" });
         }
 
-        // Before الرفع_في_ناجز: require najizNumber
-        if (targetStage === "الرفع_في_ناجز") {
+        // Entering the platform-review stages now happens directly from
+        // جاهزة_للرفع; the lawyer must supply the matching platform number.
+        if (targetStage === "قيد_التدقيق_في_تراضي") {
+          const taradi = req.body.taradiNumber || (existing as any).taradiNumber;
+          if (!taradi) return res.status(400).json({ error: "يجب إدخال رقم الطلب في تراضي" });
+        }
+        if (targetStage === "قيد_التدقيق_في_ناجز") {
           const najiz = req.body.najizNumber || (existing as any).najizNumber;
           if (!najiz) return res.status(400).json({ error: "يجب إدخال رقم القيد في ناجز" });
         }
-
-        // Before رفع_بمنصة_تراضي: require taradiNumber
-        if (targetStage === "رفع_بمنصة_تراضي") {
-          const taradi = req.body.taradiNumber || (existing as any).taradiNumber;
-          if (!taradi) return res.status(400).json({ error: "يجب إدخال رقم الطلب في منصة تراضي" });
-        }
-
-        // Before الرفع_في_معين: require moeenNumber
-        if (targetStage === "الرفع_في_معين") {
+        if (targetStage === "قيد_التدقيق_في_معين") {
           const moeen = req.body.moeenNumber || (existing as any).moeenNumber;
           if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
         }
