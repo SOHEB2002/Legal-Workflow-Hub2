@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface CaseProgressBarProps {
   currentStage: CaseStageValue;
-  onMoveToNext: (notes: string, internalReviewerId?: string) => void;
+  onMoveToNext: (notes: string, internalReviewerId?: string, reviewDecision?: string) => void;
   onMoveToPrevious: (notes: string, internalReviewerId?: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
@@ -30,6 +30,7 @@ interface CaseProgressBarProps {
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
   caseInternalReviewerId?: string | null;
   currentUserId?: string;
+  isAssignedLawyer?: boolean;
 }
 
 export function CaseProgressBar({
@@ -47,6 +48,7 @@ export function CaseProgressBar({
   eligibleInternalReviewers = [],
   caseInternalReviewerId,
   currentUserId,
+  isAssignedLawyer = false,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
@@ -79,6 +81,9 @@ export function CaseProgressBar({
 
   const isAtInternalReview =
     normalizedStage === "مراجعة_داخلية" || normalizedStage === "مراجعة_داخلية_للتظلم";
+  const isAtCommitteeNotes = normalizedStage === "الأخذ_بالملاحظات";
+  const isHeadOrManagerRole = userRole === "department_head" || userRole === "branch_manager";
+  const canActOnCommitteeNotes = isAtCommitteeNotes && (isAssignedLawyer || isHeadOrManagerRole);
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
   const canActOnInternalReview = isReviewerActor || isHeadOrManager;
@@ -98,6 +103,10 @@ export function CaseProgressBar({
     if (!onInternalReviewSendBack || !sendBackNotes.trim()) return;
     onInternalReviewSendBack(sendBackNotes.trim());
     setSendBackNotes("");
+  };
+
+  const handleCommitteeNotesDecision = (decision: string) => {
+    onMoveToNext("", undefined, decision);
   };
 
   const handleMovePrev = () => {
@@ -186,6 +195,97 @@ export function CaseProgressBar({
         <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground py-1">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>جاري تحديث المرحلة...</span>
+        </div>
+      )}
+
+      {canActOnCommitteeNotes && (
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                data-testid="button-committee-notes-applied"
+              >
+                <Check className="w-4 h-4 ml-1" />
+                تم الأخذ بالملاحظات
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تأكيد: تم الأخذ بالملاحظات</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم الانتقال مباشرةً إلى <strong>جاهزة للرفع</strong> مع تسجيل قرار "تم الأخذ بالملاحظات".
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={() => handleCommitteeNotesDecision("تم_الأخذ_بالملاحظات")}>
+                  تأكيد
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-orange-500 hover:bg-orange-600 text-white"
+                data-testid="button-committee-notes-partial"
+              >
+                <AlertTriangle className="w-4 h-4 ml-1" />
+                تم الأخذ بالملاحظات جزئياً
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تأكيد: تم الأخذ بالملاحظات جزئياً</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم الانتقال مباشرةً إلى <strong>جاهزة للرفع</strong> مع تسجيل قرار "تم الأخذ بالملاحظات جزئياً".
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={() => handleCommitteeNotesDecision("تم_الأخذ_جزئياً")}>
+                  تأكيد
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-red-600 hover:bg-red-700 text-white"
+                data-testid="button-committee-notes-not-applied"
+              >
+                <AlertTriangle className="w-4 h-4 ml-1" />
+                لم يتم الأخذ بالملاحظات
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تأكيد: لم يتم الأخذ بالملاحظات</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم الانتقال مباشرةً إلى <strong>جاهزة للرفع</strong> مع تسجيل قرار "لم يتم الأخذ بالملاحظات".
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={() => handleCommitteeNotesDecision("لم_يتم_الأخذ")}>
+                  تأكيد
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
 
@@ -363,7 +463,7 @@ export function CaseProgressBar({
           </AlertDialog>
         )}
 
-        {canGoNext && !isAtInternalReview && (
+        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
