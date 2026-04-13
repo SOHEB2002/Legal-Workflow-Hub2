@@ -393,8 +393,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const response = await apiRequest("POST", `/api/cases/${id}/skip-data-completion`, { notes });
-      const updatedCase = await response.json();
-      setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
+      try {
+        const updatedCase = await response.json();
+        setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
+      } catch {
+        // server transition succeeded; local state refresh failed — ignore
+      }
       return true;
     } catch {
       return false;
