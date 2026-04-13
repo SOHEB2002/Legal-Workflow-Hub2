@@ -1144,8 +1144,9 @@ export async function registerRoutes(
   });
 
   app.post("/api/cases/:id/skip-data-completion", requireAuth, async (req, res) => {
+    const caseId = String(req.params.id);
     try {
-      const caseItem = await storage.getCaseById(String(req.params.id));
+      const caseItem = await storage.getCaseById(caseId);
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
 
@@ -1171,25 +1172,55 @@ export async function registerRoutes(
         { stage: "دراسة", timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
       ];
 
-      const updated = await storage.updateCase(caseItem.id, { currentStage: "دراسة", stageHistory } as any);
-
-      await storage.logCaseActivity({
-        caseId: caseItem.id,
-        userId: user.id,
-        userName: user.name,
-        actionType: "stage_changed",
-        title: "تجاوز مرحلة استكمال البيانات والانتقال مباشرةً للدراسة",
-      });
+      // Step 1: update the case (the only critical operation)
+      let updated;
+      try {
+        updated = await storage.updateCase(caseItem.id, { currentStage: "دراسة", stageHistory } as any);
+      } catch (err: any) {
+        console.error("[skip-data-completion] updateCase FAILED", {
+          caseId,
+          message: err?.message,
+          stack: err?.stack,
+        });
+        return res.status(500).json({ error: "فشل تحديث القضية", detail: err?.message });
+      }
 
       if (!updated) {
-        console.error("[skip-data-completion] storage.updateCase returned undefined for case", caseItem.id);
+        console.error("[skip-data-completion] updateCase returned undefined", { caseId });
         return res.status(500).json({ error: "فشل تحديث القضية" });
       }
-      console.log("[skip-data-completion] success", { caseId: caseItem.id, newStage: updated.currentStage, userId: user.id, role: user.role });
-      res.status(200).json(updated);
-    } catch (error) {
-      console.error("Error skipping data completion:", error);
-      res.status(500).json({ error: "حدث خطأ في تجاوز المرحلة" });
+
+      // Step 2: best-effort activity log — must not fail the request
+      try {
+        await storage.logCaseActivity({
+          caseId: caseItem.id,
+          userId: user.id,
+          userName: user.name,
+          actionType: "stage_changed",
+          title: "تجاوز مرحلة استكمال البيانات والانتقال مباشرةً للدراسة",
+        });
+      } catch (err: any) {
+        console.error("[skip-data-completion] logCaseActivity FAILED (non-fatal)", {
+          caseId,
+          message: err?.message,
+          stack: err?.stack,
+        });
+      }
+
+      console.log("[skip-data-completion] success", {
+        caseId,
+        newStage: updated.currentStage,
+        userId: user.id,
+        role: user.role,
+      });
+      return res.status(200).json(updated);
+    } catch (error: any) {
+      console.error("[skip-data-completion] unexpected error", {
+        caseId,
+        message: error?.message,
+        stack: error?.stack,
+      });
+      return res.status(500).json({ error: "حدث خطأ في تجاوز المرحلة", detail: error?.message });
     }
   });
 
