@@ -1426,9 +1426,12 @@ export async function registerRoutes(
 
         // Entering the platform-review stages now happens directly from
         // جاهزة_للرفع; the lawyer must supply the matching platform number.
+        // The taradi number IS the case number at that platform, so on
+        // entry we also replace caseNumber with it. Same for labor mohr.
         if (targetStage === "قيد_التدقيق_في_تراضي") {
           const taradi = req.body.taradiNumber || (existing as any).taradiNumber;
           if (!taradi) return res.status(400).json({ error: "يجب إدخال رقم الطلب في تراضي" });
+          req.body.caseNumber = String(taradi).trim();
         }
         if (targetStage === "قيد_التدقيق_في_ناجز") {
           const najiz = req.body.najizNumber || (existing as any).najizNumber;
@@ -1437,6 +1440,20 @@ export async function registerRoutes(
         if (targetStage === "قيد_التدقيق_في_معين") {
           const moeen = req.body.moeenNumber || (existing as any).moeenNumber;
           if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
+        }
+        // Labor settlement: the moment a mohrNumber is supplied (or already
+        // exists) and the case is leaving the settlement-prep stages, sync
+        // caseNumber := mohrNumber.
+        if (
+          (targetStage === "بانتظار_رفع_العميل_للتسوية" ||
+            targetStage === "مداولة_الصلح" ||
+            targetStage === "أغلق_طلب_الصلح") &&
+          existing.currentStage !== targetStage
+        ) {
+          const mohr = req.body.mohrNumber || (existing as any).mohrNumber;
+          if (mohr && String(mohr).trim()) {
+            req.body.caseNumber = String(mohr).trim();
+          }
         }
 
         // Accepting out of a najiz/moeen review stage: the lawyer must enter
@@ -1469,30 +1486,10 @@ export async function registerRoutes(
           req.body.platformReviewResubmitted = false;
         }
 
-        // Platform-specific caseNumber replacement on acceptance:
-        // - Accepting out of قيد_التدقيق_في_تراضي: the taradi request number
-        //   IS the case number in that platform, so caseNumber := taradiNumber.
-        // - Finalising labor settlement (out of أغلق_طلب_الصلح) when mohrNumber
-        //   is recorded: caseNumber := mohrNumber.
-        // (ناجز/معين acceptance still goes through storage.updateCase, which
-        // syncs caseNumber := courtCaseNumber from the request body.)
-        if (
-          existing.currentStage === "قيد_التدقيق_في_تراضي" &&
-          targetStage !== existing.currentStage
-        ) {
-          const taradi = req.body.taradiNumber || (existing as any).taradiNumber;
-          if (taradi && String(taradi).trim()) {
-            req.body.caseNumber = String(taradi).trim();
-          }
-        }
-        if (
-          existing.currentStage === "أغلق_طلب_الصلح" &&
-          targetStage !== existing.currentStage &&
-          (existing as any).mohrNumber &&
-          String((existing as any).mohrNumber).trim()
-        ) {
-          req.body.caseNumber = String((existing as any).mohrNumber).trim();
-        }
+        // (caseNumber replacement now happens on ENTRY into the platform
+        // review stage above — see the targetStage === "قيد_التدقيق_في_تراضي"
+        // / labor settlement blocks. ناجز/معين acceptance still flows through
+        // storage.updateCase:595 which syncs caseNumber := courtCaseNumber.)
 
         // Before تقديم_التظلم: require grievanceDate
         if (targetStage === "تقديم_التظلم") {

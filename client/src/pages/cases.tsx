@@ -1351,61 +1351,18 @@ export default function CasesPage() {
                   </p>
                 </div>
               )}
-              {(selectedCase.currentStage === "تحرير_صحيفة_الدعوى" ||
-                selectedCase.currentStage === "الأخذ_بالملاحظات") &&
-                selectedCase.reviewNotes &&
-                selectedCase.reviewNotes.trim() && (
-                  (() => {
-                    const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
-                    const title = isCommittee
-                      ? "ملاحظات لجنة المراجعة"
-                      : "ملاحظات المراجع الداخلي";
-                    let reviewerName: string | undefined;
-                    if (isCommittee) {
-                      const lastEntry = [...(selectedCase.stageHistory || [])]
-                        .reverse()
-                        .find((h: any) => h.stage === "الأخذ_بالملاحظات") as any;
-                      reviewerName = lastEntry?.userName;
-                    } else if ((selectedCase as any).internalReviewerId) {
-                      reviewerName = users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name;
-                    }
-                    return (
-                      <div
-                        className="bg-amber-50 border-2 border-amber-400 rounded-lg p-4 mb-4 shadow-sm"
-                        dir="rtl"
-                        data-testid="banner-review-notes"
-                      >
-                        <div className="flex items-start gap-3">
-                          <AlertTriangle className="w-6 h-6 text-amber-700 shrink-0 mt-0.5" />
-                          <div className="flex-1">
-                            <h4 className="font-bold text-amber-900 mb-1">{title}</h4>
-                            {reviewerName && (
-                              <p className="text-xs text-amber-700 mb-2">
-                                المراجع: {reviewerName}
-                              </p>
-                            )}
-                            <p className="text-sm text-amber-900 whitespace-pre-wrap">
-                              {selectedCase.reviewNotes}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()
-                )}
-
               {(selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
                 selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
                 selectedCase.currentStage === "قيد_التدقيق_في_معين") && (
                 <div
-                  className="bg-indigo-50 border-2 border-indigo-400 rounded-lg p-4 mb-4 shadow-sm"
+                  className="bg-indigo-50 dark:bg-indigo-950/30 border-2 border-indigo-400 dark:border-indigo-800 rounded-lg p-4 mb-4 shadow-sm"
                   dir="rtl"
                   data-testid="banner-platform-review-notes"
                 >
                   <div className="flex items-start gap-3">
-                    <AlertTriangle className="w-6 h-6 text-indigo-700 shrink-0 mt-0.5" />
+                    <AlertTriangle className="w-6 h-6 text-indigo-700 dark:text-indigo-300 shrink-0 mt-0.5" />
                     <div className="flex-1">
-                      <h4 className="font-bold text-indigo-900 mb-1">
+                      <h4 className="font-bold text-indigo-900 dark:text-indigo-200 mb-1">
                         {selectedCase.currentStage === "قيد_التدقيق_في_تراضي"
                           ? "ملاحظات منصة تراضي"
                           : selectedCase.currentStage === "قيد_التدقيق_في_ناجز"
@@ -1418,22 +1375,22 @@ export default function CasesPage() {
                         if (notes && String(notes).trim()) {
                           return (
                             <>
-                              <p className="text-xs text-indigo-700 mb-2 font-semibold">
+                              <p className="text-xs text-indigo-700 dark:text-indigo-300 mb-2 font-semibold">
                                 حالة الطلب: يوجد ملاحظات — بحاجة لاستكمال
                               </p>
-                              <p className="text-sm text-indigo-900 whitespace-pre-wrap">{notes}</p>
+                              <p className="text-sm text-indigo-900 dark:text-indigo-200 whitespace-pre-wrap">{notes}</p>
                             </>
                           );
                         }
                         if (resubmitted) {
                           return (
-                            <p className="text-xs text-indigo-700">
+                            <p className="text-xs text-indigo-700 dark:text-indigo-300">
                               حالة الطلب: تم إعادة التقديم — بانتظار رد المنصة
                             </p>
                           );
                         }
                         return (
-                          <p className="text-xs text-indigo-700">
+                          <p className="text-xs text-indigo-700 dark:text-indigo-300">
                             حالة الطلب: بانتظار رد المنصة
                           </p>
                         );
@@ -2355,15 +2312,15 @@ export default function CasesPage() {
                   {(selectedCase as any)?.platformReviewNotes &&
                     String((selectedCase as any).platformReviewNotes).trim() && (
                       <div
-                        className="border border-indigo-300 bg-indigo-50 rounded-lg p-4"
+                        className="border border-indigo-300 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/30 rounded-lg p-4"
                         dir="rtl"
                         data-testid="notes-tab-platform-review"
                       >
                         <div className="flex items-center gap-2 mb-2">
-                          <AlertTriangle className="w-5 h-5 text-indigo-700 shrink-0" />
-                          <h4 className="font-bold text-indigo-900">ملاحظات المنصة</h4>
+                          <AlertTriangle className="w-5 h-5 text-indigo-700 dark:text-indigo-300 shrink-0" />
+                          <h4 className="font-bold text-indigo-900 dark:text-indigo-200">ملاحظات المنصة</h4>
                         </div>
-                        <p className="text-sm text-indigo-900 whitespace-pre-wrap">
+                        <p className="text-sm text-indigo-900 dark:text-indigo-200 whitespace-pre-wrap">
                           {(selectedCase as any).platformReviewNotes}
                         </p>
                       </div>
@@ -2387,21 +2344,21 @@ export default function CasesPage() {
                     }
                     return (
                       <div
-                        className="border border-amber-300 bg-amber-50 rounded-lg p-4"
+                        className="border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-4"
                         dir="rtl"
                         data-testid="notes-tab-review"
                       >
                         <div className="flex items-center gap-2 mb-2">
-                          <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
-                          <h4 className="font-bold text-amber-900">{title}</h4>
+                          <AlertTriangle className="w-5 h-5 text-amber-700 dark:text-amber-300 shrink-0" />
+                          <h4 className="font-bold text-amber-900 dark:text-amber-200">{title}</h4>
                         </div>
                         {(reviewerName || timestamp) && (
-                          <p className="text-xs text-amber-700 mb-2">
+                          <p className="text-xs text-amber-700 dark:text-amber-300 mb-2">
                             {reviewerName ? `المراجع: ${reviewerName}` : ""}
                             {timestamp ? ` — ${new Date(timestamp).toLocaleString("ar")}` : ""}
                           </p>
                         )}
-                        <p className="text-sm text-amber-900 whitespace-pre-wrap">{selectedCase.reviewNotes}</p>
+                        <p className="text-sm text-amber-900 dark:text-amber-200 whitespace-pre-wrap">{selectedCase.reviewNotes}</p>
                       </div>
                     );
                   })()}
