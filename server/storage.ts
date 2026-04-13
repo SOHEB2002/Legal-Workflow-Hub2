@@ -200,6 +200,7 @@ function mapDbCase(dbCase: any): LawCase {
     googleDriveFolderId: dbCase.googleDriveFolderId || "",
     reviewNotes: dbCase.reviewNotes || "",
     platformReviewNotes: dbCase.platformReviewNotes || "",
+    platformReviewResubmitted: dbCase.platformReviewResubmitted ?? false,
     reviewDecision: dbCase.reviewDecision,
     reviewActionTaken: dbCase.reviewActionTaken,
     priority: dbCase.priority || "متوسط",

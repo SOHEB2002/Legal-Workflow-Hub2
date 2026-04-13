@@ -68,6 +68,7 @@ export const lawCases = pgTable("law_cases", {
   googleDriveFolderId: varchar("google_drive_folder_id", { length: 255 }).default(""),
   reviewNotes: text("review_notes").default(""),
   platformReviewNotes: text("platform_review_notes").default(""),
+  platformReviewResubmitted: boolean("platform_review_resubmitted").default(false),
   reviewDecision: varchar("review_decision", { length: 50 }),
   reviewActionTaken: text("review_action_taken"),
   priority: varchar("priority", { length: 50 }).notNull().default("متوسط"),
@@ -1097,6 +1098,7 @@ export interface LawCase {
   googleDriveFolderId: string;
   reviewNotes: string;
   platformReviewNotes: string;
+  platformReviewResubmitted: boolean;
   reviewDecision: ReviewDecisionType | null;
   reviewActionTaken: string | null;
   priority: PriorityType;
