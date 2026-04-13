@@ -1466,12 +1466,12 @@ export default function CasesPage() {
                       u.id !== user?.id
                     )
                     .map(u => ({ id: u.id, name: u.name }))}
-                  onMoveToNext={async (notes, internalReviewerId, reviewDecision, extraFields) => {
+                  onMoveToNext={async (notes, internalReviewerId, reviewDecision, extraFields, explicitTargetStage) => {
                     if (!user) return;
                     const stageBefore = selectedCase.currentStage;
                     setStageTransitioning(true);
                     try {
-                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields);
+                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields, explicitTargetStage);
                       if (success) {
                         toast({ title: "تم نقل القضية للمرحلة التالية" });
                         // Prompt the user to add the hearing that the accepted
