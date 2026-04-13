@@ -334,7 +334,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       stageHistory: [...lawCase.stageHistory, newTransition],
     };
 
-    if (nextStage === "مراجعة_داخلية" && internalReviewerId) {
+    if ((nextStage === "مراجعة_داخلية" || nextStage === "مراجعة_داخلية_للتظلم") && internalReviewerId) {
       updateData.internalReviewerId = internalReviewerId;
     }
 

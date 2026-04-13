@@ -20,6 +20,7 @@ interface CaseProgressBarProps {
   onMoveToNext: (notes: string, internalReviewerId?: string) => void;
   onMoveToPrevious: (notes: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
+  onInternalReviewSendBack?: (notes: string) => void;
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
@@ -27,6 +28,8 @@ interface CaseProgressBarProps {
   reviewNotes?: string;
   reviewDecision?: string;
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
+  caseInternalReviewerId?: string | null;
+  currentUserId?: string;
 }
 
 export function CaseProgressBar({
@@ -34,6 +37,7 @@ export function CaseProgressBar({
   onMoveToNext,
   onMoveToPrevious,
   onSkipDataCompletion,
+  onInternalReviewSendBack,
   userRole,
   disabled = false,
   caseClassification,
@@ -41,10 +45,13 @@ export function CaseProgressBar({
   reviewNotes,
   reviewDecision,
   eligibleInternalReviewers = [],
+  caseInternalReviewerId,
+  currentUserId,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
   const [selectedReviewerId, setSelectedReviewerId] = useState("");
+  const [sendBackNotes, setSendBackNotes] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قضية_جديدة";
   const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
@@ -64,14 +71,30 @@ export function CaseProgressBar({
   };
 
   const nextStage = stagesOrder[currentIndex + 1];
-  const nextIsInternalReview = nextStage === "مراجعة_داخلية";
+  const nextIsInternalReview = nextStage === "مراجعة_داخلية" || nextStage === "مراجعة_داخلية_للتظلم";
   const canConfirmNext = !nextIsInternalReview || !!selectedReviewerId;
+
+  const isAtInternalReview =
+    normalizedStage === "مراجعة_داخلية" || normalizedStage === "مراجعة_داخلية_للتظلم";
+  const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
+  const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
+  const canActOnInternalReview = isReviewerActor || isHeadOrManager;
 
   const handleMoveNext = () => {
     if (nextIsInternalReview && !selectedReviewerId) return;
     onMoveToNext(notes, nextIsInternalReview ? selectedReviewerId : undefined);
     setNotes("");
     setSelectedReviewerId("");
+  };
+
+  const handleInternalReviewApprove = () => {
+    onMoveToNext("", undefined);
+  };
+
+  const handleInternalReviewSendBack = () => {
+    if (!onInternalReviewSendBack || !sendBackNotes.trim()) return;
+    onInternalReviewSendBack(sendBackNotes.trim());
+    setSendBackNotes("");
   };
 
   const handleMovePrev = () => {
@@ -155,8 +178,88 @@ export function CaseProgressBar({
           <span>جاري تحديث المرحلة...</span>
         </div>
       )}
+
+      {isAtInternalReview && !canActOnInternalReview && (
+        <div className="flex items-center justify-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-300 rounded-md py-2 px-3">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>بانتظار اعتماد المراجع الداخلي</span>
+        </div>
+      )}
+
+      {isAtInternalReview && canActOnInternalReview && (
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                data-testid="button-internal-review-approve"
+              >
+                <Check className="w-4 h-4 ml-1" />
+                معتمد
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>اعتماد المراجعة الداخلية</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم اعتماد القضية والانتقال إلى{" "}
+                  <strong>{getStageLabel(stagesOrder[currentIndex + 1], effectiveClassification as CaseClassificationValue)}</strong>.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={handleInternalReviewApprove}>تأكيد الاعتماد</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                className="border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+                data-testid="button-internal-review-send-back"
+              >
+                <AlertTriangle className="w-4 h-4 ml-1" />
+                يوجد ملاحظات
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>إرجاع القضية بملاحظات</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم إرجاع القضية إلى المحامي ليأخذ بالملاحظات ثم يعيدها إليك.
+                  الملاحظات مطلوبة.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <Textarea
+                placeholder="اكتب ملاحظات المراجع الداخلي..."
+                value={sendBackNotes}
+                onChange={(e) => setSendBackNotes(e.target.value)}
+                className="mt-2"
+                data-testid="input-internal-review-notes"
+              />
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel onClick={() => setSendBackNotes("")}>إلغاء</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleInternalReviewSendBack}
+                  disabled={!sendBackNotes.trim()}
+                >
+                  إرسال الملاحظات
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      )}
+
       <div className="flex items-center justify-center gap-3 flex-wrap">
-        {canGoPrev && (
+        {canGoPrev && !isAtInternalReview && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
@@ -226,7 +329,7 @@ export function CaseProgressBar({
           </AlertDialog>
         )}
 
-        {canGoNext && (
+        {canGoNext && !isAtInternalReview && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button

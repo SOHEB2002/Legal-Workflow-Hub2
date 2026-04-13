@@ -79,6 +79,7 @@ function canModifyCase(user: { id: string; role: string; departmentId: string | 
   if (user.role === "department_head" && caseData.departmentId === user.departmentId) return true;
   if (caseData.primaryLawyerId === user.id || caseData.responsibleLawyerId === user.id) return true;
   if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) return true;
+  if (caseData.internalReviewerId && caseData.internalReviewerId === user.id) return true;
   return false;
 }
 
@@ -89,7 +90,8 @@ function canViewCase(user: { id: string; role: string; departmentId: string | nu
   if (user.role === "employee") {
     return caseData.primaryLawyerId === user.id ||
       caseData.responsibleLawyerId === user.id ||
-      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id));
+      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) ||
+      caseData.internalReviewerId === user.id;
   }
   return false;
 }
@@ -132,11 +134,11 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
-  { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
   { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer"] },
-  { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "branch_manager"] },
 
   // Skip data completion
@@ -168,8 +170,8 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer"] },
-  { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+  { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "انتظار_رد_التظلم", to: "تحصيل", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "انتظار_رد_التظلم", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
@@ -247,9 +249,30 @@ function validateStageTransition(
     return { allowed: true };
   }
 
+  const isInternalReviewer =
+    entityType === "case" && !!user && !!entityData && entityData.internalReviewerId === user.id;
+
+  // Internal review stages are locked: only the designated internal reviewer,
+  // the department head, or the branch manager can transition out of them.
+  if (
+    entityType === "case" &&
+    (currentStage === "مراجعة_داخلية" || currentStage === "مراجعة_داخلية_للتظلم")
+  ) {
+    const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
+    if (!isInternalReviewer && !isHeadOrManager) {
+      return {
+        allowed: false,
+        reason: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية",
+      };
+    }
+  }
+
   const effectiveRoles = [userRole];
   if (entityType === "case" && user && entityData && isAssignedLawyer(user, entityData)) {
     effectiveRoles.push("assigned_lawyer");
+  }
+  if (isInternalReviewer) {
+    effectiveRoles.push("internal_reviewer");
   }
 
   // Rollback logic for cases
@@ -267,6 +290,9 @@ function validateStageTransition(
 
       if (isHeadOrManager) {
         return { allowed: true }; // can go back to ANY previous stage
+      }
+      if (isInternalReviewer && targetIdx === currentIdx - 1) {
+        return { allowed: true }; // reviewer can send back one stage (to drafting)
       }
       if (isLawyer && targetIdx === currentIdx - 1) {
         return { allowed: true }; // can only go back ONE stage
@@ -1470,12 +1496,15 @@ export async function registerRoutes(
         }
       }
 
-      // When moving to مراجعة_داخلية, require internalReviewerId and validate it
+      // When moving to an internal-review stage, require an internalReviewerId
+      // (either newly provided in req.body or already set on the existing case
+      // from a previous round of the review loop) and validate it.
       if (
-        req.body.currentStage === "مراجعة_داخلية" &&
-        existing.currentStage !== "مراجعة_داخلية"
+        (req.body.currentStage === "مراجعة_داخلية" || req.body.currentStage === "مراجعة_داخلية_للتظلم") &&
+        existing.currentStage !== req.body.currentStage
       ) {
-        const reviewerId = req.body.internalReviewerId;
+        const reviewerId: string | undefined =
+          req.body.internalReviewerId || (existing as any).internalReviewerId;
         if (!reviewerId || typeof reviewerId !== "string") {
           return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
         }
@@ -1491,6 +1520,8 @@ export async function registerRoutes(
           if (targetDeptId && reviewer.departmentId !== targetDeptId) {
             return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم القضية" });
           }
+          // Ensure it's persisted even on loop-back re-entries
+          req.body.internalReviewerId = reviewerId;
         } catch (e) {
           console.error("[PATCH cases] reviewer validation failed", e);
         }
@@ -1568,11 +1599,13 @@ export async function registerRoutes(
         } catch (e) {}
       }
 
-      // Notify the selected internal reviewer when transitioning to مراجعة_داخلية
+      // Notify the selected internal reviewer when transitioning into either
+      // مراجعة_داخلية or مراجعة_داخلية_للتظلم (covers both the initial assignment
+      // and re-entries after the lawyer revises following reviewer notes).
       if (
         updated &&
-        req.body.currentStage === "مراجعة_داخلية" &&
-        existing.currentStage !== "مراجعة_داخلية" &&
+        (req.body.currentStage === "مراجعة_داخلية" || req.body.currentStage === "مراجعة_داخلية_للتظلم") &&
+        existing.currentStage !== req.body.currentStage &&
         req.body.internalReviewerId
       ) {
         try {

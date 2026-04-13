@@ -1336,6 +1336,8 @@ export default function CasesPage() {
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
                   caseType={getDepartmentName(selectedCase.departmentId || "") as CaseTypeValue}
                   disabled={stageTransitioning}
+                  currentUserId={user?.id}
+                  caseInternalReviewerId={(selectedCase as any).internalReviewerId || null}
                   eligibleInternalReviewers={users
                     .filter(u =>
                       u.isActive &&
@@ -1372,6 +1374,26 @@ export default function CasesPage() {
                       }
                     } catch (err) {
                       toast({ title: "فشل إرجاع القضية", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setStageTransitioning(false);
+                    }
+                  }}
+                  onInternalReviewSendBack={async (reviewerNotes) => {
+                    if (!user) return;
+                    const targetStage =
+                      selectedCase.currentStage === "مراجعة_داخلية_للتظلم"
+                        ? "تحرير_صيغة_التظلم"
+                        : "تحرير_صحيفة_الدعوى";
+                    setStageTransitioning(true);
+                    try {
+                      await updateCase(selectedCase.id, {
+                        currentStage: targetStage,
+                        reviewNotes: reviewerNotes,
+                        stageChangeNotes: reviewerNotes,
+                      } as any);
+                      toast({ title: "تم إرجاع القضية بملاحظات المراجع" });
+                    } catch (err) {
+                      toast({ title: "تعذّر إرجاع القضية", description: extractApiError(err), variant: "destructive" });
                     } finally {
                       setStageTransitioning(false);
                     }
