@@ -1421,6 +1421,8 @@ export default function CasesPage() {
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
+                  clientRole={(selectedCase as any).clientRole || undefined}
+                  memoRequired={!!(selectedCase as any).memoRequired}
                   caseType={(() => {
                     // Resolve the department label used to pick the stage
                     // path. Prefer the case's caseType field when it already

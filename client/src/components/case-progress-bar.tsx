@@ -28,6 +28,8 @@ interface CaseProgressBarProps {
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
   caseType?: CaseTypeValue;
+  clientRole?: string;
+  memoRequired?: boolean;
   reviewNotes?: string;
   reviewDecision?: string;
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
@@ -49,6 +51,8 @@ export function CaseProgressBar({
   disabled = false,
   caseClassification,
   caseType,
+  clientRole,
+  memoRequired,
   reviewNotes,
   reviewDecision,
   eligibleInternalReviewers = [],
@@ -65,7 +69,12 @@ export function CaseProgressBar({
   const [platformNotes, setPlatformNotes] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قيد_الدراسة";
-  const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
+  const stagesOrder = getStagesForClassification(
+    effectiveClassification as CaseClassificationValue,
+    caseType,
+    clientRole,
+    memoRequired,
+  );
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
   const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;
@@ -716,15 +725,20 @@ export function CaseProgressBar({
                 data-testid="button-skip-data-completion"
               >
                 <SkipForward className="w-4 h-4 ml-1" />
-                الدعوى مكتملة - تجاوز للدراسة
+                الدعوى مكتملة - تجاوز استكمال البيانات
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>تجاوز مرحلة استكمال البيانات</AlertDialogTitle>
                 <AlertDialogDescription>
-                  سيتم تجاوز مرحلة "استكمال البيانات" والانتقال مباشرةً إلى مرحلة <strong>دراسة</strong>.
-                  استخدم هذا الخيار فقط عندما تكون بيانات الدعوى مكتملة ولا توجد نواقص.
+                  سيتم تجاوز مرحلة "استكمال البيانات" والانتقال مباشرةً إلى مرحلة{" "}
+                  <strong>
+                    {stagesOrder[currentIndex + 2]
+                      ? getStageLabel(stagesOrder[currentIndex + 2])
+                      : "دراسة"}
+                  </strong>
+                  . استخدم هذا الخيار فقط عندما تكون بيانات الدعوى مكتملة ولا توجد نواقص.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <Textarea

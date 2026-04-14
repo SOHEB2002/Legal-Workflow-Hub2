@@ -177,12 +177,30 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_معين", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
-  // ==================== EXISTING CASE PATH (memo before study) ====================
+  // ==================== IN-COURT PATH: defendant + memo ====================
+  // استلام → استكمال_البيانات is shared with the common section.
+  { from: "استلام", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
-  { from: "الأخذ_بالملاحظات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer"] },
-  { from: "الأخذ_بالملاحظات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "مراجعة_داخلية", to: "تحرير_مذكرة_جوابية", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+
+  // ==================== IN-COURT PATH: plaintiff + memo ====================
+  // Drafting the lawsuit pleading after the case is already filed. The
+  // common drafting transitions (تحرير_صحيفة_الدعوى → مراجعة_داخلية, etc.)
+  // are reused from the general section above.
+  { from: "استلام", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "استكمال_البيانات", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
+
+  // ==================== IN-COURT PATH: no memo (study only) ====================
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "دراسة", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+
+  // ==================== IN-COURT TERMINAL ====================
+  // After review (with or without notes) an in-court case goes straight to
+  // منظورة — it's already filed, so there's no ناجز/تراضي step and no
+  // جاهزة_للرفع gate.
+  { from: "إحالة_للجنة_المراجعة", to: "منظورة", allowedRoles: ["cases_review_head", "branch_manager", "department_head"] },
+  { from: "الأخذ_بالملاحظات", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
   // ==================== POST-TRIAL TRANSITIONS ====================
   { from: "منظورة", to: "محكوم_حكم_ابتدائي", allowedRoles: ["assigned_lawyer"] },
@@ -276,7 +294,9 @@ function validateStageTransition(
   if (entityType === "case" && entityData) {
     const classification = entityData.caseClassification as string;
     const caseType = entityData.caseType as CaseTypeValue;
-    const stages = getStagesForClassification(classification as any, caseType);
+    const clientRole = entityData.clientRole as string | undefined;
+    const memoRequired = !!entityData.memoRequired;
+    const stages = getStagesForClassification(classification as any, caseType, clientRole, memoRequired);
     const currentIdx = stages.indexOf(currentStage as any);
     const targetIdx = stages.indexOf(targetStage as any);
 
@@ -1189,16 +1209,31 @@ export async function registerRoutes(
       const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال البيانات - الدعوى مكتملة";
       const now = new Date().toISOString();
       const existingHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
+
+      // Skip target depends on the path the case is on. UNDER_STUDY cases
+      // always go to دراسة. IN_COURT cases branch on clientRole and
+      // memoRequired: defendant + memo → تحرير_مذكرة_جوابية, plaintiff +
+      // memo → تحرير_صحيفة_الدعوى, no memo → دراسة.
+      const isInCourt = (caseItem as any).caseClassification === "منظورة_بالمحكمة";
+      const clientRole = (caseItem as any).clientRole as string | undefined;
+      const memoRequired = !!(caseItem as any).memoRequired;
+      let skipTarget: string = "دراسة";
+      if (isInCourt && memoRequired) {
+        skipTarget = clientRole === "مدعى_عليه"
+          ? "تحرير_مذكرة_جوابية"
+          : "تحرير_صحيفة_الدعوى";
+      }
+
       const stageHistory = [
         ...existingHistory,
         { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: user.name, notes: "تجاوز تلقائي" },
-        { stage: "دراسة", timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
+        { stage: skipTarget, timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
       ];
 
       // Step 1: update the case (the only critical operation)
       let updated;
       try {
-        updated = await storage.updateCase(caseItem.id, { currentStage: "دراسة", stageHistory } as any);
+        updated = await storage.updateCase(caseItem.id, { currentStage: skipTarget, stageHistory } as any);
       } catch (err: any) {
         console.error("[skip-data-completion] updateCase FAILED", {
           caseId,
@@ -1220,7 +1255,7 @@ export async function registerRoutes(
           userId: user.id,
           userName: user.name,
           actionType: "stage_changed",
-          title: "تجاوز مرحلة استكمال البيانات والانتقال مباشرةً للدراسة",
+          title: `تجاوز مرحلة استكمال البيانات والانتقال مباشرةً إلى ${skipTarget.replace(/_/g, " ")}`,
         });
       } catch (err: any) {
         console.error("[skip-data-completion] logCaseActivity FAILED (non-fatal)", {
