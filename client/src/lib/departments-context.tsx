@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { DepartmentInfo, DepartmentType } from "@shared/schema";
 import { Department } from "@shared/schema";
+import { apiRequest } from "./queryClient";
 
 interface DepartmentsContextType {
   departments: DepartmentInfo[];
@@ -11,11 +12,13 @@ interface DepartmentsContextType {
 const DepartmentsContext = createContext<DepartmentsContextType | undefined>(undefined);
 
 // Canonical department list — shown as the bootstrap state and used as a
-// fallback whenever /api/departments is empty or unreachable. These IDs match
-// the values the server seeds for a fresh install.
+// fallback whenever /api/departments is empty or unreachable. IDs MUST match
+// the server's initializeDefaultData seed in storage.ts — department_head
+// users are assigned to these ids and the routing / notifications filter
+// on an exact id match.
 const DEFAULT_DEPARTMENTS: DepartmentInfo[] = [
-  { id: "1", name: "تجاري", headId: null, createdAt: new Date().toISOString() },
-  { id: "2", name: "عام", headId: null, createdAt: new Date().toISOString() },
+  { id: "1", name: "عام", headId: null, createdAt: new Date().toISOString() },
+  { id: "2", name: "تجاري", headId: null, createdAt: new Date().toISOString() },
   { id: "3", name: "عمالي", headId: null, createdAt: new Date().toISOString() },
   { id: "4", name: "إداري", headId: null, createdAt: new Date().toISOString() },
 ];
@@ -29,23 +32,27 @@ export function DepartmentsProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const load = async (attempt = 0) => {
       try {
-        const res = await fetch("/api/departments", { credentials: "include" });
-        if (!res.ok) return;
+        // Use apiRequest so the Bearer token is attached — a plain fetch
+        // with just credentials:"include" returns 401 for authenticated
+        // endpoints and leaves the UI stuck on the hardcoded defaults.
+        const res = await apiRequest("GET", "/api/departments");
         const data = (await res.json()) as DepartmentInfo[];
         if (cancelled || !Array.isArray(data) || data.length === 0) return;
-        // Merge server departments with defaults: prefer server rows, then
-        // append any canonical department whose NAME isn't already covered.
-        // This guarantees the dropdown always exposes all four categories
-        // even when the server list is incomplete.
         const serverNames = new Set(data.map((d) => d.name));
         const filler = DEFAULT_DEPARTMENTS.filter((d) => !serverNames.has(d.name));
         setDepartments([...data, ...filler]);
-      } catch {
-        // Keep defaults on failure.
+      } catch (err: any) {
+        // If the user isn't logged in yet (first paint before auth bootstrap),
+        // try once more after a short delay so the dropdown picks up the
+        // real server ids as soon as the session is ready.
+        if (attempt === 0 && !cancelled) {
+          setTimeout(() => { if (!cancelled) load(1); }, 1500);
+        }
       }
-    })();
+    };
+    load();
     return () => {
       cancelled = true;
     };
