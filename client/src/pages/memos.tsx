@@ -188,7 +188,11 @@ export default function MemosPage() {
         title: formData.title,
         description: formData.description,
         priority: formData.priority as "عاجل" | "عالي" | "متوسط" | "منخفض",
-        assignedTo: formData.assignedTo || user.id,
+        // Don't fall back to user.id — admin_support creating a memo must
+        // not be auto-assigned as the memo lawyer. The server resolves this
+        // from the case's primary/responsible lawyer, and leaves it empty
+        // when the case has no assigned lawyer.
+        assignedTo: formData.assignedTo || "",
         deadline: formData.deadline,
         content: formData.content,
         fileLink: "",

@@ -28,6 +28,8 @@ interface CaseProgressBarProps {
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
   caseType?: CaseTypeValue;
+  clientRole?: string;
+  memoRequired?: boolean;
   reviewNotes?: string;
   reviewDecision?: string;
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
@@ -49,6 +51,8 @@ export function CaseProgressBar({
   disabled = false,
   caseClassification,
   caseType,
+  clientRole,
+  memoRequired,
   reviewNotes,
   reviewDecision,
   eligibleInternalReviewers = [],
@@ -65,7 +69,12 @@ export function CaseProgressBar({
   const [platformNotes, setPlatformNotes] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قيد_الدراسة";
-  const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
+  const stagesOrder = getStagesForClassification(
+    effectiveClassification as CaseClassificationValue,
+    caseType,
+    clientRole,
+    memoRequired,
+  );
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
   const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;
@@ -121,6 +130,10 @@ export function CaseProgressBar({
   const isAtPlatformReview = !!platformReviewInfo;
   const canActOnPlatformReview =
     isAtPlatformReview && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
+
+  const isAtSettlement = normalizedStage === "مداولة_الصلح";
+  const canActOnSettlement =
+    isAtSettlement && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
   const canActOnInternalReview = isReviewerActor || isHeadOrManager;
@@ -179,6 +192,13 @@ export function CaseProgressBar({
         : undefined;
     onMoveToNext("", undefined, undefined, extraFields, target);
     setCourtCaseNumber("");
+  };
+
+  const handleSettlementDecision = (target: "تحصيل" | "أغلق_طلب_الصلح") => {
+    // Pass the target explicitly so the cases-context doesn't have to guess
+    // the next stage from a linear stages array — same approach used for
+    // the platform-review accept buttons.
+    onMoveToNext("", undefined, undefined, undefined, target);
   };
 
   const handlePlatformReviewAddNotes = () => {
@@ -399,6 +419,70 @@ export function CaseProgressBar({
               </AlertDialogContent>
             </AlertDialog>
           )}
+        </div>
+      )}
+
+      {canActOnSettlement && (
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                data-testid="button-settlement-reached"
+              >
+                <Check className="w-4 h-4 ml-1" />
+                تم الصلح
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تأكيد: تم الصلح</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم نقل القضية إلى مرحلة <strong>تحصيل</strong> وإنشاء مهمة
+                  تلقائية للدعم الإداري بإعداد خطاب التحصيل.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={() => handleSettlementDecision("تحصيل")}>
+                  تأكيد
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-orange-500 hover:bg-orange-600 text-white"
+                data-testid="button-settlement-failed"
+              >
+                <AlertTriangle className="w-4 h-4 ml-1" />
+                لم يتم الصلح
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف
+                  مسار التقاضي في المحكمة.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={() => handleSettlementDecision("أغلق_طلب_الصلح")}>
+                  تأكيد
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
 
@@ -641,15 +725,20 @@ export function CaseProgressBar({
                 data-testid="button-skip-data-completion"
               >
                 <SkipForward className="w-4 h-4 ml-1" />
-                الدعوى مكتملة - تجاوز للدراسة
+                الدعوى مكتملة - تجاوز استكمال البيانات
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>تجاوز مرحلة استكمال البيانات</AlertDialogTitle>
                 <AlertDialogDescription>
-                  سيتم تجاوز مرحلة "استكمال البيانات" والانتقال مباشرةً إلى مرحلة <strong>دراسة</strong>.
-                  استخدم هذا الخيار فقط عندما تكون بيانات الدعوى مكتملة ولا توجد نواقص.
+                  سيتم تجاوز مرحلة "استكمال البيانات" والانتقال مباشرةً إلى مرحلة{" "}
+                  <strong>
+                    {stagesOrder[currentIndex + 2]
+                      ? getStageLabel(stagesOrder[currentIndex + 2])
+                      : "دراسة"}
+                  </strong>
+                  . استخدم هذا الخيار فقط عندما تكون بيانات الدعوى مكتملة ولا توجد نواقص.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <Textarea
@@ -667,7 +756,7 @@ export function CaseProgressBar({
           </AlertDialog>
         )}
 
-        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtPlatformReview && (
+        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtPlatformReview && !isAtSettlement && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button

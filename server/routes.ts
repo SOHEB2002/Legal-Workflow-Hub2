@@ -148,11 +148,11 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_ناجز", to: "مداولة_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_ناجز", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
-  { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
-  { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
   // ==================== COMMERCIAL PATH (taradi then najiz) ====================
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_تراضي", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
@@ -177,12 +177,30 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_معين", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
-  // ==================== EXISTING CASE PATH (memo before study) ====================
+  // ==================== IN-COURT PATH: defendant + memo ====================
+  // استلام → استكمال_البيانات is shared with the common section.
+  { from: "استلام", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
-  { from: "الأخذ_بالملاحظات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer"] },
-  { from: "الأخذ_بالملاحظات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "مراجعة_داخلية", to: "تحرير_مذكرة_جوابية", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+
+  // ==================== IN-COURT PATH: plaintiff + memo ====================
+  // Drafting the lawsuit pleading after the case is already filed. The
+  // common drafting transitions (تحرير_صحيفة_الدعوى → مراجعة_داخلية, etc.)
+  // are reused from the general section above.
+  { from: "استلام", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: "استكمال_البيانات", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
+
+  // ==================== IN-COURT PATH: no memo (study only) ====================
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "دراسة", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+
+  // ==================== IN-COURT TERMINAL ====================
+  // After review (with or without notes) an in-court case goes straight to
+  // منظورة — it's already filed, so there's no ناجز/تراضي step and no
+  // جاهزة_للرفع gate.
+  { from: "إحالة_للجنة_المراجعة", to: "منظورة", allowedRoles: ["cases_review_head", "branch_manager", "department_head"] },
+  { from: "الأخذ_بالملاحظات", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
   // ==================== POST-TRIAL TRANSITIONS ====================
   { from: "منظورة", to: "محكوم_حكم_ابتدائي", allowedRoles: ["assigned_lawyer"] },
@@ -276,7 +294,9 @@ function validateStageTransition(
   if (entityType === "case" && entityData) {
     const classification = entityData.caseClassification as string;
     const caseType = entityData.caseType as CaseTypeValue;
-    const stages = getStagesForClassification(classification as any, caseType);
+    const clientRole = entityData.clientRole as string | undefined;
+    const memoRequired = !!entityData.memoRequired;
+    const stages = getStagesForClassification(classification as any, caseType, clientRole, memoRequired);
     const currentIdx = stages.indexOf(currentStage as any);
     const targetIdx = stages.indexOf(targetStage as any);
 
@@ -899,7 +919,7 @@ export async function registerRoutes(
             title: `مذكرة جوابية - ${newCase.caseNumber}`,
             description: `مذكرة جوابية تلقائية لقضية مدعى عليه - ${newCase.caseNumber}`,
             priority: casePriority,
-            assignedTo: newCase.primaryLawyerId || createdBy,
+            assignedTo: newCase.primaryLawyerId || newCase.responsibleLawyerId || "",
             createdBy: "system",
             deadline: deadlineStr,
             isAutoGenerated: true,
@@ -973,7 +993,7 @@ export async function registerRoutes(
             title: memoTitle,
             description: memoTitle,
             priority: validatedData.priority || "متوسط",
-            assignedTo: newCase.primaryLawyerId || createdBy,
+            assignedTo: newCase.primaryLawyerId || newCase.responsibleLawyerId || "",
             createdBy: "system",
             deadline: memoDeadline,
             isAutoGenerated: true,
@@ -1189,16 +1209,31 @@ export async function registerRoutes(
       const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال البيانات - الدعوى مكتملة";
       const now = new Date().toISOString();
       const existingHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
+
+      // Skip target depends on the path the case is on. UNDER_STUDY cases
+      // always go to دراسة. IN_COURT cases branch on clientRole and
+      // memoRequired: defendant + memo → تحرير_مذكرة_جوابية, plaintiff +
+      // memo → تحرير_صحيفة_الدعوى, no memo → دراسة.
+      const isInCourt = (caseItem as any).caseClassification === "منظورة_بالمحكمة";
+      const clientRole = (caseItem as any).clientRole as string | undefined;
+      const memoRequired = !!(caseItem as any).memoRequired;
+      let skipTarget: string = "دراسة";
+      if (isInCourt && memoRequired) {
+        skipTarget = clientRole === "مدعى_عليه"
+          ? "تحرير_مذكرة_جوابية"
+          : "تحرير_صحيفة_الدعوى";
+      }
+
       const stageHistory = [
         ...existingHistory,
         { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: user.name, notes: "تجاوز تلقائي" },
-        { stage: "دراسة", timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
+        { stage: skipTarget, timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
       ];
 
       // Step 1: update the case (the only critical operation)
       let updated;
       try {
-        updated = await storage.updateCase(caseItem.id, { currentStage: "دراسة", stageHistory } as any);
+        updated = await storage.updateCase(caseItem.id, { currentStage: skipTarget, stageHistory } as any);
       } catch (err: any) {
         console.error("[skip-data-completion] updateCase FAILED", {
           caseId,
@@ -1220,7 +1255,7 @@ export async function registerRoutes(
           userId: user.id,
           userName: user.name,
           actionType: "stage_changed",
-          title: "تجاوز مرحلة استكمال البيانات والانتقال مباشرةً للدراسة",
+          title: `تجاوز مرحلة استكمال البيانات والانتقال مباشرةً إلى ${skipTarget.replace(/_/g, " ")}`,
         });
       } catch (err: any) {
         console.error("[skip-data-completion] logCaseActivity FAILED (non-fatal)", {
@@ -1348,6 +1383,11 @@ export async function registerRoutes(
       } else if (!hasDataFields && !canModifyCase(user, existing)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
+
+      // Flag set inside the stage-transition block below; acted on after
+      // storage.updateCase succeeds. Declared at the outer scope so the
+      // post-update side-effect can see it.
+      let shouldCreateCollectionTask = false;
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -1678,6 +1718,13 @@ export async function registerRoutes(
           req.body.closedAt = new Date().toISOString();
         }
 
+        // Conciliation outcome: when moving مداولة_الصلح → تحصيل, auto-create
+        // a field task for admin_support to draft the collection letter. The
+        // task itself is created AFTER storage.updateCase succeeds so we
+        // don't leave orphan tasks on a failed transition.
+        shouldCreateCollectionTask =
+          existing.currentStage === "مداولة_الصلح" && req.body.currentStage === "تحصيل";
+
         // Struck-off reopen: clear struckOff fields when reopening
         if (existing.currentStage === "مشطوبة" && (req.body.currentStage === "منظورة" || req.body.currentStage === "منظورة_استئناف")) {
           req.body.struckOffDate = null;
@@ -1698,6 +1745,34 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
+
+      // Side effect for مداولة_الصلح → تحصيل: create the admin collection task.
+      if (shouldCreateCollectionTask) {
+        try {
+          const allUsers = await storage.getAllUsers();
+          const adminSupport = allUsers.find(
+            (u: any) => u.role === "admin_support" && u.isActive,
+          );
+          const assignee = adminSupport?.id || user.id;
+          await storage.createFieldTask(
+            {
+              title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
+              description: `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
+              taskType: "متابعة_محكمة",
+              caseId: updated.id,
+              assignedTo: assignee,
+              priority: "عاجل",
+              dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+                .toISOString()
+                .split("T")[0],
+            } as any,
+            user.id,
+          );
+        } catch (e) {
+          console.error("Failed to auto-create collection task on conciliation settlement:", e);
+        }
+      }
+
       if (user && existing) {
         try {
           if (isDeptTransfer) {
@@ -2176,7 +2251,7 @@ export async function registerRoutes(
           const deadlineDate = new Date(validatedData.hearingDate);
           deadlineDate.setDate(deadlineDate.getDate() - 3);
           const relatedCase = await storage.getCaseById(validatedData.caseId);
-          const memoAssignee = relatedCase?.primaryLawyerId || relatedCase?.responsibleLawyerId || user?.id || "1";
+          const memoAssignee = relatedCase?.primaryLawyerId || relatedCase?.responsibleLawyerId || "";
           const memo = await storage.createMemo({
             caseId: validatedData.caseId,
             hearingId: newHearing.id,
@@ -2614,7 +2689,7 @@ export async function registerRoutes(
 
               const deadlineDate = new Date(data.nextHearingDate);
               deadlineDate.setDate(deadlineDate.getDate() - 3);
-              const memoAssignee = existingCase.primaryLawyerId || existingCase.responsibleLawyerId || data.userId || "1";
+              const memoAssignee = existingCase.primaryLawyerId || existingCase.responsibleLawyerId || "";
               const memo = await storage.createMemo({
                 caseId: effectiveCaseId,
                 hearingId: hearingId,
@@ -2898,23 +2973,30 @@ export async function registerRoutes(
 
       const validatedData = insertMemoSchema.parse(req.body);
 
-      // Block memos for closed/archived cases; also resolve assignedTo from case
-      let resolvedAssignedTo = validatedData.assignedTo || "";
+      // Memo assignment rule: ALWAYS resolve from the case. The memo lawyer
+      // is the case's primary (or responsible) lawyer — never the creator,
+      // so admin_support creating a memo doesn't get auto-assigned. If the
+      // case has no lawyer, leave it empty.
+      let resolvedAssignedTo = "";
       if (validatedData.caseId) {
         const relatedCase = await storage.getCaseById(validatedData.caseId);
         if (relatedCase && (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived)) {
           return res.status(400).json({ error: "لا يمكن إضافة مذكرات لقضية مغلقة أو مؤرشفة" });
         }
-        if (relatedCase && (!resolvedAssignedTo || user.role === "admin_support")) {
+        if (relatedCase) {
           resolvedAssignedTo =
             relatedCase.primaryLawyerId ||
             relatedCase.responsibleLawyerId ||
-            user.id;
+            "";
         }
+      } else if (validatedData.assignedTo && validatedData.assignedTo !== user.id) {
+        // No caseId context — honour an explicit client-supplied assignee as
+        // long as it isn't the creator (admin_support shouldn't auto-assign
+        // themselves).
+        resolvedAssignedTo = validatedData.assignedTo;
       }
-      if (!resolvedAssignedTo) resolvedAssignedTo = user.id;
 
-      // Validate assignedTo user is active
+      // Validate assignedTo user is active (only when we have one).
       if (resolvedAssignedTo) {
         const { valid } = await validateAssignedUsersActive([resolvedAssignedTo]);
         if (!valid) {

@@ -711,18 +711,34 @@ export const UnderStudyAdminStages: CaseStageValue[] = [
   "منظورة",
 ];
 
-export const InCourtStages: CaseStageValue[] = [
+// In-court case paths. The firm is handling a case that's already filed in
+// court. The path branches on whether the firm is drafting a response
+// (defendant + memo), filing a pleading (plaintiff + memo), or just studying
+// the case before the next hearing (no memo).
+export const InCourtDefendantMemoStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "تحرير_مذكرة_جوابية",
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
-  "دراسة",
+  "منظورة",
+];
+
+export const InCourtPlaintiffMemoStages: CaseStageValue[] = [
+  "استلام",
+  "استكمال_البيانات",
   "تحرير_صحيفة_الدعوى",
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
+  "منظورة",
+];
+
+export const InCourtNoMemoStages: CaseStageValue[] = [
+  "استلام",
+  "استكمال_البيانات",
+  "دراسة",
   "منظورة",
 ];
 
@@ -737,9 +753,19 @@ export const PostTrialStages: CaseStageValue[] = [
   "مقفلة",
 ];
 
-export function getStagesForClassification(classification: CaseClassificationValue, caseType?: CaseTypeValue): CaseStageValue[] {
+export function getStagesForClassification(
+  classification: CaseClassificationValue,
+  caseType?: CaseTypeValue,
+  clientRole?: string,
+  memoRequired?: boolean,
+): CaseStageValue[] {
   if (classification === "منظورة_بالمحكمة") {
-    return InCourtStages;
+    if (memoRequired) {
+      return clientRole === "مدعى_عليه"
+        ? InCourtDefendantMemoStages
+        : InCourtPlaintiffMemoStages;
+    }
+    return InCourtNoMemoStages;
   }
 
   if (classification === "قيد_الدراسة") {

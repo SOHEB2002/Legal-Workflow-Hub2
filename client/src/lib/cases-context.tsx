@@ -89,13 +89,29 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const resolveStagesOrderForCase = (lawCase: LawCase): CaseStageValue[] => {
     const classification = (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue;
     const deptLabel = getDepartmentName(lawCase.departmentId || "");
-    const primary = getStagesForClassification(classification, deptLabel as any);
+    const clientRole = (lawCase as any).clientRole as string | undefined;
+    const memoRequired = !!(lawCase as any).memoRequired;
+    const primary = getStagesForClassification(classification, deptLabel as any, clientRole, memoRequired);
     if (primary.indexOf(lawCase.currentStage) >= 0) return primary;
+    // IN_COURT has three variants keyed on clientRole/memoRequired, not on
+    // caseType. Fall back across all IN_COURT variants if the current stage
+    // isn't in the primary choice.
+    if (classification === "منظورة_بالمحكمة") {
+      const variants = [
+        getStagesForClassification(classification, deptLabel as any, "مدعى_عليه", true),
+        getStagesForClassification(classification, deptLabel as any, "مدعي", true),
+        getStagesForClassification(classification, deptLabel as any, undefined, false),
+      ];
+      for (const v of variants) {
+        if (v.indexOf(lawCase.currentStage) >= 0) return v;
+      }
+      return primary;
+    }
     const candidates = [
-      getStagesForClassification(classification, "تجاري" as any),
-      getStagesForClassification(classification, "عام" as any),
-      getStagesForClassification(classification, "عمالي" as any),
-      getStagesForClassification(classification, "إداري" as any),
+      getStagesForClassification(classification, "تجاري" as any, clientRole, memoRequired),
+      getStagesForClassification(classification, "عام" as any, clientRole, memoRequired),
+      getStagesForClassification(classification, "عمالي" as any, clientRole, memoRequired),
+      getStagesForClassification(classification, "إداري" as any, clientRole, memoRequired),
     ];
     for (const c of candidates) {
       if (c.indexOf(lawCase.currentStage) >= 0) return c;
