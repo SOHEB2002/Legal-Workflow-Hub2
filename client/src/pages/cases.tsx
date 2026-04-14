@@ -1153,30 +1153,10 @@ export default function CasesPage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="استلام">محكمة (استلام)</SelectItem>
+                          <SelectItem value="استلام">محكمة</SelectItem>
                           <SelectItem value="مداولة_الصلح">مداولة الصلح</SelectItem>
                         </SelectContent>
                       </Select>
-                    </div>
-                    <div>
-                      <Label>عدد الجلسات السابقة</Label>
-                      <Input
-                        data-testid="input-previous-hearings"
-                        type="number"
-                        min={0}
-                        value={formData.previousHearingsCount}
-                        onChange={(e) => setFormData({ ...formData, previousHearingsCount: parseInt(e.target.value) || 0 })}
-                      />
-                    </div>
-                    <div>
-                      <Label>الوضع الحالي للقضية</Label>
-                      <Textarea
-                        data-testid="input-current-situation"
-                        value={formData.currentSituation}
-                        onChange={(e) => setFormData({ ...formData, currentSituation: e.target.value })}
-                        placeholder="وصف موجز للوضع الحالي..."
-                        rows={2}
-                      />
                     </div>
                     {(formData as any).clientRole === "مدعى_عليه" && (
                       <div>
