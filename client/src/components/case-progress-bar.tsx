@@ -69,12 +69,33 @@ export function CaseProgressBar({
   const [platformNotes, setPlatformNotes] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قيد_الدراسة";
-  const stagesOrder = getStagesForClassification(
+  let stagesOrder = getStagesForClassification(
     effectiveClassification as CaseClassificationValue,
     caseType,
     clientRole,
     memoRequired,
   );
+  // Dynamic bridge for IN_COURT cases: if a memo was added after the case
+  // already reached دراسة on the no-memo path, the memo variant returned
+  // above doesn't include دراسة. Splice دراسة in just before the drafting
+  // stage so the progress bar shows a coherent path and the next-stage
+  // button points at drafting (not back at استلام).
+  if (
+    effectiveClassification === "منظورة_بالمحكمة" &&
+    normalizedStage === "دراسة" &&
+    stagesOrder.indexOf("دراسة") < 0
+  ) {
+    const memoDraftIdx = stagesOrder.indexOf("تحرير_مذكرة_جوابية");
+    const pleadingDraftIdx = stagesOrder.indexOf("تحرير_صحيفة_الدعوى");
+    const draftingIdx = memoDraftIdx >= 0 ? memoDraftIdx : pleadingDraftIdx;
+    if (draftingIdx > 0) {
+      stagesOrder = [
+        ...stagesOrder.slice(0, draftingIdx),
+        "دراسة" as CaseStageValue,
+        ...stagesOrder.slice(draftingIdx),
+      ];
+    }
+  }
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
   const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;

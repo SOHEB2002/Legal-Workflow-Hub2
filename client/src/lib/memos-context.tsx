@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Memo, MemoStatusValue, InsertMemo } from "@shared/schema";
 import { useAuth } from "./auth-context";
+import { useCases } from "./cases-context";
 
 interface MemosContextType {
   memos: Memo[];
@@ -23,6 +24,7 @@ const MemosContext = createContext<MemosContextType | undefined>(undefined);
 
 export function MemosProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  const { refreshCases } = useCases();
   const { data: memos = [], isLoading } = useQuery<Memo[]>({
     queryKey: ["/api/memos"],
     enabled: !!user,
@@ -30,8 +32,13 @@ export function MemosProvider({ children }: { children: React.ReactNode }) {
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
-    // NOTE: Do NOT invalidate /api/cases here — memos never alter case list data
-    // and invalidating cases refetches all 254+ cases on every memo mutation.
+    // Memo create/delete can mutate the related case's memoRequired and
+    // clientRole (dynamic IN_COURT path adjustment in POST/DELETE
+    // /api/memos), so refresh the cases list to keep the progress bar in
+    // sync with the live case data. We accept the full-list refetch cost
+    // here for correctness — it was previously skipped on the assumption
+    // that memos never touched case rows, which is no longer true.
+    refreshCases().catch(() => {});
   };
 
   const addMemo = async (data: InsertMemo & { createdBy: string }): Promise<Memo> => {
