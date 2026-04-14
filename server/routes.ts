@@ -195,6 +195,12 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "دراسة", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
+  // Dynamic bridge: if a memo is added after the case has already reached
+  // دراسة on the no-memo path, the progress bar needs to route دراسة → the
+  // appropriate drafting stage. (دراسة → تحرير_صحيفة_الدعوى is already in
+  // the common section for UNDER_STUDY cases and is reused here.)
+  { from: "دراسة", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+
   // ==================== IN-COURT TERMINAL ====================
   // After review (with or without notes) an in-court case goes straight to
   // منظورة — it's already filed, so there's no ناجز/تراضي step and no
@@ -3012,7 +3018,42 @@ export async function registerRoutes(
 
       if (memo.caseId) {
         const activeCount = await getActiveMemoCount(memo.caseId);
-        await storage.updateCase(memo.caseId, { activeMemoCount: activeCount } as any);
+        const caseUpdate: any = { activeMemoCount: activeCount };
+
+        // Dynamic IN_COURT path adjustment: adding a memo to an IN_COURT
+        // case at an early stage flips memoRequired on so the progress bar
+        // switches to the memo/drafting variant. Once the case has passed
+        // drafting (منظورة or later post-trial stages), we leave it alone.
+        const relatedCase = await storage.getCaseById(memo.caseId);
+        if (
+          relatedCase &&
+          (relatedCase as any).caseClassification === "منظورة_بالمحكمة"
+        ) {
+          const EARLY_STAGES = new Set([
+            "استلام",
+            "استكمال_البيانات",
+            "دراسة",
+          ]);
+          const atEarlyStage = EARLY_STAGES.has(relatedCase.currentStage);
+
+          if (atEarlyStage) {
+            if (!(relatedCase as any).memoRequired) {
+              caseUpdate.memoRequired = true;
+            }
+            // Seed clientRole from the memo type when the case doesn't have
+            // one yet: RESPONSE ("مذكرة_جوابية") → defendant, LAWSUIT_DRAFT
+            // ("تحرير_دعوى") → plaintiff. Don't override an existing role.
+            if (!(relatedCase as any).clientRole) {
+              if (memo.memoType === "مذكرة_جوابية") {
+                caseUpdate.clientRole = "مدعى_عليه";
+              } else if (memo.memoType === "تحرير_دعوى") {
+                caseUpdate.clientRole = "مدعي";
+              }
+            }
+          }
+        }
+
+        await storage.updateCase(memo.caseId, caseUpdate);
       }
 
       res.status(201).json(memo);
@@ -3145,7 +3186,37 @@ export async function registerRoutes(
 
       if (memo.caseId) {
         const activeCount = await getActiveMemoCount(memo.caseId);
-        await storage.updateCase(memo.caseId, { activeMemoCount: activeCount } as any);
+        const caseUpdate: any = { activeMemoCount: activeCount };
+
+        // Dynamic IN_COURT path adjustment: when the last memo on an IN_COURT
+        // case is removed and the case is still at an early stage, flip
+        // memoRequired back off so the progress bar returns to the no-memo
+        // variant (study only). Once the case has passed drafting (منظورة
+        // or post-trial), the classification is locked in.
+        const relatedCase = await storage.getCaseById(memo.caseId);
+        if (
+          relatedCase &&
+          (relatedCase as any).caseClassification === "منظورة_بالمحكمة" &&
+          (relatedCase as any).memoRequired
+        ) {
+          const EARLY_STAGES = new Set([
+            "استلام",
+            "استكمال_البيانات",
+            "دراسة",
+            // Also allow flipping off while the lawyer is actively in a
+            // memo/drafting stage — they may have created the memo by
+            // mistake and want to delete it and revert to study-only.
+            "تحرير_مذكرة_جوابية",
+            "تحرير_صحيفة_الدعوى",
+          ]);
+          const allMemos = await storage.getMemosByCase(memo.caseId);
+          const anyRemaining = allMemos.some((m: any) => m.id !== memo.id);
+          if (!anyRemaining && EARLY_STAGES.has(relatedCase.currentStage)) {
+            caseUpdate.memoRequired = false;
+          }
+        }
+
+        await storage.updateCase(memo.caseId, caseUpdate);
       }
 
       res.json({ success: true });
