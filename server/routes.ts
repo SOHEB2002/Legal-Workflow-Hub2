@@ -1458,6 +1458,12 @@ export async function registerRoutes(
           (existing as any).caseClassification === "قضية_جديدة"
         ) {
           req.body.caseClassification = "قضية_مقيدة";
+          // For قضية_جديدة the firm is always the plaintiff — persist that as
+          // an explicit clientRole so post-promotion UI (صفة badge, etc.)
+          // doesn't lose the role once classification flips.
+          if (!(existing as any).clientRole) {
+            req.body.clientRole = "مدعي";
+          }
         }
         // Labor settlement: the moment a mohrNumber is supplied (or already
         // exists) and the case is leaving the settlement-prep stages, sync
@@ -2092,8 +2098,13 @@ export async function registerRoutes(
               const conciliationFromStages = ["قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_تراضي", "أغلق_طلب_الصلح"];
               if (conciliationFromStages.includes(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
+                const promoteClassification = (caseForStage as any).caseClassification === "قضية_جديدة";
                 await storage.updateCase(caseForStage.id, {
                   currentStage: "مداولة_الصلح",
+                  ...(promoteClassification ? {
+                    caseClassification: "قضية_مقيدة",
+                    ...(!(caseForStage as any).clientRole ? { clientRole: "مدعي" } : {}),
+                  } : {}),
                   stageHistory: [
                     ...stageHistory,
                     { stage: "مداولة_الصلح", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة صلح" },
@@ -2110,8 +2121,13 @@ export async function registerRoutes(
               ];
               if (courtFromStages.includes(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
+                const promoteClassification = (caseForStage as any).caseClassification === "قضية_جديدة";
                 await storage.updateCase(caseForStage.id, {
                   currentStage: "منظورة",
+                  ...(promoteClassification ? {
+                    caseClassification: "قضية_مقيدة",
+                    ...(!(caseForStage as any).clientRole ? { clientRole: "مدعي" } : {}),
+                  } : {}),
                   stageHistory: [
                     ...stageHistory,
                     { stage: "منظورة", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة محكمة" },

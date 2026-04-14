@@ -826,13 +826,29 @@ export default function CasesPage() {
                   </TableCell>
                   <TableCell className="text-center text-sm">{c.opponentName || "-"}</TableCell>
                   <TableCell className="text-center">
-                    <Badge variant="outline" className={`text-xs inline-flex text-center justify-center ${
-                      c.caseClassification === CaseClassification.CASE_EXISTING
-                        ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
-                        : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
-                    }`}>
-                      {c.caseClassification === CaseClassification.CASE_EXISTING ? "مدعى عليه" : "مدعي"}
-                    </Badge>
+                    {(() => {
+                      // Derive client role from the explicit clientRole field when
+                      // present; fall back to "مدعي" for legacy قضية_جديدة rows
+                      // (where the firm is always the plaintiff) and to "مدعى عليه"
+                      // for legacy قضية_مقيدة rows that never got clientRole set.
+                      const rawRole = (c as any).clientRole as string | undefined;
+                      const role = rawRole === "مدعى_عليه"
+                        ? "مدعى عليه"
+                        : rawRole === "مدعي"
+                        ? "مدعي"
+                        : c.caseClassification === CaseClassification.CASE_NEW
+                        ? "مدعي"
+                        : "مدعى عليه";
+                      return (
+                        <Badge variant="outline" className={`text-xs inline-flex text-center justify-center ${
+                          role === "مدعى عليه"
+                            ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
+                            : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
+                        }`}>
+                          {role}
+                        </Badge>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell className="text-center">
                     <Badge variant="outline" className="inline-flex justify-center">{c.caseType || "-"}</Badge>
