@@ -1801,19 +1801,24 @@ export async function registerRoutes(
         }
       }
 
-      // Sync the case's active memo status with the new stage so the memos
-      // page reflects what's actually happening on the case. Only runs on
-      // actual stage transitions, and only touches the first non-terminal
-      // memo (معتمدة/مرفوعة/ملغاة are left alone).
+      // Sync the case's active pre-trial memo status with the new stage so
+      // the memos page reflects what's actually happening on the IN_COURT
+      // case. Only runs on actual stage transitions, only for IN_COURT cases,
+      // and only touches non-terminal pre-trial memos (hearing-linked memos
+      // and معتمدة/مرفوعة/ملغاة are left alone).
       if (
         updated &&
         req.body.currentStage &&
-        req.body.currentStage !== existing.currentStage
+        req.body.currentStage !== existing.currentStage &&
+        ((updated as any).caseClassification === "منظورة_بالمحكمة" ||
+          (existing as any).caseClassification === "منظورة_بالمحكمة")
       ) {
         try {
           const caseMemos = await storage.getMemosByCase(String(req.params.id));
           const activeMemo = caseMemos.find(
-            (m: any) => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status),
+            (m: any) =>
+              !m.hearingId &&
+              !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status),
           );
           if (activeMemo) {
             let nextMemoStatus: string | null = null;
@@ -1829,13 +1834,7 @@ export async function registerRoutes(
                 nextMemoStatus = "بانتظار_الاعتماد";
                 break;
               case "منظورة":
-                // Only mark the memo as approved when arriving from
-                // الأخذ_بالملاحظات — that's the committee-review terminal
-                // for an IN_COURT case. Transitions to منظورة from any
-                // other stage (e.g. مشطوبة reopen) shouldn't touch memos.
-                if (existing.currentStage === "الأخذ_بالملاحظات") {
-                  nextMemoStatus = "معتمدة";
-                }
+                nextMemoStatus = "معتمدة";
                 break;
             }
             if (nextMemoStatus && nextMemoStatus !== activeMemo.status) {
