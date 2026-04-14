@@ -2462,6 +2462,88 @@ export default function CasesPage() {
                         </div>
                       ));
                     })()}
+                    {selectedCase.currentStage === "مداولة_الصلح" &&
+                      user &&
+                      (user.role === "admin_support" ||
+                        user.role === "department_head" ||
+                        user.role === "branch_manager" ||
+                        selectedCase.primaryLawyerId === user.id ||
+                        selectedCase.responsibleLawyerId === user.id) && (
+                        <div className="p-3 rounded-lg border bg-card space-y-3">
+                          <div>
+                            <p className="font-medium text-sm">نتيجة مداولة الصلح</p>
+                            <p className="text-xs text-muted-foreground">
+                              حدد نتيجة الصلح — "تم الصلح" ينقل القضية إلى التحصيل
+                              وينشئ مهمة تلقائية للدعم الإداري، و"لم يتم الصلح" يعيدها
+                              إلى مسار المحكمة.
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                              disabled={stageTransitioning}
+                              data-testid={`button-settlement-reached-actions-${selectedCase.id}`}
+                              onClick={async () => {
+                                if (!user) return;
+                                setStageTransitioning(true);
+                                try {
+                                  const success = await moveToNextStage(
+                                    selectedCase.id,
+                                    user.id,
+                                    user.name,
+                                    "تم الصلح في مداولة الصلح",
+                                    user.role,
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    "تحصيل",
+                                  );
+                                  if (success) {
+                                    toast({ title: "تم نقل القضية إلى مرحلة التحصيل" });
+                                  }
+                                } finally {
+                                  setStageTransitioning(false);
+                                }
+                              }}
+                            >
+                              <CheckCircle className="w-4 h-4 ml-1" />
+                              تم الصلح — تحصيل
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+                              disabled={stageTransitioning}
+                              data-testid={`button-settlement-failed-actions-${selectedCase.id}`}
+                              onClick={async () => {
+                                if (!user) return;
+                                setStageTransitioning(true);
+                                try {
+                                  const success = await moveToNextStage(
+                                    selectedCase.id,
+                                    user.id,
+                                    user.name,
+                                    "لم يتم الصلح",
+                                    user.role,
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    "أغلق_طلب_الصلح",
+                                  );
+                                  if (success) {
+                                    toast({ title: "تم إغلاق طلب الصلح" });
+                                  }
+                                } finally {
+                                  setStageTransitioning(false);
+                                }
+                              }}
+                            >
+                              <AlertTriangle className="w-4 h-4 ml-1" />
+                              لم يتم الصلح — إغلاق طلب الصلح
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     {canAssign(selectedCase) && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
                         <div>

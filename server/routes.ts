@@ -148,11 +148,11 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_ناجز", to: "مداولة_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_ناجز", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
-  { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مداولة_الصلح", to: "أغلق_طلب_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
-  { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
   // ==================== COMMERCIAL PATH (taradi then najiz) ====================
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_تراضي", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
@@ -1349,6 +1349,11 @@ export async function registerRoutes(
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
 
+      // Flag set inside the stage-transition block below; acted on after
+      // storage.updateCase succeeds. Declared at the outer scope so the
+      // post-update side-effect can see it.
+      let shouldCreateCollectionTask = false;
+
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
         // DEBUG: surface exactly what's being validated and which rules could match.
@@ -1678,6 +1683,13 @@ export async function registerRoutes(
           req.body.closedAt = new Date().toISOString();
         }
 
+        // Conciliation outcome: when moving مداولة_الصلح → تحصيل, auto-create
+        // a field task for admin_support to draft the collection letter. The
+        // task itself is created AFTER storage.updateCase succeeds so we
+        // don't leave orphan tasks on a failed transition.
+        shouldCreateCollectionTask =
+          existing.currentStage === "مداولة_الصلح" && req.body.currentStage === "تحصيل";
+
         // Struck-off reopen: clear struckOff fields when reopening
         if (existing.currentStage === "مشطوبة" && (req.body.currentStage === "منظورة" || req.body.currentStage === "منظورة_استئناف")) {
           req.body.struckOffDate = null;
@@ -1698,6 +1710,34 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
+
+      // Side effect for مداولة_الصلح → تحصيل: create the admin collection task.
+      if (shouldCreateCollectionTask) {
+        try {
+          const allUsers = await storage.getAllUsers();
+          const adminSupport = allUsers.find(
+            (u: any) => u.role === "admin_support" && u.isActive,
+          );
+          const assignee = adminSupport?.id || user.id;
+          await storage.createFieldTask(
+            {
+              title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
+              description: `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
+              taskType: "متابعة_محكمة",
+              caseId: updated.id,
+              assignedTo: assignee,
+              priority: "عاجل",
+              dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+                .toISOString()
+                .split("T")[0],
+            } as any,
+            user.id,
+          );
+        } catch (e) {
+          console.error("Failed to auto-create collection task on conciliation settlement:", e);
+        }
+      }
+
       if (user && existing) {
         try {
           if (isDeptTransfer) {
