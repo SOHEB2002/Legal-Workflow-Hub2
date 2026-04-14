@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import type { DepartmentInfo, DepartmentType } from "@shared/schema";
 import { Department } from "@shared/schema";
 
@@ -10,41 +10,46 @@ interface DepartmentsContextType {
 
 const DepartmentsContext = createContext<DepartmentsContextType | undefined>(undefined);
 
-const defaultDepartments: DepartmentInfo[] = [
-  {
-    id: "1",
-    name: "عام",
-    headId: "4",
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "2",
-    name: "تجاري",
-    headId: "5",
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "3",
-    name: "عمالي",
-    headId: null,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: "4",
-    name: "إداري",
-    headId: null,
-    createdAt: new Date().toISOString(),
-  },
-];
+// The canonical department labels. Used both as a bootstrap fallback before
+// /api/departments returns and as a name-based fallback for any departmentId
+// that doesn't match a server row (legacy data, etc.).
+const KNOWN_DEPARTMENT_NAMES = ["عام", "تجاري", "عمالي", "إداري"] as const;
 
 export function DepartmentsProvider({ children }: { children: React.ReactNode }) {
-  const [departments] = useState<DepartmentInfo[]>(defaultDepartments);
+  const [departments, setDepartments] = useState<DepartmentInfo[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/departments", { credentials: "include" });
+        if (!res.ok) return;
+        const data = (await res.json()) as DepartmentInfo[];
+        if (!cancelled && Array.isArray(data)) {
+          setDepartments(data);
+        }
+      } catch {
+        // Leave departments empty — getDepartmentName falls back below.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const getDepartmentById = (id: string) => departments.find((d) => d.id === id);
 
   const getDepartmentName = (id: string): string => {
+    if (!id) return "غير محدد";
     const dept = departments.find((d) => d.id === id);
-    return dept?.name || "غير محدد";
+    if (dept?.name) return dept.name;
+    // Fallback: if the caller accidentally passed a department NAME instead
+    // of an id (e.g. legacy rows that stored the label in departmentId), and
+    // that name is one of the four canonical values, return it as-is. This
+    // keeps stage-path resolution working even when the server-side list is
+    // out of sync with the stored id.
+    if ((KNOWN_DEPARTMENT_NAMES as readonly string[]).includes(id)) return id;
+    return "غير محدد";
   };
 
   return (

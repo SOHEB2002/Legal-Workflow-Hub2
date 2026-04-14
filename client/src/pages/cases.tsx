@@ -1421,7 +1421,16 @@ export default function CasesPage() {
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
-                  caseType={getDepartmentName(selectedCase.departmentId || "") as CaseTypeValue}
+                  caseType={
+                    // The case row stores the department label directly in
+                    // caseType ("عام"/"تجاري"/"عمالي"/"إداري"). Use it as the
+                    // source of truth — resolving via getDepartmentName has
+                    // been the source of a recurring "commercial case shows
+                    // general path" bug when department IDs don't match the
+                    // client-side default list.
+                    (selectedCase.caseType as CaseTypeValue) ||
+                    (getDepartmentName(selectedCase.departmentId || "") as CaseTypeValue)
+                  }
                   disabled={stageTransitioning}
                   currentUserId={user?.id}
                   caseInternalReviewerId={(selectedCase as any).internalReviewerId || null}
