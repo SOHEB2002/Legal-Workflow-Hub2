@@ -136,6 +136,8 @@ export default function HearingsPage() {
   const [filterLawyer, setFilterLawyer] = useState<string>("all");
   const [deletingHearingId, setDeletingHearingId] = useState<string | null>(null);
   const [editDialogHearing, setEditDialogHearing] = useState<Hearing | null>(null);
+  const [conflictHearing, setConflictHearing] = useState<Hearing | null>(null);
+  const [replaceHearingId, setReplaceHearingId] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState({
     hearingDate: "",
     hearingTime: "",
@@ -214,6 +216,8 @@ export default function HearingsPage() {
       responseRequired: false,
       attendingLawyerId: "",
     });
+    setReplaceHearingId(null);
+    setConflictHearing(null);
   };
 
   const resetResultForm = () => {
@@ -249,6 +253,10 @@ export default function HearingsPage() {
     setSubmitting(true);
     try {
       await addHearing(formData);
+      if (replaceHearingId) {
+        try { await deleteHearing(replaceHearingId); } catch {}
+        setReplaceHearingId(null);
+      }
       setIsAddDialogOpen(false);
       resetForm();
       const memoMsg = formData.responseRequired ? "\nتم إنشاء مذكرة جوابية تلقائياً" : "";
@@ -544,16 +552,19 @@ export default function HearingsPage() {
                                   const selected = cases.find(x => x.id === val);
                                   if (!selected) return;
                                   const autoLawyer = selected.primaryLawyerId || selected.responsibleLawyerId || "";
-                                  // Auto-derive hearing type from the case's current stage.
+                                  // Auto-derive hearing type: settlement/conciliation stages → TARADI,
+                                  // labor case type → SETTLEMENT (tasweya), otherwise COURT.
                                   const stage = selected.currentStage;
+                                  const settlementStages = new Set([
+                                    "مداولة_الصلح",
+                                    "أغلق_طلب_الصلح",
+                                    "قيد_التدقيق_في_تراضي",
+                                    "رفع_بمنصة_تراضي",
+                                  ]);
                                   let autoType: string = HearingType.COURT;
-                                  if (stage === "مداولة_الصلح" || stage === "قيد_التدقيق_في_تراضي") {
+                                  if (settlementStages.has(stage)) {
                                     autoType = HearingType.TARADI;
-                                  } else if (
-                                    stage === "بانتظار_رفع_العميل_للتسوية" ||
-                                    stage === "توجيه_العميل_بالتسوية" ||
-                                    stage === "أغلق_طلب_الصلح"
-                                  ) {
+                                  } else if (selected.caseType === "عمالي") {
                                     autoType = HearingType.SETTLEMENT;
                                   }
                                   setFormData(prev => ({
@@ -564,6 +575,18 @@ export default function HearingsPage() {
                                     courtName: (selected.courtName || prev.courtName) as any,
                                   }));
                                   setCaseComboOpen(false);
+                                  // If the case already has an upcoming future hearing,
+                                  // prompt the user to replace it or keep both.
+                                  const today = new Date();
+                                  today.setHours(0, 0, 0, 0);
+                                  const existingFuture = hearings.find(h =>
+                                    h.caseId === val &&
+                                    h.status === HearingStatus.UPCOMING &&
+                                    new Date(h.hearingDate) >= today
+                                  );
+                                  if (existingFuture) {
+                                    setConflictHearing(existingFuture);
+                                  }
                                 }}
                                 className="flex items-center justify-between gap-2"
                               >
@@ -1614,6 +1637,40 @@ export default function HearingsPage() {
               </TabsContent>
             </Tabs>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!conflictHearing} onOpenChange={(open) => { if (!open) setConflictHearing(null); }}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>توجد جلسة قادمة لهذه القضية</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>هذه القضية لديها جلسة قادمة بالفعل بتاريخ{" "}
+              <span className="font-medium"><LtrInline>{conflictHearing?.hearingDate}</LtrInline></span>
+              {conflictHearing?.hearingTime && <> الساعة <LtrInline>{conflictHearing.hearingTime}</LtrInline></>}.
+            </p>
+            <p>هل تريد استبدال الجلسة القادمة بالجلسة الجديدة، أم الإبقاء على كليهما؟</p>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => { setReplaceHearingId(null); setConflictHearing(null); }}
+              data-testid="button-keep-both-hearings"
+            >
+              الإبقاء على كليهما
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (conflictHearing) setReplaceHearingId(conflictHearing.id);
+                setConflictHearing(null);
+              }}
+              data-testid="button-replace-hearing"
+            >
+              استبدال الجلسة القادمة
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

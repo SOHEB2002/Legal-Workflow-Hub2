@@ -897,6 +897,28 @@ export async function registerRoutes(
       const createdBy = req.body.createdBy || "unknown";
       const newCase = await storage.createCase(validatedData as any, createdBy);
 
+      // IN_COURT cases may begin at مداولة_الصلح instead of the default استلام.
+      const requestedStartingStage = typeof req.body.startingStage === "string"
+        ? req.body.startingStage
+        : null;
+      if (
+        requestedStartingStage === "مداولة_الصلح" &&
+        validatedData.caseClassification === CaseClassification.IN_COURT
+      ) {
+        const nowIso = new Date().toISOString();
+        const stageHistory = [
+          { stage: "استلام", timestamp: nowIso, userId: createdBy, userName: createdBy, notes: "استلام القضية" },
+          { stage: "مداولة_الصلح", timestamp: nowIso, userId: createdBy, userName: createdBy, notes: "بدء القضية من مرحلة مداولة الصلح" },
+        ];
+        const updated = await storage.updateCase(newCase.id, {
+          currentStage: "مداولة_الصلح",
+          stageHistory,
+        } as any);
+        if (updated) {
+          Object.assign(newCase, updated);
+        }
+      }
+
       const autoCreated: any[] = [];
       const classification = validatedData.caseClassification || "قيد_الدراسة";
 

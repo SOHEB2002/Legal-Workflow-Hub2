@@ -210,6 +210,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       clientRole: (data as any).clientRole || null,
       grievanceRequired: (data as any).grievanceRequired || false,
       createdBy,
+      startingStage: (data as any).startingStage || undefined,
     };
     
     const response = await apiRequest("POST", "/api/cases", caseData);
