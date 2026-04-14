@@ -458,10 +458,14 @@ export default function HearingsPage() {
       : rawRole === "مدعي"
       ? "مدعي"
       : "";
+    const clientName = getClientName(caseData.clientId);
     return {
       number: caseData.caseNumber,
-      client: getClientName(caseData.clientId),
-      plaintiff: (caseData as any).plaintiffName || "",
+      client: clientName,
+      // Fall back to client name when the case has no plaintiffName recorded —
+      // that happens for cases where the firm's client IS the plaintiff and
+      // the operator never typed the name a second time.
+      plaintiff: ((caseData as any).plaintiffName || "").trim() || clientName || "",
       opponent: caseData.opponentName || "",
       classification: caseData.caseClassification || "",
       clientRole,
@@ -808,56 +812,57 @@ export default function HearingsPage() {
               <p>لا توجد جلسات</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table className="w-full" style={{ tableLayout: 'fixed' }}>
+            <div className="w-full overflow-hidden">
+              <table className="w-full caption-bottom text-xs" style={{ tableLayout: 'fixed' }}>
                 <colgroup>
-                  <col style={{ width: '15%' }} />
-                  <col style={{ width: '22%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col style={{ width: '20%' }} />
-                  <col style={{ width: '15%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '19%' }} />
                   <col style={{ width: '13%' }} />
+                  <col style={{ width: '18%' }} />
                 </colgroup>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="text-center">التاريخ والوقت</TableHead>
-                    <TableHead className="text-center">اسم المدعي</TableHead>
-                    <TableHead className="text-center">اسم المدعى عليه</TableHead>
-                    <TableHead className="text-center">صفة العميل</TableHead>
-                    <TableHead className="text-center">القضية والمحكمة</TableHead>
-                    <TableHead className="text-center">الحالة / النتيجة</TableHead>
-                    <TableHead className="text-center">الإجراءات</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+                <thead className="[&_tr]:border-b">
+                  <tr className="border-b">
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">التاريخ</th>
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">المدعي</th>
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">المدعى عليه</th>
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">الصفة</th>
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">القضية / المحكمة</th>
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">النتيجة</th>
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">الإجراءات</th>
+                  </tr>
+                </thead>
+                <tbody className="[&_tr:last-child]:border-0">
                   {pagedHearings.map((hearing) => {
                       const caseInfo = getCaseInfo(hearing.caseId);
                       const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
                       const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
                       return (
-                        <TableRow key={hearing.id} data-testid={`row-hearing-${hearing.id}`}>
-                          <TableCell className="text-center">
+                        <tr key={hearing.id} data-testid={`row-hearing-${hearing.id}`} className="border-b transition-colors hover:bg-muted/50">
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
                               <Badge className={getUrgencyColor(hearing.hearingDate)}>
                                 <DualDateDisplay date={hearing.hearingDate} compact />
                               </Badge>
                               <LtrInline className="text-xs text-muted-foreground">{formatTimeAmPm(hearing.hearingTime)}</LtrInline>
                             </div>
-                          </TableCell>
-                          <TableCell className="text-center">
+                          </td>
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <span className="text-sm"><BidiText>{caseInfo.plaintiff || "-"}</BidiText></span>
-                          </TableCell>
-                          <TableCell className="text-center">
+                          </td>
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <span className="text-sm"><BidiText>{caseInfo.opponent || "-"}</BidiText></span>
-                          </TableCell>
-                          <TableCell className="text-center">
+                          </td>
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             {caseInfo.clientRole ? (
                               <Badge variant="outline" className="text-xs">{caseInfo.clientRole}</Badge>
                             ) : (
                               <span className="text-xs text-muted-foreground">-</span>
                             )}
-                          </TableCell>
-                          <TableCell className="text-center">
+                          </td>
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
                               <LtrInline className="text-sm font-medium">{caseInfo.number}</LtrInline>
                               <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
@@ -868,8 +873,8 @@ export default function HearingsPage() {
                                 )}
                               </div>
                             </div>
-                          </TableCell>
-                          <TableCell className="text-center">
+                          </td>
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
                               {getStatusBadge(hearing.status)}
                               {hearing.result && (
@@ -881,14 +886,15 @@ export default function HearingsPage() {
                                 </Badge>
                               )}
                             </div>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <div className="flex items-center justify-center gap-1">
+                          </td>
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
+                            <div className="flex items-center justify-center gap-0.5 flex-wrap">
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
                                     size="icon"
                                     variant="ghost"
+                                    className="h-7 w-7"
                                     data-testid={`button-view-${hearing.id}`}
                                     onClick={() => setDetailHearingId(hearing.id)}
                                   >
@@ -902,6 +908,7 @@ export default function HearingsPage() {
                                   <Button
                                     size="icon"
                                     variant="ghost"
+                                    className="h-7 w-7"
                                     data-testid={`button-edit-hearing-${hearing.id}`}
                                     onClick={() => openEditDialog(hearing)}
                                   >
@@ -917,6 +924,7 @@ export default function HearingsPage() {
                                       <Button
                                         size="icon"
                                         variant="ghost"
+                                        className="h-7 w-7"
                                         data-testid={`button-result-${hearing.id}`}
                                         onClick={() => {
                                           resetResultForm();
@@ -933,6 +941,7 @@ export default function HearingsPage() {
                                       <Button
                                         size="icon"
                                         variant="ghost"
+                                        className="h-7 w-7"
                                         data-testid={`button-cancel-${hearing.id}`}
                                         onClick={() => handleCancelHearing(hearing)}
                                       >
@@ -949,6 +958,7 @@ export default function HearingsPage() {
                                     <Button
                                       size="icon"
                                       variant="ghost"
+                                      className="h-7 w-7"
                                       data-testid={`button-report-${hearing.id}`}
                                       onClick={() => {
                                         resetReportForm();
@@ -967,6 +977,7 @@ export default function HearingsPage() {
                                     <Button
                                       size="icon"
                                       variant="ghost"
+                                      className="h-7 w-7"
                                       data-testid={`button-contact-${hearing.id}`}
                                       onClick={() => handleMarkContactCompleted(hearing)}
                                       disabled={submitting}
@@ -983,6 +994,7 @@ export default function HearingsPage() {
                                     <Button
                                       size="icon"
                                       variant="ghost"
+                                      className="h-7 w-7"
                                       data-testid={`button-delete-hearing-${hearing.id}`}
                                       disabled={deletingHearingId === hearing.id}
                                       onClick={() => handleDeleteHearing(hearing.id)}
@@ -994,12 +1006,12 @@ export default function HearingsPage() {
                                 </Tooltip>
                               )}
                             </div>
-                          </TableCell>
-                        </TableRow>
+                          </td>
+                        </tr>
                       );
                     })}
-                </TableBody>
-              </Table>
+                </tbody>
+              </table>
             </div>
           )}
           <PaginationControls
