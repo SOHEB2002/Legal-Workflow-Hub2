@@ -131,7 +131,7 @@ export default function MemosPage() {
     getActiveMemos,
     getOverdueMemos,
   } = useMemos();
-  const { cases } = useCases();
+  const { cases, updateCase } = useCases();
   const { departments } = useDepartments();
   const { user } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
@@ -260,6 +260,22 @@ export default function MemosPage() {
       await changeStatus(memo.id, MemoStatus.CANCELLED, {
         reviewNotes: "لا يحتاج مذكرة",
       });
+      const relatedCase = cases.find(c => c.id === memo.caseId);
+      if (relatedCase) {
+        const update: any = { memoRequired: false };
+        const earlyDraftingStages = new Set([
+          "تحرير_مذكرة_جوابية",
+          "تحرير_صحيفة_الدعوى",
+          "مراجعة_داخلية",
+        ]);
+        if (
+          relatedCase.caseClassification === "منظورة_بالمحكمة" &&
+          earlyDraftingStages.has(relatedCase.currentStage)
+        ) {
+          update.currentStage = "منظورة";
+        }
+        try { await updateCase(relatedCase.id, update); } catch {}
+      }
       toast({ title: "تم إنهاء المذكرة - لا يحتاج مذكرة" });
     } catch (e: any) {
       toast({ title: "خطأ", description: e.message, variant: "destructive" });

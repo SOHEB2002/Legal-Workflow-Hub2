@@ -442,6 +442,7 @@ export default function CasesPage() {
     adminCaseSubType: "" as string,
     prescriptionDate: "",
     memoRequired: false,
+    startingStage: "استلام" as string,
   });
 
   const [assignData, setAssignData] = useState({
@@ -477,6 +478,7 @@ export default function CasesPage() {
       adminCaseSubType: "",
       prescriptionDate: "",
       memoRequired: false,
+      startingStage: "استلام",
     });
   };
 
@@ -518,6 +520,9 @@ export default function CasesPage() {
       adminCaseSubType: formData.adminCaseSubType || null,
       prescriptionDate: formData.prescriptionDate || null,
       memoRequired: formData.memoRequired,
+      startingStage: formData.caseClassification === CaseClassification.IN_COURT
+        ? formData.startingStage
+        : undefined,
     } as any, user.id, user.name);
     
     const classLabel = CaseClassificationLabels[formData.caseClassification as CaseClassificationValue] || "";
@@ -1138,6 +1143,21 @@ export default function CasesPage() {
 
                 {formData.caseClassification === CaseClassification.IN_COURT && (
                   <>
+                    <div>
+                      <Label>مرحلة البداية</Label>
+                      <Select
+                        value={formData.startingStage}
+                        onValueChange={(value) => setFormData({ ...formData, startingStage: value })}
+                      >
+                        <SelectTrigger data-testid="select-starting-stage">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="استلام">محكمة (استلام)</SelectItem>
+                          <SelectItem value="مداولة_الصلح">مداولة الصلح</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div>
                       <Label>عدد الجلسات السابقة</Label>
                       <Input
