@@ -1442,6 +1442,23 @@ export async function registerRoutes(
           const moeen = req.body.moeenNumber || (existing as any).moeenNumber;
           if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
         }
+
+        // Auto-promote classification from قضية_جديدة → قضية_مقيدة once the
+        // case has left the pre-filing phase. These stages mean the case is
+        // registered in the court/platform system and is no longer "new".
+        const REGISTERED_STAGES = new Set([
+          "منظورة",
+          "منظورة_استئناف",
+          "قيد_التدقيق_في_ناجز",
+          "قيد_التدقيق_في_معين",
+          "مداولة_الصلح",
+        ]);
+        if (
+          REGISTERED_STAGES.has(targetStage) &&
+          (existing as any).caseClassification === "قضية_جديدة"
+        ) {
+          req.body.caseClassification = "قضية_مقيدة";
+        }
         // Labor settlement: the moment a mohrNumber is supplied (or already
         // exists) and the case is leaving the settlement-prep stages, sync
         // caseNumber := mohrNumber.
