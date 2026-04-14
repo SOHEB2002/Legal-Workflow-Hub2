@@ -120,6 +120,49 @@ app.use((req, res, next) => {
     console.error("Failed to apply DB indexes:", err);
   }
 
+  // One-time idempotent classification migration.
+  //   1. Rename legacy value literals to the new scheme.
+  //   2. Promote cases whose currentStage means they're actually in court.
+  //   3. Revert cases that were wrongly promoted while still in pre-trial
+  //      review/conciliation stages (bug from a previous release).
+  // All three steps use plain UPDATEs and are safe to run on every boot.
+  try {
+    await pool.query(
+      `UPDATE cases SET case_classification = 'قيد_الدراسة' WHERE case_classification = 'قضية_جديدة'`,
+    );
+    await pool.query(
+      `UPDATE cases SET case_classification = 'منظورة_بالمحكمة' WHERE case_classification = 'قضية_مقيدة'`,
+    );
+    await pool.query(
+      `UPDATE cases
+         SET case_classification = 'منظورة_بالمحكمة',
+             client_role = COALESCE(NULLIF(client_role, ''), 'مدعي')
+       WHERE case_classification = 'قيد_الدراسة'
+         AND current_stage IN (
+           'منظورة',
+           'منظورة_استئناف',
+           'محكوم_حكم_ابتدائي',
+           'محكوم_حكم_نهائي',
+           'تحصيل'
+         )`,
+    );
+    await pool.query(
+      `UPDATE cases
+         SET case_classification = 'قيد_الدراسة'
+       WHERE case_classification = 'منظورة_بالمحكمة'
+         AND current_stage IN (
+           'مداولة_الصلح',
+           'أغلق_طلب_الصلح',
+           'قيد_التدقيق_في_تراضي',
+           'قيد_التدقيق_في_ناجز',
+           'قيد_التدقيق_في_معين'
+         )`,
+    );
+    console.log("Case classification migration applied successfully.");
+  } catch (err) {
+    console.error("Failed to apply classification migration:", err);
+  }
+
   setupWebSocket(httpServer);
   await registerRoutes(httpServer, app);
 

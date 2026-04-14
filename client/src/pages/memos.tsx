@@ -463,11 +463,11 @@ export default function MemosPage() {
                         <TableCell className="text-center">
                           {caseDetails.classification && (
                             <Badge variant="outline" className={`text-xs inline-flex justify-center ${
-                              caseDetails.classification === "قضية_مقيدة"
+                              caseDetails.classification === "منظورة_بالمحكمة"
                                 ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"
                                 : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                             }`}>
-                              {caseDetails.classification === "قضية_مقيدة" ? "قضية مقيدة" : "قضية جديدة"}
+                              {caseDetails.classification === "منظورة_بالمحكمة" ? "منظورة بالمحكمة" : "قيد الدراسة"}
                             </Badge>
                           )}
                         </TableCell>

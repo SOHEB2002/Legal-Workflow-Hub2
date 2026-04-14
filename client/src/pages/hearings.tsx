@@ -451,7 +451,7 @@ export default function HearingsPage() {
     const rawRole = (caseData as any).clientRole as string | undefined;
     // For new (un-court-registered) cases, the firm always represents the
     // plaintiff side, regardless of whether clientRole was filled in.
-    const clientRole = caseData.caseClassification === "قضية_جديدة"
+    const clientRole = caseData.caseClassification === "قيد_الدراسة"
       ? "مدعي"
       : rawRole === "مدعى_عليه"
       ? "مدعى عليه"

@@ -331,7 +331,7 @@ export function calculateSmartPriority(
 ): string {
   let score = 0;
 
-  if (classification === "قضية_مقيدة") score += 30;
+  if (classification === "منظورة_بالمحكمة") score += 30;
   if (memoRequired) score += 20;
 
   if (nextHearingDate) {
@@ -872,7 +872,7 @@ export async function registerRoutes(
       const newCase = await storage.createCase(validatedData as any, createdBy);
 
       const autoCreated: any[] = [];
-      const classification = validatedData.caseClassification || "قضية_جديدة";
+      const classification = validatedData.caseClassification || "قيد_الدراسة";
 
       const smartPriority = calculateSmartPriority(
         validatedData.caseType || "",
@@ -888,7 +888,7 @@ export async function registerRoutes(
       }
 
       // Auto-create memo for existing cases where client is defendant
-      const isDefendant = classification === CaseClassification.CASE_EXISTING && req.body.clientRole === "مدعى_عليه";
+      const isDefendant = classification === CaseClassification.IN_COURT && req.body.clientRole === "مدعى_عليه";
       if (isDefendant) {
         const deadlineStr = validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
         const casePriority = validatedData.priority || "متوسط";
@@ -1014,7 +1014,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.CASE_NEW || caseItem.caseType !== "تجاري") {
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_تراضي", "تم_الصلح", "لم_يتم_صلح"];
@@ -1070,7 +1070,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.CASE_NEW || caseItem.caseType !== "عمالي") {
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       const validStatuses = ["مقيدة_في_الموارد", "توجيه_تسوية_ودية", "انتهت_التسوية"];
@@ -1124,7 +1124,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.CASE_NEW || caseItem.caseType !== "عمالي") {
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       
@@ -1253,7 +1253,7 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
       if (!canEditCaseData(user)) return res.status(403).json({ error: "لا تملك صلاحية تقييد القضية في المحكمة" });
-      if (caseItem.caseClassification !== CaseClassification.CASE_NEW) {
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY) {
         return res.status(400).json({ error: "القضية مقيدة في المحكمة بالفعل" });
       }
       // Prerequisite: commercial cases must have taradiStatus === "لم_يتم_صلح" and a taradi number
@@ -1275,7 +1275,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يرجى إدخال رقم القيد في ناجز" });
       }
       const updated = await storage.updateCase(caseItem.id, {
-        caseClassification: CaseClassification.CASE_EXISTING,
+        caseClassification: CaseClassification.IN_COURT,
         currentStage: CaseStage.UNDER_REVIEW,
         courtCaseNumber: courtCaseNumber.trim().substring(0, 100),
         najizNumber: najizNumber.trim().substring(0, 100),
@@ -1443,22 +1443,20 @@ export async function registerRoutes(
           if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
         }
 
-        // Auto-promote classification from قضية_جديدة → قضية_مقيدة once the
-        // case has left the pre-filing phase. These stages mean the case is
-        // registered in the court/platform system and is no longer "new".
-        const REGISTERED_STAGES = new Set([
+        // Auto-promote classification from قيد_الدراسة → منظورة_بالمحكمة only
+        // once the case actually reaches trial. Pre-trial review and
+        // conciliation stages (قيد_التدقيق_*, مداولة_الصلح, أغلق_طلب_الصلح)
+        // keep the case as قيد_الدراسة.
+        const IN_COURT_STAGES = new Set([
           "منظورة",
           "منظورة_استئناف",
-          "قيد_التدقيق_في_ناجز",
-          "قيد_التدقيق_في_معين",
-          "مداولة_الصلح",
         ]);
         if (
-          REGISTERED_STAGES.has(targetStage) &&
-          (existing as any).caseClassification === "قضية_جديدة"
+          IN_COURT_STAGES.has(targetStage) &&
+          (existing as any).caseClassification === "قيد_الدراسة"
         ) {
-          req.body.caseClassification = "قضية_مقيدة";
-          // For قضية_جديدة the firm is always the plaintiff — persist that as
+          req.body.caseClassification = "منظورة_بالمحكمة";
+          // For قيد_الدراسة the firm is always the plaintiff — persist that as
           // an explicit clientRole so post-promotion UI (صفة badge, etc.)
           // doesn't lose the role once classification flips.
           if (!(existing as any).clientRole) {
@@ -2098,13 +2096,9 @@ export async function registerRoutes(
               const conciliationFromStages = ["قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_تراضي", "أغلق_طلب_الصلح"];
               if (conciliationFromStages.includes(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
-                const promoteClassification = (caseForStage as any).caseClassification === "قضية_جديدة";
+                // مداولة_الصلح is still pre-trial, so classification stays قيد_الدراسة.
                 await storage.updateCase(caseForStage.id, {
                   currentStage: "مداولة_الصلح",
-                  ...(promoteClassification ? {
-                    caseClassification: "قضية_مقيدة",
-                    ...(!(caseForStage as any).clientRole ? { clientRole: "مدعي" } : {}),
-                  } : {}),
                   stageHistory: [
                     ...stageHistory,
                     { stage: "مداولة_الصلح", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة صلح" },
@@ -2121,11 +2115,11 @@ export async function registerRoutes(
               ];
               if (courtFromStages.includes(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
-                const promoteClassification = (caseForStage as any).caseClassification === "قضية_جديدة";
+                const promoteClassification = (caseForStage as any).caseClassification === "قيد_الدراسة";
                 await storage.updateCase(caseForStage.id, {
                   currentStage: "منظورة",
                   ...(promoteClassification ? {
-                    caseClassification: "قضية_مقيدة",
+                    caseClassification: "منظورة_بالمحكمة",
                     ...(!(caseForStage as any).clientRole ? { clientRole: "مدعي" } : {}),
                   } : {}),
                   stageHistory: [

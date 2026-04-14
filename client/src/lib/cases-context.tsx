@@ -56,7 +56,7 @@ const migrateCase = (c: LawCase): LawCase => {
     c.circuitNumber = "";
   }
   if (!c.caseClassification) {
-    c.caseClassification = CaseClassification.CASE_NEW;
+    c.caseClassification = CaseClassification.UNDER_STUDY;
   }
   if (c.previousHearingsCount === undefined) {
     c.previousHearingsCount = 0;
@@ -87,7 +87,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   // if the primary lookup doesn't contain the case's current stage we fall
   // back to every known path and pick the first one that does.
   const resolveStagesOrderForCase = (lawCase: LawCase): CaseStageValue[] => {
-    const classification = (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue;
+    const classification = (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue;
     const deptLabel = getDepartmentName(lawCase.departmentId || "");
     const primary = getStagesForClassification(classification, deptLabel as any);
     if (primary.indexOf(lawCase.currentStage) >= 0) return primary;
@@ -182,7 +182,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       reviewDecision: null,
       reviewActionTaken: null,
       priority: data.priority || Priority.MEDIUM,
-      caseClassification: data.caseClassification || CaseClassification.CASE_NEW,
+      caseClassification: data.caseClassification || CaseClassification.UNDER_STUDY,
       previousHearingsCount: data.previousHearingsCount || 0,
       currentSituation: data.currentSituation || "",
       responseDeadline: data.responseDeadline || null,
@@ -351,7 +351,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       nextStage = explicitTargetStage as CaseStageValue;
     } else {
       if (userRole) {
-        const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue);
+        const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue);
         if (!validation.allowed) {
           console.warn("انتقال مرفوض:", validation.reason);
           return false;
@@ -416,7 +416,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (!lawCase) return false;
 
     if (userRole) {
-      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.CASE_NEW) as CaseClassificationValue);
+      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue);
       if (!validation.allowed) {
         console.warn("إرجاع مرفوض:", validation.reason);
         return false;
