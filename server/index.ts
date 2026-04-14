@@ -163,6 +163,42 @@ app.use((req, res, next) => {
     console.error("Failed to apply classification migration:", err);
   }
 
+  // One-time idempotent backfill for cases created while the client-side
+  // DEFAULT_DEPARTMENTS list had ids "1" and "2" inverted relative to the
+  // server seed. Any case whose department_id is one of the hardcoded
+  // "1".."4" values but doesn't match its case_type is fixed up to the
+  // correct server id. Cases pointing at real custom department UUIDs are
+  // left alone.
+  //   Server seed (storage.ts:initializeDefaultData):
+  //     "1" → عام   "2" → تجاري   "3" → عمالي   "4" → إداري
+  try {
+    const fixes: Array<{ caseType: string; correctId: string }> = [
+      { caseType: "عام", correctId: "1" },
+      { caseType: "تجاري", correctId: "2" },
+      { caseType: "عمالي", correctId: "3" },
+      { caseType: "إداري", correctId: "4" },
+    ];
+    let totalFixed = 0;
+    for (const { caseType, correctId } of fixes) {
+      const result = await pool.query(
+        `UPDATE cases
+            SET department_id = $1
+          WHERE case_type = $2
+            AND department_id IN ('1','2','3','4')
+            AND department_id <> $1`,
+        [correctId, caseType],
+      );
+      totalFixed += result.rowCount ?? 0;
+    }
+    if (totalFixed > 0) {
+      console.log(`Department backfill: corrected ${totalFixed} case(s) with mismatched department_id.`);
+    } else {
+      console.log("Department backfill: nothing to fix.");
+    }
+  } catch (err) {
+    console.error("Failed to apply department backfill:", err);
+  }
+
   setupWebSocket(httpServer);
   await registerRoutes(httpServer, app);
 
