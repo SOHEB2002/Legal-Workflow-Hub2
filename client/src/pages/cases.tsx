@@ -828,9 +828,9 @@ export default function CasesPage() {
                   <TableCell className="text-center">
                     {(() => {
                       // Derive client role from the explicit clientRole field when
-                      // present; fall back to "مدعي" for legacy قضية_جديدة rows
+                      // present; fall back to "مدعي" for قيد_الدراسة rows
                       // (where the firm is always the plaintiff) and to "مدعى عليه"
-                      // for legacy قضية_مقيدة rows that never got clientRole set.
+                      // for منظورة_بالمحكمة rows that never got clientRole set.
                       const rawRole = (c as any).clientRole as string | undefined;
                       const role = rawRole === "مدعى_عليه"
                         ? "مدعى عليه"
@@ -1421,16 +1421,26 @@ export default function CasesPage() {
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
-                  caseType={
-                    // The case row stores the department label directly in
-                    // caseType ("عام"/"تجاري"/"عمالي"/"إداري"). Use it as the
-                    // source of truth — resolving via getDepartmentName has
-                    // been the source of a recurring "commercial case shows
-                    // general path" bug when department IDs don't match the
-                    // client-side default list.
-                    (selectedCase.caseType as CaseTypeValue) ||
-                    (getDepartmentName(selectedCase.departmentId || "") as CaseTypeValue)
-                  }
+                  caseType={(() => {
+                    // Resolve the department label used to pick the stage
+                    // path. Prefer the case's caseType field when it already
+                    // holds one of the four canonical values, otherwise fall
+                    // back to looking up the department by id. This handles
+                    // legacy rows where caseType stored a sub-type like
+                    // "بيع وتوريد" instead of the department label, which
+                    // was the recurring source of "commercial case shows the
+                    // general path" bugs.
+                    const CANONICAL = ["عام", "تجاري", "عمالي", "إداري"] as const;
+                    const raw = (selectedCase.caseType || "") as string;
+                    if ((CANONICAL as readonly string[]).includes(raw)) {
+                      return raw as CaseTypeValue;
+                    }
+                    const byId = getDepartmentName(selectedCase.departmentId || "");
+                    if ((CANONICAL as readonly string[]).includes(byId)) {
+                      return byId as CaseTypeValue;
+                    }
+                    return "عام" as CaseTypeValue;
+                  })()}
                   disabled={stageTransitioning}
                   currentUserId={user?.id}
                   caseInternalReviewerId={(selectedCase as any).internalReviewerId || null}
