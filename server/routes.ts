@@ -1779,6 +1779,64 @@ export async function registerRoutes(
         }
       }
 
+      // Sync the case's active memo status with the new stage so the memos
+      // page reflects what's actually happening on the case. Only runs on
+      // actual stage transitions, and only touches the first non-terminal
+      // memo (معتمدة/مرفوعة/ملغاة are left alone).
+      if (
+        updated &&
+        req.body.currentStage &&
+        req.body.currentStage !== existing.currentStage
+      ) {
+        try {
+          const caseMemos = await storage.getMemosByCase(String(req.params.id));
+          const activeMemo = caseMemos.find(
+            (m: any) => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status),
+          );
+          if (activeMemo) {
+            let nextMemoStatus: string | null = null;
+            switch (req.body.currentStage) {
+              case "تحرير_مذكرة_جوابية":
+              case "تحرير_صحيفة_الدعوى":
+                nextMemoStatus = "قيد_التحرير";
+                break;
+              case "مراجعة_داخلية":
+                nextMemoStatus = "قيد_المراجعة";
+                break;
+              case "إحالة_للجنة_المراجعة":
+                nextMemoStatus = "بانتظار_الاعتماد";
+                break;
+              case "منظورة":
+                // Only mark the memo as approved when arriving from
+                // الأخذ_بالملاحظات — that's the committee-review terminal
+                // for an IN_COURT case. Transitions to منظورة from any
+                // other stage (e.g. مشطوبة reopen) shouldn't touch memos.
+                if (existing.currentStage === "الأخذ_بالملاحظات") {
+                  nextMemoStatus = "معتمدة";
+                }
+                break;
+            }
+            if (nextMemoStatus && nextMemoStatus !== activeMemo.status) {
+              const memoUpdate: any = { status: nextMemoStatus };
+              const now = new Date().toISOString();
+              if (nextMemoStatus === "قيد_التحرير" && !(activeMemo as any).startedAt) {
+                memoUpdate.startedAt = now;
+              }
+              if (nextMemoStatus === "قيد_المراجعة") {
+                memoUpdate.completedAt = now;
+              }
+              if (nextMemoStatus === "معتمدة") {
+                memoUpdate.reviewerId = user.id;
+                memoUpdate.reviewedAt = now;
+              }
+              await storage.updateMemo(activeMemo.id, memoUpdate);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to sync memo status with case stage:", e);
+        }
+      }
+
       if (user && existing) {
         try {
           if (isDeptTransfer) {
@@ -3074,7 +3132,7 @@ export async function registerRoutes(
     deadline: z.string().optional(),
     content: z.string().optional(),
     fileLink: z.string().optional(),
-    status: z.enum(["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل", "معتمدة", "مرفوعة", "ملغاة"]).optional(),
+    status: z.enum(["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "بانتظار_الاعتماد", "تحتاج_تعديل", "معتمدة", "مرفوعة", "ملغاة"]).optional(),
     reviewNotes: z.string().optional(),
     reviewerId: z.string().optional(),
   });
@@ -3116,7 +3174,10 @@ export async function registerRoutes(
         if (!canReviewMemos(user.role)) {
           return res.status(403).json({ error: "ليس لديك صلاحية لمراجعة المذكرات" });
         }
-        if (memo.status !== MemoStatus.IN_REVIEW) {
+        if (
+          memo.status !== MemoStatus.IN_REVIEW &&
+          memo.status !== MemoStatus.PENDING_APPROVAL
+        ) {
           return res.status(400).json({ error: "لا يمكن اعتماد أو إرجاع المذكرة إلا بعد تقديمها للمراجعة" });
         }
       }
@@ -3156,7 +3217,52 @@ export async function registerRoutes(
 
       if (memo.caseId) {
         const activeCount = await getActiveMemoCount(memo.caseId);
-        await storage.updateCase(memo.caseId, { activeMemoCount: activeCount } as any);
+        const caseUpdate: any = { activeMemoCount: activeCount };
+
+        // "لا يحتاج مذكرة" flow: on memo cancellation, if the related case
+        // is IN_COURT and still at the memo/drafting/review stages, fast-
+        // forward it to منظورة and flip memoRequired off so the progress
+        // bar reverts to the no-memo variant. Cases past الأخذ_بالملاحظات
+        // or already at منظورة/post-trial are left alone (path locked).
+        if (
+          updateData.status === MemoStatus.CANCELLED &&
+          relatedCase &&
+          (relatedCase as any).caseClassification === "منظورة_بالمحكمة"
+        ) {
+          const FAST_FORWARD_STAGES = new Set([
+            "استلام",
+            "استكمال_البيانات",
+            "تحرير_مذكرة_جوابية",
+            "تحرير_صحيفة_الدعوى",
+            "مراجعة_داخلية",
+          ]);
+          if (FAST_FORWARD_STAGES.has(relatedCase.currentStage)) {
+            caseUpdate.memoRequired = false;
+            caseUpdate.currentStage = "منظورة";
+            const history = Array.isArray((relatedCase as any).stageHistory)
+              ? (relatedCase as any).stageHistory
+              : [];
+            caseUpdate.stageHistory = [
+              ...history,
+              {
+                stage: "منظورة",
+                timestamp: new Date().toISOString(),
+                userId: user.id,
+                userName: user.name || user.id,
+                notes: "تم إلغاء المذكرة - لا يحتاج مذكرة",
+              },
+            ];
+          } else if (
+            relatedCase.currentStage !== "منظورة" &&
+            relatedCase.currentStage !== "منظورة_استئناف" &&
+            (relatedCase as any).memoRequired
+          ) {
+            // Past drafting but not yet at trial: just flip the flag off.
+            caseUpdate.memoRequired = false;
+          }
+        }
+
+        await storage.updateCase(memo.caseId, caseUpdate);
       }
 
       res.json(updated);
