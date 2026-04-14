@@ -487,7 +487,7 @@ export default function CasesPage() {
       return;
     }
     
-    const isPlaintiffNew = formData.caseClassification === CaseClassification.CASE_NEW;
+    const isPlaintiffNew = formData.caseClassification === CaseClassification.UNDER_STUDY;
     if (isPlaintiffNew && formData.caseType === "إداري") {
       if (!formData.adminCaseSubType) {
         toast({ title: "يرجى تحديد نوع القضية الإدارية (تظلم / قضية)", variant: "destructive" });
@@ -762,8 +762,8 @@ export default function CasesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
-                <SelectItem value="قضية_جديدة">قضية جديدة</SelectItem>
-                <SelectItem value="قضية_مقيدة">قضية مقيدة</SelectItem>
+                <SelectItem value="قيد_الدراسة">قضية قيد الدراسة</SelectItem>
+                <SelectItem value="منظورة_بالمحكمة">منظورة بالمحكمة</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -836,7 +836,7 @@ export default function CasesPage() {
                         ? "مدعى عليه"
                         : rawRole === "مدعي"
                         ? "مدعي"
-                        : c.caseClassification === CaseClassification.CASE_NEW
+                        : c.caseClassification === CaseClassification.UNDER_STUDY
                         ? "مدعي"
                         : "مدعى عليه";
                       return (
@@ -922,35 +922,35 @@ export default function CasesPage() {
                   data-testid="classification-case-new"
                   onClick={() => {
                     setClassificationGroup("new");
-                    setFormData({ ...formData, caseClassification: CaseClassification.CASE_NEW, previousHearingsCount: 0, currentSituation: "", responseDeadline: "", clientRole: "" as any });
+                    setFormData({ ...formData, caseClassification: CaseClassification.UNDER_STUDY, previousHearingsCount: 0, currentSituation: "", responseDeadline: "", clientRole: "" as any });
                   }}
                   className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                    formData.caseClassification === CaseClassification.CASE_NEW
+                    formData.caseClassification === CaseClassification.UNDER_STUDY
                       ? "border-[#D4AF37] bg-[#D4AF37]/10"
                       : "border-border hover-elevate"
                   }`}
                 >
                   <FileText className="h-6 w-6 text-[#345774]" />
-                  <span className="text-xs font-medium text-center">قضية جديدة (للرفع)</span>
+                  <span className="text-xs font-medium text-center">قضية قيد الدراسة</span>
                 </button>
                 <button
                   type="button"
                   data-testid="classification-case-existing"
                   onClick={() => {
                     setClassificationGroup("existing");
-                    setFormData({ ...formData, caseClassification: CaseClassification.CASE_EXISTING });
+                    setFormData({ ...formData, caseClassification: CaseClassification.IN_COURT });
                   }}
                   className={`relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                    formData.caseClassification === CaseClassification.CASE_EXISTING
+                    formData.caseClassification === CaseClassification.IN_COURT
                       ? "border-[#345774] bg-[#345774]/10"
                       : "border-border hover-elevate"
                   }`}
                 >
                   <Scale className="h-6 w-6 text-[#345774]" />
-                  <span className="text-xs font-medium text-center">قضية مقيدة (منظورة)</span>
+                  <span className="text-xs font-medium text-center">منظورة بالمحكمة</span>
                 </button>
               </div>
-              {formData.caseClassification === CaseClassification.CASE_EXISTING && (
+              {formData.caseClassification === CaseClassification.IN_COURT && (
                 <div className="space-y-3 mt-3">
                   <div>
                     <Label>صفة العميل <span className="text-red-500">*</span></Label>
@@ -1055,7 +1055,7 @@ export default function CasesPage() {
                   />
                 </div>
 
-                {formData.caseClassification !== CaseClassification.CASE_NEW && (
+                {formData.caseClassification !== CaseClassification.UNDER_STUDY && (
                   <div>
                     <Label>رقم القضية</Label>
                     <SmartInput
@@ -1068,7 +1068,7 @@ export default function CasesPage() {
                   </div>
                 )}
 
-                {formData.caseClassification !== CaseClassification.CASE_NEW && (
+                {formData.caseClassification !== CaseClassification.UNDER_STUDY && (
                   <div>
                     <Label>اسم المحكمة</Label>
                     <SmartInput
@@ -1081,7 +1081,7 @@ export default function CasesPage() {
                   </div>
                 )}
 
-                {formData.caseClassification === CaseClassification.CASE_NEW && (
+                {formData.caseClassification === CaseClassification.UNDER_STUDY && (
                   <>
                     {formData.caseType === "تجاري" && (
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
@@ -1136,7 +1136,7 @@ export default function CasesPage() {
                   </>
                 )}
 
-                {formData.caseClassification === CaseClassification.CASE_EXISTING && (
+                {formData.caseClassification === CaseClassification.IN_COURT && (
                   <>
                     <div>
                       <Label>عدد الجلسات السابقة</Label>
@@ -1171,7 +1171,7 @@ export default function CasesPage() {
                   </>
                 )}
 
-                {formData.caseClassification !== CaseClassification.CASE_NEW && (
+                {formData.caseClassification !== CaseClassification.UNDER_STUDY && (
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label>تاريخ الجلسة القادمة (اختياري)</Label>
@@ -1195,7 +1195,7 @@ export default function CasesPage() {
               </>
             )}
 
-            {formData.caseClassification === CaseClassification.CASE_EXISTING && (
+            {formData.caseClassification === CaseClassification.IN_COURT && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 pt-1">
                   <Checkbox
@@ -1354,7 +1354,7 @@ export default function CasesPage() {
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
-              {selectedCase.caseClassification === CaseClassification.CASE_EXISTING &&
+              {selectedCase.caseClassification === CaseClassification.IN_COURT &&
                selectedCase.nextHearingDate &&
                new Date(selectedCase.nextHearingDate) > new Date() && (
                 <div className="flex items-start gap-3 rounded-lg border border-orange-500/60 bg-orange-500/10 px-4 py-3 text-orange-700 dark:text-orange-400" dir="rtl">
@@ -1806,7 +1806,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.CASE_NEW && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
@@ -1822,7 +1822,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.CASE_NEW && selectedCase.caseType === "تجاري" && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "تجاري" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل منصة تراضي</h4>
                       <div className="space-y-3">
@@ -1890,7 +1890,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.CASE_NEW && selectedCase.caseType === "عمالي" && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "عمالي" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل وزارة الموارد البشرية</h4>
                       <div className="space-y-3">
@@ -2027,7 +2027,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.CASE_NEW &&
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY &&
                     CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.READY_TO_SUBMIT) &&
                     (user?.role === "branch_manager" || user?.role === "admin_support") &&
                     (selectedCase.caseType !== "تجاري" || (selectedCase as any).taradiStatus === "لم_يتم_صلح") &&
@@ -2065,7 +2065,7 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.CASE_EXISTING && (
+                  {selectedCase.caseClassification === CaseClassification.IN_COURT && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
                         <span className="w-2 h-2 rounded-full bg-violet-500 inline-block"></span>
@@ -2944,7 +2944,7 @@ export default function CasesPage() {
                 />
               </div>
             </div>
-            {editFormData.caseClassification === CaseClassification.CASE_EXISTING && (
+            {editFormData.caseClassification === CaseClassification.IN_COURT && (
               <div>
                 <Label>موعد الرد</Label>
                 <HijriDatePicker

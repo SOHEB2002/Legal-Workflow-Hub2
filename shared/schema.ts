@@ -80,7 +80,7 @@ export const lawCases = pgTable("law_cases", {
   lastHearingDate: varchar("last_hearing_date", { length: 50 }),
   nextHearingDate: varchar("next_hearing_date", { length: 50 }),
   activeMemoCount: integer("active_memo_count").default(0),
-  caseClassification: varchar("case_classification", { length: 50 }).notNull().default("قضية_جديدة"),
+  caseClassification: varchar("case_classification", { length: 50 }).notNull().default("قيد_الدراسة"),
   previousHearingsCount: integer("previous_hearings_count").default(0),
   currentSituation: text("current_situation").default(""),
   responseDeadline: varchar("response_deadline", { length: 50 }),
@@ -461,15 +461,15 @@ export type CaseTypeValue = typeof CaseType[keyof typeof CaseType];
 
 // ==================== تصنيف القضية ====================
 export const CaseClassification = {
-  CASE_NEW: "قضية_جديدة",
-  CASE_EXISTING: "قضية_مقيدة",
+  UNDER_STUDY: "قيد_الدراسة",
+  IN_COURT: "منظورة_بالمحكمة",
 } as const;
 
 export type CaseClassificationValue = typeof CaseClassification[keyof typeof CaseClassification];
 
 export const CaseClassificationLabels: Record<CaseClassificationValue, string> = {
-  "قضية_جديدة": "قضية جديدة",
-  "قضية_مقيدة": "قضية مقيدة",
+  "قيد_الدراسة": "قيد الدراسة",
+  "منظورة_بالمحكمة": "منظورة بالمحكمة",
 };
 
 // ==================== حالات منصة تراضي (تجاري) ====================
@@ -647,7 +647,7 @@ export const CaseStagesOrder: CaseStageValue[] = [
 
 // ==================== مراحل القضية حسب التصنيف والقسم ====================
 
-export const PlaintiffNewGeneralStages: CaseStageValue[] = [
+export const UnderStudyGeneralStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
@@ -662,7 +662,7 @@ export const PlaintiffNewGeneralStages: CaseStageValue[] = [
   "منظورة",
 ];
 
-export const PlaintiffNewCommercialStages: CaseStageValue[] = [
+export const UnderStudyCommercialStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
@@ -678,7 +678,7 @@ export const PlaintiffNewCommercialStages: CaseStageValue[] = [
   "منظورة",
 ];
 
-export const PlaintiffNewLaborStages: CaseStageValue[] = [
+export const UnderStudyLaborStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
@@ -694,7 +694,7 @@ export const PlaintiffNewLaborStages: CaseStageValue[] = [
   "منظورة",
 ];
 
-export const PlaintiffNewAdminStages: CaseStageValue[] = [
+export const UnderStudyAdminStages: CaseStageValue[] = [
   "استلام",
   "تحديد_تاريخ_التقادم",
   "استكمال_البيانات",
@@ -711,7 +711,7 @@ export const PlaintiffNewAdminStages: CaseStageValue[] = [
   "منظورة",
 ];
 
-export const ExistingCaseStages: CaseStageValue[] = [
+export const InCourtStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "تحرير_مذكرة_جوابية",
@@ -738,21 +738,21 @@ export const PostTrialStages: CaseStageValue[] = [
 ];
 
 export function getStagesForClassification(classification: CaseClassificationValue, caseType?: CaseTypeValue): CaseStageValue[] {
-  if (classification === "قضية_مقيدة") {
-    return ExistingCaseStages;
+  if (classification === "منظورة_بالمحكمة") {
+    return InCourtStages;
   }
 
-  if (classification === "قضية_جديدة") {
+  if (classification === "قيد_الدراسة") {
     switch (caseType) {
-      case "عام": return PlaintiffNewGeneralStages;
-      case "تجاري": return PlaintiffNewCommercialStages;
-      case "عمالي": return PlaintiffNewLaborStages;
-      case "إداري": return PlaintiffNewAdminStages;
-      default: return PlaintiffNewGeneralStages;
+      case "عام": return UnderStudyGeneralStages;
+      case "تجاري": return UnderStudyCommercialStages;
+      case "عمالي": return UnderStudyLaborStages;
+      case "إداري": return UnderStudyAdminStages;
+      default: return UnderStudyGeneralStages;
     }
   }
 
-  return PlaintiffNewGeneralStages;
+  return UnderStudyGeneralStages;
 }
 
 export function getStageLabel(stage: CaseStageValue): string {
@@ -1452,7 +1452,7 @@ export const insertCaseSchema = z.object({
   opponentNotes: z.string().optional().default(""),
   whatsappGroupLink: z.string().optional().default(""),
   googleDriveFolderId: z.string().optional().default(""),
-  caseClassification: z.enum(["قضية_جديدة", "قضية_مقيدة"]).default("قضية_جديدة"),
+  caseClassification: z.enum(["قيد_الدراسة", "منظورة_بالمحكمة"]).default("قيد_الدراسة"),
   previousHearingsCount: z.number().optional().default(0),
   currentSituation: z.string().optional().default(""),
   responseDeadline: z.string().nullable().optional(),

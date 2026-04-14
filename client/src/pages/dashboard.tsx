@@ -102,8 +102,8 @@ export default function DashboardPage() {
   }, [getUpcomingHearings]);
 
   const classificationStats = useMemo(() => {
-    const caseNew = cases.filter(c => (c.caseClassification || CaseClassification.CASE_NEW) === CaseClassification.CASE_NEW).length;
-    const caseExisting = cases.filter(c => c.caseClassification === CaseClassification.CASE_EXISTING).length;
+    const caseNew = cases.filter(c => (c.caseClassification || CaseClassification.UNDER_STUDY) === CaseClassification.UNDER_STUDY).length;
+    const caseExisting = cases.filter(c => c.caseClassification === CaseClassification.IN_COURT).length;
     return { caseNew, caseExisting, total: cases.length };
   }, [cases]);
 
@@ -269,11 +269,11 @@ export default function DashboardPage() {
             <div className="grid grid-cols-2 gap-4 text-center">
               <div className="space-y-1">
                 <p className="text-2xl font-bold text-[#345774]">{classificationStats.caseNew}</p>
-                <p className="text-xs text-muted-foreground">قضية جديدة</p>
+                <p className="text-xs text-muted-foreground">قيد الدراسة</p>
               </div>
               <div className="space-y-1">
                 <p className="text-2xl font-bold text-blue-600">{classificationStats.caseExisting}</p>
-                <p className="text-xs text-muted-foreground">قضية مقيدة</p>
+                <p className="text-xs text-muted-foreground">منظورة بالمحكمة</p>
               </div>
             </div>
           </CardContent>

@@ -64,7 +64,7 @@ export function CaseProgressBar({
   const [courtCaseNumber, setCourtCaseNumber] = useState("");
   const [platformNotes, setPlatformNotes] = useState("");
   const normalizedStage = currentStage;
-  const effectiveClassification = caseClassification || "قضية_جديدة";
+  const effectiveClassification = caseClassification || "قيد_الدراسة";
   const stagesOrder = getStagesForClassification(effectiveClassification as CaseClassificationValue, caseType);
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;

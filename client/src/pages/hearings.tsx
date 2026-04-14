@@ -139,7 +139,7 @@ export default function HearingsPage() {
   const [editFormData, setEditFormData] = useState({
     hearingDate: "",
     hearingTime: "",
-    courtName: "المحكمة العامة" as CourtTypeValue,
+    courtName: "" as CourtTypeValue,
     courtRoom: "",
     notes: "",
     attendingLawyerId: "",
@@ -150,7 +150,7 @@ export default function HearingsPage() {
     hearingDate: "",
     hearingTime: "",
     hearingType: HearingType.COURT,
-    courtName: "المحكمة العامة" as CourtTypeValue,
+    courtName: "" as CourtTypeValue,
     courtRoom: "",
     notes: "",
     responseRequired: false,
@@ -208,7 +208,7 @@ export default function HearingsPage() {
       hearingDate: "",
       hearingTime: "",
       hearingType: HearingType.COURT,
-      courtName: "المحكمة العامة",
+      courtName: "",
       courtRoom: "",
       notes: "",
       responseRequired: false,
@@ -359,7 +359,7 @@ export default function HearingsPage() {
     setEditFormData({
       hearingDate: hearing.hearingDate || "",
       hearingTime: hearing.hearingTime || "",
-      courtName: (hearing.courtName as CourtTypeValue) || "المحكمة العامة",
+      courtName: (hearing.courtName as CourtTypeValue) || ("" as CourtTypeValue),
       courtRoom: hearing.courtRoom || "",
       notes: hearing.notes || "",
       attendingLawyerId: hearing.attendingLawyerId || "",
@@ -451,7 +451,7 @@ export default function HearingsPage() {
     const rawRole = (caseData as any).clientRole as string | undefined;
     // For new (un-court-registered) cases, the firm always represents the
     // plaintiff side, regardless of whether clientRole was filled in.
-    const clientRole = caseData.caseClassification === "قضية_جديدة"
+    const clientRole = caseData.caseClassification === "قيد_الدراسة"
       ? "مدعي"
       : rawRole === "مدعى_عليه"
       ? "مدعى عليه"
