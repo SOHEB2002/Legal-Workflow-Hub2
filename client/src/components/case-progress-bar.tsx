@@ -30,6 +30,7 @@ interface CaseProgressBarProps {
   caseType?: CaseTypeValue;
   clientRole?: string;
   memoRequired?: boolean;
+  isSettlementCase?: boolean;
   reviewNotes?: string;
   reviewDecision?: string;
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
@@ -53,6 +54,7 @@ export function CaseProgressBar({
   caseType,
   clientRole,
   memoRequired,
+  isSettlementCase,
   reviewNotes,
   reviewDecision,
   eligibleInternalReviewers = [],
@@ -74,6 +76,7 @@ export function CaseProgressBar({
     caseType,
     clientRole,
     memoRequired,
+    isSettlementCase,
   );
   // Dynamic bridge for IN_COURT cases: if a memo was added after the case
   // already reached دراسة on the no-memo path, the memo variant returned
@@ -215,7 +218,7 @@ export function CaseProgressBar({
     setCourtCaseNumber("");
   };
 
-  const handleSettlementDecision = (target: "تحصيل" | "أغلق_طلب_الصلح") => {
+  const handleSettlementDecision = (target: "تحصيل" | "أغلق_طلب_الصلح" | "مقفلة") => {
     // Pass the target explicitly so the cases-context doesn't have to guess
     // the next stage from a linear stages array — same approach used for
     // the platform-review accept buttons.
@@ -492,13 +495,14 @@ export function CaseProgressBar({
               <AlertDialogHeader>
                 <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
                 <AlertDialogDescription>
-                  سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف
-                  مسار التقاضي في المحكمة.
+                  {isSettlementCase
+                    ? <>سيتم إغلاق القضية حيث إن القضية بدأت من مرحلة مداولة الصلح.</>
+                    : <>سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف مسار التقاضي في المحكمة.</>}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter className="gap-2">
                 <AlertDialogCancel>إلغاء</AlertDialogCancel>
-                <AlertDialogAction onClick={() => handleSettlementDecision("أغلق_طلب_الصلح")}>
+                <AlertDialogAction onClick={() => handleSettlementDecision(isSettlementCase ? "مقفلة" : "أغلق_طلب_الصلح")}>
                   تأكيد
                 </AlertDialogAction>
               </AlertDialogFooter>

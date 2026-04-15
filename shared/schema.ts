@@ -108,6 +108,7 @@ export const lawCases = pgTable("law_cases", {
   archivedBy: varchar("archived_by", { length: 255 }),
   archiveReason: varchar("archive_reason", { length: 50 }),
   autoArchiveDate: varchar("auto_archive_date", { length: 50 }),
+  isSettlementCase: boolean("is_settlement_case").default(false),
 });
 
 export const consultations = pgTable("consultations", {
@@ -742,6 +743,12 @@ export const InCourtNoMemoStages: CaseStageValue[] = [
   "منظورة",
 ];
 
+export const InCourtSettlementStages: CaseStageValue[] = [
+  "استلام",
+  "مداولة_الصلح",
+  "تحصيل",
+];
+
 export const PostTrialStages: CaseStageValue[] = [
   "منظورة",
   "محكوم_حكم_ابتدائي",
@@ -758,8 +765,12 @@ export function getStagesForClassification(
   caseType?: CaseTypeValue,
   clientRole?: string,
   memoRequired?: boolean,
+  isSettlementCase?: boolean,
 ): CaseStageValue[] {
   if (classification === "منظورة_بالمحكمة") {
+    if (isSettlementCase) {
+      return InCourtSettlementStages;
+    }
     if (memoRequired) {
       return clientRole === "مدعى_عليه"
         ? InCourtDefendantMemoStages
@@ -804,6 +815,7 @@ export const ClosureReason = {
   JUDGMENT_AGAINST: "حكم_نهائي_ضدنا",
   PRIMARY_NO_APPEAL: "حكم_ابتدائي_بدون_اعتراض",
   STRUCK_OFF_EXPIRED: "شطب_بدون_إعادة_قيد",
+  SETTLEMENT_FAILED: "لم_يتم_الصلح",
   OTHER: "أخرى",
 } as const;
 
@@ -816,6 +828,7 @@ export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
   "حكم_نهائي_ضدنا": "حكم نهائي ضدنا",
   "حكم_ابتدائي_بدون_اعتراض": "حكم ابتدائي بدون اعتراض",
   "شطب_بدون_إعادة_قيد": "شطب بدون إعادة قيد",
+  "لم_يتم_الصلح": "لم يتم الصلح",
   "أخرى": "أخرى",
 };
 
@@ -1162,6 +1175,7 @@ export interface LawCase {
   archivedBy: string | null;
   archiveReason: string | null;
   autoArchiveDate: string | null;
+  isSettlementCase: boolean;
   closureReason: string | null;
   closureReasonOther: string | null;
   createdBy: string;
