@@ -1658,9 +1658,18 @@ export default function CasesPage() {
                     <div>
                       <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
                       <p className="font-medium">
-                        {selectedCase.nextHearingDate
-                          ? <DualDateDisplay date={selectedCase.nextHearingDate} compact />
-                          : "-"}
+                        {(() => {
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          const upcoming = getHearingsByCase(selectedCase.id)
+                            .filter((h) => {
+                              if (!h.hearingDate) return false;
+                              const d = new Date(h.hearingDate);
+                              return !isNaN(d.getTime()) && d >= today;
+                            })
+                            .sort((a, b) => new Date(a.hearingDate).getTime() - new Date(b.hearingDate).getTime())[0];
+                          return upcoming ? <DualDateDisplay date={upcoming.hearingDate} compact /> : "-";
+                        })()}
                       </p>
                     </div>
                     <div>
