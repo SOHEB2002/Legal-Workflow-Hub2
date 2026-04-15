@@ -940,12 +940,32 @@ export async function registerRoutes(
 
       // Auto-create memo for existing cases where client is defendant
       const isDefendant = classification === CaseClassification.IN_COURT && req.body.clientRole === "مدعى_عليه";
+      let autoHearingId: string | null = null;
       if (isDefendant) {
         const deadlineStr = validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
         const casePriority = validatedData.priority || "متوسط";
+
+        if (req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
+          try {
+            const hearing = await storage.createHearing({
+              caseId: newCase.id,
+              hearingDate: req.body.nextHearingDate,
+              hearingTime: req.body.nextHearingTime || "09:00",
+              courtName: (validatedData.courtName || "المحكمة العامة") as any,
+              status: "قادمة",
+            });
+            autoHearingId = hearing.id;
+            autoCreated.push({ type: "hearing", id: hearing.id });
+            await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+          } catch (e) {
+            console.error("Error auto-creating defendant hearing:", e);
+          }
+        }
+
         try {
           const memo = await storage.createMemo({
             caseId: newCase.id,
+            hearingId: autoHearingId,
             memoType: MemoType.RESPONSE,
             title: `مذكرة جوابية - ${newCase.caseNumber}`,
             description: `مذكرة جوابية تلقائية لقضية مدعى عليه - ${newCase.caseNumber}`,
@@ -961,22 +981,6 @@ export async function registerRoutes(
           await storage.updateCase(newCase.id, { activeMemoCount: 1 } as any);
         } catch (e) {
           console.error("Error auto-creating defendant memo:", e);
-        }
-
-        if (req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
-          try {
-            const hearing = await storage.createHearing({
-              caseId: newCase.id,
-              hearingDate: req.body.nextHearingDate,
-              hearingTime: req.body.nextHearingTime || "09:00",
-              courtName: (validatedData.courtName || "المحكمة العامة") as any,
-              status: "قادمة",
-            });
-            autoCreated.push({ type: "hearing", id: hearing.id });
-            await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
-          } catch (e) {
-            console.error("Error auto-creating defendant hearing:", e);
-          }
         }
 
         try {
@@ -1007,6 +1011,7 @@ export async function registerRoutes(
             courtName: (validatedData.courtName || "المحكمة العامة") as any,
             status: "قادمة",
           });
+          autoHearingId = hearing.id;
           autoCreated.push({ type: "hearing", id: hearing.id });
           await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
         } catch (e) {
@@ -1020,6 +1025,7 @@ export async function registerRoutes(
           const memoTitle = `مذكرة — قضية رقم ${newCase.caseNumber}`;
           const memo = await storage.createMemo({
             caseId: newCase.id,
+            hearingId: autoHearingId,
             memoType: MemoType.RESPONSE,
             title: memoTitle,
             description: memoTitle,

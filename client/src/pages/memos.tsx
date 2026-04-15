@@ -56,6 +56,7 @@ import {
 } from "lucide-react";
 import { useMemos } from "@/lib/memos-context";
 import { useCases } from "@/lib/cases-context";
+import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
@@ -132,6 +133,7 @@ export default function MemosPage() {
     getOverdueMemos,
   } = useMemos();
   const { cases, updateCase } = useCases();
+  const { getHearingsByCase } = useHearings();
   const { departments } = useDepartments();
   const { user } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
@@ -181,8 +183,17 @@ export default function MemosPage() {
     if (!user || !formData.caseId || !formData.memoType || !formData.title || !formData.deadline) return;
     setSubmitting(true);
     try {
+      const now = Date.now();
+      const upcomingHearing = getHearingsByCase(formData.caseId)
+        .filter((h) => {
+          if (h.status === "تمت" || h.status === "ملغية") return false;
+          const ts = h.hearingDate ? new Date(h.hearingDate).getTime() : NaN;
+          return !isNaN(ts) && ts >= now - 24 * 60 * 60 * 1000;
+        })
+        .sort((a, b) => new Date(a.hearingDate).getTime() - new Date(b.hearingDate).getTime())[0];
       await addMemo({
         caseId: formData.caseId,
+        hearingId: upcomingHearing ? upcomingHearing.id : null,
         memoType: formData.memoType as MemoTypeValue,
         memoTypeOther: formData.memoTypeOther,
         title: formData.title,
@@ -306,13 +317,26 @@ export default function MemosPage() {
 
   const getCaseDetails = (caseId: string) => {
     const c = cases.find(cs => cs.id === caseId);
-    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "" };
+    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "", clientRoleLabel: "" };
+    const classification = c.caseClassification || "";
+    const rawClientRole = ((c as any).clientRole || "").trim();
+    let clientRoleLabel = "";
+    if (classification === "قيد_الدراسة") {
+      clientRoleLabel = "مدعي";
+    } else if (classification === "منظورة_بالمحكمة") {
+      clientRoleLabel = rawClientRole === "مدعى_عليه"
+        ? "مدعى عليه"
+        : rawClientRole === "مدعي"
+        ? "مدعي"
+        : rawClientRole || "";
+    }
     return {
       number: c.caseNumber,
       plaintiff: (c as any).plaintiffName || "",
       client: getClientName(c.clientId),
       opponent: c.opponentName || "",
-      classification: c.caseClassification || "",
+      classification,
+      clientRoleLabel,
     };
   };
 
@@ -484,14 +508,16 @@ export default function MemosPage() {
                           <span className="text-sm block text-center">{caseDetails.opponent || "-"}</span>
                         </TableCell>
                         <TableCell className="text-center">
-                          {caseDetails.classification && (
+                          {caseDetails.clientRoleLabel ? (
                             <Badge variant="outline" className={`text-xs inline-flex justify-center ${
-                              caseDetails.classification === "منظورة_بالمحكمة"
+                              caseDetails.clientRoleLabel === "مدعى عليه"
                                 ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"
                                 : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                             }`}>
-                              {caseDetails.classification === "منظورة_بالمحكمة" ? "منظورة بالمحكمة" : "قيد الدراسة"}
+                              {caseDetails.clientRoleLabel}
                             </Badge>
+                          ) : (
+                            <span className="text-sm">-</span>
                           )}
                         </TableCell>
                         <TableCell className="text-center">
