@@ -240,6 +240,7 @@ function mapDbCase(dbCase: any): LawCase {
     archivedBy: dbCase.archivedBy || null,
     archiveReason: dbCase.archiveReason || null,
     autoArchiveDate: dbCase.autoArchiveDate || null,
+    isSettlementCase: dbCase.isSettlementCase ?? false,
     createdBy: dbCase.createdBy,
     createdAt: toISOString(dbCase.createdAt),
     updatedAt: toISOString(dbCase.updatedAt),

@@ -91,13 +91,15 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const deptLabel = getDepartmentName(lawCase.departmentId || "");
     const clientRole = (lawCase as any).clientRole as string | undefined;
     const memoRequired = !!(lawCase as any).memoRequired;
-    const primary = getStagesForClassification(classification, deptLabel as any, clientRole, memoRequired);
+    const isSettlementCase = !!(lawCase as any).isSettlementCase;
+    const primary = getStagesForClassification(classification, deptLabel as any, clientRole, memoRequired, isSettlementCase);
     if (primary.indexOf(lawCase.currentStage) >= 0) return primary;
-    // IN_COURT has three variants keyed on clientRole/memoRequired, not on
-    // caseType. Fall back across all IN_COURT variants if the current stage
+    // IN_COURT has multiple variants keyed on clientRole/memoRequired/isSettlementCase,
+    // not on caseType. Fall back across all IN_COURT variants if the current stage
     // isn't in the primary choice.
     if (classification === "منظورة_بالمحكمة") {
       const variants = [
+        getStagesForClassification(classification, deptLabel as any, undefined, false, true),
         getStagesForClassification(classification, deptLabel as any, "مدعى_عليه", true),
         getStagesForClassification(classification, deptLabel as any, "مدعي", true),
         getStagesForClassification(classification, deptLabel as any, undefined, false),

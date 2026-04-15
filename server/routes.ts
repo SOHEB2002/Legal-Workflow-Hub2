@@ -153,6 +153,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_ناجز", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "مداولة_الصلح", to: "تحصيل", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  { from: "مداولة_الصلح", to: "مقفلة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
   // ==================== COMMERCIAL PATH (taradi then najiz) ====================
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_تراضي", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
@@ -302,7 +303,8 @@ function validateStageTransition(
     const caseType = entityData.caseType as CaseTypeValue;
     const clientRole = entityData.clientRole as string | undefined;
     const memoRequired = !!entityData.memoRequired;
-    const stages = getStagesForClassification(classification as any, caseType, clientRole, memoRequired);
+    const isSettlementCase = !!entityData.isSettlementCase;
+    const stages = getStagesForClassification(classification as any, caseType, clientRole, memoRequired, isSettlementCase);
     const currentIdx = stages.indexOf(currentStage as any);
     const targetIdx = stages.indexOf(targetStage as any);
 
@@ -913,6 +915,7 @@ export async function registerRoutes(
         const updated = await storage.updateCase(newCase.id, {
           currentStage: "مداولة_الصلح",
           stageHistory,
+          isSettlementCase: true,
         } as any);
         if (updated) {
           Object.assign(newCase, updated);
