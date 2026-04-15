@@ -70,13 +70,14 @@ import {
 } from "lucide-react";
 import { useHearings } from "@/lib/hearings-context";
 import { useCases } from "@/lib/cases-context";
+import { useMemos } from "@/lib/memos-context";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
 import { HearingStatus, HearingResult, CourtType, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
-import { formatTimeAmPm } from "@/lib/date-utils";
+import { formatTimeAmPm, formatDualDate } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useToast } from "@/hooks/use-toast";
@@ -119,6 +120,7 @@ export default function HearingsPage() {
     getUpcomingHearings,
   } = useHearings();
   const { cases, getCaseById } = useCases();
+  const { getMemosByCase } = useMemos();
   const { getClientName } = useClients();
   const { user, users } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
@@ -1519,6 +1521,37 @@ export default function HearingsPage() {
                         </div>
                       </div>
                     )}
+                    {detailHearing.result === "موعد_جديد" && (() => {
+                      const caseData = getCaseById(detailHearing.caseId);
+                      if (!caseData || !(caseData as any).memoRequired) return null;
+                      const isDefendant = (caseData as any).clientRole === "مدعى_عليه";
+                      const requiredLabel = isDefendant ? "مذكرة" : "تحرير صحيفة";
+                      const hearingTs = new Date(detailHearing.hearingDate).getTime();
+                      const relevantMemos = getMemosByCase(detailHearing.caseId).filter((m) => {
+                        const createdTs = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
+                        return !isNaN(createdTs) && createdTs >= hearingTs;
+                      });
+                      const isDone = relevantMemos.some(
+                        (m) => m.status === "معتمدة" || m.status === "مرفوعة" || (m.status as any) === "منجزة",
+                      );
+                      return (
+                        <div>
+                          <p className="text-xs text-muted-foreground">المطلوب</p>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">{requiredLabel}</span>
+                            {isDone ? (
+                              <Badge variant="outline" className="border-green-600 text-green-600 dark:border-green-400 dark:text-green-400">
+                                منجزة
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="border-orange-500 text-orange-500">
+                                قيد العمل
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </>
                 ) : (
                   <div className="text-center py-6 text-muted-foreground">
@@ -1647,7 +1680,12 @@ export default function HearingsPage() {
           </DialogHeader>
           <div className="space-y-2 text-sm">
             <p>هذه القضية لديها جلسة قادمة بالفعل بتاريخ{" "}
-              <span className="font-medium"><LtrInline>{conflictHearing?.hearingDate}</LtrInline></span>
+              <span className="font-medium">
+                {(() => {
+                  const { hijri, gregorian } = formatDualDate(conflictHearing?.hearingDate);
+                  return <>{hijri} — <LtrInline>{gregorian}</LtrInline> م</>;
+                })()}
+              </span>
               {conflictHearing?.hearingTime && <> الساعة <LtrInline>{conflictHearing.hearingTime}</LtrInline></>}.
             </p>
             <p>هل تريد استبدال الجلسة القادمة بالجلسة الجديدة، أم الإبقاء على كليهما؟</p>
