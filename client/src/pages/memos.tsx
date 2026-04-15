@@ -306,13 +306,26 @@ export default function MemosPage() {
 
   const getCaseDetails = (caseId: string) => {
     const c = cases.find(cs => cs.id === caseId);
-    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "" };
+    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "", clientRoleLabel: "" };
+    const classification = c.caseClassification || "";
+    const rawClientRole = ((c as any).clientRole || "").trim();
+    let clientRoleLabel = "";
+    if (classification === "قيد_الدراسة") {
+      clientRoleLabel = "مدعي";
+    } else if (classification === "منظورة_بالمحكمة") {
+      clientRoleLabel = rawClientRole === "مدعى_عليه"
+        ? "مدعى عليه"
+        : rawClientRole === "مدعي"
+        ? "مدعي"
+        : rawClientRole || "";
+    }
     return {
       number: c.caseNumber,
       plaintiff: (c as any).plaintiffName || "",
       client: getClientName(c.clientId),
       opponent: c.opponentName || "",
-      classification: c.caseClassification || "",
+      classification,
+      clientRoleLabel,
     };
   };
 
@@ -481,14 +494,16 @@ export default function MemosPage() {
                           <span className="text-sm block text-center">{caseDetails.opponent || "-"}</span>
                         </TableCell>
                         <TableCell className="text-center">
-                          {caseDetails.classification && (
+                          {caseDetails.clientRoleLabel ? (
                             <Badge variant="outline" className={`text-xs inline-flex justify-center ${
-                              caseDetails.classification === "منظورة_بالمحكمة"
+                              caseDetails.clientRoleLabel === "مدعى عليه"
                                 ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"
                                 : "border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-400"
                             }`}>
-                              {caseDetails.classification === "منظورة_بالمحكمة" ? "منظورة بالمحكمة" : "قيد الدراسة"}
+                              {caseDetails.clientRoleLabel}
                             </Badge>
+                          ) : (
+                            <span className="text-sm">-</span>
                           )}
                         </TableCell>
                         <TableCell className="text-center">
