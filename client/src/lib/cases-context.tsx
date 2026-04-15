@@ -1,7 +1,7 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
 import { CaseStatus, Priority, CaseStage, CaseStagesOrder, CaseClassification, getStagesForClassification } from "@shared/schema";
-import { apiRequest, queryClient } from "./queryClient";
+import { apiRequest } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
 import { useAuth } from "./auth-context";
@@ -76,6 +76,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const [comments, setComments] = useState<CaseComment[]>([]);
   const { user } = useAuth();
   const { getDepartmentName } = useDepartments();
+  const backgroundRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Resolve the stage-order array for a case. Department resolution via
   // getDepartmentName is the primary path ("تجاري" / "عام" / "عمالي" /
@@ -170,6 +171,27 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user, fetchCases]);
 
+  // Debounced background refetch: after any targeted local update, schedule a
+  // silent re-sync 5s later. Further updates within the window reset the
+  // timer, so a burst of edits produces one reconciliation round-trip.
+  const scheduleBackgroundRefetch = useCallback(() => {
+    if (backgroundRefetchRef.current) {
+      clearTimeout(backgroundRefetchRef.current);
+    }
+    backgroundRefetchRef.current = setTimeout(() => {
+      backgroundRefetchRef.current = null;
+      fetchCases().catch(() => {});
+    }, 5000);
+  }, [fetchCases]);
+
+  useEffect(() => {
+    return () => {
+      if (backgroundRefetchRef.current) {
+        clearTimeout(backgroundRefetchRef.current);
+      }
+    };
+  }, []);
+
   const addCase = async (data: Partial<LawCase>, createdBy: string, createdByName: string): Promise<LawCase> => {
     const now = new Date().toISOString();
     const initialStage: CaseStageValue = CaseStage.RECEPTION;
@@ -218,10 +240,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const response = await apiRequest("POST", "/api/cases", caseData);
     const newCase = await response.json();
     setCases((prev) => [migrateCase(newCase), ...prev]);
-    if (newCase.autoCreated?.length > 0) {
-      queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
-    }
+    scheduleBackgroundRefetch();
     if (newCase.departmentId) {
       notifyCaseAdded(newCase.id, newCase.caseNumber, newCase.departmentId).catch(() => {});
     }
@@ -246,6 +265,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // JSON parse failed — keep optimistic state (server confirmed the update).
       }
+      scheduleBackgroundRefetch();
     } catch (err) {
       // Server rejected the update — roll back to the previous state.
       if (previous) {
@@ -482,6 +502,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       } catch (parseErr) {
         console.warn("[skipDataCompletion] response parse failed, but server accepted the transition", parseErr);
       }
+      scheduleBackgroundRefetch();
       return true;
     } catch (err) {
       console.error("[skipDataCompletion] request failed", err);

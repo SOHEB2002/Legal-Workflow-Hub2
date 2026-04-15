@@ -129,15 +129,10 @@ export const queryClient = new QueryClient({
       // Tab-focus refetch causes an extra round-trip every time a user switches
       // windows — a big source of needless API calls in a multi-tab office.
       refetchOnWindowFocus: false,
-      // Don't re-fetch when a component remounts if the data is still fresh.
-      // Combined with staleTime below this means: fetch once, cache for 5 min,
-      // never refetch on navigation or tab-focus.
+      refetchOnReconnect: true,
       refetchOnMount: false,
-      // Consider data fresh for 5 minutes — no refetch within that window.
-      staleTime: 5 * 60 * 1000,
-      // Keep unused data in memory for 10 minutes before garbage-collecting it,
-      // so navigating back to a page reuses the cache instead of re-fetching.
-      gcTime: 10 * 60 * 1000,
+      staleTime: 60 * 1000,
+      gcTime: 5 * 60 * 1000,
       retry: false,
     },
     mutations: {
