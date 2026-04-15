@@ -1686,7 +1686,7 @@ export default function HearingsPage() {
                   return <>{hijri} — <LtrInline>{gregorian}</LtrInline> م</>;
                 })()}
               </span>
-              {conflictHearing?.hearingTime && <> الساعة <LtrInline>{conflictHearing.hearingTime}</LtrInline></>}.
+              {conflictHearing?.hearingTime && <> الساعة <LtrInline>{formatTimeAmPm(conflictHearing.hearingTime)}</LtrInline></>}.
             </p>
             <p>هل تريد استبدال الجلسة القادمة بالجلسة الجديدة، أم الإبقاء على كليهما؟</p>
           </div>
