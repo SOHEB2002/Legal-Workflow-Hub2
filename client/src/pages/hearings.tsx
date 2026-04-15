@@ -1522,33 +1522,39 @@ export default function HearingsPage() {
                       </div>
                     )}
                     {detailHearing.result === "موعد_جديد" && (() => {
-                      const caseData = getCaseById(detailHearing.caseId);
-                      if (!caseData || !(caseData as any).memoRequired) return null;
-                      const isDefendant = (caseData as any).clientRole === "مدعى_عليه";
-                      const requiredLabel = isDefendant ? "مذكرة" : "تحرير صحيفة";
+                      const hearingMemoRequired = !!(detailHearing as any).memoRequired;
+                      const opponentResponseRequired = !!(detailHearing as any).opponentResponseRequired;
+                      if (!hearingMemoRequired && !opponentResponseRequired) return null;
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
                       const relevantMemos = getMemosByCase(detailHearing.caseId).filter((m) => {
                         const createdTs = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
                         return !isNaN(createdTs) && createdTs >= hearingTs;
                       });
-                      const isDone = relevantMemos.some(
+                      const memoDone = relevantMemos.some(
                         (m) => m.status === "معتمدة" || m.status === "مرفوعة" || (m.status as any) === "منجزة",
                       );
                       return (
-                        <div>
-                          <p className="text-xs text-muted-foreground">المطلوب</p>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm">{requiredLabel}</span>
-                            {isDone ? (
-                              <Badge variant="outline" className="border-green-600 text-green-600 dark:border-green-400 dark:text-green-400">
-                                منجزة
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="border-orange-500 text-orange-500">
-                                قيد العمل
-                              </Badge>
-                            )}
-                          </div>
+                        <div className="border border-border rounded-md p-3 space-y-2">
+                          <p className="text-xs text-muted-foreground font-semibold">المطلوب بعد الجلسة</p>
+                          {hearingMemoRequired && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">مذكرة مطلوبة</span>
+                              {memoDone ? (
+                                <Badge variant="outline" className="border-green-600 text-green-600 dark:border-green-400 dark:text-green-400">
+                                  منجزة
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="border-orange-500 text-orange-500">
+                                  قيد العمل
+                                </Badge>
+                              )}
+                            </div>
+                          )}
+                          {opponentResponseRequired && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">مطلوب رد من الخصم</span>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
