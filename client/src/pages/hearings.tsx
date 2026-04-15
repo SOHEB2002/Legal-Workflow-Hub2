@@ -71,6 +71,8 @@ import {
 import { useHearings } from "@/lib/hearings-context";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
+import { useFieldTasks } from "@/lib/field-tasks-context";
+import { MemoStatusLabels, MemoType, FieldTaskStatus } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -121,6 +123,7 @@ export default function HearingsPage() {
   } = useHearings();
   const { cases, getCaseById } = useCases();
   const { getMemosByCase } = useMemos();
+  const { getTasksByCase } = useFieldTasks();
   const { getClientName } = useClients();
   const { user, users } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
@@ -1469,6 +1472,72 @@ export default function HearingsPage() {
                     <p className="text-sm">{detailHearing.notes}</p>
                   </div>
                 )}
+                {(() => {
+                  const hearingTs = new Date(detailHearing.hearingDate).getTime();
+                  const linkedMemos = getMemosByCase(detailHearing.caseId).filter((m) => {
+                    const ts = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
+                    return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
+                  });
+                  const linkedTasks = getTasksByCase(detailHearing.caseId).filter((t) => {
+                    const ts = (t as any).createdAt ? new Date((t as any).createdAt).getTime() : NaN;
+                    return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
+                  });
+                  const doneMemoStatuses = new Set(["معتمدة", "مرفوعة", "منجزة"]);
+                  return (
+                    <div className="border border-border rounded-md p-3 space-y-2">
+                      <p className="text-xs text-muted-foreground font-semibold">المهام المرتبطة</p>
+                      {linkedMemos.length === 0 && linkedTasks.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">لا توجد مهام مرتبطة</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {linkedMemos.map((m) => {
+                            const memoTypeLabel = m.memoType === MemoType.RESPONSE ? "جوابية" : "تحرير";
+                            const isDone = doneMemoStatuses.has(m.status as any);
+                            return (
+                              <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
+                                <div className="flex flex-col">
+                                  <span className="font-medium">{m.title}</span>
+                                  <span className="text-xs text-muted-foreground">مذكرة {memoTypeLabel}</span>
+                                </div>
+                                <Badge
+                                  variant="outline"
+                                  className={
+                                    isDone
+                                      ? "border-green-600 text-green-600 dark:border-green-400 dark:text-green-400"
+                                      : "border-orange-500 text-orange-500"
+                                  }
+                                >
+                                  {MemoStatusLabels[m.status] || m.status}
+                                </Badge>
+                              </div>
+                            );
+                          })}
+                          {linkedTasks.map((t) => {
+                            const isDone = t.status === FieldTaskStatus.COMPLETED;
+                            return (
+                              <div key={t.id} className="flex items-center justify-between gap-2 text-sm">
+                                <div className="flex flex-col">
+                                  <span className="font-medium">{t.title}</span>
+                                  <span className="text-xs text-muted-foreground">مهمة ميدانية</span>
+                                </div>
+                                <Badge
+                                  variant="outline"
+                                  className={
+                                    isDone
+                                      ? "border-green-600 text-green-600 dark:border-green-400 dark:text-green-400"
+                                      : "border-orange-500 text-orange-500"
+                                  }
+                                >
+                                  {t.status}
+                                </Badge>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </TabsContent>
 
               <TabsContent value="result" className="space-y-3 mt-4">
