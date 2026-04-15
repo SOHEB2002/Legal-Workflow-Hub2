@@ -56,6 +56,7 @@ import {
 } from "lucide-react";
 import { useMemos } from "@/lib/memos-context";
 import { useCases } from "@/lib/cases-context";
+import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
@@ -132,6 +133,7 @@ export default function MemosPage() {
     getOverdueMemos,
   } = useMemos();
   const { cases, updateCase } = useCases();
+  const { getHearingsByCase } = useHearings();
   const { departments } = useDepartments();
   const { user } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
@@ -181,8 +183,17 @@ export default function MemosPage() {
     if (!user || !formData.caseId || !formData.memoType || !formData.title || !formData.deadline) return;
     setSubmitting(true);
     try {
+      const now = Date.now();
+      const upcomingHearing = getHearingsByCase(formData.caseId)
+        .filter((h) => {
+          if (h.status === "تمت" || h.status === "ملغية") return false;
+          const ts = h.hearingDate ? new Date(h.hearingDate).getTime() : NaN;
+          return !isNaN(ts) && ts >= now - 24 * 60 * 60 * 1000;
+        })
+        .sort((a, b) => new Date(a.hearingDate).getTime() - new Date(b.hearingDate).getTime())[0];
       await addMemo({
         caseId: formData.caseId,
+        hearingId: upcomingHearing ? upcomingHearing.id : null,
         memoType: formData.memoType as MemoTypeValue,
         memoTypeOther: formData.memoTypeOther,
         title: formData.title,

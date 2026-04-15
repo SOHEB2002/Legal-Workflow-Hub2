@@ -1474,10 +1474,13 @@ export default function HearingsPage() {
                 )}
                 {(() => {
                   const hearingTs = new Date(detailHearing.hearingDate).getTime();
-                  const linkedMemos = getMemosByCase(detailHearing.caseId).filter((m) => {
+                  const allCaseMemos = getMemosByCase(detailHearing.caseId);
+                  const directLinked = allCaseMemos.filter((m) => (m as any).hearingId === detailHearing.id);
+                  const dateLinked = allCaseMemos.filter((m) => {
                     const ts = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
                     return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
                   });
+                  const linkedMemos = directLinked.length > 0 ? directLinked : dateLinked;
                   const linkedTasks = getTasksByCase(detailHearing.caseId).filter((t) => {
                     const ts = (t as any).createdAt ? new Date((t as any).createdAt).getTime() : NaN;
                     return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
@@ -1595,10 +1598,14 @@ export default function HearingsPage() {
                       const opponentResponseRequired = !!(detailHearing as any).opponentResponseRequired;
                       if (!hearingMemoRequired && !opponentResponseRequired) return null;
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
-                      const relevantMemos = getMemosByCase(detailHearing.caseId).filter((m) => {
-                        const createdTs = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
-                        return !isNaN(createdTs) && createdTs >= hearingTs;
-                      });
+                      const caseMemos = getMemosByCase(detailHearing.caseId);
+                      const directMatches = caseMemos.filter((m) => (m as any).hearingId === detailHearing.id);
+                      const relevantMemos = directMatches.length > 0
+                        ? directMatches
+                        : caseMemos.filter((m) => {
+                            const createdTs = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
+                            return !isNaN(createdTs) && createdTs >= hearingTs;
+                          });
                       const memoDone = relevantMemos.some(
                         (m) => m.status === "معتمدة" || m.status === "مرفوعة" || (m.status as any) === "منجزة",
                       );
