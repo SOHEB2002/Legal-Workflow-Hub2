@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Hearing, HearingResultValue } from "@shared/schema";
@@ -50,49 +50,112 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     enabled: !!user,
   });
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
-    // NOTE: Do NOT cross-invalidate /api/field-tasks — hearing changes don't
-    // affect field tasks and this causes an unnecessary full refetch.
+  const HEARINGS_KEY = ["/api/hearings"] as const;
+  const bgRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleBackgroundRefetch = () => {
+    if (bgRefetchRef.current) clearTimeout(bgRefetchRef.current);
+    bgRefetchRef.current = setTimeout(() => {
+      bgRefetchRef.current = null;
+      queryClient.invalidateQueries({ queryKey: HEARINGS_KEY });
+    }, 5000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (bgRefetchRef.current) clearTimeout(bgRefetchRef.current);
+    };
+  }, []);
+
+  const upsertLocal = (hearing: Hearing) => {
+    queryClient.setQueryData<Hearing[]>(HEARINGS_KEY, (prev) => {
+      if (!prev) return [hearing];
+      const idx = prev.findIndex((h) => h.id === hearing.id);
+      if (idx === -1) return [hearing, ...prev];
+      const next = prev.slice();
+      next[idx] = hearing;
+      return next;
+    });
+  };
+
+  const patchLocal = (id: string, patch: Partial<Hearing>) => {
+    queryClient.setQueryData<Hearing[]>(HEARINGS_KEY, (prev) =>
+      prev ? prev.map((h) => (h.id === id ? { ...h, ...patch } : h)) : prev,
+    );
+  };
+
+  const removeLocal = (id: string) => {
+    queryClient.setQueryData<Hearing[]>(HEARINGS_KEY, (prev) =>
+      prev ? prev.filter((h) => h.id !== id) : prev,
+    );
   };
 
   const addHearing = async (data: Partial<Hearing>): Promise<Hearing> => {
     const res = await apiRequest("POST", "/api/hearings", data);
     const hearing = await res.json();
-    invalidate();
+    upsertLocal(hearing);
+    scheduleBackgroundRefetch();
     return hearing;
   };
 
   const updateHearing = async (id: string, data: Partial<Hearing>): Promise<void> => {
-    await apiRequest("PATCH", `/api/hearings/${id}`, data);
-    invalidate();
+    const res = await apiRequest("PATCH", `/api/hearings/${id}`, data);
+    try {
+      const updated = await res.json();
+      if (updated && updated.id) upsertLocal(updated);
+      else patchLocal(id, data);
+    } catch {
+      patchLocal(id, data);
+    }
+    scheduleBackgroundRefetch();
   };
 
   const deleteHearing = async (id: string): Promise<void> => {
     await apiRequest("DELETE", `/api/hearings/${id}`);
-    invalidate();
+    removeLocal(id);
+    scheduleBackgroundRefetch();
   };
 
   const submitResult = async (id: string, data: HearingResultData): Promise<any> => {
     const res = await apiRequest("POST", `/api/hearings/${id}/result`, data);
     const result = await res.json();
-    invalidate();
+    if (result && result.hearing && result.hearing.id) {
+      upsertLocal(result.hearing);
+    } else if (result && result.id) {
+      upsertLocal(result);
+    }
+    scheduleBackgroundRefetch();
     return result;
   };
 
   const submitReport = async (id: string, data: HearingReportData): Promise<void> => {
-    await apiRequest("POST", `/api/hearings/${id}/report`, data);
-    invalidate();
+    const res = await apiRequest("POST", `/api/hearings/${id}/report`, data);
+    try {
+      const updated = await res.json();
+      if (updated && updated.id) upsertLocal(updated);
+      else patchLocal(id, { reportCompleted: true, ...data } as any);
+    } catch {
+      patchLocal(id, { reportCompleted: true, ...data } as any);
+    }
+    scheduleBackgroundRefetch();
   };
 
   const closeHearing = async (id: string): Promise<void> => {
-    await apiRequest("POST", `/api/hearings/${id}/close`);
-    invalidate();
+    const res = await apiRequest("POST", `/api/hearings/${id}/close`);
+    try {
+      const updated = await res.json();
+      if (updated && updated.id) upsertLocal(updated);
+      else patchLocal(id, { status: HearingStatus.COMPLETED } as any);
+    } catch {
+      patchLocal(id, { status: HearingStatus.COMPLETED } as any);
+    }
+    scheduleBackgroundRefetch();
   };
 
   const cancelHearing = async (id: string): Promise<void> => {
     await apiRequest("PATCH", `/api/hearings/${id}`, { status: HearingStatus.CANCELLED });
-    invalidate();
+    patchLocal(id, { status: HearingStatus.CANCELLED } as any);
+    scheduleBackgroundRefetch();
   };
 
   const getHearingById = (id: string) => hearings.find((h) => h.id === id);

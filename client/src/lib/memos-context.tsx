@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Memo, MemoStatusValue, InsertMemo } from "@shared/schema";
@@ -30,40 +30,71 @@ export function MemosProvider({ children }: { children: React.ReactNode }) {
     enabled: !!user,
   });
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
-    // Memo create/delete can mutate the related case's memoRequired and
-    // clientRole (dynamic IN_COURT path adjustment in POST/DELETE
-    // /api/memos), so refresh the cases list to keep the progress bar in
-    // sync with the live case data. We accept the full-list refetch cost
-    // here for correctness — it was previously skipped on the assumption
-    // that memos never touched case rows, which is no longer true.
-    refreshCases().catch(() => {});
+  const MEMOS_KEY = ["/api/memos"] as const;
+  const bgRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleBackgroundRefetch = () => {
+    if (bgRefetchRef.current) clearTimeout(bgRefetchRef.current);
+    bgRefetchRef.current = setTimeout(() => {
+      bgRefetchRef.current = null;
+      queryClient.invalidateQueries({ queryKey: MEMOS_KEY });
+      // Memo create/delete/update can mutate the related case's memoRequired
+      // and clientRole (dynamic IN_COURT path adjustment). Keep cases in sync
+      // via the debounced background refetch rather than on every mutation.
+      refreshCases().catch(() => {});
+    }, 5000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (bgRefetchRef.current) clearTimeout(bgRefetchRef.current);
+    };
+  }, []);
+
+  const upsertLocal = (memo: Memo) => {
+    queryClient.setQueryData<Memo[]>(MEMOS_KEY, (prev) => {
+      if (!prev) return [memo];
+      const idx = prev.findIndex((m) => m.id === memo.id);
+      if (idx === -1) return [memo, ...prev];
+      const next = prev.slice();
+      next[idx] = memo;
+      return next;
+    });
+  };
+
+  const removeLocal = (id: string) => {
+    queryClient.setQueryData<Memo[]>(MEMOS_KEY, (prev) =>
+      prev ? prev.filter((m) => m.id !== id) : prev,
+    );
   };
 
   const addMemo = async (data: InsertMemo & { createdBy: string }): Promise<Memo> => {
     const res = await apiRequest("POST", "/api/memos", data);
     const memo = await res.json();
-    invalidate();
+    upsertLocal(memo);
+    scheduleBackgroundRefetch();
     return memo;
   };
 
   const updateMemo = async (id: string, data: Partial<Memo>): Promise<Memo> => {
     const res = await apiRequest("PATCH", `/api/memos/${id}`, data);
     const memo = await res.json();
-    invalidate();
+    upsertLocal(memo);
+    scheduleBackgroundRefetch();
     return memo;
   };
 
   const deleteMemo = async (id: string): Promise<void> => {
     await apiRequest("DELETE", `/api/memos/${id}`);
-    invalidate();
+    removeLocal(id);
+    scheduleBackgroundRefetch();
   };
 
   const changeStatus = async (id: string, status: MemoStatusValue, extra?: Partial<Memo>): Promise<Memo> => {
     const res = await apiRequest("PATCH", `/api/memos/${id}`, { status, ...extra });
     const memo = await res.json();
-    invalidate();
+    upsertLocal(memo);
+    scheduleBackgroundRefetch();
     return memo;
   };
 
