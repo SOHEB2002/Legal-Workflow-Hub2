@@ -1158,16 +1158,6 @@ export default function CasesPage() {
                         </SelectContent>
                       </Select>
                     </div>
-                    {(formData as any).clientRole === "مدعى_عليه" && (
-                      <div>
-                        <Label>مهلة الرد (تاريخ)</Label>
-                        <HijriDatePicker
-                          value={formData.responseDeadline}
-                          onChange={(v) => setFormData({ ...formData, responseDeadline: v })}
-                          data-testid="input-response-deadline"
-                        />
-                      </div>
-                    )}
                   </>
                 )}
 
