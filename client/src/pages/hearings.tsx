@@ -76,7 +76,7 @@ import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
 import { HearingStatus, HearingResult, CourtType, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
-import { formatTimeAmPm } from "@/lib/date-utils";
+import { formatTimeAmPm, formatDualDate } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useToast } from "@/hooks/use-toast";
@@ -1647,7 +1647,12 @@ export default function HearingsPage() {
           </DialogHeader>
           <div className="space-y-2 text-sm">
             <p>هذه القضية لديها جلسة قادمة بالفعل بتاريخ{" "}
-              <span className="font-medium"><LtrInline>{conflictHearing?.hearingDate}</LtrInline></span>
+              <span className="font-medium">
+                {(() => {
+                  const { hijri, gregorian } = formatDualDate(conflictHearing?.hearingDate);
+                  return <>{hijri} — <LtrInline>{gregorian}</LtrInline> م</>;
+                })()}
+              </span>
               {conflictHearing?.hearingTime && <> الساعة <LtrInline>{conflictHearing.hearingTime}</LtrInline></>}.
             </p>
             <p>هل تريد استبدال الجلسة القادمة بالجلسة الجديدة، أم الإبقاء على كليهما؟</p>
