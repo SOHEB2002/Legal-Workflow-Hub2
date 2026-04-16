@@ -2476,6 +2476,8 @@ export async function registerRoutes(
         updateData.nextHearingDate = data.nextHearingDate || null;
         updateData.nextHearingTime = data.nextHearingTime || null;
         updateData.responseRequired = data.responseRequired ?? false;
+        updateData.memoRequired = data.memoRequired ?? false;
+        updateData.opponentResponseRequired = data.opponentResponseRequired ?? false;
       }
 
       const updatedHearing = await storage.updateHearing(hearingId, updateData);
