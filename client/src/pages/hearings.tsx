@@ -309,13 +309,17 @@ export default function HearingsPage() {
         data.opponentResponseRequired = resultForm.opponentResponseRequired;
       }
       const res = await submitResult(resultDialogHearing.id, data);
+      const hasNewHearing = res.createdTasks?.some((t: any) => t.type === "new_hearing");
       const tasksMsg = res.createdTasks?.length
         ? `\nتم إنشاء ${res.createdTasks.length} مهمة تلقائياً`
         : "";
       const memosMsg = res.createdMemos?.length
         ? `\nتم إنشاء ${res.createdMemos.length} مذكرة تلقائياً`
         : "";
-      toast({ title: "تم تسجيل النتيجة بنجاح" + tasksMsg + memosMsg });
+      const opponentMsg = data.opponentResponseRequired && hasNewHearing
+        ? "\nتم تعليم الجلسة القادمة: مطلوب رد من الخصم"
+        : "";
+      toast({ title: "تم تسجيل النتيجة بنجاح" + tasksMsg + memosMsg + opponentMsg });
       setResultDialogHearing(null);
       resetResultForm();
     } catch (e: any) {
@@ -920,6 +924,11 @@ export default function HearingsPage() {
                                   {hearing.result === HearingResult.JUDGMENT && hearing.judgmentSide && (
                                     <span className="mr-1">({hearing.judgmentSide})</span>
                                   )}
+                                </Badge>
+                              )}
+                              {hearing.opponentResponseRequired && (
+                                <Badge variant="outline" className="text-xs border-orange-500 text-orange-600 dark:text-orange-400">
+                                  مطلوب رد من الخصم
                                 </Badge>
                               )}
                             </div>

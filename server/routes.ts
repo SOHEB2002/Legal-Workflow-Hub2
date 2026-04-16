@@ -2517,6 +2517,7 @@ export async function registerRoutes(
           await storage.updateCase(effectiveCaseId, caseUpdate);
 
           // Auto-create next hearing
+          let newSessionHearingId: string | null = null;
           if (data.nextHearingDate) {
             const newHearing = await storage.createHearing({
               caseId: effectiveCaseId,
@@ -2527,8 +2528,10 @@ export async function registerRoutes(
               courtRoom: hearing.courtRoom,
               status: HearingStatus.UPCOMING,
               attendingLawyerId: hearing.attendingLawyerId,
+              opponentResponseRequired: data.opponentResponseRequired || false,
               notes: `موعد جديد من جلسة ${hearing.hearingDate}`,
             } as any);
+            newSessionHearingId = newHearing.id;
             createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
           }
 
@@ -2536,7 +2539,7 @@ export async function registerRoutes(
           if (data.memoRequired && existingCase.primaryLawyerId) {
             const memo = await storage.createMemo({
               caseId: effectiveCaseId,
-              hearingId: hearingId,
+              hearingId: newSessionHearingId || hearingId,
               memoType: MemoType.RESPONSE,
               title: `مذكرة — قضية رقم ${existingCase.caseNumber}`,
               description: `مذكرة مطلوبة بناءً على نتيجة الجلسة بتاريخ ${hearing.hearingDate}`,
@@ -2765,6 +2768,7 @@ export async function registerRoutes(
               courtRoom: hearing.courtRoom,
               status: HearingStatus.UPCOMING,
               attendingLawyerId: hearing.attendingLawyerId,
+              opponentResponseRequired: data.opponentResponseRequired || false,
               notes: `جلسة مؤجلة من ${hearing.hearingDate}`,
             } as any);
             createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });

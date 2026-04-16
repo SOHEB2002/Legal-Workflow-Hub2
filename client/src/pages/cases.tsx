@@ -881,6 +881,11 @@ export default function CasesPage() {
                             <AlertTriangle className="w-3 h-3 text-amber-700" />
                           </span>
                         )}
+                      {getHearingsByCase(c.id).some(h => h.opponentResponseRequired) && (
+                        <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600 dark:text-orange-400 px-1 py-0">
+                          رد خصم
+                        </Badge>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
@@ -1691,6 +1696,14 @@ export default function CasesPage() {
                         <p className="font-medium">
                           <DualDateDisplay date={selectedCase.responseDeadline} compact />
                         </p>
+                      </div>
+                    )}
+                    {getHearingsByCase(selectedCase.id).some(h => h.opponentResponseRequired) && (
+                      <div>
+                        <Label className="text-muted-foreground">رد الخصم</Label>
+                        <Badge variant="outline" className="mt-1 border-orange-500 text-orange-600 dark:text-orange-400">
+                          مطلوب رد من الخصم
+                        </Badge>
                       </div>
                     )}
                     {(selectedCase as any).taradiNumber && (
