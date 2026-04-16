@@ -945,20 +945,26 @@ export async function registerRoutes(
         const deadlineStr = validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
         const casePriority = validatedData.priority || "متوسط";
 
-        if (req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
+        if (req.body.nextHearingDate && String(req.body.nextHearingDate).trim()) {
+          console.log("[POST /api/cases] IN_COURT defendant hearing auto-create:", {
+            caseId: newCase.id,
+            nextHearingDate: req.body.nextHearingDate,
+          });
           try {
             const hearing = await storage.createHearing({
               caseId: newCase.id,
               hearingDate: req.body.nextHearingDate,
-              hearingTime: req.body.nextHearingTime || "09:00",
-              courtName: (validatedData.courtName || "المحكمة العامة") as any,
+              hearingTime: req.body.nextHearingTime || "10:00",
+              hearingType: "محكمة",
+              courtName: (validatedData.courtName || "") as any,
               status: "قادمة",
             });
             autoHearingId = hearing.id;
             autoCreated.push({ type: "hearing", id: hearing.id });
             await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+            console.log("[POST /api/cases] Defendant hearing created:", hearing.id);
           } catch (e) {
-            console.error("Error auto-creating defendant hearing:", e);
+            console.error("[POST /api/cases] Error auto-creating defendant hearing:", e);
           }
         }
 
@@ -1002,20 +1008,35 @@ export async function registerRoutes(
         }
       }
 
-      if (!isDefendant && req.body.nextHearingDate && req.body.nextHearingDate.trim()) {
+      // Auto-create hearing for IN_COURT plaintiff cases (non-defendant path)
+      if (
+        !isDefendant &&
+        classification === CaseClassification.IN_COURT &&
+        req.body.nextHearingDate &&
+        String(req.body.nextHearingDate).trim()
+      ) {
+        console.log("[POST /api/cases] IN_COURT plaintiff hearing auto-create:", {
+          caseId: newCase.id,
+          nextHearingDate: req.body.nextHearingDate,
+          nextHearingTime: req.body.nextHearingTime,
+          courtName: validatedData.courtName,
+          clientRole: req.body.clientRole,
+        });
         try {
           const hearing = await storage.createHearing({
             caseId: newCase.id,
             hearingDate: req.body.nextHearingDate,
-            hearingTime: req.body.nextHearingTime || "09:00",
-            courtName: (validatedData.courtName || "المحكمة العامة") as any,
+            hearingTime: req.body.nextHearingTime || "10:00",
+            hearingType: "محكمة",
+            courtName: (validatedData.courtName || "") as any,
             status: "قادمة",
           });
           autoHearingId = hearing.id;
           autoCreated.push({ type: "hearing", id: hearing.id });
           await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+          console.log("[POST /api/cases] Hearing created successfully:", hearing.id);
         } catch (e) {
-          console.error("Error auto-creating hearing for non-defendant case:", e);
+          console.error("[POST /api/cases] Error auto-creating hearing:", e);
         }
       }
 
