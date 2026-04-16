@@ -205,6 +205,7 @@ export default function HearingsPage() {
     nextHearingDate: "",
     nextHearingTime: "",
     responseRequired: false,
+    opponentResponseRequired: false,
     caseId: "",
   });
 
@@ -242,6 +243,7 @@ export default function HearingsPage() {
       nextHearingDate: "",
       nextHearingTime: "",
       responseRequired: false,
+      opponentResponseRequired: false,
       caseId: "",
     });
   };
@@ -304,6 +306,7 @@ export default function HearingsPage() {
         data.nextHearingDate = resultForm.nextHearingDate;
         data.nextHearingTime = resultForm.nextHearingTime;
         data.responseRequired = resultForm.responseRequired;
+        data.opponentResponseRequired = resultForm.opponentResponseRequired;
       }
       const res = await submitResult(resultDialogHearing.id, data);
       const tasksMsg = res.createdTasks?.length
@@ -1174,6 +1177,19 @@ export default function HearingsPage() {
                     سيتم إنشاء مذكرة جوابية تلقائياً ومهمة إعداد الرد
                   </p>
                 )}
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="opponentResponseRequired"
+                    checked={resultForm.opponentResponseRequired}
+                    onCheckedChange={(checked) =>
+                      setResultForm({ ...resultForm, opponentResponseRequired: !!checked })
+                    }
+                    data-testid="checkbox-opponent-response-required"
+                  />
+                  <Label htmlFor="opponentResponseRequired" className="text-sm cursor-pointer">
+                    مطلوب رد من الخصم
+                  </Label>
+                </div>
               </Card>
             )}
 
@@ -1600,8 +1616,8 @@ export default function HearingsPage() {
                       </div>
                     )}
                     {detailHearing.result === "موعد_جديد" && (() => {
-                      const hearingMemoRequired = !!(detailHearing as any).memoRequired;
-                      const opponentResponseRequired = !!(detailHearing as any).opponentResponseRequired;
+                      const hearingMemoRequired = !!detailHearing.memoRequired;
+                      const opponentResponseRequired = !!detailHearing.opponentResponseRequired;
                       if (!hearingMemoRequired && !opponentResponseRequired) return null;
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
                       const caseMemos = getMemosByCase(detailHearing.caseId);

@@ -153,6 +153,8 @@ export const hearings = pgTable("hearings", {
   nextHearingDate: varchar("next_hearing_date", { length: 50 }),
   nextHearingTime: varchar("next_hearing_time", { length: 50 }),
   responseRequired: boolean("response_required").default(false),
+  memoRequired: boolean("memo_required").default(false),
+  opponentResponseRequired: boolean("opponent_response_required").default(false),
   hearingReport: text("hearing_report").default(""),
   recommendations: text("recommendations").default(""),
   nextSteps: text("next_steps").default(""),
@@ -1235,6 +1237,8 @@ export interface Hearing {
   nextHearingDate: string | null;
   nextHearingTime: string | null;
   responseRequired: boolean;
+  memoRequired: boolean;
+  opponentResponseRequired: boolean;
   hearingReport: string;
   recommendations: string;
   nextSteps: string;
