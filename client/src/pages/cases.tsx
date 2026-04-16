@@ -242,6 +242,11 @@ export default function CasesPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
 
+  // Refresh cases on page mount to pick up changes from other tabs/users
+  useEffect(() => {
+    refreshCases();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const s = params.get("status");
