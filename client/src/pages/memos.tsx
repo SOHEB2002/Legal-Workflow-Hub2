@@ -134,7 +134,7 @@ export default function MemosPage() {
     getOverdueMemos,
   } = useMemos();
   const { cases, updateCase } = useCases();
-  const { getHearingsByCase } = useHearings();
+  const { getHearingsByCase, getHearingById } = useHearings();
   const { departments } = useDepartments();
   const { user } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
@@ -532,9 +532,16 @@ export default function MemosPage() {
                           </span>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Badge className={getStatusBadgeClass(memo.status)}>
-                            {MemoStatusLabels[memo.status]}
-                          </Badge>
+                          <div className="flex flex-col items-center gap-1">
+                            <Badge className={getStatusBadgeClass(memo.status)}>
+                              {MemoStatusLabels[memo.status]}
+                            </Badge>
+                            {memo.hearingId && getHearingById(memo.hearingId)?.opponentResponseRequired && (
+                              <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600 dark:text-orange-400 px-1 py-0">
+                                رد خصم
+                              </Badge>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-center">
                           <Badge className={getPriorityBadgeClass(memo.priority)}>
@@ -821,6 +828,14 @@ export default function MemosPage() {
                     <div>
                       <p className="text-sm text-muted-foreground">عدد الإرجاع</p>
                       <p className="font-medium text-orange-500">{detailMemo.returnCount}</p>
+                    </div>
+                  )}
+                  {detailMemo.hearingId && getHearingById(detailMemo.hearingId)?.opponentResponseRequired && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">رد الخصم</p>
+                      <Badge variant="outline" className="mt-1 border-orange-500 text-orange-600 dark:text-orange-400">
+                        مطلوب رد من الخصم
+                      </Badge>
                     </div>
                   )}
                   <div>

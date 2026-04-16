@@ -922,6 +922,11 @@ export default function HearingsPage() {
                                   )}
                                 </Badge>
                               )}
+                              {hearing.opponentResponseRequired && (
+                                <Badge variant="outline" className="text-xs border-orange-500 text-orange-600 dark:text-orange-400">
+                                  مطلوب رد من الخصم
+                                </Badge>
+                              )}
                             </div>
                           </td>
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
