@@ -69,6 +69,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { useHearings } from "@/lib/hearings-context";
+import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
@@ -128,6 +129,11 @@ export default function HearingsPage() {
   const { user, users } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { toast } = useToast();
+
+  // Invalidate hearings on page mount to pick up changes from other tabs/users
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [caseComboOpen, setCaseComboOpen] = useState(false);

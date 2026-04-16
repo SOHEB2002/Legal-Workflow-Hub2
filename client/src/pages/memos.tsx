@@ -55,6 +55,7 @@ import {
   ChevronsUpDown,
 } from "lucide-react";
 import { useMemos } from "@/lib/memos-context";
+import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -139,6 +140,11 @@ export default function MemosPage() {
   const { extendedUsers: users, getUserById } = useUsers();
   const { clients } = useClients();
   const { toast } = useToast();
+
+  // Invalidate memos on page mount to pick up changes from other tabs/users
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [caseComboOpen, setCaseComboOpen] = useState(false);
