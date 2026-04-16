@@ -495,7 +495,7 @@ export default function CasesPage() {
     }
     
     const isPlaintiffNew = formData.caseClassification === CaseClassification.UNDER_STUDY;
-    if (isPlaintiffNew && formData.caseType === "إداري") {
+    if (isPlaintiffNew && getDepartmentName(formData.departmentId) === "إداري") {
       if (!formData.adminCaseSubType) {
         toast({ title: "يرجى تحديد نوع القضية الإدارية (تظلم / قضية)", variant: "destructive" });
         return;
@@ -1093,19 +1093,19 @@ export default function CasesPage() {
 
                 {formData.caseClassification === CaseClassification.UNDER_STUDY && (
                   <>
-                    {formData.caseType === "تجاري" && (
+                    {getDepartmentName(formData.departmentId) === "تجاري" && (
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
                         <Info className="h-4 w-4 text-blue-600 shrink-0" />
                         <span className="text-xs text-blue-700 dark:text-blue-400">القضايا التجارية تتطلب التقييد في منصة تراضي ومحاولة الصلح قبل رفعها للمحكمة</span>
                       </div>
                     )}
-                    {formData.caseType === "عمالي" && (
+                    {getDepartmentName(formData.departmentId) === "عمالي" && (
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
                         <Info className="h-4 w-4 text-blue-600 shrink-0" />
                         <span className="text-xs text-blue-700 dark:text-blue-400">القضايا العمالية تتطلب التقييد في منصة وزارة الموارد البشرية والتسوية الودية قبل رفعها للمحكمة</span>
                       </div>
                     )}
-                    {formData.caseType === "إداري" && (
+                    {getDepartmentName(formData.departmentId) === "إداري" && (
                       <>
                         <div>
                           <Label>نوع القضية الإدارية <span className="text-red-500">*</span></Label>
