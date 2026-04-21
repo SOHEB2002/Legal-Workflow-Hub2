@@ -960,8 +960,9 @@ export async function registerRoutes(
               status: "قادمة",
             });
             autoHearingId = hearing.id;
-            autoCreated.push({ type: "hearing", id: hearing.id });
+            autoCreated.push({ type: "hearing", id: hearing.id, hearing });
             await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+            (newCase as any).nextHearingDate = req.body.nextHearingDate;
             console.log("[POST /api/cases] Defendant hearing created:", hearing.id);
           } catch (e) {
             console.error("[POST /api/cases] Error auto-creating defendant hearing:", e);
@@ -1032,8 +1033,9 @@ export async function registerRoutes(
             status: "قادمة",
           });
           autoHearingId = hearing.id;
-          autoCreated.push({ type: "hearing", id: hearing.id });
+          autoCreated.push({ type: "hearing", id: hearing.id, hearing });
           await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+          (newCase as any).nextHearingDate = req.body.nextHearingDate;
           console.log("[POST /api/cases] Hearing created successfully:", hearing.id);
         } catch (e) {
           console.error("[POST /api/cases] Error auto-creating hearing:", e);
@@ -1557,7 +1559,7 @@ export async function registerRoutes(
           // For قيد_الدراسة the firm is always the plaintiff — persist that as
           // an explicit clientRole so post-promotion UI (صفة badge, etc.)
           // doesn't lose the role once classification flips.
-          if (!(existing as any).clientRole) {
+          if (!(existing as any).clientRole && !req.body.clientRole) {
             req.body.clientRole = "مدعي";
           }
         }
