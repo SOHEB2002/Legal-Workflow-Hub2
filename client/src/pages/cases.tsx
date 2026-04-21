@@ -439,6 +439,7 @@ export default function CasesPage() {
     courtCaseNumber: "",
     opponentName: "",
     caseClassification: "" as CaseClassificationValue | "",
+    clientRole: "" as string,
     previousHearingsCount: 0,
     currentSituation: "",
     responseDeadline: "",
@@ -475,6 +476,7 @@ export default function CasesPage() {
       courtCaseNumber: "",
       opponentName: "",
       caseClassification: "",
+      clientRole: "",
       previousHearingsCount: 0,
       currentSituation: "",
       responseDeadline: "",
@@ -517,6 +519,9 @@ export default function CasesPage() {
       courtCaseNumber: formData.courtCaseNumber,
       opponentName: formData.opponentName,
       caseClassification: formData.caseClassification as CaseClassificationValue,
+      clientRole: formData.caseClassification === CaseClassification.IN_COURT
+        ? (formData.clientRole || "مدعي")
+        : null,
       previousHearingsCount: formData.previousHearingsCount,
       currentSituation: formData.currentSituation,
       responseDeadline: formData.responseDeadline || null,
@@ -970,8 +975,8 @@ export default function CasesPage() {
                   <div>
                     <Label>صفة العميل <span className="text-red-500">*</span></Label>
                     <Select
-                      value={(formData as any).clientRole || ""}
-                      onValueChange={(value) => setFormData({ ...formData, clientRole: value } as any)}
+                      value={formData.clientRole || ""}
+                      onValueChange={(value) => setFormData({ ...formData, clientRole: value })}
                     >
                       <SelectTrigger data-testid="select-client-role">
                         <SelectValue placeholder="اختر صفة العميل" />

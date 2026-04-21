@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
 import { CaseStatus, Priority, CaseStage, CaseStagesOrder, CaseClassification, getStagesForClassification } from "@shared/schema";
-import { apiRequest } from "./queryClient";
+import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
 import { useAuth } from "./auth-context";
@@ -241,6 +241,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const newCase = await response.json();
     setCases((prev) => [migrateCase(newCase), ...prev]);
     scheduleBackgroundRefetch();
+    if (newCase.autoCreated?.some((a: any) => a.type === "hearing")) {
+      queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
+    }
     if (newCase.departmentId) {
       notifyCaseAdded(newCase.id, newCase.caseNumber, newCase.departmentId).catch(() => {});
     }
