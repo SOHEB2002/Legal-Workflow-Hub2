@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
+import { getClientRoleLabel } from "@/lib/client-role";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -323,19 +324,9 @@ export default function MemosPage() {
 
   const getCaseDetails = (caseId: string) => {
     const c = cases.find(cs => cs.id === caseId);
-    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "", clientRoleLabel: "" };
+    if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "", clientRoleLabel: "-" };
     const classification = c.caseClassification || "";
-    const rawClientRole = ((c as any).clientRole || "").trim();
-    let clientRoleLabel = "";
-    if (classification === "قيد_الدراسة") {
-      clientRoleLabel = "مدعي";
-    } else if (classification === "منظورة_بالمحكمة") {
-      clientRoleLabel = rawClientRole === "مدعى_عليه"
-        ? "مدعى عليه"
-        : rawClientRole === "مدعي"
-        ? "مدعي"
-        : rawClientRole || "";
-    }
+    const clientRoleLabel = getClientRoleLabel(classification, (c as any).clientRole);
     return {
       number: c.caseNumber,
       plaintiff: (c as any).plaintiffName || "",
@@ -511,7 +502,7 @@ export default function MemosPage() {
                           <span className="text-sm block text-center">{caseDetails.opponent || "-"}</span>
                         </TableCell>
                         <TableCell className="text-center">
-                          {caseDetails.clientRoleLabel ? (
+                          {caseDetails.clientRoleLabel && caseDetails.clientRoleLabel !== "-" ? (
                             <Badge variant="outline" className={`text-xs inline-flex justify-center ${
                               caseDetails.clientRoleLabel === "مدعى عليه"
                                 ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"

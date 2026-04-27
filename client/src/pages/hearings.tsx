@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
+import { getClientRoleLabel } from "@/lib/client-role";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -473,17 +474,8 @@ export default function HearingsPage() {
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
-    if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "", clientRole: "" };
-    const rawRole = (caseData as any).clientRole as string | undefined;
-    // For new (un-court-registered) cases, the firm always represents the
-    // plaintiff side, regardless of whether clientRole was filled in.
-    const clientRole = caseData.caseClassification === "قيد_الدراسة"
-      ? "مدعي"
-      : rawRole === "مدعى_عليه"
-      ? "مدعى عليه"
-      : rawRole === "مدعي"
-      ? "مدعي"
-      : "";
+    if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "", clientRole: "-" };
+    const clientRole = getClientRoleLabel(caseData.caseClassification, (caseData as any).clientRole);
     const clientName = getClientName(caseData.clientId);
     return {
       number: caseData.caseNumber,
@@ -897,7 +889,7 @@ export default function HearingsPage() {
                             <span className="text-sm"><BidiText>{caseInfo.opponent || "-"}</BidiText></span>
                           </td>
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
-                            {caseInfo.clientRole ? (
+                            {caseInfo.clientRole && caseInfo.clientRole !== "-" ? (
                               <Badge variant="outline" className="text-xs">{caseInfo.clientRole}</Badge>
                             ) : (
                               <span className="text-xs text-muted-foreground">-</span>
