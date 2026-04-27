@@ -1374,6 +1374,11 @@ export async function registerRoutes(
         currentStage: CaseStage.UNDER_REVIEW,
         courtCaseNumber: courtCaseNumber.trim().substring(0, 100),
         najizNumber: najizNumber.trim().substring(0, 100),
+        // قيد_الدراسة cases store clientRole as null because the firm is
+        // implicitly the plaintiff. On promotion to IN_COURT we must persist
+        // that as an explicit "مدعي" — otherwise the row ends up IN_COURT
+        // with null clientRole and the UI loses the role.
+        ...(!(caseItem as any).clientRole ? { clientRole: "مدعي" } : {}),
       } as any);
       await storage.logCaseActivity({
         caseId: caseItem.id,
