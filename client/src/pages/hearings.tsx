@@ -476,6 +476,12 @@ export default function HearingsPage() {
     const caseData = getCaseById(caseId);
     if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "", clientRole: "-" };
     const clientRole = getClientRoleLabel(caseData.caseClassification, (caseData as any).clientRole);
+    console.log("[clientRole][hearings:list]", {
+      caseNumber: caseData.caseNumber,
+      caseClassification: caseData.caseClassification,
+      rawClientRole: (caseData as any).clientRole,
+      rendered: clientRole,
+    });
     const clientName = getClientName(caseData.clientId);
     return {
       number: caseData.caseNumber,

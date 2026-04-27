@@ -327,6 +327,12 @@ export default function MemosPage() {
     if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "", clientRoleLabel: "-" };
     const classification = c.caseClassification || "";
     const clientRoleLabel = getClientRoleLabel(classification, (c as any).clientRole);
+    console.log("[clientRole][memos:list]", {
+      caseNumber: c.caseNumber,
+      caseClassification: classification,
+      rawClientRole: (c as any).clientRole,
+      rendered: clientRoleLabel,
+    });
     return {
       number: c.caseNumber,
       plaintiff: (c as any).plaintiffName || "",
