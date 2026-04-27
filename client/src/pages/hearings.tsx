@@ -1098,9 +1098,9 @@ export default function HearingsPage() {
                     <>
                       <SelectItem value="تأجيل">تأجيل</SelectItem>
                       <SelectItem value="حكم">حكم</SelectItem>
-                      <SelectItem value="صلح">صلح</SelectItem>
                       <SelectItem value="شطب">شطب</SelectItem>
-                      <SelectItem value="أخرى">أخرى</SelectItem>
+                      <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
+                      <SelectItem value="لم_يتم_الصلح">لم يتم الصلح</SelectItem>
                     </>
                   )}
                 </SelectContent>
