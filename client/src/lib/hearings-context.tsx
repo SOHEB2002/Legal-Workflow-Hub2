@@ -95,6 +95,13 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     const hearing = await res.json();
     upsertLocal(hearing);
     scheduleBackgroundRefetch();
+    // The server may have auto-created memos (the explicit responseRequired
+    // path, or the deferred-memo pickup from prior hearings on the same
+    // case). Invalidate memos immediately so memos.tsx shows them without
+    // waiting for the 5s background refetch.
+    if (Array.isArray(hearing?.createdMemos) && hearing.createdMemos.length > 0) {
+      queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+    }
     return hearing;
   };
 
@@ -125,6 +132,12 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
       upsertLocal(result);
     }
     scheduleBackgroundRefetch();
+    // Invalidate memos immediately if the result handler auto-created any
+    // (NEW_SESSION + memoRequired path), so memos.tsx reflects them now
+    // instead of after the 5s background refetch.
+    if (Array.isArray(result?.createdMemos) && result.createdMemos.length > 0) {
+      queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+    }
     return result;
   };
 
