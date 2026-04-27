@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
+import { getClientRoleLabel } from "@/lib/client-role";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
@@ -842,18 +843,10 @@ export default function CasesPage() {
                   <TableCell className="text-center text-sm">{c.opponentName || "-"}</TableCell>
                   <TableCell className="text-center">
                     {(() => {
-                      // Derive client role from the explicit clientRole field when
-                      // present; fall back to "مدعي" for قيد_الدراسة rows
-                      // (where the firm is always the plaintiff) and to "مدعى عليه"
-                      // for منظورة_بالمحكمة rows that never got clientRole set.
-                      const rawRole = (c as any).clientRole as string | undefined;
-                      const role = rawRole === "مدعى_عليه"
-                        ? "مدعى عليه"
-                        : rawRole === "مدعي"
-                        ? "مدعي"
-                        : c.caseClassification === CaseClassification.UNDER_STUDY
-                        ? "مدعي"
-                        : "مدعى عليه";
+                      const role = getClientRoleLabel(c.caseClassification, (c as any).clientRole);
+                      if (role === "-") {
+                        return <span className="text-xs text-muted-foreground">-</span>;
+                      }
                       return (
                         <Badge variant="outline" className={`text-xs inline-flex text-center justify-center ${
                           role === "مدعى عليه"
@@ -1789,16 +1782,14 @@ export default function CasesPage() {
                     </div>
                   )}
 
-                  {(selectedCase as any).clientRole && (
-                    <div className="border-t pt-4">
-                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
-                        <div>
-                          <Label className="text-muted-foreground">صفة العميل</Label>
-                          <p className="font-medium">{(selectedCase as any).clientRole === "مدعى_عليه" ? "مدعى عليه" : "مدعي"}</p>
-                        </div>
+                  <div className="border-t pt-4">
+                    <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
+                      <div>
+                        <Label className="text-muted-foreground">صفة العميل</Label>
+                        <p className="font-medium">{getClientRoleLabel(selectedCase.caseClassification, (selectedCase as any).clientRole)}</p>
                       </div>
                     </div>
-                  )}
+                  </div>
 
                   {selectedCase.currentStage === "مشطوبة" && (selectedCase as any).struckOffReopenDeadline && (
                     <div className="border-t pt-4">
