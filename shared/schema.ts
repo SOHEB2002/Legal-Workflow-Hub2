@@ -920,9 +920,12 @@ export const HearingStatus = {
 export type HearingStatusValue = typeof HearingStatus[keyof typeof HearingStatus];
 
 // ==================== نتائج الجلسات ====================
+// NOTE: POSTPONEMENT/"تأجيل" was unified with NEW_SESSION/"موعد_جديد"; both
+// outcomes schedule a next hearing, so they're now a single concept. Old
+// DB rows may still carry "تأجيل" — left intact for read-back. Run
+// script/backfill-hearing-result.ts to migrate them to "موعد_جديد".
 export const HearingResult = {
   NEW_SESSION: "موعد_جديد",
-  POSTPONEMENT: "تأجيل",
   JUDGMENT: "حكم",
   SETTLEMENT: "صلح",
   SETTLEMENT_REACHED: "تم_الصلح",
@@ -1537,7 +1540,7 @@ export const insertHearingSchema = z.object({
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
 
 export const hearingResultSchema = z.object({
-  result: z.enum(["موعد_جديد", "تأجيل", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "أخرى"]),
+  result: z.enum(["موعد_جديد", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "أخرى"]),
   resultDetails: z.string().optional().default(""),
   // Judgment fields
   judgmentType: z.enum(["لصالحنا", "ضدنا", "جزئي"]).nullable().optional(),
