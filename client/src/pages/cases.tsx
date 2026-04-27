@@ -844,6 +844,14 @@ export default function CasesPage() {
                   <TableCell className="text-center">
                     {(() => {
                       const role = getClientRoleLabel(c.caseClassification, (c as any).clientRole);
+                      // DEBUG: surfaces the inputs the helper saw for each row.
+                      // Filter DevTools console by "[clientRole][cases:list]".
+                      console.log("[clientRole][cases:list]", {
+                        caseNumber: c.caseNumber,
+                        caseClassification: c.caseClassification,
+                        rawClientRole: (c as any).clientRole,
+                        rendered: role,
+                      });
                       if (role === "-") {
                         return <span className="text-xs text-muted-foreground">-</span>;
                       }
@@ -1786,7 +1794,16 @@ export default function CasesPage() {
                     <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                       <div>
                         <Label className="text-muted-foreground">صفة العميل</Label>
-                        <p className="font-medium">{getClientRoleLabel(selectedCase.caseClassification, (selectedCase as any).clientRole)}</p>
+                        <p className="font-medium">{(() => {
+                          const label = getClientRoleLabel(selectedCase.caseClassification, (selectedCase as any).clientRole);
+                          console.log("[clientRole][cases:details]", {
+                            caseNumber: selectedCase.caseNumber,
+                            caseClassification: selectedCase.caseClassification,
+                            rawClientRole: (selectedCase as any).clientRole,
+                            rendered: label,
+                          });
+                          return label;
+                        })()}</p>
                       </div>
                     </div>
                   </div>
