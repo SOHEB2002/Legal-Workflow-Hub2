@@ -303,20 +303,11 @@ export default function HearingsPage() {
         data.objectionFeasible = resultForm.objectionFeasible;
         data.objectionDeadline = resultForm.objectionDeadline || undefined;
       }
-      if (
-        resultForm.result === HearingResult.POSTPONEMENT ||
-        resultForm.result === HearingResult.NEW_SESSION
-      ) {
+      if (resultForm.result === HearingResult.NEW_SESSION) {
         data.nextHearingDate = resultForm.nextHearingDate;
         data.nextHearingTime = resultForm.nextHearingTime;
         data.responseRequired = resultForm.responseRequired;
         data.opponentResponseRequired = resultForm.opponentResponseRequired;
-        // Server's NEW_SESSION branch creates an auto-memo when memoRequired
-        // is set; the form exposes one "needs response" checkbox, so map it
-        // through for موعد_جديد.
-        if (resultForm.result === HearingResult.NEW_SESSION) {
-          data.memoRequired = resultForm.responseRequired;
-        }
       }
       const res = await submitResult(resultDialogHearing.id, data);
       const hasNewHearing = res.createdTasks?.some((t: any) => t.type === "new_hearing");
@@ -1104,15 +1095,16 @@ export default function HearingsPage() {
                     const isAdminCourt =
                       ht === HearingType.COURT && linkedCase?.caseType === "إداري";
 
+                    // Settlement (تراضي / تسوية_ودية): conciliation outcome only.
                     if (ht === HearingType.TARADI || ht === HearingType.SETTLEMENT) {
                       return (
                         <>
                           <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
                           <SelectItem value="لم_يتم_الصلح">لم يتم الصلح</SelectItem>
-                          <SelectItem value="تأجيل">تأجيل</SelectItem>
                         </>
                       );
                     }
+                    // Admin court (إداري): no conciliation in admin courts.
                     if (isAdminCourt) {
                       return (
                         <>
@@ -1122,13 +1114,13 @@ export default function HearingsPage() {
                         </>
                       );
                     }
+                    // Regular court (commercial / general / labor).
                     return (
                       <>
-                        <SelectItem value="تأجيل">تأجيل</SelectItem>
+                        <SelectItem value="موعد_جديد">جلسة (موعد جديد)</SelectItem>
                         <SelectItem value="حكم">حكم</SelectItem>
-                        <SelectItem value="شطب">شطب</SelectItem>
                         <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
-                        <SelectItem value="لم_يتم_الصلح">لم يتم الصلح</SelectItem>
+                        <SelectItem value="شطب">شطب</SelectItem>
                       </>
                     );
                   })()}
@@ -1170,14 +1162,11 @@ export default function HearingsPage() {
               </div>
             )}
 
-            {(resultForm.result === HearingResult.POSTPONEMENT ||
-              resultForm.result === HearingResult.NEW_SESSION) && (
+            {resultForm.result === HearingResult.NEW_SESSION && (
               <Card className="p-4 space-y-3">
                 <p className="text-sm font-medium text-primary flex items-center gap-1">
                   <ArrowLeftRight className="w-4 h-4" />
-                  {resultForm.result === HearingResult.NEW_SESSION
-                    ? "تفاصيل الموعد الجديد"
-                    : "تفاصيل التأجيل"}
+                  تفاصيل الموعد الجديد
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
