@@ -1502,6 +1502,7 @@ export const insertCaseSchema = z.object({
   whatsappGroupLink: z.string().optional().default(""),
   googleDriveFolderId: z.string().optional().default(""),
   caseClassification: z.enum(["قيد_الدراسة", "منظورة_بالمحكمة"]).default("قيد_الدراسة"),
+  clientRole: z.string().nullable().optional(),
   previousHearingsCount: z.number().optional().default(0),
   currentSituation: z.string().optional().default(""),
   responseDeadline: z.string().nullable().optional(),

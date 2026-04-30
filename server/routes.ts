@@ -902,11 +902,25 @@ export async function registerRoutes(
         caseClassification: req.body.caseClassification,
         departmentOther: req.body.departmentOther,
       });
+      console.log("[clientRole][POST /api/cases] req.body.clientRole:", {
+        clientRole: req.body.clientRole,
+        type: typeof req.body.clientRole,
+        length: typeof req.body.clientRole === "string" ? req.body.clientRole.length : null,
+        equalsDefendant: req.body.clientRole === "مدعى_عليه",
+        caseClassification: req.body.caseClassification,
+      });
       const validatedData = insertCaseSchema.parse(req.body);
       console.log("[BUG2][POST /api/cases] after zod parse:", {
         departmentId: validatedData.departmentId,
         caseType: validatedData.caseType,
       });
+      console.log("[clientRole][POST /api/cases] after zod parse:", {
+        clientRole: (validatedData as any).clientRole,
+        type: typeof (validatedData as any).clientRole,
+      });
+      // Carry clientRole forward explicitly — earlier the field wasn't in the
+      // schema, so parse() stripped it and the case was inserted with null.
+      (validatedData as any).clientRole = (validatedData as any).clientRole ?? req.body.clientRole ?? null;
       const createdBy = req.body.createdBy || "unknown";
       const newCase = await storage.createCase(validatedData as any, createdBy);
 
