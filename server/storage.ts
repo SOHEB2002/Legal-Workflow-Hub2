@@ -549,7 +549,7 @@ export class DatabaseStorage implements IStorage {
       id,
       caseNumber,
       clientId: data.clientId || "",
-      caseType: data.caseType || "عام",
+      caseType: data.caseType || "",
       caseTypeOther: data.caseTypeOther || "",
       departmentOther: data.departmentOther || "",
       status: CaseStatus.RECEIVED,
