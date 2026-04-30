@@ -1108,8 +1108,25 @@ export async function registerRoutes(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
-      console.error("Error creating case:", error);
-      res.status(500).json({ error: "حدث خطأ في إنشاء القضية" });
+      // Dump full error to server logs.
+      console.error("[POST /api/cases] FAILED. clientRole=", req.body.clientRole, "caseClassification=", req.body.caseClassification);
+      console.error("[POST /api/cases] error name:", (error as any)?.name);
+      console.error("[POST /api/cases] error message:", (error as any)?.message);
+      console.error("[POST /api/cases] error code:", (error as any)?.code);
+      console.error("[POST /api/cases] error stack:", (error as any)?.stack);
+      console.error("[POST /api/cases] full error object:", error);
+      // Temporarily surface the error to the client so the cause is visible in
+      // the browser Network tab without needing Replit log access. Remove the
+      // `debug` field once the bug is identified.
+      res.status(500).json({
+        error: "حدث خطأ في إنشاء القضية",
+        debug: {
+          name: (error as any)?.name,
+          message: (error as any)?.message,
+          code: (error as any)?.code,
+          stack: typeof (error as any)?.stack === "string" ? (error as any).stack.split("\n").slice(0, 6).join("\n") : null,
+        },
+      });
     }
   });
 
