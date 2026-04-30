@@ -575,6 +575,7 @@ export class DatabaseStorage implements IStorage {
       reviewActionTaken: null,
       priority: data.priority || "متوسط",
       caseClassification: data.caseClassification || CaseClassification.UNDER_STUDY,
+      clientRole: (data as any).clientRole ?? null,
       previousHearingsCount: data.previousHearingsCount || 0,
       currentSituation: data.currentSituation || "",
       responseDeadline: data.responseDeadline || null,
@@ -583,7 +584,14 @@ export class DatabaseStorage implements IStorage {
       updatedAt: now,
       closedAt: null,
     };
-    
+
+    console.log("[clientRole][storage:createCase] inserting case with clientRole:", {
+      incoming: (data as any).clientRole,
+      incomingType: typeof (data as any).clientRole,
+      incomingLength: typeof (data as any).clientRole === "string" ? (data as any).clientRole.length : null,
+      finalValue: newCase.clientRole,
+      caseClassification: newCase.caseClassification,
+    });
     await db.insert(lawCases).values(newCase);
     return mapDbCase(newCase);
   }

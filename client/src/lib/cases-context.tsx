@@ -244,6 +244,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       caseClassification: caseData.caseClassification,
       departmentOther: caseData.departmentOther,
     });
+    console.log("[clientRole][cases-context] addCase clientRole:", {
+      incoming: (data as any).clientRole,
+      finalSentToServer: caseData.clientRole,
+      type: typeof caseData.clientRole,
+      caseClassification: caseData.caseClassification,
+    });
     const response = await apiRequest("POST", "/api/cases", caseData);
     const newCase = await response.json();
     setCases((prev) => [migrateCase(newCase), ...prev]);

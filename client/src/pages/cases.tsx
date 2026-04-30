@@ -515,6 +515,17 @@ export default function CasesPage() {
       caseClassification: formData.caseClassification,
       departmentOther: formData.departmentOther,
     });
+    const computedClientRole = formData.caseClassification === CaseClassification.IN_COURT
+      ? (formData.clientRole || "مدعي")
+      : null;
+    console.log("[clientRole][cases.tsx] handleAddCase clientRole:", {
+      formDataClientRole: formData.clientRole,
+      formDataClientRoleType: typeof formData.clientRole,
+      formDataClientRoleLength: (formData.clientRole || "").length,
+      caseClassification: formData.caseClassification,
+      computedSentToContext: computedClientRole,
+      isDefendantSelection: formData.clientRole === "مدعى_عليه",
+    });
     await addCase({
       clientId: formData.clientId || "",
       plaintiffName: formData.plaintiffName || "",
