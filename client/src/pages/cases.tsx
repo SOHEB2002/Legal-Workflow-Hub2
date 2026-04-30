@@ -208,7 +208,7 @@ export default function CasesPage() {
     getCaseById,
     refreshCases,
   } = useCases();
-  const { clients, getClientName } = useClients();
+  const { clients, getClientName, isLoading: clientsLoading } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
@@ -496,7 +496,16 @@ export default function CasesPage() {
       toast({ title: "يرجى اختيار تصنيف القضية", variant: "destructive" });
       return;
     }
-    
+    if (!formData.clientId) {
+      toast({
+        title: clientsLoading
+          ? "جاري تحميل قائمة العملاء، يرجى الانتظار"
+          : "يجب اختيار العميل",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const isPlaintiffNew = formData.caseClassification === CaseClassification.UNDER_STUDY;
     if (isPlaintiffNew && getDepartmentName(formData.departmentId) === "إداري") {
       if (!formData.adminCaseSubType) {
@@ -1008,7 +1017,7 @@ export default function CasesPage() {
             {formData.caseClassification && (
               <>
                 <div>
-                  <Label>العميل</Label>
+                  <Label>العميل <span className="text-red-500">*</span></Label>
                   <ClientAutocomplete
                     value={formData.clientId}
                     onChange={(clientId) => setFormData({ ...formData, clientId })}

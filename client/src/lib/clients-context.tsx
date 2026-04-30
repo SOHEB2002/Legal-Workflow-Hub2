@@ -112,11 +112,16 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
   const getClientById = (id: string) => clients.find((c) => c.id === id);
 
   const getClientName = (id: string): string => {
+    if (!id) return "غير مرتبط بعميل";
     const client = clients.find((c) => c.id === id);
-    if (!client) return "غير معروف";
-    return client.clientType === "فرد" 
-      ? client.individualName || "فرد" 
-      : client.companyName || "شركة";
+    if (client) {
+      return client.clientType === "فرد"
+        ? client.individualName || "فرد"
+        : client.companyName || "شركة";
+    }
+    // id is set but no match — distinguish "still fetching" from "deleted".
+    if (isLoading) return "جاري التحميل...";
+    return "عميل محذوف";
   };
 
   const searchClients = (query: string) => {
