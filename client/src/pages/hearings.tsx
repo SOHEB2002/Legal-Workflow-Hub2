@@ -878,6 +878,10 @@ export default function HearingsPage() {
                       const caseInfo = getCaseInfo(hearing.caseId);
                       const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
                       const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
+                      const canEditOrDeleteHearing =
+                        user?.role === "branch_manager" ||
+                        user?.role === "admin_support" ||
+                        user?.role === "department_head";
                       return (
                         <tr key={hearing.id} data-testid={`row-hearing-${hearing.id}`} className="border-b transition-colors hover:bg-muted/50">
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
@@ -947,20 +951,22 @@ export default function HearingsPage() {
                                 </TooltipTrigger>
                                 <TooltipContent>عرض التفاصيل</TooltipContent>
                               </Tooltip>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    className="h-7 w-7"
-                                    data-testid={`button-edit-hearing-${hearing.id}`}
-                                    onClick={() => openEditDialog(hearing)}
-                                  >
-                                    <Pencil className="w-4 h-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>تعديل الجلسة</TooltipContent>
-                              </Tooltip>
+                              {canEditOrDeleteHearing && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      data-testid={`button-edit-hearing-${hearing.id}`}
+                                      onClick={() => openEditDialog(hearing)}
+                                    >
+                                      <Pencil className="w-4 h-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>تعديل الجلسة</TooltipContent>
+                                </Tooltip>
+                              )}
                               {hearing.status === HearingStatus.UPCOMING && canActOnHearing && (
                                 <>
                                   <Tooltip>
@@ -1032,7 +1038,7 @@ export default function HearingsPage() {
                                   <TooltipContent>تأكيد التواصل مع العميل</TooltipContent>
                                 </Tooltip>
                               )}
-                              {(user?.role === "branch_manager" || user?.role === "admin_support") && (
+                              {canEditOrDeleteHearing && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button

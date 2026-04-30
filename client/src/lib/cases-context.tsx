@@ -237,6 +237,13 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       startingStage: (data as any).startingStage || undefined,
     };
     
+    console.log("[BUG2][cases-context] addCase request body:", {
+      departmentId: caseData.departmentId,
+      departmentIdType: typeof caseData.departmentId,
+      caseType: caseData.caseType,
+      caseClassification: caseData.caseClassification,
+      departmentOther: caseData.departmentOther,
+    });
     const response = await apiRequest("POST", "/api/cases", caseData);
     const newCase = await response.json();
     setCases((prev) => [migrateCase(newCase), ...prev]);

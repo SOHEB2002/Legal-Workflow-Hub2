@@ -895,7 +895,18 @@ export async function registerRoutes(
       if (!["branch_manager", "admin_support"].includes(user.role)) {
         return res.status(403).json({ error: "إنشاء القضايا متاح فقط لمدير الفرع والدعم الإداري" });
       }
+      console.log("[BUG2][POST /api/cases] req.body received:", {
+        departmentId: req.body.departmentId,
+        departmentIdType: typeof req.body.departmentId,
+        caseType: req.body.caseType,
+        caseClassification: req.body.caseClassification,
+        departmentOther: req.body.departmentOther,
+      });
       const validatedData = insertCaseSchema.parse(req.body);
+      console.log("[BUG2][POST /api/cases] after zod parse:", {
+        departmentId: validatedData.departmentId,
+        caseType: validatedData.caseType,
+      });
       const createdBy = req.body.createdBy || "unknown";
       const newCase = await storage.createCase(validatedData as any, createdBy);
 

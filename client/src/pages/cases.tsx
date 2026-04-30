@@ -508,6 +508,13 @@ export default function CasesPage() {
         return;
       }
     }
+    console.log("[BUG2][cases.tsx] handleAddCase formData before submit:", {
+      departmentId: formData.departmentId,
+      departmentIdType: typeof formData.departmentId,
+      caseType: formData.caseType,
+      caseClassification: formData.caseClassification,
+      departmentOther: formData.departmentOther,
+    });
     await addCase({
       clientId: formData.clientId || "",
       plaintiffName: formData.plaintiffName || "",
@@ -788,15 +795,14 @@ export default function CasesPage() {
           <div className="overflow-x-auto">
           <Table className="w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '10%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '15%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
+              <col style={{ width: '7%' }} />
               <col style={{ width: '9%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '6%' }} />
-              <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
             </colgroup>
             <TableHeader>
@@ -805,7 +811,6 @@ export default function CasesPage() {
                 <TableHead className="text-center">العميل</TableHead>
                 <TableHead className="text-center">الخصم</TableHead>
                 <TableHead className="text-center">صفة العميل</TableHead>
-                <TableHead className="text-center">النوع</TableHead>
                 <TableHead className="text-center">الحالة</TableHead>
                 <TableHead className="text-center">المحامي المسؤول</TableHead>
                 <TableHead className="text-center">الأولوية</TableHead>
@@ -816,7 +821,7 @@ export default function CasesPage() {
             <TableBody>
               {casesLoading ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                     <div className="flex items-center justify-center gap-2">
                       <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                       <span>جاري التحميل...</span>
@@ -825,7 +830,7 @@ export default function CasesPage() {
                 </TableRow>
               ) : pagedCases.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                     لا توجد قضايا مطابقة للبحث
                   </TableCell>
                 </TableRow>
@@ -865,9 +870,6 @@ export default function CasesPage() {
                         </Badge>
                       );
                     })()}
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <Badge variant="outline" className="inline-flex justify-center">{c.caseType || "-"}</Badge>
                   </TableCell>
                   <TableCell className="text-center">
                     <div className="inline-flex items-center gap-1">
