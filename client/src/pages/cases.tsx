@@ -32,6 +32,7 @@ import {
   Check,
   X,
   MessageSquare,
+  UserCog,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -341,6 +342,8 @@ export default function CasesPage() {
   const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editCaseId, setEditCaseId] = useState<string | null>(null);
+  const [reassignCaseDialog, setReassignCaseDialog] = useState<LawCase | null>(null);
+  const [reassignCaseLawyerId, setReassignCaseLawyerId] = useState<string>("");
   const [editFormData, setEditFormData] = useState({
     clientId: "",
     plaintiffName: "",
@@ -424,6 +427,22 @@ export default function CasesPage() {
       setEditCaseId(null);
     } catch (error) {
       toast({ title: "حدث خطأ أثناء تحديث القضية", variant: "destructive" });
+    }
+  };
+
+  const openReassignCaseDialog = (caseItem: LawCase) => {
+    setReassignCaseLawyerId(caseItem.primaryLawyerId || "");
+    setReassignCaseDialog(caseItem);
+  };
+
+  const handleReassignCase = async () => {
+    if (!reassignCaseDialog || !reassignCaseLawyerId) return;
+    try {
+      await updateCase(reassignCaseDialog.id, { primaryLawyerId: reassignCaseLawyerId } as any);
+      toast({ title: "تم إسناد القضية لمحامي جديد" });
+      setReassignCaseDialog(null);
+    } catch (e: any) {
+      toast({ title: "خطأ", description: e?.message || "فشل إسناد القضية", variant: "destructive" });
     }
   };
 
@@ -929,6 +948,11 @@ export default function CasesPage() {
                       {(user?.role === "branch_manager" || user?.role === "admin_support") && (
                         <Button size="icon" variant="ghost" title="تعديل البيانات" data-testid={`button-edit-${c.id}`} onClick={() => openEditDialog(c)}>
                           <Pencil className="w-4 h-4" />
+                        </Button>
+                      )}
+                      {user?.role === "department_head" && c.currentStage !== "مقفلة" && !(c as any).isArchived && (
+                        <Button size="icon" variant="ghost" title="إسناد لمحامي" data-testid={`button-reassign-case-${c.id}`} onClick={() => openReassignCaseDialog(c)}>
+                          <UserCog className="w-4 h-4" />
                         </Button>
                       )}
                       {user?.role === "branch_manager" && (
@@ -2947,6 +2971,48 @@ export default function CasesPage() {
               }}
             >
               تأكيد الإغلاق
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!reassignCaseDialog} onOpenChange={(open) => !open && setReassignCaseDialog(null)}>
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserCog className="w-5 h-5" />
+              إسناد لمحامي
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>المحامي المسؤول عن القضية</Label>
+              <Select value={reassignCaseLawyerId} onValueChange={setReassignCaseLawyerId}>
+                <SelectTrigger data-testid="select-reassign-case-lawyer">
+                  <SelectValue placeholder="اختر المحامي" />
+                </SelectTrigger>
+                <SelectContent>
+                  {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-cancel-reassign-case"
+              onClick={() => setReassignCaseDialog(null)}
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-save-reassign-case"
+              onClick={handleReassignCase}
+              disabled={!reassignCaseLawyerId}
+            >
+              حفظ
             </Button>
           </DialogFooter>
         </DialogContent>

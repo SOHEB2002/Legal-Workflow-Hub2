@@ -909,7 +909,10 @@ export default function HearingsPage() {
                       const caseInfo = getCaseInfo(hearing.caseId);
                       const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
                       const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
-                      const canEditOrDeleteHearing =
+                      const canEditHearing =
+                        user?.role === "branch_manager" ||
+                        user?.role === "admin_support";
+                      const canDeleteHearing =
                         user?.role === "branch_manager" ||
                         user?.role === "admin_support" ||
                         user?.role === "department_head";
@@ -984,7 +987,7 @@ export default function HearingsPage() {
                                 </TooltipTrigger>
                                 <TooltipContent>عرض التفاصيل</TooltipContent>
                               </Tooltip>
-                              {canEditOrDeleteHearing && (
+                              {canEditHearing && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
@@ -1089,7 +1092,7 @@ export default function HearingsPage() {
                                   <TooltipContent>تأكيد التواصل مع العميل</TooltipContent>
                                 </Tooltip>
                               )}
-                              {canEditOrDeleteHearing && (
+                              {canDeleteHearing && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button

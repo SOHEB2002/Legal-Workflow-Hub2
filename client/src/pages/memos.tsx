@@ -54,6 +54,7 @@ import {
   Ban,
   Check,
   ChevronsUpDown,
+  UserCog,
 } from "lucide-react";
 import { useMemos } from "@/lib/memos-context";
 import { queryClient } from "@/lib/queryClient";
@@ -159,6 +160,8 @@ export default function MemosPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [reviewNotes, setReviewNotes] = useState("");
+  const [reassignMemoDialog, setReassignMemoDialog] = useState<Memo | null>(null);
+  const [reassignMemoAssignedTo, setReassignMemoAssignedTo] = useState<string>("");
 
   const [formData, setFormData] = useState({
     caseId: "",
@@ -297,6 +300,25 @@ export default function MemosPage() {
       toast({ title: "تم إنهاء المذكرة - لا يحتاج مذكرة" });
     } catch (e: any) {
       toast({ title: "خطأ", description: e.message, variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openReassignMemoDialog = (memo: Memo) => {
+    setReassignMemoAssignedTo(memo.assignedTo || "");
+    setReassignMemoDialog(memo);
+  };
+
+  const handleReassignMemo = async () => {
+    if (!reassignMemoDialog || !reassignMemoAssignedTo) return;
+    setSubmitting(true);
+    try {
+      await updateMemo(reassignMemoDialog.id, { assignedTo: reassignMemoAssignedTo } as any);
+      toast({ title: "تم إسناد المذكرة لمحامي جديد" });
+      setReassignMemoDialog(null);
+    } catch (e: any) {
+      toast({ title: "خطأ", description: e?.message || "فشل إسناد المذكرة", variant: "destructive" });
     } finally {
       setSubmitting(false);
     }
@@ -558,6 +580,17 @@ export default function MemosPage() {
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
+                            {user?.role === "department_head" && !["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                title="إسناد لمحامي"
+                                data-testid={`button-reassign-memo-${memo.id}`}
+                                onClick={() => openReassignMemoDialog(memo)}
+                              >
+                                <UserCog className="w-4 h-4" />
+                              </Button>
+                            )}
                             {!["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && canUserChangeStatus(memo) && (
                               <Button
                                 size="icon"
@@ -586,6 +619,49 @@ export default function MemosPage() {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={!!reassignMemoDialog} onOpenChange={(open) => !open && setReassignMemoDialog(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserCog className="w-5 h-5" />
+              إسناد لمحامي
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>المحامي المكلف بالمذكرة</Label>
+              <Select value={reassignMemoAssignedTo} onValueChange={setReassignMemoAssignedTo}>
+                <SelectTrigger data-testid="select-reassign-memo-lawyer">
+                  <SelectValue placeholder="اختر المحامي" />
+                </SelectTrigger>
+                <SelectContent>
+                  {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-cancel-reassign-memo"
+              onClick={() => setReassignMemoDialog(null)}
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-save-reassign-memo"
+              onClick={handleReassignMemo}
+              disabled={!reassignMemoAssignedTo || submitting}
+            >
+              {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
+              حفظ
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
