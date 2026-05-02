@@ -69,6 +69,7 @@ import {
   Trash2,
   Pencil,
   UserCog,
+  Search,
 } from "lucide-react";
 import { useHearings } from "@/lib/hearings-context";
 import { queryClient } from "@/lib/queryClient";
@@ -91,6 +92,7 @@ import {
   HearingsAdvancedFilters,
   EMPTY_HEARINGS_ADV_FILTERS,
   countActiveHearingsAdvFilters,
+  PENDING_MEMO_STATUSES,
   type AdvancedHearingsFilters,
 } from "@/components/hearings-advanced-filters";
 
@@ -142,7 +144,7 @@ export default function HearingsPage() {
     getUpcomingHearings,
   } = useHearings();
   const { cases, getCaseById } = useCases();
-  const { getMemosByCase } = useMemos();
+  const { getMemosByCase, getMemosByHearing } = useMemos();
   const { getTasksByCase } = useFieldTasks();
   const { getClientName } = useClients();
   const { user, users } = useAuth();
@@ -161,6 +163,7 @@ export default function HearingsPage() {
   const [resultDialogHearing, setResultDialogHearing] = useState<Hearing | null>(null);
   const [reportDialogHearing, setReportDialogHearing] = useState<Hearing | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [basicSearch, setBasicSearch] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDepartment, setFilterDepartment] = useState<string>("all");
   const [filterLawyer, setFilterLawyer] = useState<string>("all");
@@ -483,7 +486,7 @@ export default function HearingsPage() {
     ? users.filter(u => u.canBeAssignedCases)
     : users.filter(u => u.canBeAssignedCases && u.departmentId === filterDepartment);
 
-  const advSearch = advFilters.search.trim().toLowerCase();
+  const basicSearchQ = basicSearch.trim().toLowerCase();
   const filteredHearings = hearings
     .filter((h) => {
       // Existing single-select filters (unchanged)
@@ -503,9 +506,13 @@ export default function HearingsPage() {
 
       // Advanced filters (all AND'd; empty arrays / strings = no constraint)
       if (advFilters.hearingTypes.length && !advFilters.hearingTypes.includes(h.hearingType)) return false;
-      if (advFilters.courtTypes.length && !advFilters.courtTypes.includes(h.courtName)) return false;
       if (advFilters.results.length && (!h.result || !advFilters.results.includes(h.result))) return false;
-      if (advFilters.statuses.length && !advFilters.statuses.includes(h.status)) return false;
+      if (advFilters.statuses.length) {
+        const matchesAdvStatus = advFilters.statuses.some((s) =>
+          s === "today" ? isToday(new Date(h.hearingDate)) : s === h.status,
+        );
+        if (!matchesAdvStatus) return false;
+      }
       if (advFilters.depts.length) {
         const deptId = getDepartmentForHearing(h);
         if (!deptId || !advFilters.depts.includes(deptId)) return false;
@@ -520,8 +527,13 @@ export default function HearingsPage() {
       }
       if (advFilters.dateFrom && h.hearingDate < advFilters.dateFrom) return false;
       if (advFilters.dateTo && h.hearingDate > advFilters.dateTo) return false;
-      if (advSearch) {
+      if (advFilters.withPendingMemos) {
+        const linked = getMemosByHearing(h.id);
+        if (!linked.some((m) => PENDING_MEMO_STATUSES.has(m.status))) return false;
+      }
+      if (basicSearchQ) {
         const c = h.caseId ? getCaseById(h.caseId) : null;
+        const clientName = c?.clientId ? getClientName(c.clientId) : "";
         const hay = [
           c?.caseNumber,
           c?.courtCaseNumber,
@@ -529,11 +541,12 @@ export default function HearingsPage() {
           c?.opponentName,
           h.courtName,
           h.courtNameOther,
+          clientName,
         ]
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
-        if (!hay.includes(advSearch)) return false;
+        if (!hay.includes(basicSearchQ)) return false;
       }
       return true;
     })
@@ -545,7 +558,7 @@ export default function HearingsPage() {
 
   const HEARING_PAGE_SIZE = 15;
   const [hearingPage, setHearingPage] = useState(1);
-  useEffect(() => { setHearingPage(1); }, [filterStatus, filterDepartment, filterLawyer, advFilters]);
+  useEffect(() => { setHearingPage(1); }, [basicSearch, filterStatus, filterDepartment, filterLawyer, advFilters]);
   const hearingTotalPages = Math.max(1, Math.ceil(filteredHearings.length / HEARING_PAGE_SIZE));
   const pagedHearings = filteredHearings.slice((hearingPage - 1) * HEARING_PAGE_SIZE, hearingPage * HEARING_PAGE_SIZE);
 
@@ -884,6 +897,17 @@ export default function HearingsPage() {
             <CardTitle>جدول الجلسات</CardTitle>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <SmartInput
+                inputType="text"
+                data-testid="input-hearings-search"
+                placeholder="بحث برقم القضية، اسم المدعي، الخصم، المحكمة، أو العميل..."
+                value={basicSearch}
+                onChange={(e) => setBasicSearch(e.target.value)}
+                className="pr-10"
+              />
+            </div>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
               <SelectTrigger className="w-36" data-testid="select-filter-status">
                 <SelectValue placeholder="تصفية الحالة" />

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Popover,
   PopoverContent,
@@ -18,6 +19,13 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -27,15 +35,12 @@ import {
   HearingResult,
   HearingResultLabels,
   HearingType,
-  CourtType,
   CaseClassification,
   CaseClassificationLabels,
 } from "@shared/schema";
 
 export type AdvancedHearingsFilters = {
-  search: string;
   hearingTypes: string[];
-  courtTypes: string[];
   results: string[];
   statuses: string[];
   depts: string[];
@@ -43,12 +48,11 @@ export type AdvancedHearingsFilters = {
   classification: string; // "" | "قيد_الدراسة" | "منظورة_بالمحكمة"
   dateFrom: string;       // "" or YYYY-MM-DD (Gregorian, matches hearing.hearingDate)
   dateTo: string;
+  withPendingMemos: boolean;
 };
 
 export const EMPTY_HEARINGS_ADV_FILTERS: AdvancedHearingsFilters = {
-  search: "",
   hearingTypes: [],
-  courtTypes: [],
   results: [],
   statuses: [],
   depts: [],
@@ -56,20 +60,29 @@ export const EMPTY_HEARINGS_ADV_FILTERS: AdvancedHearingsFilters = {
   classification: "",
   dateFrom: "",
   dateTo: "",
+  withPendingMemos: false,
 };
+
+// Memo statuses considered "incomplete" for the pending-memo hearing filter.
+export const PENDING_MEMO_STATUSES: ReadonlySet<string> = new Set([
+  "لم_تبدأ",
+  "قيد_التحرير",
+  "قيد_المراجعة",
+  "بانتظار_الاعتماد",
+  "تحتاج_تعديل",
+]);
 
 export function countActiveHearingsAdvFilters(f: AdvancedHearingsFilters): number {
   return (
-    (f.search.trim() ? 1 : 0) +
     (f.hearingTypes.length > 0 ? 1 : 0) +
-    (f.courtTypes.length > 0 ? 1 : 0) +
     (f.results.length > 0 ? 1 : 0) +
     (f.statuses.length > 0 ? 1 : 0) +
     (f.depts.length > 0 ? 1 : 0) +
     (f.lawyers.length > 0 ? 1 : 0) +
     (f.classification ? 1 : 0) +
     (f.dateFrom ? 1 : 0) +
-    (f.dateTo ? 1 : 0)
+    (f.dateTo ? 1 : 0) +
+    (f.withPendingMemos ? 1 : 0)
   );
 }
 
@@ -244,10 +257,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
     () => Object.values(HearingType).map((v) => ({ value: v, label: v.replace(/_/g, " ") })),
     [],
   );
-  const courtTypeOptions = useMemo(
-    () => Object.values(CourtType).map((v) => ({ value: v, label: v })),
-    [],
-  );
   const resultOptions = useMemo(
     () => Object.values(HearingResult).map((v) => ({
       value: v,
@@ -256,10 +265,13 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
     [],
   );
   const statusOptions = useMemo(
-    () => Object.values(HearingStatus).map((v) => ({
-      value: v,
-      label: HearingStatusLabels[v as keyof typeof HearingStatusLabels] || v,
-    })),
+    () => [
+      { value: "today", label: "اليوم" },
+      ...Object.values(HearingStatus).map((v) => ({
+        value: v,
+        label: HearingStatusLabels[v as keyof typeof HearingStatusLabels] || v,
+      })),
+    ],
     [],
   );
   const deptOptions = useMemo(
@@ -353,17 +365,17 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
 
   const describeFilters = (f: AdvancedHearingsFilters): string => {
     const parts: string[] = [];
-    if (f.search) parts.push(`بحث: ${f.search}`);
     if (f.hearingTypes.length) parts.push(`النوع: ${f.hearingTypes.join("، ")}`);
-    if (f.courtTypes.length) parts.push(`المحكمة: ${f.courtTypes.join("، ")}`);
     if (f.results.length)
       parts.push(`النتيجة: ${f.results.map((r) => HearingResultLabels[r as keyof typeof HearingResultLabels] || r).join("، ")}`);
-    if (f.statuses.length) parts.push(`الحالة: ${f.statuses.join("، ")}`);
+    if (f.statuses.length)
+      parts.push(`الحالة: ${f.statuses.map((s) => (s === "today" ? "اليوم" : s)).join("، ")}`);
     if (f.depts.length) parts.push(`القسم: ${f.depts.map(deptNameById).join("، ")}`);
     if (f.lawyers.length) parts.push(`المترافع: ${f.lawyers.map(userNameById).join("، ")}`);
     if (f.classification)
       parts.push(`التصنيف: ${CaseClassificationLabels[f.classification as keyof typeof CaseClassificationLabels] || f.classification}`);
     if (f.dateFrom || f.dateTo) parts.push(`من ${f.dateFrom || "؟"} إلى ${f.dateTo || "؟"}`);
+    if (f.withPendingMemos) parts.push("بها مذكرات غير منجزة");
     return parts.join(" • ") || "—";
   };
 
@@ -399,16 +411,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
             </Button>
           </div>
 
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">بحث (رقم القضية / المدعي / الخصم / المحكمة)</Label>
-            <Input
-              value={draft.search}
-              onChange={(e) => setDraft({ ...draft, search: e.target.value })}
-              placeholder="ابحث..."
-              data-testid="input-hearings-adv-search"
-            />
-          </div>
-
           <div className="grid grid-cols-2 gap-3">
             <MultiSelectCombo
               label="نوع الجلسة"
@@ -418,14 +420,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
               placeholder="كل الأنواع"
               searchable={false}
               testIdPrefix="adv-hearing-type"
-            />
-            <MultiSelectCombo
-              label="نوع المحكمة"
-              values={draft.courtTypes}
-              onChange={(v) => setDraft({ ...draft, courtTypes: v })}
-              options={courtTypeOptions}
-              placeholder="كل المحاكم"
-              testIdPrefix="adv-court-type"
             />
             <MultiSelectCombo
               label="النتيجة"
@@ -462,17 +456,37 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
             />
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">التصنيف</Label>
-              <select
-                className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                value={draft.classification}
-                onChange={(e) => setDraft({ ...draft, classification: e.target.value })}
-                data-testid="select-adv-hearings-classification"
+              <Select
+                value={draft.classification || "all"}
+                onValueChange={(v) =>
+                  setDraft({ ...draft, classification: v === "all" ? "" : v })
+                }
               >
-                <option value="">كل التصنيفات</option>
-                <option value={CaseClassification.UNDER_STUDY}>قضية قيد الدراسة</option>
-                <option value={CaseClassification.IN_COURT}>منظورة بالمحكمة</option>
-              </select>
+                <SelectTrigger
+                  className="w-full h-9"
+                  data-testid="select-adv-hearings-classification"
+                >
+                  <SelectValue placeholder="كل التصنيفات" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل التصنيفات</SelectItem>
+                  <SelectItem value={CaseClassification.UNDER_STUDY}>قضية قيد الدراسة</SelectItem>
+                  <SelectItem value={CaseClassification.IN_COURT}>منظورة بالمحكمة</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-md border px-3 py-2">
+            <Label htmlFor="adv-with-pending-memos" className="text-sm cursor-pointer">
+              الجلسات التي بها مذكرات غير منجزة
+            </Label>
+            <Switch
+              id="adv-with-pending-memos"
+              checked={draft.withPendingMemos}
+              onCheckedChange={(v) => setDraft({ ...draft, withPendingMemos: v })}
+              data-testid="switch-adv-with-pending-memos"
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
