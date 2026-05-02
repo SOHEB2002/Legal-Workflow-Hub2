@@ -8,9 +8,13 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
+  type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
+  type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   CaseStatus, CaseStage, CaseClassification,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
-  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters
+  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
+  consultationStudies, consultationDrafts, consultationReviews,
+  consultationCommitteeDecisions, consultationNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
@@ -144,6 +148,19 @@ export interface IStorage {
   updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined>;
   deleteSavedFilter(id: string): Promise<boolean>;
 
+  // Consultation helper tables (rebuild §3.1.3)
+  createConsultationStudy(data: { consultationId: string; notes: string; createdBy: string }): Promise<ConsultationStudy>;
+  getConsultationStudies(consultationId: string): Promise<ConsultationStudy[]>;
+  createConsultationDraft(data: { consultationId: string; content: string; createdBy: string }): Promise<ConsultationDraft>;
+  getConsultationDrafts(consultationId: string): Promise<ConsultationDraft[]>;
+  createConsultationReview(data: { consultationId: string; reviewerId: string; decision: string; notes: string }): Promise<ConsultationReview>;
+  getConsultationReviews(consultationId: string): Promise<ConsultationReview[]>;
+  getLatestConsultationReview(consultationId: string): Promise<ConsultationReview | undefined>;
+  createConsultationCommitteeDecision(data: { consultationId: string; decision: string; notes: string; decidedBy: string }): Promise<ConsultationCommitteeDecision>;
+  getConsultationCommitteeDecisions(consultationId: string): Promise<ConsultationCommitteeDecision[]>;
+  createConsultationNoteOutcome(data: { consultationId: string; outcome: string; notes: string; recordedBy: string }): Promise<ConsultationNoteOutcome>;
+  getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]>;
+
   // Initialization
   initializeDefaultData(): Promise<void>;
 }
@@ -247,6 +264,7 @@ function mapDbCase(dbCase: any): LawCase {
     archiveReason: dbCase.archiveReason || null,
     autoArchiveDate: dbCase.autoArchiveDate || null,
     isSettlementCase: dbCase.isSettlementCase ?? false,
+    convertedFromConsultationId: dbCase.convertedFromConsultationId || null,
     createdBy: dbCase.createdBy,
     createdAt: toISOString(dbCase.createdAt),
     updatedAt: toISOString(dbCase.updatedAt),
@@ -284,6 +302,7 @@ function mapDbConsultation(dbCon: any): Consultation {
     clientId: dbCon.clientId,
     consultationType: dbCon.consultationType,
     deliveryType: dbCon.deliveryType,
+    currentStage: dbCon.currentStage,
     status: dbCon.status,
     departmentId: dbCon.departmentId,
     assignedTo: dbCon.assignedTo,
@@ -1305,6 +1324,188 @@ export class DatabaseStorage implements IStorage {
   async deleteSavedFilter(id: string): Promise<boolean> {
     const result = await db.delete(savedFilters).where(eq(savedFilters.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ==================== Consultation Studies / Drafts / Reviews / Committee / Notes ====================
+
+  async createConsultationStudy(data: { consultationId: string; notes: string; createdBy: string }): Promise<ConsultationStudy> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationStudies).values({
+      id,
+      consultationId: data.consultationId,
+      notes: data.notes,
+      createdBy: data.createdBy,
+      createdAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      notes: row.notes ?? "",
+      createdBy: row.createdBy,
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  async getConsultationStudies(consultationId: string): Promise<ConsultationStudy[]> {
+    const rows = await db.select().from(consultationStudies)
+      .where(eq(consultationStudies.consultationId, consultationId))
+      .orderBy(asc(consultationStudies.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      notes: r.notes ?? "",
+      createdBy: r.createdBy,
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async createConsultationDraft(data: { consultationId: string; content: string; createdBy: string }): Promise<ConsultationDraft> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationDrafts).values({
+      id,
+      consultationId: data.consultationId,
+      content: data.content,
+      createdBy: data.createdBy,
+      createdAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      content: row.content ?? "",
+      createdBy: row.createdBy,
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  async getConsultationDrafts(consultationId: string): Promise<ConsultationDraft[]> {
+    const rows = await db.select().from(consultationDrafts)
+      .where(eq(consultationDrafts.consultationId, consultationId))
+      .orderBy(asc(consultationDrafts.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      content: r.content ?? "",
+      createdBy: r.createdBy,
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async createConsultationReview(data: { consultationId: string; reviewerId: string; decision: string; notes: string }): Promise<ConsultationReview> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationReviews).values({
+      id,
+      consultationId: data.consultationId,
+      reviewerId: data.reviewerId,
+      decision: data.decision,
+      notes: data.notes,
+      createdAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      reviewerId: row.reviewerId,
+      decision: row.decision,
+      notes: row.notes ?? "",
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  async getConsultationReviews(consultationId: string): Promise<ConsultationReview[]> {
+    const rows = await db.select().from(consultationReviews)
+      .where(eq(consultationReviews.consultationId, consultationId))
+      .orderBy(asc(consultationReviews.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      reviewerId: r.reviewerId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async getLatestConsultationReview(consultationId: string): Promise<ConsultationReview | undefined> {
+    const [row] = await db.select().from(consultationReviews)
+      .where(eq(consultationReviews.consultationId, consultationId))
+      .orderBy(desc(consultationReviews.createdAt))
+      .limit(1);
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      reviewerId: row.reviewerId,
+      decision: row.decision,
+      notes: row.notes ?? "",
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  async createConsultationCommitteeDecision(data: { consultationId: string; decision: string; notes: string; decidedBy: string }): Promise<ConsultationCommitteeDecision> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationCommitteeDecisions).values({
+      id,
+      consultationId: data.consultationId,
+      decision: data.decision,
+      notes: data.notes,
+      decidedBy: data.decidedBy,
+      decidedAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      decision: row.decision,
+      notes: row.notes ?? "",
+      decidedBy: row.decidedBy,
+      decidedAt: toISOString(row.decidedAt),
+    };
+  }
+
+  async getConsultationCommitteeDecisions(consultationId: string): Promise<ConsultationCommitteeDecision[]> {
+    const rows = await db.select().from(consultationCommitteeDecisions)
+      .where(eq(consultationCommitteeDecisions.consultationId, consultationId))
+      .orderBy(asc(consultationCommitteeDecisions.decidedAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      decidedBy: r.decidedBy,
+      decidedAt: toISOString(r.decidedAt),
+    }));
+  }
+
+  async createConsultationNoteOutcome(data: { consultationId: string; outcome: string; notes: string; recordedBy: string }): Promise<ConsultationNoteOutcome> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationNoteOutcomes).values({
+      id,
+      consultationId: data.consultationId,
+      outcome: data.outcome,
+      notes: data.notes,
+      recordedBy: data.recordedBy,
+      recordedAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      outcome: row.outcome,
+      notes: row.notes ?? "",
+      recordedBy: row.recordedBy,
+      recordedAt: toISOString(row.recordedAt),
+    };
+  }
+
+  async getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]> {
+    const rows = await db.select().from(consultationNoteOutcomes)
+      .where(eq(consultationNoteOutcomes.consultationId, consultationId))
+      .orderBy(asc(consultationNoteOutcomes.recordedAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      outcome: r.outcome,
+      notes: r.notes ?? "",
+      recordedBy: r.recordedBy,
+      recordedAt: toISOString(r.recordedAt),
+    }));
   }
 
   // ==================== Case Activity Log ====================

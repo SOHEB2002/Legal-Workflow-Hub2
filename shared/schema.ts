@@ -969,13 +969,27 @@ export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
 
 // Linear happy-path order (excludes TAKING_NOTES, which is conditional).
 export const ConsultationStagesOrder: ConsultationStageValue[] = [
-  "استلام",
-  "دراسة",
-  "تحرير",
-  "مراجعة_داخلية",
-  "لجنة_مراجعة",
-  "جاهزة_للتسليم",
-  "منجزة",
+  ConsultationStage.RECEIVED,
+  ConsultationStage.STUDY,
+  ConsultationStage.DRAFTING,
+  ConsultationStage.INTERNAL_REVIEW,
+  ConsultationStage.COMMITTEE,
+  ConsultationStage.READY,
+  ConsultationStage.COMPLETED,
+];
+
+// All consultation stages in canonical order, including the conditional
+// TAKING_NOTES branch (entered only when committee returns يوجد_ملاحظات).
+// Used for rollback validation; the linear-path Order excludes TAKING_NOTES.
+export const ConsultationStagesAll: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.STUDY,
+  ConsultationStage.DRAFTING,
+  ConsultationStage.INTERNAL_REVIEW,
+  ConsultationStage.COMMITTEE,
+  ConsultationStage.TAKING_NOTES,
+  ConsultationStage.READY,
+  ConsultationStage.COMPLETED,
 ];
 
 // ==================== Consultation Status (per consultations-rebuild-spec.md §3.1.2) ====================
@@ -1337,6 +1351,53 @@ export interface Consultation {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+}
+
+// ==================== Consultation helper-row interfaces (rebuild §3.1.3) ====================
+export interface ConsultationStudy {
+  id: string;
+  consultationId: string;
+  notes: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ConsultationDraft {
+  id: string;
+  consultationId: string;
+  content: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ConsultationReview {
+  id: string;
+  consultationId: string;
+  reviewerId: string;
+  // values: تم | يوجد_ملاحظات | تم_إعادة_التقديم (per spec §3.1.3 / §3.2.1)
+  decision: string;
+  notes: string;
+  createdAt: string;
+}
+
+export interface ConsultationCommitteeDecision {
+  id: string;
+  consultationId: string;
+  // values: اعتماد | يوجد_ملاحظات (per spec §3.1.3 / §3.2.1)
+  decision: string;
+  notes: string;
+  decidedBy: string;
+  decidedAt: string;
+}
+
+export interface ConsultationNoteOutcome {
+  id: string;
+  consultationId: string;
+  // values: تم | لم_يتم | جزئياً (per spec §3.1.3 / §3.2.1)
+  outcome: string;
+  notes: string;
+  recordedBy: string;
+  recordedAt: string;
 }
 
 export interface Hearing {

@@ -21,6 +21,8 @@ import {
   CaseClassification,
   CaseStage,
   CaseStagesOrder,
+  ConsultationStage,
+  ConsultationStagesAll,
   getStagesForClassification,
   type CaseTypeValue,
   canCreateMemos,
@@ -238,21 +240,32 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "مشطوبة", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 ];
 
+// Consultations canonical 7+1 stage workflow per consultations-rebuild-spec.md
+// §3.2.1. Forward transitions only — backward transitions are handled via the
+// rollback block in validateStageTransition (matches case-side semantics:
+// dept_head/branch_manager can rollback to any prior stage; assigned_lawyer
+// can rollback one step). The committee/review/notes-outcome transitions
+// have additional endpoint-level checks (e.g. internal-review enforces
+// "actor must be the active cycle's reviewer") in their dedicated routes.
+//
+// Stage values come from the ConsultationStage enum (no Arabic literals
+// in this file; the enum lives in shared/schema.ts).
 const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
-  // Forward transitions
-  { from: "استلام", to: "دراسة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "دراسة", to: "إعداد_الرد", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "إعداد_الرد", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "لجنة_المراجعة", to: "جاهز", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
-  { from: "لجنة_المراجعة", to: "تعديلات", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
-  { from: "تعديلات", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "جاهز", to: "مسلّم", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "مسلّم", to: "مغلق", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  // Backward transitions
-  { from: "دراسة", to: "استلام", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "إعداد_الرد", to: "دراسة", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "لجنة_المراجعة", to: "إعداد_الرد", allowedRoles: ["branch_manager", "consultations_review_head", "department_head"] },
-  { from: "جاهز", to: "تعديلات", allowedRoles: ["branch_manager", "department_head"] },
+  // Linear happy-path
+  { from: ConsultationStage.RECEIVED,        to: ConsultationStage.STUDY,             allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: ConsultationStage.STUDY,           to: ConsultationStage.DRAFTING,          allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.DRAFTING,        to: ConsultationStage.INTERNAL_REVIEW,   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Internal-review outcomes (enforced finely by the internal-review endpoint;
+  // table stays permissive for assigned_lawyer + dept_head + branch_manager).
+  { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.DRAFTING,          allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.COMMITTEE,         allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Committee decisions
+  { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.READY,             allowedRoles: ["consultations_review_head", "branch_manager"] },
+  { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.TAKING_NOTES,      allowedRoles: ["consultations_review_head", "branch_manager"] },
+  // Take-notes outcome (any of تم | لم_يتم | جزئياً all advance to READY)
+  { from: ConsultationStage.TAKING_NOTES,    to: ConsultationStage.READY,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Delivery
+  { from: ConsultationStage.READY,           to: ConsultationStage.COMPLETED,         allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 ];
 
 function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
@@ -298,7 +311,7 @@ function validateStageTransition(
   }
 
   const effectiveRoles = [userRole];
-  if (entityType === "case" && user && entityData && isAssignedLawyer(user, entityData)) {
+  if (user && entityData && isAssignedLawyer(user, entityData)) {
     effectiveRoles.push("assigned_lawyer");
   }
   if (isInternalReviewer) {
@@ -330,6 +343,27 @@ function validateStageTransition(
       if (isLawyer && targetIdx === currentIdx - 1) {
         return { allowed: true }; // can only go back ONE stage
       }
+      if (isLawyer && targetIdx < currentIdx - 1) {
+        return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
+      }
+      return { allowed: false, reason: "ليس لديك صلاحية للرجوع في المراحل" };
+    }
+  }
+
+  // Consultation rollback (per consultations-rebuild-spec.md §3.2.1):
+  //   department_head / branch_manager can return to any prior stage;
+  //   assigned_lawyer can return one step.
+  // Uses ConsultationStagesAll which includes the conditional TAKING_NOTES
+  // stage in canonical order so rollback works from there too.
+  if (entityType === "consultation" && entityData) {
+    const stages = ConsultationStagesAll as readonly string[];
+    const currentIdx = stages.indexOf(currentStage);
+    const targetIdx = stages.indexOf(targetStage);
+    if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
+      const isLawyer = effectiveRoles.includes("assigned_lawyer");
+      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+      if (isHeadOrManager) return { allowed: true };
+      if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
         return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
       }
