@@ -108,6 +108,12 @@ function canModifyConsultation(user: { id: string; role: string; departmentId: s
   return false;
 }
 
+function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
+  if (["branch_manager", "admin_support", "department_head"].includes(user.role)) return true;
+  if (hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
+  return false;
+}
+
 async function validateAssignedUsersActive(userIds: string[]): Promise<{ valid: boolean; inactiveUsers: string[] }> {
   const inactiveUsers: string[] = [];
   for (const id of userIds) {
@@ -2556,6 +2562,9 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
+      if (!canActOnHearing((req as any).user, hearing)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
       if (hearing.status !== HearingStatus.UPCOMING) {
         return res.status(400).json({ error: "لا يمكن تسجيل نتيجة لجلسة غير قادمة" });
       }
@@ -2916,6 +2925,9 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
+      if (!canActOnHearing((req as any).user, hearing)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
       if (!hearing.result) {
         return res.status(400).json({ error: "يجب تسجيل نتيجة الجلسة أولاً" });
       }
@@ -2946,6 +2958,9 @@ export async function registerRoutes(
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!canActOnHearing((req as any).user, hearing)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {
         return res.status(400).json({ error: "يجب كتابة التقرير أولاً قبل إغلاق الجلسة" });
