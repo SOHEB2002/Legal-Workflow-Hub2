@@ -914,8 +914,7 @@ export default function HearingsPage() {
                         user?.role === "admin_support";
                       const canDeleteHearing =
                         user?.role === "branch_manager" ||
-                        user?.role === "admin_support" ||
-                        user?.role === "department_head";
+                        user?.role === "admin_support";
                       const canReassignAttendingLawyer = user?.role === "department_head";
                       const isFutureHearing = isHearingInFuture(hearing.hearingDate);
                       return (
