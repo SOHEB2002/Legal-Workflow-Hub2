@@ -87,6 +87,12 @@ import { formatTimeAmPm, formatDualDate } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useToast } from "@/hooks/use-toast";
+import {
+  HearingsAdvancedFilters,
+  EMPTY_HEARINGS_ADV_FILTERS,
+  countActiveHearingsAdvFilters,
+  type AdvancedHearingsFilters,
+} from "@/components/hearings-advanced-filters";
 
 function getUrgencyColor(hearingDate: string) {
   const days = differenceInDays(new Date(hearingDate), new Date());
@@ -158,6 +164,7 @@ export default function HearingsPage() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDepartment, setFilterDepartment] = useState<string>("all");
   const [filterLawyer, setFilterLawyer] = useState<string>("all");
+  const [advFilters, setAdvFilters] = useState<AdvancedHearingsFilters>(EMPTY_HEARINGS_ADV_FILTERS);
   const [deletingHearingId, setDeletingHearingId] = useState<string | null>(null);
   const [editDialogHearing, setEditDialogHearing] = useState<Hearing | null>(null);
   const [reassignDialogHearing, setReassignDialogHearing] = useState<Hearing | null>(null);
@@ -476,8 +483,10 @@ export default function HearingsPage() {
     ? users.filter(u => u.canBeAssignedCases)
     : users.filter(u => u.canBeAssignedCases && u.departmentId === filterDepartment);
 
+  const advSearch = advFilters.search.trim().toLowerCase();
   const filteredHearings = hearings
     .filter((h) => {
+      // Existing single-select filters (unchanged)
       if (filterStatus === "today") {
         if (!isToday(new Date(h.hearingDate))) return false;
       } else if (filterStatus !== "all") {
@@ -491,6 +500,41 @@ export default function HearingsPage() {
         const lawyerId = getLawyerForHearing(h);
         if (lawyerId !== filterLawyer) return false;
       }
+
+      // Advanced filters (all AND'd; empty arrays / strings = no constraint)
+      if (advFilters.hearingTypes.length && !advFilters.hearingTypes.includes(h.hearingType)) return false;
+      if (advFilters.courtTypes.length && !advFilters.courtTypes.includes(h.courtName)) return false;
+      if (advFilters.results.length && (!h.result || !advFilters.results.includes(h.result))) return false;
+      if (advFilters.statuses.length && !advFilters.statuses.includes(h.status)) return false;
+      if (advFilters.depts.length) {
+        const deptId = getDepartmentForHearing(h);
+        if (!deptId || !advFilters.depts.includes(deptId)) return false;
+      }
+      if (advFilters.lawyers.length) {
+        const lawyerId = getLawyerForHearing(h);
+        if (!lawyerId || !advFilters.lawyers.includes(lawyerId)) return false;
+      }
+      if (advFilters.classification) {
+        const c = h.caseId ? getCaseById(h.caseId) : null;
+        if (!c || c.caseClassification !== advFilters.classification) return false;
+      }
+      if (advFilters.dateFrom && h.hearingDate < advFilters.dateFrom) return false;
+      if (advFilters.dateTo && h.hearingDate > advFilters.dateTo) return false;
+      if (advSearch) {
+        const c = h.caseId ? getCaseById(h.caseId) : null;
+        const hay = [
+          c?.caseNumber,
+          c?.courtCaseNumber,
+          c?.plaintiffName,
+          c?.opponentName,
+          h.courtName,
+          h.courtNameOther,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(advSearch)) return false;
+      }
       return true;
     })
     .sort((a, b) => {
@@ -501,7 +545,7 @@ export default function HearingsPage() {
 
   const HEARING_PAGE_SIZE = 15;
   const [hearingPage, setHearingPage] = useState(1);
-  useEffect(() => { setHearingPage(1); }, [filterStatus, filterDepartment, filterLawyer]);
+  useEffect(() => { setHearingPage(1); }, [filterStatus, filterDepartment, filterLawyer, advFilters]);
   const hearingTotalPages = Math.max(1, Math.ceil(filteredHearings.length / HEARING_PAGE_SIZE));
   const pagedHearings = filteredHearings.slice((hearingPage - 1) * HEARING_PAGE_SIZE, hearingPage * HEARING_PAGE_SIZE);
 
@@ -875,6 +919,17 @@ export default function HearingsPage() {
                 ))}
               </SelectContent>
             </Select>
+            <HearingsAdvancedFilters
+              filters={advFilters}
+              onChange={setAdvFilters}
+              departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
+              users={users.map((u) => ({
+                id: u.id,
+                name: u.name,
+                role: u.role,
+                departmentId: u.departmentId,
+              }))}
+            />
           </div>
         </CardHeader>
         <CardContent>
