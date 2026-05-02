@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Popover,
   PopoverContent,
@@ -43,6 +44,7 @@ export type AdvancedHearingsFilters = {
   classification: string; // "" | "قيد_الدراسة" | "منظورة_بالمحكمة"
   dateFrom: string;       // "" or YYYY-MM-DD (Gregorian, matches hearing.hearingDate)
   dateTo: string;
+  withPendingMemos: boolean;
 };
 
 export const EMPTY_HEARINGS_ADV_FILTERS: AdvancedHearingsFilters = {
@@ -56,7 +58,17 @@ export const EMPTY_HEARINGS_ADV_FILTERS: AdvancedHearingsFilters = {
   classification: "",
   dateFrom: "",
   dateTo: "",
+  withPendingMemos: false,
 };
+
+// Memo statuses considered "incomplete" for the pending-memo hearing filter.
+export const PENDING_MEMO_STATUSES: ReadonlySet<string> = new Set([
+  "لم_تبدأ",
+  "قيد_التحرير",
+  "قيد_المراجعة",
+  "بانتظار_الاعتماد",
+  "تحتاج_تعديل",
+]);
 
 export function countActiveHearingsAdvFilters(f: AdvancedHearingsFilters): number {
   return (
@@ -69,7 +81,8 @@ export function countActiveHearingsAdvFilters(f: AdvancedHearingsFilters): numbe
     (f.lawyers.length > 0 ? 1 : 0) +
     (f.classification ? 1 : 0) +
     (f.dateFrom ? 1 : 0) +
-    (f.dateTo ? 1 : 0)
+    (f.dateTo ? 1 : 0) +
+    (f.withPendingMemos ? 1 : 0)
   );
 }
 
@@ -364,6 +377,7 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
     if (f.classification)
       parts.push(`التصنيف: ${CaseClassificationLabels[f.classification as keyof typeof CaseClassificationLabels] || f.classification}`);
     if (f.dateFrom || f.dateTo) parts.push(`من ${f.dateFrom || "؟"} إلى ${f.dateTo || "؟"}`);
+    if (f.withPendingMemos) parts.push("بها مذكرات غير منجزة");
     return parts.join(" • ") || "—";
   };
 
@@ -473,6 +487,18 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
                 <option value={CaseClassification.IN_COURT}>منظورة بالمحكمة</option>
               </select>
             </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-md border px-3 py-2">
+            <Label htmlFor="adv-with-pending-memos" className="text-sm cursor-pointer">
+              الجلسات التي بها مذكرات غير منجزة
+            </Label>
+            <Switch
+              id="adv-with-pending-memos"
+              checked={draft.withPendingMemos}
+              onCheckedChange={(v) => setDraft({ ...draft, withPendingMemos: v })}
+              data-testid="switch-adv-with-pending-memos"
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">

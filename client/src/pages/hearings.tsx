@@ -91,6 +91,7 @@ import {
   HearingsAdvancedFilters,
   EMPTY_HEARINGS_ADV_FILTERS,
   countActiveHearingsAdvFilters,
+  PENDING_MEMO_STATUSES,
   type AdvancedHearingsFilters,
 } from "@/components/hearings-advanced-filters";
 
@@ -142,7 +143,7 @@ export default function HearingsPage() {
     getUpcomingHearings,
   } = useHearings();
   const { cases, getCaseById } = useCases();
-  const { getMemosByCase } = useMemos();
+  const { getMemosByCase, getMemosByHearing } = useMemos();
   const { getTasksByCase } = useFieldTasks();
   const { getClientName } = useClients();
   const { user, users } = useAuth();
@@ -520,6 +521,10 @@ export default function HearingsPage() {
       }
       if (advFilters.dateFrom && h.hearingDate < advFilters.dateFrom) return false;
       if (advFilters.dateTo && h.hearingDate > advFilters.dateTo) return false;
+      if (advFilters.withPendingMemos) {
+        const linked = getMemosByHearing(h.id);
+        if (!linked.some((m) => PENDING_MEMO_STATUSES.has(m.status))) return false;
+      }
       if (advSearch) {
         const c = h.caseId ? getCaseById(h.caseId) : null;
         const hay = [
