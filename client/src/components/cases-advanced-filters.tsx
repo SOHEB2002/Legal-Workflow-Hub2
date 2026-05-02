@@ -105,7 +105,7 @@ const IN_COURT_STAGES_UNION: string[] = [
 //   if UNDER_STUDY in classifications (or none chosen):
 //     deptNames=[]  → add union of all dept paths
 //     deptNames=[…] → add per-dept lists (by dept NAME)
-function getFilterStages(
+export function getFilterStages(
   classifications: string[],
   deptNames: string[],
 ): string[] {
