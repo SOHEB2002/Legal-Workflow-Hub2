@@ -75,7 +75,8 @@ import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
-import { MemoStatusLabels, MemoType, FieldTaskStatus } from "@shared/schema";
+import { MemoStatusLabels, MemoType, FieldTaskStatus, CaseStageLabels, HearingStatusLabels, HearingResultLabels, ObjectionStatusLabels } from "@shared/schema";
+import type { CaseStageValue, ObjectionStatusValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -106,17 +107,18 @@ function isHearingInFuture(hearingDate: string): boolean {
 }
 
 function getStatusBadge(status: HearingStatusValue) {
+  const label = HearingStatusLabels[status] || status;
   switch (status) {
     case HearingStatus.UPCOMING:
-      return <Badge variant="outline" className="border-primary text-primary"><Calendar className="w-3 h-3 ml-1" />قادمة</Badge>;
+      return <Badge variant="outline" className="border-primary text-primary"><Calendar className="w-3 h-3 ml-1" />{label}</Badge>;
     case HearingStatus.COMPLETED:
-      return <Badge variant="outline" className="border-green-600 text-green-600 dark:border-green-400 dark:text-green-400"><CheckCircle className="w-3 h-3 ml-1" />تمت</Badge>;
+      return <Badge variant="outline" className="border-green-600 text-green-600 dark:border-green-400 dark:text-green-400"><CheckCircle className="w-3 h-3 ml-1" />{label}</Badge>;
     case HearingStatus.POSTPONED:
-      return <Badge variant="outline" className="border-orange-500 text-orange-500"><ArrowLeftRight className="w-3 h-3 ml-1" />مؤجلة</Badge>;
+      return <Badge variant="outline" className="border-orange-500 text-orange-500"><ArrowLeftRight className="w-3 h-3 ml-1" />{label}</Badge>;
     case HearingStatus.CANCELLED:
-      return <Badge variant="outline" className="border-destructive text-destructive"><XCircle className="w-3 h-3 ml-1" />ملغية</Badge>;
+      return <Badge variant="outline" className="border-destructive text-destructive"><XCircle className="w-3 h-3 ml-1" />{label}</Badge>;
     default:
-      return <Badge variant="outline">{status}</Badge>;
+      return <Badge variant="outline">{label}</Badge>;
   }
 }
 
@@ -660,7 +662,7 @@ export default function HearingsPage() {
                     <div className="mt-2 rounded-md border bg-muted/40 p-2 text-xs space-y-1" dir="rtl">
                       <div>
                         <span className="text-muted-foreground">المرحلة:</span>{" "}
-                        <span className="font-medium">{c.currentStage}</span>
+                        <span className="font-medium">{CaseStageLabels[c.currentStage as CaseStageValue] || c.currentStage}</span>
                       </div>
                       <div>
                         <span className="text-muted-foreground">القسم:</span>{" "}
@@ -957,7 +959,7 @@ export default function HearingsPage() {
                               {getStatusBadge(hearing.status)}
                               {hearing.result && (
                                 <Badge variant="secondary" className="text-xs">
-                                  {hearing.result}
+                                  {HearingResultLabels[hearing.result] || hearing.result}
                                   {hearing.result === HearingResult.JUDGMENT && hearing.judgmentSide && (
                                     <span className="mr-1">({hearing.judgmentSide})</span>
                                   )}
@@ -1701,7 +1703,7 @@ export default function HearingsPage() {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <p className="text-xs text-muted-foreground">النتيجة</p>
-                        <Badge variant="secondary">{detailHearing.result}</Badge>
+                        <Badge variant="secondary">{HearingResultLabels[detailHearing.result] || detailHearing.result}</Badge>
                       </div>
                       {detailHearing.judgmentSide && (
                         <div>
@@ -1727,7 +1729,7 @@ export default function HearingsPage() {
                     {detailHearing.objectionStatus && (
                       <div>
                         <p className="text-xs text-muted-foreground">حالة الاعتراض</p>
-                        <Badge variant="outline">{detailHearing.objectionStatus}</Badge>
+                        <Badge variant="outline">{ObjectionStatusLabels[detailHearing.objectionStatus as ObjectionStatusValue] || detailHearing.objectionStatus}</Badge>
                       </div>
                     )}
                     {detailHearing.objectionDeadline && (

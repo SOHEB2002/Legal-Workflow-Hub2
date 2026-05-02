@@ -936,6 +936,23 @@ export const HearingResult = {
 
 export type HearingResultValue = typeof HearingResult[keyof typeof HearingResult];
 
+export const HearingStatusLabels: Record<HearingStatusValue, string> = {
+  "قادمة": "قادمة",
+  "تمت": "تمت",
+  "مؤجلة": "مؤجلة",
+  "ملغية": "ملغية",
+};
+
+export const HearingResultLabels: Record<HearingResultValue, string> = {
+  "موعد_جديد": "موعد جديد",
+  "حكم": "حكم",
+  "صلح": "صلح",
+  "تم_الصلح": "تم الصلح",
+  "لم_يتم_الصلح": "لم يتم الصلح",
+  "شطب": "شطب",
+  "أخرى": "أخرى",
+};
+
 // ==================== جانب الحكم ====================
 export const JudgmentSide = {
   FOR_US: "لصالحنا",
@@ -954,6 +971,14 @@ export const ObjectionStatus = {
 } as const;
 
 export type ObjectionStatusValue = typeof ObjectionStatus[keyof typeof ObjectionStatus];
+
+export const ObjectionStatusLabels: Record<ObjectionStatusValue, string> = {
+  "بانتظار_القرار": "بانتظار القرار",
+  "تم_تقديم_الاعتراض": "تم تقديم الاعتراض",
+  "لم_يتم_الاعتراض": "لم يتم الاعتراض",
+  "مقبول": "مقبول",
+  "مرفوض": "مرفوض",
+};
 
 // ==================== أنواع المهام التلقائية للجلسات ====================
 export const HearingAutoTaskType = {
