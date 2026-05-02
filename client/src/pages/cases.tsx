@@ -260,6 +260,7 @@ export default function CasesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
+  const [lawyerFilter, setLawyerFilter] = useState<string>("all");
   const [advFilters, setAdvFilters] = useState<AdvancedCasesFilters>(EMPTY_ADV_FILTERS);
 
   // Refresh cases on page mount to pick up changes from other tabs/users
@@ -665,6 +666,7 @@ export default function CasesPage() {
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
         c.caseClassification === classificationFilter;
+      const matchesLawyer = lawyerFilter === "all" || c.primaryLawyerId === lawyerFilter;
       const matchesAdvPriority =
         advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
       const matchesAdvStage =
@@ -683,6 +685,7 @@ export default function CasesPage() {
         matchesStatus &&
         matchesDept &&
         matchesClassification &&
+        matchesLawyer &&
         matchesAdvPriority &&
         matchesAdvStage &&
         matchesAdvDept &&
@@ -690,7 +693,7 @@ export default function CasesPage() {
         matchesAdvLawyer
       );
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, advFilters, getClientName]);
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName]);
 
   const basicAllowedStages = useMemo(() => {
     const cls = classificationFilter !== "all" ? [classificationFilter] : [];
@@ -709,7 +712,7 @@ export default function CasesPage() {
 
   const PAGE_SIZE = 15;
   const [casePage, setCasePage] = useState(1);
-  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, advFilters]);
+  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters]);
   const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
   const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
 
@@ -884,6 +887,17 @@ export default function CasesPage() {
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
                 <SelectItem value="قيد_الدراسة">قضية قيد الدراسة</SelectItem>
                 <SelectItem value="منظورة_بالمحكمة">منظورة بالمحكمة</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={lawyerFilter} onValueChange={setLawyerFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-lawyer-filter">
+                <SelectValue placeholder="المحامي" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">جميع المحامين</SelectItem>
+                {filterLawyers.map((u) => (
+                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <CasesAdvancedFilters
