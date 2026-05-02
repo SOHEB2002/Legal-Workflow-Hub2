@@ -842,38 +842,11 @@ export async function registerRoutes(
 
   app.get("/api/cases", requireAuth, async (req, res) => {
     try {
-      const user = (req as any).user;
-      if (!user) {
-        return res.status(401).json({ error: "يجب تسجيل الدخول" });
-      }
-
       const allCases = await storage.getAllCases();
-      const { role, id: userId, departmentId } = user;
-
       // Strip stageHistory from list responses — it can be 20-50 entries per case
       // and is only needed in the case detail view (GET /api/cases/:id).
-      const stripForList = (cases: any[]) =>
-        cases.map(({ stageHistory: _sh, ...c }) => c);
-
-      if (["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"].includes(role)) {
-        return res.json(stripForList(allCases));
-      }
-
-      if (role === "department_head") {
-        const filtered = allCases.filter((c: any) => c.departmentId === departmentId);
-        return res.json(stripForList(filtered));
-      }
-
-      if (role === "employee") {
-        const filtered = allCases.filter((c: any) =>
-          (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) ||
-          c.primaryLawyerId === userId ||
-          c.responsibleLawyerId === userId
-        );
-        return res.json(stripForList(filtered));
-      }
-
-      return res.status(403).json({ error: "ليس لديك صلاحية لعرض القضايا" });
+      const stripped = allCases.map(({ stageHistory: _sh, ...c }) => c);
+      res.json(stripped);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب القضايا" });
     }
