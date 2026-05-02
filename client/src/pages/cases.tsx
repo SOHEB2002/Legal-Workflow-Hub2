@@ -658,10 +658,13 @@ export default function CasesPage() {
   const filteredCases = useMemo(() => {
     return cases.filter((c) => {
       const clientName = c.clientId ? getClientName(c.clientId) : "";
-      const matchesSearch =
-        c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (clientName && clientName.toLowerCase().includes(searchQuery.toLowerCase()));
+      const q = searchQuery.trim().toLowerCase();
+      const matchesSearch = !q ||
+        c.caseNumber.toLowerCase().includes(q) ||
+        (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(q)) ||
+        (clientName && clientName.toLowerCase().includes(q)) ||
+        (c.plaintiffName && c.plaintiffName.toLowerCase().includes(q)) ||
+        (c.opponentName && c.opponentName.toLowerCase().includes(q));
       const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
