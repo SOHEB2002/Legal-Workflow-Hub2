@@ -225,6 +225,16 @@ export default function CasesPage() {
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
   const lawyers = users.filter(u => u.canBeAssignedCases);
+  // Lawyer-filter source: role-based exclusion. Wider than `lawyers` because
+  // it must surface anyone who *has* cases (e.g. cases_review_head) — not
+  // only those assignable going forward.
+  const LAWYER_FILTER_EXCLUDED_ROLES = new Set([
+    "branch_manager",
+    "admin_support",
+    "hr",
+    "technical_support",
+  ]);
+  const filterLawyers = users.filter(u => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
   const contractReviewStandards = getStandardsByType("contract_review");
   
   const getLawyerName = (id: string | null): string => {
@@ -894,7 +904,7 @@ export default function CasesPage() {
               filters={advFilters}
               onChange={setAdvFilters}
               departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
-              lawyers={lawyers.map((l) => ({ id: l.id, name: l.name }))}
+              lawyers={filterLawyers.map((l) => ({ id: l.id, name: l.name }))}
             />
           </div>
         </CardHeader>
