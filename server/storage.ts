@@ -304,6 +304,8 @@ function mapDbConsultation(dbCon: any): Consultation {
     deliveryType: dbCon.deliveryType,
     currentStage: dbCon.currentStage,
     status: dbCon.status,
+    closureReason: dbCon.closureReason || null,
+    closureReasonOther: dbCon.closureReasonOther || null,
     departmentId: dbCon.departmentId,
     assignedTo: dbCon.assignedTo,
     questionSummary: dbCon.questionSummary,

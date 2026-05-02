@@ -129,6 +129,8 @@ export const consultations = pgTable("consultations", {
   googleDriveFolderId: varchar("google_drive_folder_id", { length: 255 }).default(""),
   reviewNotes: text("review_notes").default(""),
   reviewDecision: varchar("review_decision", { length: 50 }),
+  closureReason: varchar("closure_reason", { length: 50 }),
+  closureReasonOther: varchar("closure_reason_other", { length: 500 }),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -1006,6 +1008,33 @@ export const ConsultationStatusLabels: Record<ConsultationStatusValue, string> =
   converted: "converted",
   closed: "closed",
 };
+// ==================== Consultation review/committee/outcome decision values ====================
+// Per consultations-rebuild-spec.md §3.1.3 / §3.2.1. Used by the dedicated
+// /internal-review, /committee-decision, /take-notes-outcome endpoints.
+
+export const InternalReviewDecision = {
+  PASSED:      "تم",
+  NEEDS_NOTES: "يوجد_ملاحظات",
+  RESUBMITTED: "تم_إعادة_التقديم",
+} as const;
+
+export type InternalReviewDecisionValue = typeof InternalReviewDecision[keyof typeof InternalReviewDecision];
+
+export const CommitteeDecision = {
+  APPROVED:    "اعتماد",
+  NEEDS_NOTES: "يوجد_ملاحظات",
+} as const;
+
+export type CommitteeDecisionValue = typeof CommitteeDecision[keyof typeof CommitteeDecision];
+
+export const NoteOutcome = {
+  DONE:     "تم",
+  NOT_DONE: "لم_يتم",
+  PARTIAL:  "جزئياً",
+} as const;
+
+export type NoteOutcomeValue = typeof NoteOutcome[keyof typeof NoteOutcome];
+
 
 // ==================== نوع تسليم الاستشارة ====================
 export const DeliveryType = {
@@ -1347,11 +1376,28 @@ export interface Consultation {
   googleDriveFolderId: string;
   reviewNotes: string;
   reviewDecision: ReviewDecisionType | null;
+  closureReason: string | null;
+  closureReasonOther: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
 }
+
+// Per consultations-rebuild-spec.md §3.2.2 (early-close): "match the cases
+// early-close pattern (4 reasons + 'other' with custom text)". The spec
+// doesn't enumerate the 4 reasons so we pick four reasonable consultation-
+// domain values; English keys/values keep this commit free of typed Arabic.
+// Frontend can map keys to Arabic display labels in a later commit.
+export const ConsultationClosureReason = {
+  CLIENT_CANCELLED:    "client_cancelled",
+  ANSWERED_VERBALLY:   "answered_verbally",
+  DUPLICATE:           "duplicate",
+  NO_LONGER_NEEDED:    "no_longer_needed",
+  OTHER:               "other",
+} as const;
+
+export type ConsultationClosureReasonValue = typeof ConsultationClosureReason[keyof typeof ConsultationClosureReason];
 
 // ==================== Consultation helper-row interfaces (rebuild §3.1.3) ====================
 export interface ConsultationStudy {

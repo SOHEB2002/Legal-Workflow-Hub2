@@ -23,6 +23,10 @@ import {
   CaseStagesOrder,
   ConsultationStage,
   ConsultationStagesAll,
+  InternalReviewDecision,
+  CommitteeDecision,
+  NoteOutcome,
+  ConsultationClosureReason,
   getStagesForClassification,
   type CaseTypeValue,
   canCreateMemos,
@@ -2289,6 +2293,328 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الاستشارة" });
+    }
+  });
+
+  // ==================== Consultation workflow endpoints (rebuild §3.2.2) ====================
+
+  // POST /api/consultations/:id/assign
+  // Body: { assignedTo, notes? }. Sets assignedTo. If currentStage is RECEIVED,
+  // advances to STUDY in the same write. Allowed roles: admin_support,
+  // department_head, branch_manager.
+  app.post("/api/consultations/:id/assign", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
+      }
+
+      const { assignedTo } = req.body || {};
+      if (!assignedTo || typeof assignedTo !== "string") {
+        return res.status(400).json({ error: "assignedTo مطلوب" });
+      }
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const { valid } = await validateAssignedUsersActive([assignedTo]);
+      if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
+
+      const updates: any = { assignedTo };
+      if (consultation.currentStage === ConsultationStage.RECEIVED) {
+        updates.currentStage = ConsultationStage.STUDY;
+      }
+
+      const updated = await storage.updateConsultation(consultation.id, updates);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/advance-stage
+  // Body: { targetStage }. Generic forward via validateStageTransition.
+  // Used for transitions where no dedicated endpoint applies. The dedicated
+  // endpoints (internal-review, committee-decision, take-notes-outcome) are
+  // preferred where they apply because they also record helper-table rows.
+  app.post("/api/consultations/:id/advance-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const check = validateStageTransition(
+        consultation.currentStage,
+        targetStage,
+        reqUser.role,
+        "consultation",
+        reqUser,
+        consultation,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      const updated = await storage.updateConsultation(consultation.id, { currentStage: targetStage } as any);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/return-stage
+  // Body: { targetStage }. Generic backward — validateStageTransition's
+  // rollback block enforces: dept_head/branch_manager can return to any
+  // prior stage, assigned_lawyer can return one step.
+  app.post("/api/consultations/:id/return-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const check = validateStageTransition(
+        consultation.currentStage,
+        targetStage,
+        reqUser.role,
+        "consultation",
+        reqUser,
+        consultation,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      const updated = await storage.updateConsultation(consultation.id, { currentStage: targetStage } as any);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/internal-review
+  // Body: { decision, notes }. Inserts a consultation_reviews row, then
+  // routes the stage:
+  //   PASSED      -> COMMITTEE
+  //   NEEDS_NOTES -> DRAFTING
+  //   RESUBMITTED -> DRAFTING
+  // Allowed roles: assigned_lawyer (synthetic) + employee, department_head,
+  // cases_review_head, consultations_review_head, branch_manager. The strict
+  // "actor must be the active review cycle's reviewer" check is deferred —
+  // the codebase has no active-reviewer tracking column yet. TODO: tighten
+  // once that tracking lands (likely a small column add on consultations).
+  app.post("/api/consultations/:id/internal-review", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      if (consultation.currentStage !== ConsultationStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة المراجعة الداخلية" });
+      }
+
+      const baseAllowed = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      if (!baseAllowed.includes(reqUser.role) && !isLawyer) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
+      }
+
+      const review = await storage.createConsultationReview({
+        consultationId: consultation.id,
+        reviewerId: reqUser.id,
+        decision,
+        notes,
+      });
+
+      const nextStage = decision === InternalReviewDecision.PASSED
+        ? ConsultationStage.COMMITTEE
+        : ConsultationStage.DRAFTING;
+
+      const updated = await storage.updateConsultation(consultation.id, { currentStage: nextStage } as any);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث المرحلة" });
+      res.json({ review, consultation: updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/committee-decision
+  // Body: { decision, notes }. Inserts a consultation_committee_decisions
+  // row, then routes the stage:
+  //   APPROVED    -> READY
+  //   NEEDS_NOTES -> TAKING_NOTES
+  // Allowed roles: consultations_review_head, branch_manager.
+  app.post("/api/consultations/:id/committee-decision", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار اللجنة غير صحيح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      if (consultation.currentStage !== ConsultationStage.COMMITTEE) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      const decisionRow = await storage.createConsultationCommitteeDecision({
+        consultationId: consultation.id,
+        decision,
+        notes,
+        decidedBy: reqUser.id,
+      });
+
+      const nextStage = decision === CommitteeDecision.APPROVED
+        ? ConsultationStage.READY
+        : ConsultationStage.TAKING_NOTES;
+
+      const updated = await storage.updateConsultation(consultation.id, { currentStage: nextStage } as any);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث المرحلة" });
+      res.json({ decision: decisionRow, consultation: updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/take-notes-outcome
+  // Body: { outcome, notes }. Inserts a consultation_note_outcomes row.
+  // Per spec §3.2.1, ALL outcomes (DONE | NOT_DONE | PARTIAL) advance to
+  // READY — the outcome distinction is for record only, not for routing.
+  // Allowed roles: assigned_lawyer (synthetic), department_head, branch_manager.
+  app.post("/api/consultations/:id/take-notes-outcome", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const outcome = String(req.body?.outcome || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(NoteOutcome) as string[]).includes(outcome);
+      if (!valid) return res.status(400).json({ error: "نتيجة غير صحيحة" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      if (consultation.currentStage !== ConsultationStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة الأخذ بالملاحظات" });
+      }
+
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      if (!isLawyer && !isHead) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
+      }
+
+      const outcomeRow = await storage.createConsultationNoteOutcome({
+        consultationId: consultation.id,
+        outcome,
+        notes,
+        recordedBy: reqUser.id,
+      });
+
+      const updated = await storage.updateConsultation(consultation.id, { currentStage: ConsultationStage.READY } as any);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث المرحلة" });
+      res.json({ outcome: outcomeRow, consultation: updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/early-close
+  // Body: { reason, otherText? }. Sets status='closed', closedAt=now(),
+  // persists closure_reason (and closure_reason_other when reason='other').
+  // Validation matches the cases early-close pattern: reason required, and
+  // otherText required iff reason === 'other'.
+  // Allowed roles: assigned_lawyer (synthetic), admin_support, department_head,
+  // branch_manager (per spec §3.2.4).
+  app.post("/api/consultations/:id/early-close", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      const adminLike = ["admin_support", "department_head", "branch_manager"];
+      if (!adminLike.includes(reqUser.role) && !isLawyer) {
+        return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
+      }
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const reason = String(req.body?.reason || "");
+      const otherText = String(req.body?.otherText || "");
+      if (!reason) return res.status(400).json({ error: "سبب الإغلاق مطلوب" });
+      const validReasons = Object.values(ConsultationClosureReason) as string[];
+      if (!validReasons.includes(reason)) {
+        return res.status(400).json({ error: "سبب الإغلاق غير صحيح" });
+      }
+      if (reason === ConsultationClosureReason.OTHER && !otherText.trim()) {
+        return res.status(400).json({ error: "يجب توضيح سبب الإغلاق عند اختيار 'أخرى'" });
+      }
+
+      const updated = await storage.updateConsultation(consultation.id, {
+        status: "closed",
+        closureReason: reason,
+        closureReasonOther: otherText.trim() || null,
+        closedAt: new Date(),
+      } as any);
+
+      if (!updated) return res.status(500).json({ error: "فشل إغلاق الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 
