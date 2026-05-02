@@ -68,6 +68,7 @@ import {
   Lock,
   Trash2,
   Pencil,
+  UserCog,
 } from "lucide-react";
 import { useHearings } from "@/lib/hearings-context";
 import { queryClient } from "@/lib/queryClient";
@@ -93,6 +94,15 @@ function getUrgencyColor(hearingDate: string) {
   if (days <= 3) return "bg-orange-500 text-white dark:bg-orange-600";
   if (days <= 7) return "bg-yellow-500 text-white dark:bg-yellow-600";
   return "bg-accent text-accent-foreground";
+}
+
+function isHearingInFuture(hearingDate: string): boolean {
+  if (!hearingDate) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const hd = new Date(hearingDate);
+  hd.setHours(0, 0, 0, 0);
+  return hd.getTime() > today.getTime();
 }
 
 function getStatusBadge(status: HearingStatusValue) {
@@ -148,6 +158,8 @@ export default function HearingsPage() {
   const [filterLawyer, setFilterLawyer] = useState<string>("all");
   const [deletingHearingId, setDeletingHearingId] = useState<string | null>(null);
   const [editDialogHearing, setEditDialogHearing] = useState<Hearing | null>(null);
+  const [reassignDialogHearing, setReassignDialogHearing] = useState<Hearing | null>(null);
+  const [reassignLawyerId, setReassignLawyerId] = useState<string>("");
   const [conflictHearing, setConflictHearing] = useState<Hearing | null>(null);
   const [replaceHearingId, setReplaceHearingId] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState({
@@ -401,6 +413,25 @@ export default function HearingsPage() {
       await updateHearing(editDialogHearing.id, editFormData);
       toast({ title: "تم تعديل الجلسة بنجاح" });
       setEditDialogHearing(null);
+    } catch (e: any) {
+      toast({ title: "خطأ", description: e.message, variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openReassignDialog = (hearing: Hearing) => {
+    setReassignLawyerId(hearing.attendingLawyerId || "");
+    setReassignDialogHearing(hearing);
+  };
+
+  const handleReassign = async () => {
+    if (!reassignDialogHearing || !reassignLawyerId) return;
+    setSubmitting(true);
+    try {
+      await updateHearing(reassignDialogHearing.id, { attendingLawyerId: reassignLawyerId } as any);
+      toast({ title: "تم إسناد الجلسة لمحامي جديد" });
+      setReassignDialogHearing(null);
     } catch (e: any) {
       toast({ title: "خطأ", description: e.message, variant: "destructive" });
     } finally {
@@ -882,6 +913,8 @@ export default function HearingsPage() {
                         user?.role === "branch_manager" ||
                         user?.role === "admin_support" ||
                         user?.role === "department_head";
+                      const canReassignAttendingLawyer = user?.role === "department_head";
+                      const isFutureHearing = isHearingInFuture(hearing.hearingDate);
                       return (
                         <tr key={hearing.id} data-testid={`row-hearing-${hearing.id}`} className="border-b transition-colors hover:bg-muted/50">
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
@@ -967,6 +1000,22 @@ export default function HearingsPage() {
                                   <TooltipContent>تعديل الجلسة</TooltipContent>
                                 </Tooltip>
                               )}
+                              {canReassignAttendingLawyer && hearing.status === HearingStatus.UPCOMING && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      data-testid={`button-reassign-${hearing.id}`}
+                                      onClick={() => openReassignDialog(hearing)}
+                                    >
+                                      <UserCog className="w-4 h-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>إسناد لمحامي</TooltipContent>
+                                </Tooltip>
+                              )}
                               {hearing.status === HearingStatus.UPCOMING && canActOnHearing && (
                                 <>
                                   <Tooltip>
@@ -974,9 +1023,11 @@ export default function HearingsPage() {
                                       <Button
                                         size="icon"
                                         variant="ghost"
-                                        className="h-7 w-7"
+                                        className={`h-7 w-7 ${isFutureHearing ? "opacity-50 cursor-not-allowed" : ""}`}
                                         data-testid={`button-result-${hearing.id}`}
+                                        aria-disabled={isFutureHearing}
                                         onClick={() => {
+                                          if (isFutureHearing) return;
                                           resetResultForm();
                                           setResultDialogHearing(hearing);
                                         }}
@@ -984,7 +1035,7 @@ export default function HearingsPage() {
                                         <Gavel className="w-4 h-4 text-primary" />
                                       </Button>
                                     </TooltipTrigger>
-                                    <TooltipContent>تسجيل النتيجة</TooltipContent>
+                                    <TooltipContent>{isFutureHearing ? "لا يمكن تسجيل النتيجة قبل موعد الجلسة" : "تسجيل النتيجة"}</TooltipContent>
                                   </Tooltip>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
@@ -1465,6 +1516,49 @@ export default function HearingsPage() {
             >
               {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
               حفظ التعديلات
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!reassignDialogHearing} onOpenChange={(open) => !open && setReassignDialogHearing(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserCog className="w-5 h-5" />
+              إسناد لمحامي
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>المحامي المكلف بالحضور</Label>
+              <Select value={reassignLawyerId} onValueChange={setReassignLawyerId}>
+                <SelectTrigger data-testid="select-reassign-lawyer">
+                  <SelectValue placeholder="اختر المحامي" />
+                </SelectTrigger>
+                <SelectContent>
+                  {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-cancel-reassign"
+              onClick={() => setReassignDialogHearing(null)}
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-save-reassign"
+              onClick={handleReassign}
+              disabled={!reassignLawyerId || submitting}
+            >
+              {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
+              حفظ
             </Button>
           </DialogFooter>
         </DialogContent>
