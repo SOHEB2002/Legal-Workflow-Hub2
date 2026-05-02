@@ -2618,6 +2618,77 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/consultations/:id/convert-to-case
+  // Body: { targetCaseStage, caseDepartmentId, ...any other case fields }.
+  // Per spec §3.2.3: single DB transaction. Steps 3-5 (helper-table copies)
+  // are skipped per option (ii) of the Phase 2 plan — the new case carries
+  // convertedFromConsultationId and the consultation row is preserved with
+  // status='converted' so the UI can navigate back for history.
+  // Allowed roles: admin_support, department_head, branch_manager.
+  app.post("/api/consultations/:id/convert-to-case", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتحويل الاستشارة لقضية" });
+      }
+
+      // Pre-validate (storage re-checks inside the transaction for race-safety).
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      if (consultation.currentStage === ConsultationStage.COMPLETED) {
+        return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
+      }
+
+      const { targetCaseStage, caseDepartmentId, ...rest } = req.body || {};
+      if (!targetCaseStage || typeof targetCaseStage !== "string") {
+        return res.status(400).json({ error: "targetCaseStage مطلوب" });
+      }
+      if (!caseDepartmentId || typeof caseDepartmentId !== "string") {
+        return res.status(400).json({ error: "caseDepartmentId مطلوب" });
+      }
+
+      // If a primaryLawyerId / responsibleLawyerId / assigned lawyer is being
+      // copied through, validate it's an active user — same check the case
+      // PATCH endpoint applies.
+      const lawyerIds = [rest.primaryLawyerId, rest.responsibleLawyerId].filter(
+        (v: any): v is string => typeof v === "string" && v.length > 0,
+      );
+      if (lawyerIds.length > 0) {
+        const { valid } = await validateAssignedUsersActive(lawyerIds);
+        if (!valid) return res.status(400).json({ error: "أحد المحامين المختارين غير نشط أو غير موجود" });
+      }
+
+      const caseFields = {
+        ...rest,
+        currentStage: targetCaseStage,
+        departmentId: caseDepartmentId,
+      };
+
+      try {
+        const result = await storage.convertConsultationToCase(consultation.id, caseFields, reqUser.id);
+        res.status(201).json(result);
+      } catch (e: any) {
+        const msg = e?.message || "";
+        if (msg === "CONSULTATION_NOT_FOUND") return res.status(404).json({ error: "الاستشارة غير موجودة" });
+        if (msg === "CONSULTATION_NOT_ACTIVE") return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+        if (msg === "CONSULTATION_COMPLETED") return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
+        if (msg === "CASE_INSERT_FAILED" || msg === "CONSULTATION_UPDATE_FAILED") {
+          // Transaction rolled back — neither row persisted.
+          return res.status(500).json({ error: "فشل التحويل، تم التراجع عن جميع التغييرات" });
+        }
+        throw e;
+      }
+    } catch (error: any) {
+      console.error("[convert-to-case] error:", error);
+      res.status(500).json({ error: error.message || "فشل تحويل الاستشارة" });
+    }
+  });
+
   // ==================== Hearings ====================
 
   app.get("/api/hearings", requireAuth, async (req, res) => {

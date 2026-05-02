@@ -10,7 +10,7 @@ import {
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
-  CaseStatus, CaseStage, CaseClassification,
+  CaseStatus, CaseStage, CaseClassification, ConsultationStage,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
   consultationStudies, consultationDrafts, consultationReviews,
@@ -147,6 +147,13 @@ export interface IStorage {
   createSavedFilter(userId: string, data: InsertSavedFilter): Promise<SavedFilter>;
   updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined>;
   deleteSavedFilter(id: string): Promise<boolean>;
+
+  // Convert consultation to case (rebuild §3.2.3) — single DB transaction.
+  convertConsultationToCase(
+    consultationId: string,
+    caseFields: Partial<LawCase>,
+    actorId: string,
+  ): Promise<{ case: LawCase; consultation: Consultation }>;
 
   // Consultation helper tables (rebuild §3.1.3)
   createConsultationStudy(data: { consultationId: string; notes: string; createdBy: string }): Promise<ConsultationStudy>;
@@ -1508,6 +1515,99 @@ export class DatabaseStorage implements IStorage {
       recordedBy: r.recordedBy,
       recordedAt: toISOString(r.recordedAt),
     }));
+  }
+
+  // ==================== Convert consultation to case (rebuild §3.2.3) ====================
+
+  // Single DB transaction. Helper-table copies (§3.2.3 steps 3-5) are
+  // intentionally skipped per option (ii) of the Phase 2 plan: cases-side
+  // study/draft/review tables don't exist and won't be created. The case
+  // gets a back-pointer via convertedFromConsultationId; the UI reaches
+  // the consultation's history through that link.
+  //
+  // Throws sentinel Error names on validation failure inside the txn so
+  // the route handler can map them to specific 4xx codes:
+  //   CONSULTATION_NOT_FOUND, CONSULTATION_NOT_ACTIVE, CONSULTATION_COMPLETED.
+  async convertConsultationToCase(
+    consultationId: string,
+    caseFields: Partial<LawCase>,
+    actorId: string,
+  ): Promise<{ case: LawCase; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      // 1. Read consultation inside the transaction (re-validate for race-safety)
+      const [existingCon] = await tx.select().from(consultations).where(eq(consultations.id, consultationId));
+      if (!existingCon) throw new Error("CONSULTATION_NOT_FOUND");
+      if (existingCon.status !== "active") throw new Error("CONSULTATION_NOT_ACTIVE");
+      if (existingCon.currentStage === ConsultationStage.COMPLETED) throw new Error("CONSULTATION_COMPLETED");
+
+      // 2. Build and insert the new case row
+      const newCaseId = randomUUID();
+      const caseNumber = caseFields.courtCaseNumber
+        ? caseFields.courtCaseNumber
+        : `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+      const now = new Date();
+
+      const newCaseRow = {
+        id: newCaseId,
+        caseNumber,
+        clientId: caseFields.clientId || existingCon.clientId,
+        caseType: caseFields.caseType || existingCon.consultationType,
+        caseTypeOther: caseFields.caseTypeOther || "",
+        departmentOther: caseFields.departmentOther || "",
+        status: CaseStatus.RECEIVED,
+        currentStage: caseFields.currentStage || CaseStage.RECEPTION,
+        stageHistory: [],
+        departmentId: caseFields.departmentId || existingCon.departmentId,
+        assignedLawyers: [],
+        primaryLawyerId: caseFields.primaryLawyerId || null,
+        responsibleLawyerId: caseFields.responsibleLawyerId || null,
+        courtName: caseFields.courtName || "",
+        courtCaseNumber: caseFields.courtCaseNumber || "",
+        judgeName: caseFields.judgeName || "",
+        circuitNumber: caseFields.circuitNumber || "",
+        plaintiffName: caseFields.plaintiffName || "",
+        opponentName: caseFields.opponentName || "",
+        opponentLawyer: caseFields.opponentLawyer || "",
+        opponentPhone: caseFields.opponentPhone || "",
+        opponentNotes: caseFields.opponentNotes || "",
+        whatsappGroupLink: caseFields.whatsappGroupLink || existingCon.whatsappGroupLink || "",
+        googleDriveFolderId: caseFields.googleDriveFolderId || existingCon.googleDriveFolderId || "",
+        reviewNotes: "",
+        reviewDecision: null,
+        reviewActionTaken: null,
+        priority: caseFields.priority || "متوسط",
+        caseClassification: caseFields.caseClassification || CaseClassification.UNDER_STUDY,
+        clientRole: (caseFields as any).clientRole ?? null,
+        previousHearingsCount: caseFields.previousHearingsCount || 0,
+        currentSituation: caseFields.currentSituation || existingCon.questionSummary || "",
+        responseDeadline: caseFields.responseDeadline || null,
+        convertedFromConsultationId: existingCon.id,
+        createdBy: actorId,
+        createdAt: now,
+        updatedAt: now,
+        closedAt: null,
+      };
+
+      const inserted = await tx.insert(lawCases).values(newCaseRow as any).returning();
+      if (!inserted.length) throw new Error("CASE_INSERT_FAILED");
+
+      // 3. Update consultation to mark conversion (helper-table copies skipped per option ii)
+      const updatedConRows = await tx.update(consultations)
+        .set({
+          status: "converted",
+          convertedToCaseId: newCaseId,
+          closedAt: now,
+          updatedAt: now,
+        } as any)
+        .where(eq(consultations.id, consultationId))
+        .returning();
+      if (!updatedConRows.length) throw new Error("CONSULTATION_UPDATE_FAILED");
+
+      return {
+        case: mapDbCase(newCaseRow),
+        consultation: mapDbConsultation(updatedConRows[0]),
+      };
+    });
   }
 
   // ==================== Case Activity Log ====================
