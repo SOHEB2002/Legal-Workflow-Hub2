@@ -117,6 +117,7 @@ import {
   CasesAdvancedFilters,
   EMPTY_ADV_FILTERS,
   countActiveAdvFilters,
+  getFilterStages,
   type AdvancedCasesFilters,
 } from "@/components/cases-advanced-filters";
 
@@ -684,6 +685,21 @@ export default function CasesPage() {
     });
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, priorityFilter, advFilters, getClientName]);
 
+  const basicAllowedStages = useMemo(() => {
+    const cls = classificationFilter !== "all" ? [classificationFilter] : [];
+    const deptName = deptFilter !== "all"
+      ? departments.find((d) => String(d.id) === deptFilter)?.name
+      : undefined;
+    const deptNames = deptName ? [deptName] : [];
+    return getFilterStages(cls, deptNames);
+  }, [classificationFilter, deptFilter, departments]);
+
+  useEffect(() => {
+    if (statusFilter !== "all" && !basicAllowedStages.includes(statusFilter)) {
+      setStatusFilter("all");
+    }
+  }, [basicAllowedStages, statusFilter]);
+
   const PAGE_SIZE = 15;
   const [casePage, setCasePage] = useState(1);
   useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, priorityFilter, advFilters]);
@@ -835,8 +851,10 @@ export default function CasesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع المراحل</SelectItem>
-                {CaseStagesOrder.map((stage) => (
-                  <SelectItem key={stage} value={stage}>{CaseStageLabels[stage]}</SelectItem>
+                {basicAllowedStages.map((stage) => (
+                  <SelectItem key={stage} value={stage}>
+                    {CaseStageLabels[stage as keyof typeof CaseStageLabels] || stage}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
