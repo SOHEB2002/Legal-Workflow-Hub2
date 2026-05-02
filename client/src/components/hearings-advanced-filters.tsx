@@ -35,14 +35,12 @@ import {
   HearingResult,
   HearingResultLabels,
   HearingType,
-  CourtType,
   CaseClassification,
   CaseClassificationLabels,
 } from "@shared/schema";
 
 export type AdvancedHearingsFilters = {
   hearingTypes: string[];
-  courtTypes: string[];
   results: string[];
   statuses: string[];
   depts: string[];
@@ -55,7 +53,6 @@ export type AdvancedHearingsFilters = {
 
 export const EMPTY_HEARINGS_ADV_FILTERS: AdvancedHearingsFilters = {
   hearingTypes: [],
-  courtTypes: [],
   results: [],
   statuses: [],
   depts: [],
@@ -78,7 +75,6 @@ export const PENDING_MEMO_STATUSES: ReadonlySet<string> = new Set([
 export function countActiveHearingsAdvFilters(f: AdvancedHearingsFilters): number {
   return (
     (f.hearingTypes.length > 0 ? 1 : 0) +
-    (f.courtTypes.length > 0 ? 1 : 0) +
     (f.results.length > 0 ? 1 : 0) +
     (f.statuses.length > 0 ? 1 : 0) +
     (f.depts.length > 0 ? 1 : 0) +
@@ -261,10 +257,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
     () => Object.values(HearingType).map((v) => ({ value: v, label: v.replace(/_/g, " ") })),
     [],
   );
-  const courtTypeOptions = useMemo(
-    () => Object.values(CourtType).map((v) => ({ value: v, label: v })),
-    [],
-  );
   const resultOptions = useMemo(
     () => Object.values(HearingResult).map((v) => ({
       value: v,
@@ -374,7 +366,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
   const describeFilters = (f: AdvancedHearingsFilters): string => {
     const parts: string[] = [];
     if (f.hearingTypes.length) parts.push(`النوع: ${f.hearingTypes.join("، ")}`);
-    if (f.courtTypes.length) parts.push(`المحكمة: ${f.courtTypes.join("، ")}`);
     if (f.results.length)
       parts.push(`النتيجة: ${f.results.map((r) => HearingResultLabels[r as keyof typeof HearingResultLabels] || r).join("، ")}`);
     if (f.statuses.length)
@@ -429,14 +420,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
               placeholder="كل الأنواع"
               searchable={false}
               testIdPrefix="adv-hearing-type"
-            />
-            <MultiSelectCombo
-              label="نوع المحكمة"
-              values={draft.courtTypes}
-              onChange={(v) => setDraft({ ...draft, courtTypes: v })}
-              options={courtTypeOptions}
-              placeholder="كل المحاكم"
-              testIdPrefix="adv-court-type"
             />
             <MultiSelectCombo
               label="النتيجة"

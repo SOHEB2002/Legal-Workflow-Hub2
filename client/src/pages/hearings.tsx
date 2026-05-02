@@ -506,7 +506,6 @@ export default function HearingsPage() {
 
       // Advanced filters (all AND'd; empty arrays / strings = no constraint)
       if (advFilters.hearingTypes.length && !advFilters.hearingTypes.includes(h.hearingType)) return false;
-      if (advFilters.courtTypes.length && !advFilters.courtTypes.includes(h.courtName)) return false;
       if (advFilters.results.length && (!h.result || !advFilters.results.includes(h.result))) return false;
       if (advFilters.statuses.length) {
         const matchesAdvStatus = advFilters.statuses.some((s) =>
