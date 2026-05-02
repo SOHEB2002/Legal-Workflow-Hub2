@@ -19,6 +19,13 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -269,10 +276,13 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
     [],
   );
   const statusOptions = useMemo(
-    () => Object.values(HearingStatus).map((v) => ({
-      value: v,
-      label: HearingStatusLabels[v as keyof typeof HearingStatusLabels] || v,
-    })),
+    () => [
+      { value: "today", label: "اليوم" },
+      ...Object.values(HearingStatus).map((v) => ({
+        value: v,
+        label: HearingStatusLabels[v as keyof typeof HearingStatusLabels] || v,
+      })),
+    ],
     [],
   );
   const deptOptions = useMemo(
@@ -371,7 +381,8 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
     if (f.courtTypes.length) parts.push(`المحكمة: ${f.courtTypes.join("، ")}`);
     if (f.results.length)
       parts.push(`النتيجة: ${f.results.map((r) => HearingResultLabels[r as keyof typeof HearingResultLabels] || r).join("، ")}`);
-    if (f.statuses.length) parts.push(`الحالة: ${f.statuses.join("، ")}`);
+    if (f.statuses.length)
+      parts.push(`الحالة: ${f.statuses.map((s) => (s === "today" ? "اليوم" : s)).join("، ")}`);
     if (f.depts.length) parts.push(`القسم: ${f.depts.map(deptNameById).join("، ")}`);
     if (f.lawyers.length) parts.push(`المترافع: ${f.lawyers.map(userNameById).join("، ")}`);
     if (f.classification)
@@ -476,16 +487,24 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
             />
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">التصنيف</Label>
-              <select
-                className="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                value={draft.classification}
-                onChange={(e) => setDraft({ ...draft, classification: e.target.value })}
-                data-testid="select-adv-hearings-classification"
+              <Select
+                value={draft.classification || "all"}
+                onValueChange={(v) =>
+                  setDraft({ ...draft, classification: v === "all" ? "" : v })
+                }
               >
-                <option value="">كل التصنيفات</option>
-                <option value={CaseClassification.UNDER_STUDY}>قضية قيد الدراسة</option>
-                <option value={CaseClassification.IN_COURT}>منظورة بالمحكمة</option>
-              </select>
+                <SelectTrigger
+                  className="w-full h-9"
+                  data-testid="select-adv-hearings-classification"
+                >
+                  <SelectValue placeholder="كل التصنيفات" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل التصنيفات</SelectItem>
+                  <SelectItem value={CaseClassification.UNDER_STUDY}>قضية قيد الدراسة</SelectItem>
+                  <SelectItem value={CaseClassification.IN_COURT}>منظورة بالمحكمة</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

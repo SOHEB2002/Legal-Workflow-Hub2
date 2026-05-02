@@ -506,7 +506,12 @@ export default function HearingsPage() {
       if (advFilters.hearingTypes.length && !advFilters.hearingTypes.includes(h.hearingType)) return false;
       if (advFilters.courtTypes.length && !advFilters.courtTypes.includes(h.courtName)) return false;
       if (advFilters.results.length && (!h.result || !advFilters.results.includes(h.result))) return false;
-      if (advFilters.statuses.length && !advFilters.statuses.includes(h.status)) return false;
+      if (advFilters.statuses.length) {
+        const matchesAdvStatus = advFilters.statuses.some((s) =>
+          s === "today" ? isToday(new Date(h.hearingDate)) : s === h.status,
+        );
+        if (!matchesAdvStatus) return false;
+      }
       if (advFilters.depts.length) {
         const deptId = getDepartmentForHearing(h);
         if (!deptId || !advFilters.depts.includes(deptId)) return false;
