@@ -260,7 +260,6 @@ export default function CasesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
-  const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [advFilters, setAdvFilters] = useState<AdvancedCasesFilters>(EMPTY_ADV_FILTERS);
 
   // Refresh cases on page mount to pick up changes from other tabs/users
@@ -666,7 +665,6 @@ export default function CasesPage() {
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
         c.caseClassification === classificationFilter;
-      const matchesPriority = priorityFilter === "all" || c.priority === priorityFilter;
       const matchesAdvPriority =
         advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
       const matchesAdvStage =
@@ -685,7 +683,6 @@ export default function CasesPage() {
         matchesStatus &&
         matchesDept &&
         matchesClassification &&
-        matchesPriority &&
         matchesAdvPriority &&
         matchesAdvStage &&
         matchesAdvDept &&
@@ -693,7 +690,7 @@ export default function CasesPage() {
         matchesAdvLawyer
       );
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, priorityFilter, advFilters, getClientName]);
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, advFilters, getClientName]);
 
   const basicAllowedStages = useMemo(() => {
     const cls = classificationFilter !== "all" ? [classificationFilter] : [];
@@ -712,7 +709,7 @@ export default function CasesPage() {
 
   const PAGE_SIZE = 15;
   const [casePage, setCasePage] = useState(1);
-  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, priorityFilter, advFilters]);
+  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, advFilters]);
   const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
   const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
 
@@ -887,17 +884,6 @@ export default function CasesPage() {
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
                 <SelectItem value="قيد_الدراسة">قضية قيد الدراسة</SelectItem>
                 <SelectItem value="منظورة_بالمحكمة">منظورة بالمحكمة</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-              <SelectTrigger className="w-[140px]" data-testid="select-priority-filter">
-                <SelectValue placeholder="الأولوية" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">كل الأولويات</SelectItem>
-                {Object.values(Priority).map((p) => (
-                  <SelectItem key={p} value={p}>{p}</SelectItem>
-                ))}
               </SelectContent>
             </Select>
             <CasesAdvancedFilters
