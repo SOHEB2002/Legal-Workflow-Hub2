@@ -7,9 +7,10 @@ import {
   type CaseCommentRow, type InsertCaseComment,
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
+  type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   CaseStatus, CaseStage, CaseClassification,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
-  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable
+  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
@@ -135,6 +136,13 @@ export interface IStorage {
   createDelegation(data: InsertDelegation): Promise<DelegationRecord>;
   updateDelegation(id: string, data: Partial<DelegationRecord>): Promise<DelegationRecord | undefined>;
   deleteDelegation(id: string): Promise<boolean>;
+
+  // Saved Filters
+  getSavedFiltersByUser(userId: string, pageType: string): Promise<SavedFilter[]>;
+  getSavedFilterById(id: string): Promise<SavedFilter | undefined>;
+  createSavedFilter(userId: string, data: InsertSavedFilter): Promise<SavedFilter>;
+  updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined>;
+  deleteSavedFilter(id: string): Promise<boolean>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -1255,6 +1263,48 @@ export class DatabaseStorage implements IStorage {
       return isNaN(num) ? max : Math.max(max, num);
     }, 0);
     return `TK-${String(maxNum + 1).padStart(4, "0")}`;
+  }
+
+  // ==================== Saved Filters ====================
+
+  async getSavedFiltersByUser(userId: string, pageType: string): Promise<SavedFilter[]> {
+    return await db.select().from(savedFilters)
+      .where(and(eq(savedFilters.userId, userId), eq(savedFilters.pageType, pageType)))
+      .orderBy(desc(savedFilters.createdAt));
+  }
+
+  async getSavedFilterById(id: string): Promise<SavedFilter | undefined> {
+    const [row] = await db.select().from(savedFilters).where(eq(savedFilters.id, id));
+    return row;
+  }
+
+  async createSavedFilter(userId: string, data: InsertSavedFilter): Promise<SavedFilter> {
+    const id = randomUUID();
+    const [row] = await db.insert(savedFilters).values({
+      id,
+      userId,
+      name: data.name,
+      filterConfig: data.filterConfig,
+      pageType: data.pageType || "cases",
+      createdAt: new Date(),
+    } as any).returning();
+    return row;
+  }
+
+  async updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined> {
+    const updates: any = {};
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.filterConfig !== undefined) updates.filterConfig = data.filterConfig;
+    const [row] = await db.update(savedFilters)
+      .set(updates)
+      .where(eq(savedFilters.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteSavedFilter(id: string): Promise<boolean> {
+    const result = await db.delete(savedFilters).where(eq(savedFilters.id, id)).returning();
+    return result.length > 0;
   }
 
   // ==================== Case Activity Log ====================

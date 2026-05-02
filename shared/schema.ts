@@ -358,6 +358,15 @@ export const delegationsTable = pgTable("delegations_table", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const savedFilters = pgTable("saved_filters", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  userId: varchar("user_id", { length: 255 }).notNull(),
+  name: varchar("name", { length: 200 }).notNull(),
+  filterConfig: jsonb("filter_config").notNull(),
+  pageType: varchar("page_type", { length: 50 }).notNull().default("cases"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const supportTickets = pgTable("support_tickets", {
   id: varchar("id", { length: 255 }).primaryKey(),
   ticketNumber: varchar("ticket_number", { length: 50 }).notNull().unique(),
@@ -396,6 +405,7 @@ export const insertCaseNoteDbSchema = createInsertSchema(caseNotes).omit({ creat
 export const insertCaseCommentDbSchema = createInsertSchema(caseComments).omit({ createdAt: true });
 export const insertLegalDeadlineDbSchema = createInsertSchema(legalDeadlines).omit({ createdAt: true });
 export const insertDelegationDbSchema = createInsertSchema(delegationsTable).omit({ createdAt: true });
+export const insertSavedFilterDbSchema = createInsertSchema(savedFilters).omit({ createdAt: true });
 
 // ==================== Select Types ====================
 
@@ -415,6 +425,7 @@ export type DbCaseNote = typeof caseNotes.$inferSelect;
 export type DbCaseComment = typeof caseComments.$inferSelect;
 export type DbLegalDeadline = typeof legalDeadlines.$inferSelect;
 export type DbDelegation = typeof delegationsTable.$inferSelect;
+export type DbSavedFilter = typeof savedFilters.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
 export const UserRole = {
@@ -2161,6 +2172,22 @@ export const insertTicketSchema = z.object({
 
 export type InsertTicket = z.infer<typeof insertTicketSchema>;
 export type SupportTicket = typeof supportTickets.$inferSelect;
+
+// ==================== Saved Filters ====================
+export const insertSavedFilterSchema = z.object({
+  name: z.string().min(1, "اسم الفلتر مطلوب").max(200),
+  filterConfig: z.record(z.any()),
+  pageType: z.string().max(50).default("cases"),
+});
+
+export const updateSavedFilterSchema = z.object({
+  name: z.string().min(1, "اسم الفلتر مطلوب").max(200).optional(),
+  filterConfig: z.record(z.any()).optional(),
+});
+
+export type InsertSavedFilter = z.infer<typeof insertSavedFilterSchema>;
+export type UpdateSavedFilter = z.infer<typeof updateSavedFilterSchema>;
+export type SavedFilter = typeof savedFilters.$inferSelect;
 
 export const insertCaseActivitySchema = z.object({
   caseId: z.string().min(1),
