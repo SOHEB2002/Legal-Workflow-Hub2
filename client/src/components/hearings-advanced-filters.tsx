@@ -41,7 +41,6 @@ import {
 } from "@shared/schema";
 
 export type AdvancedHearingsFilters = {
-  search: string;
   hearingTypes: string[];
   courtTypes: string[];
   results: string[];
@@ -55,7 +54,6 @@ export type AdvancedHearingsFilters = {
 };
 
 export const EMPTY_HEARINGS_ADV_FILTERS: AdvancedHearingsFilters = {
-  search: "",
   hearingTypes: [],
   courtTypes: [],
   results: [],
@@ -79,7 +77,6 @@ export const PENDING_MEMO_STATUSES: ReadonlySet<string> = new Set([
 
 export function countActiveHearingsAdvFilters(f: AdvancedHearingsFilters): number {
   return (
-    (f.search.trim() ? 1 : 0) +
     (f.hearingTypes.length > 0 ? 1 : 0) +
     (f.courtTypes.length > 0 ? 1 : 0) +
     (f.results.length > 0 ? 1 : 0) +
@@ -376,7 +373,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
 
   const describeFilters = (f: AdvancedHearingsFilters): string => {
     const parts: string[] = [];
-    if (f.search) parts.push(`بحث: ${f.search}`);
     if (f.hearingTypes.length) parts.push(`النوع: ${f.hearingTypes.join("، ")}`);
     if (f.courtTypes.length) parts.push(`المحكمة: ${f.courtTypes.join("، ")}`);
     if (f.results.length)
@@ -422,16 +418,6 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
               <X className="h-4 w-4 ml-1" />
               مسح
             </Button>
-          </div>
-
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">بحث (رقم القضية / المدعي / الخصم / المحكمة)</Label>
-            <Input
-              value={draft.search}
-              onChange={(e) => setDraft({ ...draft, search: e.target.value })}
-              placeholder="ابحث..."
-              data-testid="input-hearings-adv-search"
-            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
