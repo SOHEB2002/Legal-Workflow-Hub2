@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
   HearingStatus,
   HearingStatusLabels,
@@ -477,19 +478,19 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">من تاريخ</Label>
-              <Input
-                type="date"
+              <HijriDatePicker
                 value={draft.dateFrom}
-                onChange={(e) => setDraft({ ...draft, dateFrom: e.target.value })}
+                onChange={(v) => setDraft({ ...draft, dateFrom: v })}
+                placeholder="اختر التاريخ"
                 data-testid="input-adv-date-from"
               />
             </div>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">إلى تاريخ</Label>
-              <Input
-                type="date"
+              <HijriDatePicker
                 value={draft.dateTo}
-                onChange={(e) => setDraft({ ...draft, dateTo: e.target.value })}
+                onChange={(v) => setDraft({ ...draft, dateTo: v })}
+                placeholder="اختر التاريخ"
                 data-testid="input-adv-date-to"
               />
             </div>
