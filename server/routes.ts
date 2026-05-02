@@ -2565,6 +2565,15 @@ export async function registerRoutes(
       if (!canActOnHearing((req as any).user, hearing)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
+      if (hearing.hearingDate) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const hd = new Date(hearing.hearingDate);
+        hd.setHours(0, 0, 0, 0);
+        if (hd.getTime() > today.getTime()) {
+          return res.status(403).json({ error: "لا يمكن تسجيل نتيجة الجلسة قبل موعدها" });
+        }
+      }
       if (hearing.status !== HearingStatus.UPCOMING) {
         return res.status(400).json({ error: "لا يمكن تسجيل نتيجة لجلسة غير قادمة" });
       }
