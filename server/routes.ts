@@ -2571,7 +2571,7 @@ export async function registerRoutes(
         const hd = new Date(hearing.hearingDate);
         hd.setHours(0, 0, 0, 0);
         if (hd.getTime() > today.getTime()) {
-          return res.status(403).json({ error: "لا يمكن تسجيل نتيجة الجلسة قبل موعدها" });
+          return res.status(400).json({ error: "لا يمكن تسجيل نتيجة الجلسة قبل موعدها" });
         }
       }
       if (hearing.status !== HearingStatus.UPCOMING) {
