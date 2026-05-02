@@ -109,6 +109,7 @@ export const lawCases = pgTable("law_cases", {
   archiveReason: varchar("archive_reason", { length: 50 }),
   autoArchiveDate: varchar("auto_archive_date", { length: 50 }),
   isSettlementCase: boolean("is_settlement_case").default(false),
+  convertedFromConsultationId: varchar("converted_from_consultation_id", { length: 255 }),
 });
 
 export const consultations = pgTable("consultations", {
@@ -117,7 +118,8 @@ export const consultations = pgTable("consultations", {
   clientId: varchar("client_id", { length: 255 }).notNull(),
   consultationType: varchar("consultation_type", { length: 255 }).notNull(),
   deliveryType: varchar("delivery_type", { length: 50 }).notNull(),
-  status: varchar("status", { length: 50 }).notNull(),
+  currentStage: varchar("current_stage", { length: 50 }).notNull().default("استلام"),
+  status: varchar("status", { length: 20 }).notNull().default("active"),
   departmentId: varchar("department_id", { length: 255 }).notNull(),
   assignedTo: varchar("assigned_to", { length: 255 }),
   questionSummary: text("question_summary").notNull(),
@@ -131,6 +133,49 @@ export const consultations = pgTable("consultations", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   closedAt: timestamp("closed_at"),
+});
+
+export const consultationStudies = pgTable("consultation_studies", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const consultationDrafts = pgTable("consultation_drafts", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  content: text("content").notNull().default(""),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const consultationReviews = pgTable("consultation_reviews", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  reviewerId: varchar("reviewer_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const consultationCommitteeDecisions = pgTable("consultation_committee_decisions", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  decidedBy: varchar("decided_by", { length: 255 }).notNull(),
+  decidedAt: timestamp("decided_at").defaultNow(),
+});
+
+export const consultationNoteOutcomes = pgTable("consultation_note_outcomes", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  outcome: varchar("outcome", { length: 20 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
+  recordedAt: timestamp("recorded_at").defaultNow(),
 });
 
 export const hearings = pgTable("hearings", {
@@ -405,6 +450,11 @@ export const insertCaseNoteDbSchema = createInsertSchema(caseNotes).omit({ creat
 export const insertCaseCommentDbSchema = createInsertSchema(caseComments).omit({ createdAt: true });
 export const insertLegalDeadlineDbSchema = createInsertSchema(legalDeadlines).omit({ createdAt: true });
 export const insertDelegationDbSchema = createInsertSchema(delegationsTable).omit({ createdAt: true });
+export const insertConsultationStudyDbSchema = createInsertSchema(consultationStudies).omit({ createdAt: true });
+export const insertConsultationDraftDbSchema = createInsertSchema(consultationDrafts).omit({ createdAt: true });
+export const insertConsultationReviewDbSchema = createInsertSchema(consultationReviews).omit({ createdAt: true });
+export const insertConsultationCommitteeDecisionDbSchema = createInsertSchema(consultationCommitteeDecisions).omit({ decidedAt: true });
+export const insertConsultationNoteOutcomeDbSchema = createInsertSchema(consultationNoteOutcomes).omit({ recordedAt: true });
 export const insertSavedFilterDbSchema = createInsertSchema(savedFilters).omit({ createdAt: true });
 
 // ==================== Select Types ====================
@@ -425,6 +475,11 @@ export type DbCaseNote = typeof caseNotes.$inferSelect;
 export type DbCaseComment = typeof caseComments.$inferSelect;
 export type DbLegalDeadline = typeof legalDeadlines.$inferSelect;
 export type DbDelegation = typeof delegationsTable.$inferSelect;
+export type DbConsultationStudy = typeof consultationStudies.$inferSelect;
+export type DbConsultationDraft = typeof consultationDrafts.$inferSelect;
+export type DbConsultationReview = typeof consultationReviews.$inferSelect;
+export type DbConsultationCommitteeDecision = typeof consultationCommitteeDecisions.$inferSelect;
+export type DbConsultationNoteOutcome = typeof consultationNoteOutcomes.$inferSelect;
 export type DbSavedFilter = typeof savedFilters.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
@@ -887,29 +942,55 @@ export const ClientType = {
 
 export type ClientTypeValue = typeof ClientType[keyof typeof ClientType];
 
-// ==================== حالات الاستشارات ====================
-export const ConsultationStatus = {
+// ==================== Consultation Stage (rebuild per consultations-rebuild-spec.md §3.1.1) ====================
+export const ConsultationStage = {
   RECEIVED: "استلام",
   STUDY: "دراسة",
-  PREPARING_RESPONSE: "إعداد_الرد",
-  REVIEW_COMMITTEE: "لجنة_المراجعة",
-  AMENDMENTS: "تعديلات",
-  READY: "جاهز",
-  DELIVERED: "مسلّم",
-  CLOSED: "مغلق",
+  DRAFTING: "تحرير",
+  INTERNAL_REVIEW: "مراجعة_داخلية",
+  COMMITTEE: "لجنة_مراجعة",
+  TAKING_NOTES: "الأخذ_بالملاحظات",
+  READY: "جاهزة_للتسليم",
+  COMPLETED: "منجزة",
+} as const;
+
+export type ConsultationStageValue = typeof ConsultationStage[keyof typeof ConsultationStage];
+
+export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
+  "استلام": "استلام",
+  "دراسة": "دراسة",
+  "تحرير": "تحرير",
+  "مراجعة_داخلية": "مراجعة داخلية",
+  "لجنة_مراجعة": "لجنة مراجعة",
+  "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
+  "جاهزة_للتسليم": "جاهزة للتسليم",
+  "منجزة": "منجزة",
+};
+
+// Linear happy-path order (excludes TAKING_NOTES, which is conditional).
+export const ConsultationStagesOrder: ConsultationStageValue[] = [
+  "استلام",
+  "دراسة",
+  "تحرير",
+  "مراجعة_داخلية",
+  "لجنة_مراجعة",
+  "جاهزة_للتسليم",
+  "منجزة",
+];
+
+// ==================== Consultation Status (per consultations-rebuild-spec.md §3.1.2) ====================
+export const ConsultationStatus = {
+  ACTIVE: "active",
+  CONVERTED: "converted",
+  CLOSED: "closed",
 } as const;
 
 export type ConsultationStatusValue = typeof ConsultationStatus[keyof typeof ConsultationStatus];
 
 export const ConsultationStatusLabels: Record<ConsultationStatusValue, string> = {
-  "استلام": "استلام",
-  "دراسة": "دراسة",
-  "إعداد_الرد": "إعداد الرد",
-  "لجنة_المراجعة": "لجنة المراجعة",
-  "تعديلات": "تعديلات",
-  "جاهز": "جاهز",
-  "مسلّم": "مسلّم",
-  "مغلق": "مغلق",
+  active: "active",
+  converted: "converted",
+  closed: "closed",
 };
 
 // ==================== نوع تسليم الاستشارة ====================
@@ -1217,6 +1298,7 @@ export interface LawCase {
   archiveReason: string | null;
   autoArchiveDate: string | null;
   isSettlementCase: boolean;
+  convertedFromConsultationId: string | null;
   closureReason: string | null;
   closureReasonOther: string | null;
   createdBy: string;
@@ -1240,6 +1322,7 @@ export interface Consultation {
   clientId: string;
   consultationType: CaseTypeValue;
   deliveryType: DeliveryTypeValue;
+  currentStage: ConsultationStageValue;
   status: ConsultationStatusValue;
   departmentId: string;
   assignedTo: string | null;
@@ -2422,43 +2505,6 @@ export const WorkflowCaseStagesOrder: WorkflowCaseStageValue[] = [
   "submitted_to_court",
 ];
 
-export const ConsultationStage = {
-  RECEIVED: "received",
-  ASSIGNED_TO_DEPARTMENT: "assigned_to_department",
-  DRAFTING: "drafting",
-  IN_REVIEW: "in_review",
-  REVIEW_NOTES_RECEIVED: "review_notes_received",
-  PROCESSING_NOTES: "processing_notes",
-  RETURNED_FOR_REVISION: "returned_for_revision",
-  READY_TO_SEND: "ready_to_send",
-  SENT_TO_CLIENT: "sent_to_client",
-} as const;
-
-export type ConsultationStageValue = typeof ConsultationStage[keyof typeof ConsultationStage];
-
-export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
-  received: "استلام من العميل",
-  assigned_to_department: "محالة للقسم",
-  drafting: "تحرير الاستشارة",
-  in_review: "لدى لجنة المراجعة",
-  review_notes_received: "استلام ملاحظات المراجعة",
-  processing_notes: "معالجة الملاحظات",
-  returned_for_revision: "مُرجعة للتعديل",
-  ready_to_send: "جاهزة للإرسال",
-  sent_to_client: "مرسلة للعميل",
-};
-
-export const ConsultationStagesOrder: ConsultationStageValue[] = [
-  "received",
-  "assigned_to_department",
-  "drafting",
-  "in_review",
-  "review_notes_received",
-  "processing_notes",
-  "returned_for_revision",
-  "ready_to_send",
-  "sent_to_client",
-];
 
 export const ReviewNoteAction = {
   FULLY_ACCEPTED: "fully_accepted",
@@ -2479,7 +2525,7 @@ export const ReviewNoteActionLabels: Record<ReviewNoteActionValue, string> = {
 // ==================== Workflow Interfaces ====================
 
 export interface StageSLA {
-  stage: WorkflowCaseStageValue | ConsultationStageValue;
+  stage: WorkflowCaseStageValue;
   maxDurationHours: number;
   warningBeforeHours: number;
 }
@@ -2488,8 +2534,8 @@ export interface StageTransition {
   id: string;
   entityType: "case" | "consultation";
   entityId: string;
-  fromStage: WorkflowCaseStageValue | ConsultationStageValue | null;
-  toStage: WorkflowCaseStageValue | ConsultationStageValue;
+  fromStage: WorkflowCaseStageValue | null;
+  toStage: WorkflowCaseStageValue;
   performedBy: string;
   performedByRole: string;
   notes: string;
@@ -2535,13 +2581,11 @@ export const DefaultSLASettings: StageSLA[] = [
   { stage: "under_study", maxDurationHours: 72, warningBeforeHours: 12 },
   { stage: "drafting_lawsuit", maxDurationHours: 48, warningBeforeHours: 8 },
   { stage: "drafting_response", maxDurationHours: 48, warningBeforeHours: 8 },
-  { stage: "drafting", maxDurationHours: 48, warningBeforeHours: 8 },
   { stage: "in_review", maxDurationHours: 24, warningBeforeHours: 4 },
   { stage: "review_notes_received", maxDurationHours: 4, warningBeforeHours: 1 },
   { stage: "processing_notes", maxDurationHours: 24, warningBeforeHours: 4 },
   { stage: "returned_for_revision", maxDurationHours: 24, warningBeforeHours: 4 },
   { stage: "ready_to_submit", maxDurationHours: 4, warningBeforeHours: 1 },
-  { stage: "ready_to_send", maxDurationHours: 4, warningBeforeHours: 1 },
 ];
 
 // ==================== User Management System ====================
