@@ -393,7 +393,21 @@ export default function MemosPage() {
       const relatedCase = cases.find(c => c.id === m.caseId);
       if (filterDept !== "all" && !(relatedCase && relatedCase.departmentId === filterDept)) return false;
       if (filterPriority !== "all" && m.priority !== filterPriority) return false;
-      if (q && !m.title.toLowerCase().includes(q)) return false;
+      if (q) {
+        const clientName = relatedCase ? getClientName(relatedCase.clientId) : "";
+        const hay = [
+          m.title,
+          relatedCase?.caseNumber,
+          relatedCase?.courtCaseNumber,
+          (relatedCase as any)?.plaintiffName,
+          relatedCase?.opponentName,
+          clientName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
 
       // Advanced filters (empty = no constraint, all AND'd)
       if (advFilters.memoTypes.length && !advFilters.memoTypes.includes(m.memoType)) return false;
@@ -467,7 +481,7 @@ export default function MemosPage() {
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 data-testid="input-search"
-                placeholder="بحث بالعنوان..."
+                placeholder="بحث بالعنوان أو رقم القضية أو اسم العميل..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pr-10"
@@ -547,11 +561,17 @@ export default function MemosPage() {
                     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
                     .map((memo) => {
                       const caseDetails = getCaseDetails(memo.caseId);
+                      const relatedCaseForRow = cases.find((c) => c.id === memo.caseId);
                       return (
                       <TableRow key={memo.id} data-testid={`row-memo-${memo.id}`}>
                         <TableCell className="text-center">
                           <div className="flex flex-col items-center text-center w-full">
                             <p className="font-medium text-sm text-center w-full">{memo.title}</p>
+                            {relatedCaseForRow && (
+                              <p className="text-xs text-muted-foreground text-center mt-0.5">
+                                قضية رقم <LtrInline>{relatedCaseForRow.caseNumber}</LtrInline>
+                              </p>
+                            )}
                             <Badge variant="outline" className="mt-1">
                               {memo.memoType === "أخرى" ? (memo.memoTypeOther || "أخرى") : MemoTypeLabels[memo.memoType]}
                             </Badge>
