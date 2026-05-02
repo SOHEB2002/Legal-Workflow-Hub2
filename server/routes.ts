@@ -30,6 +30,8 @@ import {
   insertTicketSchema,
   canManageSupportTickets,
   insertLegalDeadlineSchema,
+  insertSavedFilterSchema,
+  updateSavedFilterSchema,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -3791,6 +3793,66 @@ export async function registerRoutes(
       }
       const success = await storage.deleteSupportTicket(String(req.params.id));
       if (!success) return res.status(404).json({ error: "التذكرة غير موجودة" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ==================== Saved Filters ====================
+
+  app.get("/api/saved-filters", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const pageType = String(req.query.pageType || "cases");
+      const rows = await storage.getSavedFiltersByUser(reqUser.id, pageType);
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/saved-filters", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const data = insertSavedFilterSchema.parse(req.body);
+      const row = await storage.createSavedFilter(reqUser.id, data);
+      res.json(row);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.patch("/api/saved-filters/:id", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const existing = await storage.getSavedFilterById(String(req.params.id));
+      if (!existing) return res.status(404).json({ error: "الفلتر غير موجود" });
+      if (existing.userId !== reqUser.id) {
+        return res.status(403).json({ error: "غير مصرح بتعديل هذا الفلتر" });
+      }
+      const data = updateSavedFilterSchema.parse(req.body);
+      const row = await storage.updateSavedFilter(String(req.params.id), data);
+      res.json(row);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/saved-filters/:id", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const existing = await storage.getSavedFilterById(String(req.params.id));
+      if (!existing) return res.status(404).json({ error: "الفلتر غير موجود" });
+      if (existing.userId !== reqUser.id) {
+        return res.status(403).json({ error: "غير مصرح بحذف هذا الفلتر" });
+      }
+      const success = await storage.deleteSavedFilter(String(req.params.id));
+      if (!success) return res.status(404).json({ error: "الفلتر غير موجود" });
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

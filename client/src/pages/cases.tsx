@@ -113,6 +113,12 @@ import { useMemos } from "@/lib/memos-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
+import {
+  CasesAdvancedFilters,
+  EMPTY_ADV_FILTERS,
+  countActiveAdvFilters,
+  type AdvancedCasesFilters,
+} from "@/components/cases-advanced-filters";
 
 function getStageColor(stage: CaseStageValue | string) {
   switch (stage) {
@@ -243,6 +249,8 @@ export default function CasesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
+  const [priorityFilter, setPriorityFilter] = useState<string>("all");
+  const [advFilters, setAdvFilters] = useState<AdvancedCasesFilters>(EMPTY_ADV_FILTERS);
 
   // Refresh cases on page mount to pick up changes from other tabs/users
   useEffect(() => {
@@ -647,13 +655,38 @@ export default function CasesPage() {
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
         c.caseClassification === classificationFilter;
-      return matchesSearch && matchesStatus && matchesDept && matchesClassification;
+      const matchesPriority = priorityFilter === "all" || c.priority === priorityFilter;
+      const matchesAdvPriority =
+        advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
+      const matchesAdvStage =
+        advFilters.stages.length === 0 || advFilters.stages.includes(c.currentStage as string);
+      const matchesAdvDept =
+        advFilters.depts.length === 0 || advFilters.depts.includes(c.departmentId);
+      const matchesAdvClassification =
+        advFilters.classifications.length === 0 ||
+        advFilters.classifications.includes(c.caseClassification as string);
+      const matchesAdvLawyer =
+        advFilters.lawyers.length === 0 ||
+        (c.responsibleLawyerId && advFilters.lawyers.includes(c.responsibleLawyerId)) ||
+        (c.primaryLawyerId && advFilters.lawyers.includes(c.primaryLawyerId));
+      return (
+        matchesSearch &&
+        matchesStatus &&
+        matchesDept &&
+        matchesClassification &&
+        matchesPriority &&
+        matchesAdvPriority &&
+        matchesAdvStage &&
+        matchesAdvDept &&
+        matchesAdvClassification &&
+        matchesAdvLawyer
+      );
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, getClientName]);
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, priorityFilter, advFilters, getClientName]);
 
   const PAGE_SIZE = 15;
   const [casePage, setCasePage] = useState(1);
-  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter]);
+  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, priorityFilter, advFilters]);
   const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
   const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
 
@@ -828,6 +861,23 @@ export default function CasesPage() {
                 <SelectItem value="منظورة_بالمحكمة">منظورة بالمحكمة</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+              <SelectTrigger className="w-[140px]" data-testid="select-priority-filter">
+                <SelectValue placeholder="الأولوية" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الأولويات</SelectItem>
+                {Object.values(Priority).map((p) => (
+                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <CasesAdvancedFilters
+              filters={advFilters}
+              onChange={setAdvFilters}
+              departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
+              lawyers={lawyers.map((l) => ({ id: l.id, name: l.name }))}
+            />
           </div>
         </CardHeader>
         <CardContent>

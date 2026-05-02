@@ -42,8 +42,8 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
-import { UserRoleLabels, UserStatusLabels, VacationStatusLabels, DelegationTypeLabels } from "@shared/schema";
-import type { UserRoleType, UserStatusValue, VacationStatusValue, DelegationTypeValue } from "@shared/schema";
+import { UserRoleLabels, UserStatusLabels, VacationStatusLabels, DelegationTypeLabels, CaseStageLabels } from "@shared/schema";
+import type { UserRoleType, UserStatusValue, VacationStatusValue, DelegationTypeValue, CaseStageValue } from "@shared/schema";
 import { VacationDialog } from "@/components/users/vacation-dialog";
 import { DelegationDialog } from "@/components/users/delegation-dialog";
 
@@ -301,7 +301,7 @@ export default function UserProfilePage() {
                       <TableCell className="font-medium">{c.caseNumber}</TableCell>
                       <TableCell>{c.caseType}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{c.currentStage}</Badge>
+                        <Badge variant="outline">{CaseStageLabels[c.currentStage as CaseStageValue] || c.currentStage}</Badge>
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">{c.priority}</Badge>
