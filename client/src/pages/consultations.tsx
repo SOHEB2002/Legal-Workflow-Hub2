@@ -45,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Search, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -53,7 +53,16 @@ import { useClients } from "@/lib/clients-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
-import type { Consultation, ConsultationStatusValue, ConsultationStageValue, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
+import type {
+  Consultation,
+  ConsultationStatusValue,
+  ConsultationStageValue,
+  CaseTypeValue,
+  DeliveryTypeValue,
+  InternalReviewDecisionValue,
+  CommitteeDecisionValue,
+  NoteOutcomeValue,
+} from "@shared/schema";
 import {
   ConsultationStatus,
   ConsultationStatusLabels,
@@ -61,11 +70,12 @@ import {
   ConsultationStageLabels,
   ConsultationStagesAll,
   ConsultationStagesOrder,
+  InternalReviewDecision,
+  CommitteeDecision,
+  NoteOutcome,
   DeliveryType,
   Department,
 } from "@shared/schema";
-import { useStandards } from "@/lib/standards-context";
-import { ReviewChecklist } from "@/components/review-checklist";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
 import { DialogFooter } from "@/components/ui/dialog";
 import { apiRequest } from "@/lib/queryClient";
@@ -125,6 +135,54 @@ function getReturnTargets(
   return [];
 }
 
+// Mirrors the role gate on POST /api/consultations/:id/internal-review.
+// The endpoint accepts assigned_lawyer (synthetic) plus a base set of
+// lawyer-class roles. Department head is additionally scoped to their
+// own department here, which the endpoint also enforces via
+// validateStageTransition.
+function canDoInternalReview(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.status !== "active") return false;
+  if (consultation.currentStage !== ConsultationStage.INTERNAL_REVIEW) return false;
+  if (userRole === "department_head" && consultation.departmentId !== userDeptId) return false;
+  const baseRoles = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
+  if (baseRoles.includes(userRole)) return true;
+  return !!consultation.assignedTo && consultation.assignedTo === userId;
+}
+
+// Mirrors the role gate on POST /api/consultations/:id/committee-decision.
+// Committee outcomes are restricted to the consultations review head and
+// the branch manager — narrower than internal-review by design.
+function canDoCommitteeDecision(
+  consultation: Consultation,
+  userRole: string,
+): boolean {
+  if (consultation.status !== "active") return false;
+  if (consultation.currentStage !== ConsultationStage.COMMITTEE) return false;
+  return userRole === "consultations_review_head" || userRole === "branch_manager";
+}
+
+// Mirrors the role gate on POST /api/consultations/:id/take-notes-outcome.
+// Recording the outcome is the assigned lawyer's job; dept_head and
+// branch_manager can also record on their behalf. Dept-scope check
+// applied for dept_head.
+function canDoTakeNotesOutcome(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.status !== "active") return false;
+  if (consultation.currentStage !== ConsultationStage.TAKING_NOTES) return false;
+  if (userRole === "department_head" && consultation.departmentId !== userDeptId) return false;
+  if (userRole === "department_head" || userRole === "branch_manager") return true;
+  return !!consultation.assignedTo && consultation.assignedTo === userId;
+}
+
 function extractApiError(err: unknown): string {
   const msg = (err as any)?.message || "";
   // format from throwIfResNotOk: "400: {"error":"..."}"
@@ -164,12 +222,6 @@ export default function ConsultationsPage() {
     consultations,
     addConsultation,
     updateConsultation,
-    assignConsultation,
-    sendToReviewCommittee,
-    approveConsultation,
-    rejectConsultation,
-    markDelivered,
-    closeConsultation,
     deleteConsultation,
     refreshConsultations,
   } = useConsultations();
@@ -177,17 +229,13 @@ export default function ConsultationsPage() {
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users } = useAuth();
   const { addRecentVisit } = useFavorites();
-  const { getStandardsByType } = useStandards();
   const { toast } = useToast();
   const lawyers = users.filter(u => u.canBeAssignedConsultations);
-  const consultationReviewStandards = getStandardsByType("legal_consultation");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
-  const [showReviewDialog, setShowReviewDialog] = useState(false);
-  const [consultationToReview, setConsultationToReview] = useState<Consultation | null>(null);
 
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [assignConsultationId, setAssignConsultationId] = useState<string | null>(null);
@@ -210,9 +258,18 @@ export default function ConsultationsPage() {
   });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [consultationToDelete, setConsultationToDelete] = useState<Consultation | null>(null);
-  const [showConsultRejectDialog, setShowConsultRejectDialog] = useState(false);
-  const [consultRejectNotes, setConsultRejectNotes] = useState("");
-  const [consultationToReject, setConsultationToReject] = useState<Consultation | null>(null);
+
+  const [showInternalReviewDialog, setShowInternalReviewDialog] = useState(false);
+  const [internalReviewConsultation, setInternalReviewConsultation] = useState<Consultation | null>(null);
+  const [internalReviewNotes, setInternalReviewNotes] = useState("");
+
+  const [showCommitteeDialog, setShowCommitteeDialog] = useState(false);
+  const [committeeConsultation, setCommitteeConsultation] = useState<Consultation | null>(null);
+  const [committeeNotes, setCommitteeNotes] = useState("");
+
+  const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
+  const [takeNotesConsultation, setTakeNotesConsultation] = useState<Consultation | null>(null);
+  const [takeNotesNotes, setTakeNotesNotes] = useState("");
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -236,13 +293,102 @@ export default function ConsultationsPage() {
     setReminderConsultation(null);
   };
 
-  const handleConsultReject = () => {
-    if (!consultationToReject) return;
-    rejectConsultation(consultationToReject.id, consultRejectNotes || "تم إضافة ملاحظات من لجنة المراجعة", user?.role);
-    toast({ title: "تم إرسال الاستشارة للأخذ بالملاحظات" });
-    setShowConsultRejectDialog(false);
-    setConsultationToReject(null);
-    setConsultRejectNotes("");
+  const openInternalReviewDialog = (c: Consultation) => {
+    setInternalReviewConsultation(c);
+    setInternalReviewNotes("");
+    setShowInternalReviewDialog(true);
+  };
+
+  const closeInternalReviewDialog = () => {
+    setShowInternalReviewDialog(false);
+    setInternalReviewConsultation(null);
+    setInternalReviewNotes("");
+  };
+
+  const handleInternalReview = async (decision: InternalReviewDecisionValue) => {
+    if (!internalReviewConsultation) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${internalReviewConsultation.id}/internal-review`, {
+        decision,
+        notes: internalReviewNotes,
+      });
+      await refreshConsultations();
+      const msg = decision === InternalReviewDecision.PASSED
+        ? "تمت المراجعة الداخلية — أُحيلت للجنة"
+        : "تم تسجيل ملاحظات المراجعة الداخلية";
+      toast({ title: msg });
+      closeInternalReviewDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل المراجعة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const openCommitteeDialog = (c: Consultation) => {
+    setCommitteeConsultation(c);
+    setCommitteeNotes("");
+    setShowCommitteeDialog(true);
+  };
+
+  const closeCommitteeDialog = () => {
+    setShowCommitteeDialog(false);
+    setCommitteeConsultation(null);
+    setCommitteeNotes("");
+  };
+
+  const handleCommitteeDecision = async (decision: CommitteeDecisionValue) => {
+    if (!committeeConsultation) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${committeeConsultation.id}/committee-decision`, {
+        decision,
+        notes: committeeNotes,
+      });
+      await refreshConsultations();
+      const msg = decision === CommitteeDecision.APPROVED
+        ? "تم اعتماد الاستشارة — جاهزة للتسليم"
+        : "تم إرسال الاستشارة للأخذ بالملاحظات";
+      toast({ title: msg });
+      closeCommitteeDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل قرار اللجنة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const openTakeNotesDialog = (c: Consultation) => {
+    setTakeNotesConsultation(c);
+    setTakeNotesNotes("");
+    setShowTakeNotesDialog(true);
+  };
+
+  const closeTakeNotesDialog = () => {
+    setShowTakeNotesDialog(false);
+    setTakeNotesConsultation(null);
+    setTakeNotesNotes("");
+  };
+
+  const handleTakeNotesOutcome = async (outcome: NoteOutcomeValue) => {
+    if (!takeNotesConsultation) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${takeNotesConsultation.id}/take-notes-outcome`, {
+        outcome,
+        notes: takeNotesNotes,
+      });
+      await refreshConsultations();
+      // All outcomes advance to READY per spec — outcome distinction
+      // is recorded but not reflected in routing.
+      toast({ title: "تم تسجيل النتيجة — الاستشارة جاهزة للتسليم" });
+      closeTakeNotesDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل النتيجة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
   };
 
   const consultationLawyers = users.filter(u => u.canBeAssignedConsultations);
@@ -374,11 +520,6 @@ export default function ConsultationsPage() {
     } finally {
       setActionInProgress(false);
     }
-  };
-
-  const handleSendToReview = (consultation: Consultation) => {
-    sendToReviewCommittee(consultation.id);
-    toast({ title: "تم إرسال الاستشارة للمراجعة" });
   };
 
   const handleDeleteConsultation = async () => {
@@ -631,45 +772,31 @@ export default function ConsultationsPage() {
                               المرحلة السابقة
                             </DropdownMenuItem>
                           )}
-                          {(consultation.status === ConsultationStatus.STUDY ||
-                            consultation.status === ConsultationStatus.PREPARING_RESPONSE ||
-                            consultation.status === ConsultationStatus.AMENDMENTS) &&
-                            (permissions.canManageDepartment || consultation.assignedTo === user?.id) && (
-                            <DropdownMenuItem data-testid={`button-send-review-${consultation.id}`} onClick={() => handleSendToReview(consultation)}>
-                              <Send className="w-4 h-4 ml-2" />
-                              إرسال للمراجعة
+                          {user && canDoInternalReview(consultation, user.role, user.id, user.departmentId) && (
+                            <DropdownMenuItem
+                              data-testid={`button-internal-review-${consultation.id}`}
+                              onClick={() => openInternalReviewDialog(consultation)}
+                            >
+                              <ClipboardCheck className="w-4 h-4 ml-2" />
+                              المراجعة الداخلية
                             </DropdownMenuItem>
                           )}
-                          {consultation.status === ConsultationStatus.REVIEW_COMMITTEE &&
-                            permissions.canReviewConsultations && (
-                              <>
-                                <DropdownMenuItem data-testid={`button-review-checklist-${consultation.id}`} onClick={() => { setConsultationToReview(consultation); setShowReviewDialog(true); }}>
-                                  <ClipboardCheck className="w-4 h-4 ml-2" />
-                                  قائمة المراجعة
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  data-testid={`button-reject-${consultation.id}`}
-                                  onClick={() => { setConsultationToReject(consultation); setConsultRejectNotes(""); setShowConsultRejectDialog(true); }}
-                                  className="text-amber-700 focus:text-amber-700"
-                                >
-                                  <MessageSquare className="w-4 h-4 ml-2 text-amber-600" />
-                                  تم إضافة ملاحظات
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  data-testid={`button-approve-${consultation.id}`}
-                                  onClick={() => { approveConsultation(consultation.id, undefined, user?.role); toast({ title: "تم اعتماد الاستشارة — جاهزة للرفع" }); }}
-                                  className="text-green-700 focus:text-green-700"
-                                >
-                                  <CheckCircle className="w-4 h-4 ml-2 text-green-600" />
-                                  لا يوجد ملاحظات
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          {consultation.status === ConsultationStatus.READY && permissions.canCloseCases && (
-                            <DropdownMenuItem data-testid={`button-deliver-${consultation.id}`} onClick={() => markDelivered(consultation.id)}>
+                          {user && canDoCommitteeDecision(consultation, user.role) && (
+                            <DropdownMenuItem
+                              data-testid={`button-committee-decision-${consultation.id}`}
+                              onClick={() => openCommitteeDialog(consultation)}
+                            >
+                              <CheckCircle className="w-4 h-4 ml-2" />
+                              قرار اللجنة
+                            </DropdownMenuItem>
+                          )}
+                          {user && canDoTakeNotesOutcome(consultation, user.role, user.id, user.departmentId) && (
+                            <DropdownMenuItem
+                              data-testid={`button-take-notes-outcome-${consultation.id}`}
+                              onClick={() => openTakeNotesDialog(consultation)}
+                            >
                               <FileText className="w-4 h-4 ml-2" />
-                              تسليم الاستشارة
+                              تسجيل نتيجة الأخذ بالملاحظات
                             </DropdownMenuItem>
                           )}
                           {isDeptHead && consultation.departmentId === user?.departmentId && (
@@ -762,39 +889,6 @@ export default function ConsultationsPage() {
                   </p>
                 </div>
               )}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ClipboardCheck className="w-5 h-5" />
-              <span>مراجعة الاستشارة:</span>
-              <LtrInline>{consultationToReview?.consultationNumber}</LtrInline>
-            </DialogTitle>
-          </DialogHeader>
-          {consultationToReview && consultationReviewStandards.length > 0 && (
-            <ReviewChecklist
-              standardId={consultationReviewStandards[0].id}
-              targetId={consultationToReview.id}
-              targetType="consultation"
-              onSave={() => {
-                setShowReviewDialog(false);
-                setConsultationToReview(null);
-                toast({ title: "تم حفظ نتيجة المراجعة" });
-              }}
-              onClose={() => {
-                setShowReviewDialog(false);
-                setConsultationToReview(null);
-              }}
-            />
-          )}
-          {consultationReviewStandards.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">
-              لا توجد معايير مراجعة متاحة. يرجى إضافة معايير من صفحة معايير المراجعة.
             </div>
           )}
         </DialogContent>
@@ -1058,32 +1152,182 @@ export default function ConsultationsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showConsultRejectDialog} onOpenChange={setShowConsultRejectDialog}>
+      <Dialog
+        open={showInternalReviewDialog}
+        onOpenChange={(open) => { if (!open) closeInternalReviewDialog(); }}
+      >
         <DialogContent dir="rtl">
           <DialogHeader>
-            <DialogTitle>تم إضافة ملاحظات — الأخذ بملاحظات اللجنة</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5" />
+              المراجعة الداخلية
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">سيتم إرسال الاستشارة لمرحلة الأخذ بالملاحظات. يمكنك إضافة ملاحظات توضيحية اختيارية.</p>
+            <p className="text-sm text-muted-foreground">
+              اختر نتيجة المراجعة. <strong>تم</strong> ينقل الاستشارة إلى لجنة المراجعة،
+              و<strong>يوجد ملاحظات</strong> أو <strong>تم إعادة التقديم</strong> يعيدانها إلى مرحلة التحرير.
+            </p>
+            <div>
+              <Label>الملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-internal-review-notes"
+                value={internalReviewNotes}
+                onChange={(e) => setInternalReviewNotes(e.target.value)}
+                placeholder="ملاحظات المراجع الداخلي..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeInternalReviewDialog}
+              data-testid="button-cancel-internal-review"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-internal-review-resubmitted"
+              onClick={() => handleInternalReview(InternalReviewDecision.RESUBMITTED)}
+              disabled={actionInProgress}
+              variant="outline"
+            >
+              تم إعادة التقديم
+            </Button>
+            <Button
+              data-testid="button-internal-review-needs-notes"
+              onClick={() => handleInternalReview(InternalReviewDecision.NEEDS_NOTES)}
+              disabled={actionInProgress}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              يوجد ملاحظات
+            </Button>
+            <Button
+              data-testid="button-internal-review-passed"
+              onClick={() => handleInternalReview(InternalReviewDecision.PASSED)}
+              disabled={actionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              تم
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showCommitteeDialog}
+        onOpenChange={(open) => { if (!open) closeCommitteeDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5" />
+              قرار لجنة المراجعة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              <strong>اعتماد</strong> ينقل الاستشارة إلى مرحلة "جاهزة للتسليم"،
+              و<strong>يوجد ملاحظات</strong> ينقلها إلى "الأخذ بالملاحظات".
+            </p>
             <div>
               <Label>ملاحظات اللجنة (اختياري)</Label>
               <Textarea
-                data-testid="input-consult-reject-notes"
-                value={consultRejectNotes}
-                onChange={(e) => setConsultRejectNotes(e.target.value)}
+                data-testid="input-committee-notes"
+                value={committeeNotes}
+                onChange={(e) => setCommitteeNotes(e.target.value)}
                 placeholder="ملاحظات اللجنة للمحامي المسؤول..."
                 rows={4}
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowConsultRejectDialog(false)}>إلغاء</Button>
+          <DialogFooter className="gap-2 flex-wrap">
             <Button
-              data-testid="button-confirm-consult-reject"
-              onClick={handleConsultReject}
+              variant="outline"
+              onClick={closeCommitteeDialog}
+              data-testid="button-cancel-committee"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-committee-needs-notes"
+              onClick={() => handleCommitteeDecision(CommitteeDecision.NEEDS_NOTES)}
+              disabled={actionInProgress}
               className="bg-amber-600 hover:bg-amber-700 text-white"
             >
-              إرسال للأخذ بالملاحظات
+              يوجد ملاحظات
+            </Button>
+            <Button
+              data-testid="button-committee-approved"
+              onClick={() => handleCommitteeDecision(CommitteeDecision.APPROVED)}
+              disabled={actionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showTakeNotesDialog}
+        onOpenChange={(open) => { if (!open) closeTakeNotesDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              نتيجة الأخذ بالملاحظات
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              اختر نتيجة معالجة ملاحظات اللجنة. جميع النتائج تنقل الاستشارة إلى
+              "جاهزة للتسليم"؛ النتيجة تُسجَّل للأرشيف فقط.
+            </p>
+            <div>
+              <Label>الملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-take-notes-notes"
+                value={takeNotesNotes}
+                onChange={(e) => setTakeNotesNotes(e.target.value)}
+                placeholder="ملاحظات حول معالجة ملاحظات اللجنة..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeTakeNotesDialog}
+              data-testid="button-cancel-take-notes"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-take-notes-not-done"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.NOT_DONE)}
+              disabled={actionInProgress}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              لم يتم
+            </Button>
+            <Button
+              data-testid="button-take-notes-partial"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.PARTIAL)}
+              disabled={actionInProgress}
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              جزئياً
+            </Button>
+            <Button
+              data-testid="button-take-notes-done"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.DONE)}
+              disabled={actionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              تم
             </Button>
           </DialogFooter>
         </DialogContent>
