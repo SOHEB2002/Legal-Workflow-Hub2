@@ -135,11 +135,15 @@ async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotif
     }
   }
 
-  const allUsers = await storage.getAllUsers();
+  // Reuse the allUsers list passed in by checkUnupdatedHearings (which
+  // pre-fetched it once to avoid N+1). The previous `const allUsers =
+  // await storage.getAllUsers()` here both shadowed the parameter (a
+  // no-op since the value was the same) and triggered an esbuild
+  // "already been declared" error that broke `npm run dev` boot.
   const admins = allUsers.filter(
-    (u) => u.role === "branch_manager" || u.role === "admin_support"
+    (u: any) => u.role === "branch_manager" || u.role === "admin_support"
   );
-  admins.forEach((a) => recipientIds.push(a.id));
+  admins.forEach((a: any) => recipientIds.push(a.id));
 
   const uniqueRecipients = Array.from(new Set(recipientIds));
   for (const recipientId of uniqueRecipients) {
