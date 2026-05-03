@@ -98,6 +98,10 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
       googleDriveFolderId: data.googleDriveFolderId || "",
       reviewNotes: "",
       reviewDecision: null,
+      // Phase-4: pass through SLA category. Server falls back to "عادية"
+      // when omitted, but forwarding it explicitly keeps the create dialog
+      // and the inserted row in lockstep.
+      category: data.category || "عادية",
       createdBy,
     };
 

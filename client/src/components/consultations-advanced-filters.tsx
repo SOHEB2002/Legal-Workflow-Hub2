@@ -47,6 +47,11 @@ export type AdvancedConsultationsFilters = {
   priorities: string[];
   dateFrom: string; // ISO date string, "" means no lower bound
   dateTo: string;   // ISO date string, "" means no upper bound
+  // Phase-4 quick filter "المتأخرة": when true, narrow to active rows
+  // whose expectedDeliveryDate is in the past. Implemented as a boolean
+  // because there's only one meaningful overdue state — the row is
+  // either past its SLA or it isn't.
+  overdue: boolean;
 };
 
 export const EMPTY_CONSULTATIONS_FILTERS: AdvancedConsultationsFilters = {
@@ -58,6 +63,7 @@ export const EMPTY_CONSULTATIONS_FILTERS: AdvancedConsultationsFilters = {
   priorities: [],
   dateFrom: "",
   dateTo: "",
+  overdue: false,
 };
 
 // Active-count for the badge on the trigger button. Search and status='all'
@@ -69,7 +75,8 @@ export function countActiveConsultationFilters(f: AdvancedConsultationsFilters):
     (f.stages.length > 0 ? 1 : 0) +
     (f.lawyers.length > 0 ? 1 : 0) +
     (f.priorities.length > 0 ? 1 : 0) +
-    (f.dateFrom || f.dateTo ? 1 : 0)
+    (f.dateFrom || f.dateTo ? 1 : 0) +
+    (f.overdue ? 1 : 0)
   );
 }
 
@@ -145,6 +152,7 @@ function describeFilters(
     const to = f.dateTo || "—";
     parts.push(`تاريخ الإنشاء: ${from} → ${to}`);
   }
+  if (f.overdue) parts.push("المتأخرة");
   return parts.join(" • ") || "—";
 }
 
@@ -506,6 +514,24 @@ export function ConsultationsAdvancedFilters({ filters, onChange, departments, l
                   placeholder="إلى"
                   data-testid="adv-date-to"
                 />
+              </div>
+
+              {/* Phase-4 quick filter — overdue (متأخرة): active rows
+                  past their expectedDeliveryDate. Pairs with the SLA
+                  category column on the table. */}
+              <div className="col-span-2">
+                <label
+                  className="flex items-center gap-2 cursor-pointer text-sm select-none"
+                  data-testid="adv-overdue-toggle"
+                >
+                  <input
+                    type="checkbox"
+                    checked={draft.overdue}
+                    onChange={(e) => setDraft({ ...draft, overdue: e.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  <span>المتأخرة فقط (تجاوزت تاريخ التسليم)</span>
+                </label>
               </div>
             </div>
 

@@ -11,6 +11,7 @@ import {
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
+  ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
   consultationStudies, consultationDrafts, consultationReviews,
@@ -336,6 +337,12 @@ function mapDbConsultation(dbCon: any): Consultation {
     googleDriveFolderId: dbCon.googleDriveFolderId ?? "",
     reviewNotes: dbCon.reviewNotes ?? "",
     reviewDecision: dbCon.reviewDecision ?? null,
+    // Phase-4 SLA columns. Category falls back to "عادية" so consultations
+    // created before the column existed (and never backfilled) still
+    // present a valid value to the UI; expectedDeliveryDate stays null
+    // when the row predates the migration.
+    category: dbCon.category ?? "عادية",
+    expectedDeliveryDate: toISOStringOrNull(dbCon.expectedDeliveryDate),
     createdBy: dbCon.createdBy,
     createdAt: toISOString(dbCon.createdAt),
     updatedAt: toISOString(dbCon.updatedAt),
@@ -772,7 +779,18 @@ export class DatabaseStorage implements IStorage {
     const id = randomUUID();
     const consultationNumber = `CON-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     const now = new Date();
-    
+
+    // Phase-4: category drives the SLA. Default to STANDARD (3 days) when
+    // not supplied so older clients keep working. expectedDeliveryDate is
+    // computed once at creation — there's no manual override (per spec).
+    const incomingCategory = (data as any).category as ConsultationCategoryValue | undefined;
+    const category: ConsultationCategoryValue =
+      incomingCategory && (Object.values(ConsultationCategory) as string[]).includes(incomingCategory)
+        ? incomingCategory
+        : ConsultationCategory.STANDARD;
+    const slaDays = ConsultationCategorySLADays[category];
+    const expectedDeliveryDate = new Date(now.getTime() + slaDays * 24 * 60 * 60 * 1000);
+
     // Pre-rebuild this method conflated the two: it wrote the stage value
     // ("استلام") into the status column. Status now is a separate
     // lifecycle enum (active | converted | closed) per spec §3.1.2;
@@ -795,12 +813,14 @@ export class DatabaseStorage implements IStorage {
       googleDriveFolderId: data.googleDriveFolderId || "",
       reviewNotes: "",
       reviewDecision: null,
+      category,
+      expectedDeliveryDate,
       createdBy,
       createdAt: now,
       updatedAt: now,
       closedAt: null,
     };
-    
+
     await db.insert(consultations).values(newConsultation);
     return mapDbConsultation(newConsultation);
   }

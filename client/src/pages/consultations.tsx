@@ -46,7 +46,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -63,6 +63,7 @@ import type {
   CommitteeDecisionValue,
   NoteOutcomeValue,
   ConsultationClosureReasonValue,
+  ConsultationCategoryValue,
 } from "@shared/schema";
 import {
   ConsultationStage,
@@ -73,6 +74,8 @@ import {
   CommitteeDecision,
   NoteOutcome,
   ConsultationClosureReason,
+  ConsultationCategory,
+  ConsultationCategoryLabels,
   CaseStage,
   CaseStageLabels,
   CaseStagesOrder,
@@ -302,6 +305,42 @@ function getConsultationDisplayBadge(c: Consultation): { label: string; classNam
   };
 }
 
+// Phase-4 SLA helpers — overdue is "active consultation whose
+// expectedDeliveryDate has already passed". Closed/converted rows never
+// count as overdue (the SLA only matters while we're working the file).
+function isConsultationOverdue(c: Consultation, now: number = Date.now()): boolean {
+  if (c.status !== "active") return false;
+  if (!c.expectedDeliveryDate) return false;
+  const due = new Date(c.expectedDeliveryDate).getTime();
+  if (Number.isNaN(due)) return false;
+  return now > due;
+}
+
+// Render the expectedDeliveryDate as a short, locale-agnostic ISO date
+// (YYYY-MM-DD). The DB stores a timestamp but the SLA precision the user
+// cares about is days, and the page already shows other dates this way.
+function formatExpectedDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toISOString().slice(0, 10);
+}
+
+// Per-category badge palette. Quick = amber (urgent), standard = neutral,
+// long = blue (low-pressure). Keeps the table readable at a glance without
+// fighting the existing stage badge.
+function getCategoryBadgeClassName(category: ConsultationCategoryValue): string {
+  switch (category) {
+    case ConsultationCategory.QUICK:
+      return "bg-amber-500/20 text-amber-700 border-amber-500/30";
+    case ConsultationCategory.LONG:
+      return "bg-blue-500/15 text-blue-700 border-blue-500/30";
+    case ConsultationCategory.STANDARD:
+    default:
+      return "bg-muted text-muted-foreground border-muted";
+  }
+}
+
 // Mirrors the role gate on POST /api/consultations/:id/early-close.
 // Per spec §3.2.4: assigned_lawyer (synthetic), admin_support,
 // department_head, branch_manager. Dept_head dept-scoped.
@@ -332,6 +371,14 @@ export default function ConsultationsPage() {
   const { addRecentVisit } = useFavorites();
   const { toast } = useToast();
   const lawyers = users.filter(u => u.canBeAssignedConsultations);
+
+  // Resolves an assigned-lawyer id to a display name. Mirrors the
+  // memos/teams-page pattern. Returns "—" when null/unknown so callers
+  // don't have to repeat the fallback.
+  const getLawyerName = (id: string | null | undefined): string => {
+    if (!id) return "—";
+    return users.find((u) => u.id === id)?.name || "—";
+  };
 
   const [, setLocation] = useLocation();
   const [advFilters, setAdvFilters] = useState<AdvancedConsultationsFilters>(EMPTY_CONSULTATIONS_FILTERS);
@@ -770,6 +817,9 @@ export default function ConsultationsPage() {
     deliveryType: "مكتوبة" as DeliveryTypeValue,
     departmentId: "",
     questionSummary: "",
+    // Phase-4: SLA category. Defaults to "عادية" (3-day SLA). Set once
+    // at creation; not editable afterward per spec.
+    category: ConsultationCategory.STANDARD as ConsultationCategoryValue,
   });
 
   const resetForm = () => {
@@ -779,6 +829,7 @@ export default function ConsultationsPage() {
       deliveryType: "مكتوبة",
       departmentId: "",
       questionSummary: "",
+      category: ConsultationCategory.STANDARD,
     });
   };
 
@@ -806,6 +857,19 @@ export default function ConsultationsPage() {
       setPendingOpenConsId(null);
     }
   }, [pendingOpenConsId, consultations, addRecentVisit, getClientName]);
+
+  // Phase-4: keep the open details dialog in sync with the consultations
+  // list. The new in-dialog action buttons run mutations that refresh the
+  // list; without this, role-gated buttons (المرحلة التالية / المراجعة
+  // الداخلية / …) would compute against a stale snapshot taken at click
+  // time. We re-resolve by id on every list change.
+  useEffect(() => {
+    if (!selectedConsultation) return;
+    const fresh = consultations.find((x) => x.id === selectedConsultation.id);
+    if (fresh && fresh !== selectedConsultation) {
+      setSelectedConsultation(fresh);
+    }
+  }, [consultations, selectedConsultation]);
 
   const filterLawyers = users.filter(u => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
 
@@ -856,6 +920,10 @@ export default function ConsultationsPage() {
         }
       }
     }
+    // Phase-4 SLA filter: keep only active rows past their
+    // expectedDeliveryDate. Reuses isConsultationOverdue so the
+    // table indicator and the filter agree on the threshold.
+    if (advFilters.overdue && !isConsultationOverdue(consultation)) return false;
     return true;
   });
 
@@ -931,6 +999,29 @@ export default function ConsultationsPage() {
                   </Select>
                 </div>
                 <div>
+                  <Label>تصنيف المدة</Label>
+                  <Select
+                    value={formData.category}
+                    onValueChange={(value: ConsultationCategoryValue) =>
+                      setFormData({ ...formData, category: value })
+                    }
+                  >
+                    <SelectTrigger data-testid="select-consultation-category">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.values(ConsultationCategory) as ConsultationCategoryValue[]).map((cat) => (
+                        <SelectItem key={cat} value={cat}>
+                          {ConsultationCategoryLabels[cat]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    يحدّد التصنيف تاريخ التسليم المتوقع تلقائياً (يوم / 3 أيام / 14 يوم).
+                  </p>
+                </div>
+                <div>
                   <Label>ملخص السؤال</Label>
                   <Textarea
                     data-testid="input-question-summary"
@@ -974,6 +1065,9 @@ export default function ConsultationsPage() {
                 <TableHead className="text-right">النوع</TableHead>
                 <TableHead className="text-right">الحالة</TableHead>
                 <TableHead className="text-right">القسم</TableHead>
+                <TableHead className="text-right">المحامي المسؤول</TableHead>
+                <TableHead className="text-right">التصنيف</TableHead>
+                <TableHead className="text-right">التسليم المتوقع</TableHead>
                 <TableHead className="text-right">التسليم</TableHead>
                 <TableHead className="text-right">الإجراءات</TableHead>
               </TableRow>
@@ -997,6 +1091,36 @@ export default function ConsultationsPage() {
                     })()}
                   </TableCell>
                   <TableCell>{getDepartmentName(consultation.departmentId)}</TableCell>
+                  <TableCell data-testid={`cell-assigned-lawyer-${consultation.id}`}>
+                    <BidiText>{getLawyerName(consultation.assignedTo)}</BidiText>
+                  </TableCell>
+                  <TableCell data-testid={`cell-category-${consultation.id}`}>
+                    <Badge
+                      variant="outline"
+                      className={getCategoryBadgeClassName(consultation.category)}
+                    >
+                      {consultation.category}
+                    </Badge>
+                  </TableCell>
+                  <TableCell data-testid={`cell-expected-delivery-${consultation.id}`}>
+                    {(() => {
+                      const overdue = isConsultationOverdue(consultation);
+                      const text = formatExpectedDate(consultation.expectedDeliveryDate);
+                      return (
+                        <span
+                          className={
+                            overdue
+                              ? "inline-flex items-center gap-1 text-destructive font-medium"
+                              : "text-muted-foreground"
+                          }
+                          title={overdue ? "تجاوزت تاريخ التسليم المتوقع" : undefined}
+                        >
+                          {overdue && <AlertTriangle className="w-3.5 h-3.5" />}
+                          <LtrInline>{text}</LtrInline>
+                        </span>
+                      );
+                    })()}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={consultation.deliveryType === "مكتوبة" ? "secondary" : "outline"}>
                       {consultation.deliveryType}
@@ -1161,6 +1285,105 @@ export default function ConsultationsPage() {
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل الاستشارة</h4>
                 <ConsultationStagesBar currentStage={selectedConsultation.currentStage} />
+                {/* Phase-4 dev-feedback: surface the same workflow actions
+                    that live in the row's ⋯ dropdown right under the stages
+                    bar, so the user doesn't have to close the dialog to
+                    advance / return / review / convert / close. Same
+                    role-gating, same handlers — just a second entry
+                    point. */}
+                {user && (
+                  <div className="flex flex-wrap gap-2 justify-center mt-4 pt-4 border-t">
+                    {canAssignConsultation(selectedConsultation) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-assign-${selectedConsultation.id}`}
+                        onClick={() => openAssignDialog(selectedConsultation)}
+                      >
+                        <UserPlus className="w-4 h-4 ml-1" />
+                        إسناد الاستشارة
+                      </Button>
+                    )}
+                    {getAdvanceTarget(selectedConsultation, user.role, user.id, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-advance-${selectedConsultation.id}`}
+                        onClick={() => openAdvanceDialog(selectedConsultation)}
+                      >
+                        <ChevronLeft className="w-4 h-4 ml-1" />
+                        المرحلة التالية
+                      </Button>
+                    )}
+                    {getReturnTargets(selectedConsultation, user.role, user.id, user.departmentId).length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-return-${selectedConsultation.id}`}
+                        onClick={() => openReturnDialog(selectedConsultation)}
+                      >
+                        <ChevronRight className="w-4 h-4 ml-1" />
+                        المرحلة السابقة
+                      </Button>
+                    )}
+                    {canDoInternalReview(selectedConsultation, user.role, user.id, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-internal-review-${selectedConsultation.id}`}
+                        onClick={() => openInternalReviewDialog(selectedConsultation)}
+                      >
+                        <ClipboardCheck className="w-4 h-4 ml-1" />
+                        المراجعة الداخلية
+                      </Button>
+                    )}
+                    {canDoCommitteeDecision(selectedConsultation, user.role) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-committee-${selectedConsultation.id}`}
+                        onClick={() => openCommitteeDialog(selectedConsultation)}
+                      >
+                        <CheckCircle className="w-4 h-4 ml-1" />
+                        قرار اللجنة
+                      </Button>
+                    )}
+                    {canDoTakeNotesOutcome(selectedConsultation, user.role, user.id, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-take-notes-${selectedConsultation.id}`}
+                        onClick={() => openTakeNotesDialog(selectedConsultation)}
+                      >
+                        <FileText className="w-4 h-4 ml-1" />
+                        نتيجة الأخذ بالملاحظات
+                      </Button>
+                    )}
+                    {canConvertToCase(selectedConsultation, user.role, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-convert-${selectedConsultation.id}`}
+                        onClick={() => openConvertDialog(selectedConsultation)}
+                      >
+                        <FileSymlink className="w-4 h-4 ml-1" />
+                        تحويل لقضية
+                      </Button>
+                    )}
+                    {canEarlyClose(selectedConsultation, user.role, user.id, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        data-testid={`dialog-button-early-close-${selectedConsultation.id}`}
+                        onClick={() => openEarlyCloseDialog(selectedConsultation)}
+                      >
+                        <XCircle className="w-4 h-4 ml-1" />
+                        إغلاق مبكر
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1176,6 +1399,42 @@ export default function ConsultationsPage() {
                 <div>
                   <Label className="text-muted-foreground">طريقة التسليم</Label>
                   <p>{selectedConsultation.deliveryType}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">المحامي المسؤول</Label>
+                  <p className="font-medium" data-testid="dialog-assigned-lawyer">
+                    <BidiText>{getLawyerName(selectedConsultation.assignedTo)}</BidiText>
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">التصنيف</Label>
+                  <p data-testid="dialog-category">
+                    <Badge
+                      variant="outline"
+                      className={getCategoryBadgeClassName(selectedConsultation.category)}
+                    >
+                      {selectedConsultation.category}
+                    </Badge>
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">التسليم المتوقع</Label>
+                  <p data-testid="dialog-expected-delivery">
+                    {(() => {
+                      const overdue = isConsultationOverdue(selectedConsultation);
+                      const text = formatExpectedDate(selectedConsultation.expectedDeliveryDate);
+                      return (
+                        <span
+                          className={
+                            overdue ? "inline-flex items-center gap-1 text-destructive font-medium" : ""
+                          }
+                        >
+                          {overdue && <AlertTriangle className="w-3.5 h-3.5" />}
+                          <LtrInline>{text}</LtrInline>
+                        </span>
+                      );
+                    })()}
+                  </p>
                 </div>
               </div>
               <div>
@@ -1472,8 +1731,8 @@ export default function ConsultationsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              اختر نتيجة المراجعة. <strong>تم</strong> ينقل الاستشارة إلى لجنة المراجعة،
-              و<strong>يوجد ملاحظات</strong> أو <strong>تم إعادة التقديم</strong> يعيدانها إلى مرحلة التحرير.
+              اختر نتيجة المراجعة. <strong>اعتماد</strong> ينقل الاستشارة إلى لجنة المراجعة،
+              و<strong>يوجد ملاحظات</strong> يعيدها إلى مرحلة التحرير.
             </p>
             <div>
               <Label>الملاحظات (اختياري)</Label>
@@ -1495,14 +1754,6 @@ export default function ConsultationsPage() {
               إلغاء
             </Button>
             <Button
-              data-testid="button-internal-review-resubmitted"
-              onClick={() => handleInternalReview(InternalReviewDecision.RESUBMITTED)}
-              disabled={actionInProgress}
-              variant="outline"
-            >
-              تم إعادة التقديم
-            </Button>
-            <Button
               data-testid="button-internal-review-needs-notes"
               onClick={() => handleInternalReview(InternalReviewDecision.NEEDS_NOTES)}
               disabled={actionInProgress}
@@ -1516,7 +1767,7 @@ export default function ConsultationsPage() {
               disabled={actionInProgress}
               className="bg-green-600 hover:bg-green-700 text-white"
             >
-              تم
+              اعتماد
             </Button>
           </DialogFooter>
         </DialogContent>

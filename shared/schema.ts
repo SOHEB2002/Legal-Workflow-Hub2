@@ -131,6 +131,12 @@ export const consultations = pgTable("consultations", {
   reviewDecision: varchar("review_decision", { length: 50 }),
   closureReason: varchar("closure_reason", { length: 50 }),
   closureReasonOther: varchar("closure_reason_other", { length: 500 }),
+  // Phase-4 SLA columns. Category is set once at creation and drives the
+  // expectedDeliveryDate (createdAt + SLA days). The DB default mirrors the
+  // server fallback so manual inserts still get a valid category.
+  // Migration: script/add-consultation-category-and-due-date.sql.
+  category: varchar("category", { length: 50 }).notNull().default("عادية"),
+  expectedDeliveryDate: timestamp("expected_delivery_date"),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -994,6 +1000,32 @@ export const ConsultationStagesAll: ConsultationStageValue[] = [
   ConsultationStage.COMPLETED,
 ];
 
+// ==================== Consultation Category (Phase 4 — SLA categories) ====================
+// Category is set once at consultation creation (no manual override) and
+// drives the expectedDeliveryDate via SLA_DAYS. Stored as plain varchar in
+// the DB so a future category addition is a value change with no DDL.
+export const ConsultationCategory = {
+  QUICK:    "سريعة",
+  STANDARD: "عادية",
+  LONG:     "طويلة",
+} as const;
+
+export type ConsultationCategoryValue = typeof ConsultationCategory[keyof typeof ConsultationCategory];
+
+// SLA days per category — used server-side on insert to compute
+// expectedDeliveryDate = createdAt + SLA_DAYS[category].
+export const ConsultationCategorySLADays: Record<ConsultationCategoryValue, number> = {
+  "سريعة": 1,
+  "عادية": 3,
+  "طويلة": 14,
+};
+
+export const ConsultationCategoryLabels: Record<ConsultationCategoryValue, string> = {
+  "سريعة": "سريعة (يوم)",
+  "عادية": "عادية (3 أيام)",
+  "طويلة": "طويلة (14 يوم)",
+};
+
 // ==================== Consultation Status (per consultations-rebuild-spec.md §3.1.2) ====================
 export const ConsultationStatus = {
   ACTIVE: "active",
@@ -1012,10 +1044,15 @@ export const ConsultationStatusLabels: Record<ConsultationStatusValue, string> =
 // Per consultations-rebuild-spec.md §3.1.3 / §3.2.1. Used by the dedicated
 // /internal-review, /committee-decision, /take-notes-outcome endpoints.
 
+// Aligned with CommitteeDecision.APPROVED on the Arabic value "اعتماد"
+// per the dev-feedback rename (Phase 4). The "تم_إعادة_التقديم"
+// resubmitted decision was retired in the same pass — the dialog now
+// has only two outcomes (اعتماد / يوجد_ملاحظات). Existing review rows
+// stored with the old "تم" or "تم_إعادة_التقديم" string remain in the
+// DB; the column is plain varchar so no migration is required.
 export const InternalReviewDecision = {
-  PASSED:      "تم",
+  PASSED:      "اعتماد",
   NEEDS_NOTES: "يوجد_ملاحظات",
-  RESUBMITTED: "تم_إعادة_التقديم",
 } as const;
 
 export type InternalReviewDecisionValue = typeof InternalReviewDecision[keyof typeof InternalReviewDecision];
@@ -1378,6 +1415,8 @@ export interface Consultation {
   reviewDecision: ReviewDecisionType | null;
   closureReason: string | null;
   closureReasonOther: string | null;
+  category: ConsultationCategoryValue;
+  expectedDeliveryDate: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -1420,7 +1459,9 @@ export interface ConsultationReview {
   id: string;
   consultationId: string;
   reviewerId: string;
-  // values: تم | يوجد_ملاحظات | تم_إعادة_التقديم (per spec §3.1.3 / §3.2.1)
+  // values: اعتماد | يوجد_ملاحظات (Phase 4 trim — the resubmitted decision
+  // was retired and the positive decision was renamed from "تم" to "اعتماد"
+  // to match the committee outcome label).
   decision: string;
   notes: string;
   createdAt: string;
@@ -1747,6 +1788,10 @@ export const insertConsultationSchema = z.object({
   questionSummary: z.string().min(1, "ملخص السؤال مطلوب"),
   whatsappGroupLink: z.string().optional().default(""),
   googleDriveFolderId: z.string().optional().default(""),
+  // Phase-4 SLA category. Defaults to "عادية" (3-day SLA) so older clients
+  // that don't send the field get the standard SLA. The server uses this
+  // to compute expectedDeliveryDate at insert time.
+  category: z.enum(["سريعة", "عادية", "طويلة"]).optional().default("عادية"),
 });
 
 export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
