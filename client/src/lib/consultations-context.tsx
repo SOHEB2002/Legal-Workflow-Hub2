@@ -1,25 +1,43 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import type { Consultation, ConsultationStatusValue, ReviewDecisionType, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
-import { ConsultationStatus } from "@shared/schema";
-import type { UserRoleType } from "@shared/schema";
+import type {
+  Consultation,
+  ConsultationStageValue,
+  InternalReviewDecisionValue,
+  CommitteeDecisionValue,
+  NoteOutcomeValue,
+  ConsultationClosureReasonValue,
+} from "@shared/schema";
+import { ConsultationStage } from "@shared/schema";
 import { apiRequest } from "./queryClient";
-import { validateConsultationTransition } from "./transitions-engine";
-import { notifyConsultationAdded, notifyConsultationAssigned, notifyConsultationSentToReview, notifyConsultationReturnedForRevision } from "./notification-triggers";
+import { notifyConsultationAdded, notifyConsultationAssigned } from "./notification-triggers";
 import { useAuth } from "./auth-context";
 
 interface ConsultationsContextType {
   consultations: Consultation[];
   isLoading: boolean;
+
+  // CRUD
   addConsultation: (data: Partial<Consultation>, createdBy: string) => Promise<Consultation>;
   updateConsultation: (id: string, data: Partial<Consultation>) => Promise<void>;
   deleteConsultation: (id: string) => Promise<void>;
-  assignConsultation: (id: string, assignedTo: string, departmentId: string) => void;
-  sendToReviewCommittee: (id: string, userRole?: string) => void;
-  approveConsultation: (id: string, notes?: string, userRole?: string) => void;
-  rejectConsultation: (id: string, notes: string, userRole?: string) => void;
-  markDelivered: (id: string, userRole?: string) => void;
-  closeConsultation: (id: string, userRole?: string) => void;
-  convertToCase: (id: string, caseId: string) => void;
+
+  // Workflow mutators (each calls a dedicated /api/consultations/:id/...
+  // endpoint per consultations-rebuild-spec.md §3.2; the context refreshes
+  // the list afterward so callers can rely on `consultations` being current).
+  assignConsultation: (id: string, assignedTo: string) => Promise<void>;
+  advanceStage: (id: string, targetStage: ConsultationStageValue) => Promise<void>;
+  returnStage: (id: string, targetStage: ConsultationStageValue) => Promise<void>;
+  submitInternalReview: (id: string, decision: InternalReviewDecisionValue, notes?: string) => Promise<void>;
+  submitCommitteeDecision: (id: string, decision: CommitteeDecisionValue, notes?: string) => Promise<void>;
+  recordTakeNotesOutcome: (id: string, outcome: NoteOutcomeValue, notes?: string) => Promise<void>;
+  convertToCase: (id: string, targetCaseStage: string, caseDepartmentId: string) => Promise<void>;
+  earlyCloseConsultation: (id: string, reason: ConsultationClosureReasonValue, otherText?: string, notes?: string) => Promise<void>;
+  // Backwards-compat alias for earlyCloseConsultation. Same signature, same
+  // behaviour — kept so any older import keeps compiling. New code should
+  // prefer earlyCloseConsultation for the more explicit name.
+  closeConsultation: (id: string, reason: ConsultationClosureReasonValue, otherText?: string, notes?: string) => Promise<void>;
+
+  // Selectors
   getConsultationById: (id: string) => Consultation | undefined;
   getConsultationsByDepartment: (departmentId: string) => Consultation[];
   getActiveConsultations: () => Consultation[];
@@ -71,7 +89,6 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
       clientId: data.clientId || "",
       consultationType: data.consultationType || "عام",
       deliveryType: data.deliveryType || "مكتوبة",
-      status: ConsultationStatus.RECEIVED,
       departmentId: data.departmentId || "",
       assignedTo: null,
       questionSummary: data.questionSummary || "",
@@ -83,7 +100,7 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
       reviewDecision: null,
       createdBy,
     };
-    
+
     const response = await apiRequest("POST", "/api/consultations", consultationData);
     const newConsultation = await response.json();
     setConsultations((prev) => [newConsultation, ...prev]);
@@ -109,112 +126,128 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     setConsultations((prev) => prev.filter((c) => c.id !== id));
   };
 
-  const assignConsultation = (id: string, assignedTo: string, departmentId: string) => {
-    const consultation = consultations.find(c => c.id === id);
-    const data = {
-      assignedTo,
-      departmentId,
-      status: ConsultationStatus.STUDY as ConsultationStatusValue,
-    };
-    updateConsultation(id, data);
-    notifyConsultationAssigned(id, consultation?.consultationNumber || "", assignedTo).catch(() => {});
+  // Apply the server's authoritative consultation row to local state.
+  // Each workflow endpoint returns the updated consultation (or wraps it
+  // alongside a helper-table row); using the response directly keeps us
+  // from issuing a second GET just to learn what changed.
+  const applyServerConsultation = (updated: Consultation) => {
+    setConsultations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
   };
 
-  const sendToReviewCommittee = (id: string, userRole?: string) => {
-    const consultation = consultations.find(c => c.id === id);
-    if (!consultation) return;
-    if (userRole) {
-      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.REVIEW_COMMITTEE, userRole as UserRoleType);
-      if (!validation.allowed) {
-        console.warn("انتقال استشارة مرفوض:", validation.reason);
-        return;
-      }
+  const assignConsultation = async (id: string, assignedTo: string): Promise<void> => {
+    const consultation = consultations.find((c) => c.id === id);
+    const res = await apiRequest("POST", `/api/consultations/${id}/assign`, { assignedTo });
+    const updated = (await res.json()) as Consultation;
+    applyServerConsultation(updated);
+    if (consultation) {
+      notifyConsultationAssigned(id, consultation.consultationNumber || "", assignedTo).catch(() => {});
     }
-    updateConsultation(id, { status: ConsultationStatus.REVIEW_COMMITTEE as ConsultationStatusValue });
-    notifyConsultationSentToReview(id, consultation.consultationNumber || "").catch(() => {});
   };
 
-  const approveConsultation = (id: string, notes?: string, userRole?: string) => {
-    const consultation = consultations.find(c => c.id === id);
-    if (!consultation) return;
-    if (userRole) {
-      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.READY, userRole as UserRoleType);
-      if (!validation.allowed) {
-        console.warn("اعتماد استشارة مرفوض:", validation.reason);
-        return;
-      }
-    }
-    updateConsultation(id, {
-      status: ConsultationStatus.READY as ConsultationStatusValue,
-      reviewDecision: "approved" as ReviewDecisionType,
-      reviewNotes: notes || "",
+  const advanceStage = async (id: string, targetStage: ConsultationStageValue): Promise<void> => {
+    const res = await apiRequest("POST", `/api/consultations/${id}/advance-stage`, { targetStage });
+    const updated = (await res.json()) as Consultation;
+    applyServerConsultation(updated);
+  };
+
+  const returnStage = async (id: string, targetStage: ConsultationStageValue): Promise<void> => {
+    const res = await apiRequest("POST", `/api/consultations/${id}/return-stage`, { targetStage });
+    const updated = (await res.json()) as Consultation;
+    applyServerConsultation(updated);
+  };
+
+  const submitInternalReview = async (
+    id: string,
+    decision: InternalReviewDecisionValue,
+    notes: string = "",
+  ): Promise<void> => {
+    const res = await apiRequest("POST", `/api/consultations/${id}/internal-review`, { decision, notes });
+    // Endpoint returns { review, consultation } — pull the consultation half.
+    const { consultation: updated } = (await res.json()) as { consultation: Consultation };
+    applyServerConsultation(updated);
+  };
+
+  const submitCommitteeDecision = async (
+    id: string,
+    decision: CommitteeDecisionValue,
+    notes: string = "",
+  ): Promise<void> => {
+    const res = await apiRequest("POST", `/api/consultations/${id}/committee-decision`, { decision, notes });
+    const { consultation: updated } = (await res.json()) as { consultation: Consultation };
+    applyServerConsultation(updated);
+  };
+
+  const recordTakeNotesOutcome = async (
+    id: string,
+    outcome: NoteOutcomeValue,
+    notes: string = "",
+  ): Promise<void> => {
+    const res = await apiRequest("POST", `/api/consultations/${id}/take-notes-outcome`, { outcome, notes });
+    const { consultation: updated } = (await res.json()) as { consultation: Consultation };
+    applyServerConsultation(updated);
+  };
+
+  const convertToCase = async (
+    id: string,
+    targetCaseStage: string,
+    caseDepartmentId: string,
+  ): Promise<void> => {
+    const res = await apiRequest("POST", `/api/consultations/${id}/convert-to-case`, {
+      targetCaseStage,
+      caseDepartmentId,
     });
+    // Endpoint returns { case, consultation } — apply the consultation
+    // (now status='converted', convertedToCaseId set). Callers needing the
+    // new case row should still do their own fetch / cache update against
+    // the cases context.
+    const { consultation: updated } = (await res.json()) as { consultation: Consultation };
+    applyServerConsultation(updated);
   };
 
-  const rejectConsultation = (id: string, notes: string, userRole?: string) => {
-    const consultation = consultations.find(c => c.id === id);
-    if (!consultation) return;
-    if (userRole) {
-      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.AMENDMENTS, userRole as UserRoleType);
-      if (!validation.allowed) {
-        console.warn("رفض استشارة مرفوض:", validation.reason);
-        return;
-      }
-    }
-    updateConsultation(id, {
-      status: ConsultationStatus.AMENDMENTS as ConsultationStatusValue,
-      reviewDecision: "rejected" as ReviewDecisionType,
-      reviewNotes: notes,
-    });
-    notifyConsultationReturnedForRevision(id, consultation.consultationNumber || "", consultation.assignedTo || null, notes).catch(() => {});
+  const earlyCloseConsultation = async (
+    id: string,
+    reason: ConsultationClosureReasonValue,
+    otherText?: string,
+    notes?: string,
+  ): Promise<void> => {
+    // The endpoint reads { reason, otherText? } only; `notes` is sent for
+    // forward compatibility (no closure_notes column on the consultations
+    // table yet — see the comment on the page-side handler in
+    // consultations.tsx for the matching gap note).
+    const body: Record<string, unknown> = { reason };
+    if (otherText && otherText.trim()) body.otherText = otherText.trim();
+    if (notes && notes.trim()) body.notes = notes.trim();
+    const res = await apiRequest("POST", `/api/consultations/${id}/early-close`, body);
+    const updated = (await res.json()) as Consultation;
+    applyServerConsultation(updated);
   };
 
-  const markDelivered = (id: string, userRole?: string) => {
-    const consultation = consultations.find(c => c.id === id);
-    if (!consultation) return;
-    if (userRole) {
-      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.DELIVERED, userRole as UserRoleType);
-      if (!validation.allowed) {
-        console.warn("تسليم استشارة مرفوض:", validation.reason);
-        return;
-      }
-    }
-    updateConsultation(id, { status: ConsultationStatus.DELIVERED as ConsultationStatusValue });
-  };
-
-  const closeConsultation = (id: string, userRole?: string) => {
-    const consultation = consultations.find(c => c.id === id);
-    if (!consultation) return;
-    if (userRole) {
-      const validation = validateConsultationTransition(consultation.status, ConsultationStatus.CLOSED, userRole as UserRoleType);
-      if (!validation.allowed) {
-        console.warn("إقفال استشارة مرفوض:", validation.reason);
-        return;
-      }
-    }
-    updateConsultation(id, {
-      status: ConsultationStatus.CLOSED as ConsultationStatusValue,
-      closedAt: new Date().toISOString(),
-    });
-  };
-
-  const convertToCase = (id: string, caseId: string) => {
-    updateConsultation(id, { convertedToCaseId: caseId });
-  };
+  // Backwards-compat alias — same shape as earlyCloseConsultation.
+  const closeConsultation = earlyCloseConsultation;
 
   const getConsultationById = (id: string) => consultations.find((c) => c.id === id);
 
   const getConsultationsByDepartment = (departmentId: string) =>
     consultations.filter((c) => c.departmentId === departmentId);
 
+  // "Active" in the new schema is a status value, not a derivation. Mirrors
+  // what the dashboard expects: rows that aren't converted or closed.
   const getActiveConsultations = () =>
-    consultations.filter((c) => c.status !== ConsultationStatus.CLOSED);
+    consultations.filter((c) => c.status === "active");
 
+  // Replaces the old REVIEW_COMMITTEE filter — that status no longer
+  // exists. The new equivalent is "currently in the لجنة_مراجعة stage,
+  // and still active" (i.e. not converted or closed mid-review).
   const getReviewConsultations = () =>
-    consultations.filter((c) => c.status === ConsultationStatus.REVIEW_COMMITTEE);
+    consultations.filter(
+      (c) => c.status === "active" && c.currentStage === ConsultationStage.COMMITTEE,
+    );
 
+  // Replaces the old READY filter for the same reason.
   const getReadyConsultations = () =>
-    consultations.filter((c) => c.status === ConsultationStatus.READY);
+    consultations.filter(
+      (c) => c.status === "active" && c.currentStage === ConsultationStage.READY,
+    );
 
   return (
     <ConsultationsContext.Provider
@@ -225,12 +258,14 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
         updateConsultation,
         deleteConsultation,
         assignConsultation,
-        sendToReviewCommittee,
-        approveConsultation,
-        rejectConsultation,
-        markDelivered,
-        closeConsultation,
+        advanceStage,
+        returnStage,
+        submitInternalReview,
+        submitCommitteeDecision,
+        recordTakeNotesOutcome,
         convertToCase,
+        earlyCloseConsultation,
+        closeConsultation,
         getConsultationById,
         getConsultationsByDepartment,
         getActiveConsultations,
