@@ -37,6 +37,7 @@ import {
   CaseStageValue,
   ConsultationStatusLabels,
   ConsultationStatusValue,
+  ConsultationStage,
   UserRoleLabels,
 } from "@shared/schema";
 
@@ -629,7 +630,11 @@ function ConsultationsSummarySection() {
 
   const overdueConsultations = useMemo(() => {
     return consultations.filter(c => {
-      if (c.status === "مسلّم" || c.status === "مغلق") return false;
+      // Post-rebuild: "delivered" is no longer a status — delivery is the
+      // workflow's terminal stage (ConsultationStage.COMPLETED). Skip rows
+      // that are either closed (early-closed) or have reached COMPLETED
+      // (delivered through the normal flow).
+      if (c.status === "closed" || c.currentStage === ConsultationStage.COMPLETED) return false;
       try {
         const created = parseISO(c.createdAt);
         return differenceInDays(new Date(), created) > 14;
@@ -673,7 +678,7 @@ function ConsultationsSummarySection() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600 dark:text-green-400" data-testid="text-sent-consultations">
-              {consultations.filter(c => c.status === "مسلّم" || c.status === "مغلق").length}
+              {consultations.filter(c => c.status === "closed" || c.currentStage === ConsultationStage.COMPLETED).length}
             </div>
           </CardContent>
         </Card>
