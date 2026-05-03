@@ -45,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -79,9 +79,26 @@ import {
   Department,
 } from "@shared/schema";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
+import {
+  ConsultationsAdvancedFilters,
+  EMPTY_CONSULTATIONS_FILTERS,
+  type AdvancedConsultationsFilters,
+} from "@/components/consultations-advanced-filters";
 import { DialogFooter } from "@/components/ui/dialog";
 import { apiRequest } from "@/lib/queryClient";
 import { sendConsultationReminder, requestConsultationTransfer } from "@/lib/notification-triggers";
+
+// Lawyer-filter source: role-based exclusion. Wider than the
+// canBeAssignedConsultations gate (used elsewhere on this page) because
+// the filter must surface anyone who *has* consultations historically,
+// not only those assignable going forward. Mirrors the cases-page
+// LAWYER_FILTER_EXCLUDED_ROLES set.
+const LAWYER_FILTER_EXCLUDED_ROLES = new Set([
+  "branch_manager",
+  "admin_support",
+  "hr",
+  "technical_support",
+]);
 
 // Per consultations-rebuild-spec.md §3.2.1 ALLOWED_CONSULTATION_TRANSITIONS.
 // Only includes the linear forward steps that the generic /advance-stage
@@ -315,8 +332,7 @@ export default function ConsultationsPage() {
   const { toast } = useToast();
   const lawyers = users.filter(u => u.canBeAssignedConsultations);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [advFilters, setAdvFilters] = useState<AdvancedConsultationsFilters>(EMPTY_CONSULTATIONS_FILTERS);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
 
@@ -753,14 +769,56 @@ export default function ConsultationsPage() {
     resetForm();
   };
 
+  const filterLawyers = users.filter(u => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
+
   const filteredConsultations = consultations.filter((consultation) => {
-    const clientName = getClientName(consultation.clientId);
-    const matchesSearch =
-      consultation.consultationNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      clientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      consultation.questionSummary.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === "all" || consultation.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const q = advFilters.search.trim().toLowerCase();
+    if (q) {
+      const clientName = getClientName(consultation.clientId);
+      const haystack = [
+        consultation.consultationNumber,
+        consultation.questionSummary,
+        clientName,
+        consultation.consultationType,
+      ].map((s) => (s || "").toLowerCase());
+      if (!haystack.some((h) => h.includes(q))) return false;
+    }
+    if (advFilters.status !== "all" && consultation.status !== advFilters.status) return false;
+    if (advFilters.departmentId && consultation.departmentId !== advFilters.departmentId) return false;
+    if (advFilters.stages.length > 0 && !advFilters.stages.includes(consultation.currentStage)) return false;
+    if (advFilters.lawyers.length > 0) {
+      const assignedTo = consultation.assignedTo;
+      if (!assignedTo || !advFilters.lawyers.includes(assignedTo)) return false;
+    }
+    // Priority is forward-compat: the consultations table doesn't carry
+    // a priority column yet (per shared/schema.ts §consultations table).
+    // When a priority filter is active and the consultation has no
+    // priority field, exclude it — that's the conservative interpretation
+    // ("if you ask for high-priority consultations, don't surface ones
+    // whose priority is unknown"). This becomes naturally functional once
+    // the schema gains the column.
+    if (advFilters.priorities.length > 0) {
+      const p = (consultation as any).priority as string | undefined;
+      if (!p || !advFilters.priorities.includes(p)) return false;
+    }
+    if (advFilters.dateFrom || advFilters.dateTo) {
+      const created = consultation.createdAt ? new Date(consultation.createdAt).getTime() : NaN;
+      if (Number.isNaN(created)) return false;
+      if (advFilters.dateFrom) {
+        const from = new Date(advFilters.dateFrom).getTime();
+        if (!Number.isNaN(from) && created < from) return false;
+      }
+      if (advFilters.dateTo) {
+        // Inclusive upper bound: bump to end-of-day so a same-day
+        // createdAt timestamp matches.
+        const toBase = new Date(advFilters.dateTo).getTime();
+        if (!Number.isNaN(toBase)) {
+          const toEnd = toBase + 24 * 60 * 60 * 1000 - 1;
+          if (created > toEnd) return false;
+        }
+      }
+    }
+    return true;
   });
 
   return (
@@ -861,27 +919,12 @@ export default function ConsultationsPage() {
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center gap-4">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                data-testid="input-search-consultations"
-                placeholder="بحث برقم الاستشارة أو العميل..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pr-10"
-              />
-            </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[180px]" data-testid="select-status-filter">
-                <SelectValue placeholder="الحالة" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">جميع الحالات</SelectItem>
-                <SelectItem value="active">{ConsultationStatusDisplayLabels.active}</SelectItem>
-                <SelectItem value="converted">{ConsultationStatusDisplayLabels.converted}</SelectItem>
-                <SelectItem value="closed">{ConsultationStatusDisplayLabels.closed}</SelectItem>
-              </SelectContent>
-            </Select>
+            <ConsultationsAdvancedFilters
+              filters={advFilters}
+              onChange={setAdvFilters}
+              departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
+              lawyers={filterLawyers.map((l) => ({ id: l.id, name: l.name }))}
+            />
           </div>
         </CardHeader>
         <CardContent>
