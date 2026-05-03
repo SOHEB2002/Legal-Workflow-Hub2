@@ -45,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink } from "lucide-react";
+import { Plus, Search, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -55,17 +55,15 @@ import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type {
   Consultation,
-  ConsultationStatusValue,
   ConsultationStageValue,
   CaseTypeValue,
   DeliveryTypeValue,
   InternalReviewDecisionValue,
   CommitteeDecisionValue,
   NoteOutcomeValue,
+  ConsultationClosureReasonValue,
 } from "@shared/schema";
 import {
-  ConsultationStatus,
-  ConsultationStatusLabels,
   ConsultationStage,
   ConsultationStageLabels,
   ConsultationStagesAll,
@@ -73,6 +71,7 @@ import {
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
+  ConsultationClosureReason,
   CaseStage,
   CaseStageLabels,
   CaseStagesOrder,
@@ -216,25 +215,89 @@ function extractApiError(err: unknown): string {
   return msg || "حدث خطأ غير متوقع";
 }
 
-function getStatusColor(status: ConsultationStatusValue) {
-  switch (status) {
-    case ConsultationStatus.RECEIVED:
+// Arabic display labels for ConsultationClosureReason. Schema keeps the
+// enum values in English keys per spec §3.2.4 ("Frontend will localise
+// the labels"), so the mapping lives here at the page boundary.
+const ConsultationClosureReasonLabels: Record<ConsultationClosureReasonValue, string> = {
+  client_cancelled:  "إلغاء العميل",
+  answered_verbally: "تم الرد شفهياً",
+  duplicate:         "استشارة مكررة",
+  no_longer_needed:  "لم تعد مطلوبة",
+  other:             "أخرى",
+};
+
+// Arabic display labels for the simplified active/converted/closed
+// status enum. Schema entries are English keys post-rebuild; we localise
+// at the page boundary the same way as ClosureReason.
+const ConsultationStatusDisplayLabels: Record<"active" | "converted" | "closed", string> = {
+  active:    "نشطة",
+  converted: "محولة لقضية",
+  closed:    "مقفلة",
+};
+
+// Per-stage badge colour palette, aligned with the cases page table:
+// study/drafting/review/committee/notes/ready/closed slots match the
+// case-side getStageColor so the two tables read consistently.
+function getStageBadgeColor(stage: ConsultationStageValue): string {
+  switch (stage) {
+    case ConsultationStage.RECEIVED:
       return "bg-primary/20 text-primary border-primary/30";
-    case ConsultationStatus.STUDY:
-    case ConsultationStatus.PREPARING_RESPONSE:
+    case ConsultationStage.STUDY:
       return "bg-accent/20 text-accent border-accent/30";
-    case ConsultationStatus.REVIEW_COMMITTEE:
+    case ConsultationStage.DRAFTING:
+      return "bg-blue-500/20 text-blue-600 border-blue-500/30";
+    case ConsultationStage.INTERNAL_REVIEW:
+      return "bg-indigo-500/20 text-indigo-600 border-indigo-500/30";
+    case ConsultationStage.COMMITTEE:
       return "bg-secondary/20 text-secondary-foreground border-secondary/30";
-    case ConsultationStatus.AMENDMENTS:
+    case ConsultationStage.TAKING_NOTES:
       return "bg-destructive/20 text-destructive border-destructive/30";
-    case ConsultationStatus.READY:
-      return "bg-accent/30 text-accent border-accent/40";
-    case ConsultationStatus.DELIVERED:
-    case ConsultationStatus.CLOSED:
+    case ConsultationStage.READY:
+      return "bg-green-500/20 text-green-600 border-green-500/30";
+    case ConsultationStage.COMPLETED:
       return "bg-muted text-muted-foreground border-muted";
     default:
       return "bg-muted text-muted-foreground";
   }
+}
+
+// Combined badge: derives label + colour from currentStage + status.
+//   active     → live stage label + stage colour (drives the row's eye)
+//   converted  → "محولة لقضية" + violet
+//   closed     → "مقفلة" + muted
+function getConsultationDisplayBadge(c: Consultation): { label: string; className: string } {
+  if (c.status === "converted") {
+    return {
+      label: ConsultationStatusDisplayLabels.converted,
+      className: "bg-violet-500/20 text-violet-600 border-violet-500/30",
+    };
+  }
+  if (c.status === "closed") {
+    return {
+      label: ConsultationStatusDisplayLabels.closed,
+      className: "bg-muted text-muted-foreground border-muted",
+    };
+  }
+  return {
+    label: ConsultationStageLabels[c.currentStage] || c.currentStage,
+    className: getStageBadgeColor(c.currentStage),
+  };
+}
+
+// Mirrors the role gate on POST /api/consultations/:id/early-close.
+// Per spec §3.2.4: assigned_lawyer (synthetic), admin_support,
+// department_head, branch_manager. Dept_head dept-scoped.
+function canEarlyClose(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.status !== "active") return false;
+  if (userRole === "department_head" && consultation.departmentId !== userDeptId) return false;
+  if (userRole === "branch_manager" || userRole === "admin_support") return true;
+  if (userRole === "department_head") return true;
+  return !!consultation.assignedTo && consultation.assignedTo === userId;
 }
 
 export default function ConsultationsPage() {
@@ -297,6 +360,12 @@ export default function ConsultationsPage() {
     targetCaseStage: CaseStage.RECEPTION,
     caseDepartmentId: "",
   });
+
+  const [showEarlyCloseDialog, setShowEarlyCloseDialog] = useState(false);
+  const [earlyCloseConsultation, setEarlyCloseConsultation] = useState<Consultation | null>(null);
+  const [earlyCloseReason, setEarlyCloseReason] = useState<ConsultationClosureReasonValue | "">("");
+  const [earlyCloseOtherText, setEarlyCloseOtherText] = useState("");
+  const [earlyCloseNotes, setEarlyCloseNotes] = useState("");
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -459,6 +528,58 @@ export default function ConsultationsPage() {
       closeConvertDialog();
     } catch (err) {
       toast({ title: "فشل تحويل الاستشارة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const openEarlyCloseDialog = (c: Consultation) => {
+    setEarlyCloseConsultation(c);
+    setEarlyCloseReason("");
+    setEarlyCloseOtherText("");
+    setEarlyCloseNotes("");
+    setShowEarlyCloseDialog(true);
+  };
+
+  const closeEarlyCloseDialog = () => {
+    setShowEarlyCloseDialog(false);
+    setEarlyCloseConsultation(null);
+    setEarlyCloseReason("");
+    setEarlyCloseOtherText("");
+    setEarlyCloseNotes("");
+  };
+
+  const handleEarlyClose = async () => {
+    if (!earlyCloseConsultation) return;
+    // Client-side body validation. The endpoint also enforces:
+    //   - reason ∈ ConsultationClosureReason values
+    //   - otherText non-empty when reason === OTHER
+    if (!earlyCloseReason) {
+      toast({ title: "اختر سبب الإغلاق", variant: "destructive" });
+      return;
+    }
+    if (earlyCloseReason === ConsultationClosureReason.OTHER && !earlyCloseOtherText.trim()) {
+      toast({ title: "يجب توضيح سبب الإغلاق عند اختيار 'أخرى'", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      // The endpoint reads { reason, otherText? } only — `notes` is sent
+      // for forward compatibility but currently ignored server-side
+      // (the consultations table has no closure_notes column yet). A
+      // follow-up commit can add the column + read it on the route.
+      await apiRequest("POST", `/api/consultations/${earlyCloseConsultation.id}/early-close`, {
+        reason: earlyCloseReason,
+        otherText: earlyCloseReason === ConsultationClosureReason.OTHER
+          ? earlyCloseOtherText.trim()
+          : undefined,
+        notes: earlyCloseNotes.trim() || undefined,
+      });
+      await refreshConsultations();
+      toast({ title: "تم إغلاق الاستشارة" });
+      closeEarlyCloseDialog();
+    } catch (err) {
+      toast({ title: "فشل إغلاق الاستشارة", description: extractApiError(err), variant: "destructive" });
     } finally {
       setActionInProgress(false);
     }
@@ -756,11 +877,9 @@ export default function ConsultationsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع الحالات</SelectItem>
-                {Object.entries(ConsultationStatusLabels).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
+                <SelectItem value="active">{ConsultationStatusDisplayLabels.active}</SelectItem>
+                <SelectItem value="converted">{ConsultationStatusDisplayLabels.converted}</SelectItem>
+                <SelectItem value="closed">{ConsultationStatusDisplayLabels.closed}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -791,9 +910,10 @@ export default function ConsultationsPage() {
                     <Badge variant="outline">{consultation.consultationType}</Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge className={getStatusColor(consultation.status)}>
-                      {ConsultationStatusLabels[consultation.status]}
-                    </Badge>
+                    {(() => {
+                      const b = getConsultationDisplayBadge(consultation);
+                      return <Badge className={b.className}>{b.label}</Badge>;
+                    })()}
                   </TableCell>
                   <TableCell>{getDepartmentName(consultation.departmentId)}</TableCell>
                   <TableCell>
@@ -883,6 +1003,16 @@ export default function ConsultationsPage() {
                                 تحويل لقضية
                               </DropdownMenuItem>
                             </>
+                          )}
+                          {user && canEarlyClose(consultation, user.role, user.id, user.departmentId) && (
+                            <DropdownMenuItem
+                              data-testid={`button-early-close-${consultation.id}`}
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => openEarlyCloseDialog(consultation)}
+                            >
+                              <XCircle className="w-4 h-4 ml-2" />
+                              إغلاق مبكر
+                            </DropdownMenuItem>
                           )}
                           {isDeptHead && consultation.departmentId === user?.departmentId && (
                             <>
@@ -1497,6 +1627,87 @@ export default function ConsultationsPage() {
             >
               <FileSymlink className="w-4 h-4 ml-2" />
               تحويل لقضية
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showEarlyCloseDialog}
+        onOpenChange={(open) => { if (!open) closeEarlyCloseDialog(); }}
+      >
+        <DialogContent dir="rtl" className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <XCircle className="w-5 h-5" />
+              إغلاق الاستشارة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم إقفال الاستشارة وتعطيل جميع إجراءات سير العمل. هذا الإجراء لا يمكن التراجع عنه.
+            </p>
+            <div>
+              <Label>سبب الإغلاق <span className="text-red-500">*</span></Label>
+              <Select
+                value={earlyCloseReason}
+                onValueChange={(v) => setEarlyCloseReason(v as ConsultationClosureReasonValue)}
+              >
+                <SelectTrigger data-testid="select-closure-reason">
+                  <SelectValue placeholder="اختر سبب الإغلاق" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.values(ConsultationClosureReason) as ConsultationClosureReasonValue[]).map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {ConsultationClosureReasonLabels[r]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {earlyCloseReason === ConsultationClosureReason.OTHER && (
+              <div>
+                <Label>توضيح السبب <span className="text-red-500">*</span></Label>
+                <Textarea
+                  data-testid="input-closure-reason-other"
+                  value={earlyCloseOtherText}
+                  onChange={(e) => setEarlyCloseOtherText(e.target.value)}
+                  placeholder="اكتب سبب الإغلاق..."
+                  rows={3}
+                />
+              </div>
+            )}
+            <div>
+              <Label>ملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-closure-notes"
+                value={earlyCloseNotes}
+                onChange={(e) => setEarlyCloseNotes(e.target.value)}
+                placeholder="ملاحظات إضافية للأرشيف..."
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={closeEarlyCloseDialog}
+              data-testid="button-cancel-early-close"
+            >
+              إلغاء
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleEarlyClose}
+              disabled={
+                actionInProgress ||
+                !earlyCloseReason ||
+                (earlyCloseReason === ConsultationClosureReason.OTHER && !earlyCloseOtherText.trim())
+              }
+              data-testid="button-confirm-early-close"
+            >
+              <XCircle className="w-4 h-4 ml-2" />
+              تأكيد الإغلاق
             </Button>
           </DialogFooter>
         </DialogContent>
