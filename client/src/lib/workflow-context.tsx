@@ -116,12 +116,16 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     duration: number,
     isOverdue: boolean
   ) => {
+    // StageTransition's fromStage/toStage are typed as WorkflowCaseStageValue
+    // only (legacy from when this file pre-dated the consultation rebuild).
+    // The runtime carries entityType so the discriminator is preserved; the
+    // cast keeps the narrow declared type without widening shared/schema.ts.
     const transition: StageTransition = {
       id: generateId(),
       entityType,
       entityId,
-      fromStage,
-      toStage,
+      fromStage: fromStage as WorkflowCaseStageValue | null,
+      toStage: toStage as WorkflowCaseStageValue,
       performedBy: user?.id || "",
       performedByRole: user?.role || "",
       notes,
@@ -279,11 +283,17 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
         updateCaseWorkflowStage(entityId, WorkflowCaseStage.REVIEW_NOTES_RECEIVED, "تم استلام ملاحظات المراجعة");
       }
     } else {
-      if (action === "returned") {
-        updateConsultationWorkflowStage(entityId, ConsultationStage.RETURNED_FOR_REVISION, "تم إرجاع الاستشارة للتعديل");
-      } else {
-        updateConsultationWorkflowStage(entityId, ConsultationStage.REVIEW_NOTES_RECEIVED, "تم استلام ملاحظات المراجعة");
-      }
+      // Both "returned" and "notes received" map to TAKING_NOTES in the
+      // post-rebuild consultation workflow — that's the single canonical
+      // stage that holds a consultation while the assigned lawyer
+      // processes committee feedback. The legacy RETURNED_FOR_REVISION /
+      // REVIEW_NOTES_RECEIVED distinction was UI-only and didn't survive
+      // the rebuild.
+      updateConsultationWorkflowStage(
+        entityId,
+        ConsultationStage.TAKING_NOTES,
+        action === "returned" ? "تم إرجاع الاستشارة للتعديل" : "تم استلام ملاحظات المراجعة",
+      );
     }
   };
   
@@ -303,7 +313,9 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     if (entityType === "case") {
       updateCaseWorkflowStage(entityId, WorkflowCaseStage.PROCESSING_NOTES, "جاري معالجة الملاحظات");
     } else {
-      updateConsultationWorkflowStage(entityId, ConsultationStage.PROCESSING_NOTES, "جاري معالجة الملاحظات");
+      // PROCESSING_NOTES collapsed into TAKING_NOTES post-rebuild — see
+      // the matching note in submitReviewNotes above.
+      updateConsultationWorkflowStage(entityId, ConsultationStage.TAKING_NOTES, "جاري معالجة الملاحظات");
     }
   };
   
@@ -369,19 +381,24 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     const isOverdue = sla ? duration > sla.maxDurationHours : false;
     
     addTransition("consultation", consultationId, "received", "assigned_to_department", "تم إحالة الاستشارة للقسم", duration, isOverdue);
-    
+
+    // Post-rebuild: status is just active/converted/closed; the workflow
+    // position lives on currentStage. The dedicated /assign endpoint
+    // already advances RECEIVED → STUDY in a single write, but this
+    // workflow-context path is a legacy local mirror that bypasses the
+    // endpoint, so we set currentStage here to keep parity.
     updateConsultation(consultationId, {
       departmentId,
       assignedTo,
-      status: "دراسة",
+      currentStage: ConsultationStage.STUDY,
     });
-    
+
     triggerWorkflowNotification({
       type: NotificationType.CONSULTATION_ASSIGNED,
       entityType: "consultation",
       entityId: consultationId,
       entityName: consultation.consultationNumber,
-      stage: "دراسة",
+      stage: ConsultationStage.STUDY,
     }, [assignedTo]);
   };
   
@@ -400,30 +417,24 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     const isOverdue = sla ? duration > sla.maxDurationHours : false;
     
     addTransition("consultation", consultationId, fromStage, newStage, notes, duration, isOverdue);
-    
-    const stageMapping: Record<ConsultationStageValue, string> = {
-      received: "استلام",
-      assigned_to_department: "دراسة",
-      drafting: "إعداد_الرد",
-      in_review: "لجنة_المراجعة",
-      review_notes_received: "تعديلات",
-      processing_notes: "تعديلات",
-      returned_for_revision: "تعديلات",
-      ready_to_send: "جاهز",
-      sent_to_client: "مسلّم",
-    };
-    
+
+    // Post-rebuild: ConsultationStageValue values ARE the canonical Arabic
+    // stage strings written to consultations.current_stage. The legacy
+    // stage-name → status-label remap is gone (status is now just
+    // active/converted/closed). Just persist newStage directly.
     updateConsultation(consultationId, {
-      status: stageMapping[newStage] as any,
+      currentStage: newStage,
     });
   };
   
   const sendConsultationToReview = (consultationId: string) => {
-    updateConsultationWorkflowStage(consultationId, ConsultationStage.IN_REVIEW, "تم إرسال الاستشارة للجنة المراجعة");
+    // Post-rebuild: IN_REVIEW collapsed into COMMITTEE (لجنة_مراجعة).
+    updateConsultationWorkflowStage(consultationId, ConsultationStage.COMMITTEE, "تم إرسال الاستشارة للجنة المراجعة");
   };
-  
+
   const returnConsultation = (consultationId: string, reason: string) => {
-    updateConsultationWorkflowStage(consultationId, ConsultationStage.RETURNED_FOR_REVISION, reason);
+    // Post-rebuild: RETURNED_FOR_REVISION collapsed into TAKING_NOTES.
+    updateConsultationWorkflowStage(consultationId, ConsultationStage.TAKING_NOTES, reason);
     
     const existingNotes = reviewNotes.filter(n => n.entityId === consultationId);
     const returnCount = existingNotes.filter(n => n.action === "returned").length + 1;
@@ -449,7 +460,10 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
   };
   
   const sendConsultationToClient = (consultationId: string) => {
-    updateConsultationWorkflowStage(consultationId, ConsultationStage.SENT_TO_CLIENT, "تم إرسال الاستشارة للعميل");
+    // Post-rebuild: SENT_TO_CLIENT collapsed into COMPLETED (منجزة) —
+    // delivery is now the workflow's terminal stage rather than a
+    // separate post-delivery state.
+    updateConsultationWorkflowStage(consultationId, ConsultationStage.COMPLETED, "تم إرسال الاستشارة للعميل");
   };
   
   const checkOverdueItems = () => {
@@ -552,14 +566,20 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
       c.primaryLawyerId === employeeId && c.status !== "مغلق"
     ).length;
     
-    const activeConsultations = consultations.filter(c => 
-      c.assignedTo === employeeId && c.status !== "مغلق"
+    // Post-rebuild: consultation status is just active/converted/closed.
+    // "Not closed" includes both active and converted (still relevant
+    // for workload until explicitly closed).
+    const activeConsultations = consultations.filter(c =>
+      c.assignedTo === employeeId && c.status !== "closed"
     ).length;
-    
-    const inReviewItems = cases.filter(c => 
+
+    // Cases-side check stays as-is (string status field, not an enum).
+    // Consultations-side moved from the removed "لجنة_المراجعة" status to
+    // the new currentStage === COMMITTEE check.
+    const inReviewItems = cases.filter(c =>
       c.primaryLawyerId === employeeId && c.status === "لجنة_المراجعة"
-    ).length + consultations.filter(c => 
-      c.assignedTo === employeeId && c.status === "لجنة_المراجعة"
+    ).length + consultations.filter(c =>
+      c.assignedTo === employeeId && c.currentStage === ConsultationStage.COMMITTEE
     ).length;
     
     const { cases: overdueCases, consultations: overdueConsultations } = checkOverdueItems();
