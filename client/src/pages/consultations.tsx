@@ -45,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Search, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -73,6 +73,9 @@ import {
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
+  CaseStage,
+  CaseStageLabels,
+  CaseStagesOrder,
   DeliveryType,
   Department,
 } from "@shared/schema";
@@ -183,6 +186,23 @@ function canDoTakeNotesOutcome(
   return !!consultation.assignedTo && consultation.assignedTo === userId;
 }
 
+// Mirrors the role gate on POST /api/consultations/:id/convert-to-case.
+// Per spec §3.2.3 / §3.2.4: admin_support, department_head, branch_manager.
+// Dept_head additionally scoped to their own department here. The endpoint
+// also rejects non-active or COMPLETED consultations; we mirror that here
+// so the dropdown doesn't show a doomed action.
+function canConvertToCase(
+  consultation: Consultation,
+  userRole: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.status !== "active") return false;
+  if (consultation.currentStage === ConsultationStage.COMPLETED) return false;
+  if (userRole === "branch_manager" || userRole === "admin_support") return true;
+  if (userRole === "department_head" && consultation.departmentId === userDeptId) return true;
+  return false;
+}
+
 function extractApiError(err: unknown): string {
   const msg = (err as any)?.message || "";
   // format from throwIfResNotOk: "400: {"error":"..."}"
@@ -270,6 +290,13 @@ export default function ConsultationsPage() {
   const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
   const [takeNotesConsultation, setTakeNotesConsultation] = useState<Consultation | null>(null);
   const [takeNotesNotes, setTakeNotesNotes] = useState("");
+
+  const [showConvertDialog, setShowConvertDialog] = useState(false);
+  const [convertConsultation, setConvertConsultation] = useState<Consultation | null>(null);
+  const [convertData, setConvertData] = useState<{ targetCaseStage: string; caseDepartmentId: string }>({
+    targetCaseStage: CaseStage.RECEPTION,
+    caseDepartmentId: "",
+  });
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -386,6 +413,52 @@ export default function ConsultationsPage() {
       closeTakeNotesDialog();
     } catch (err) {
       toast({ title: "فشل تسجيل النتيجة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const openConvertDialog = (c: Consultation) => {
+    setConvertConsultation(c);
+    setConvertData({
+      targetCaseStage: CaseStage.RECEPTION,
+      caseDepartmentId: c.departmentId || "",
+    });
+    setShowConvertDialog(true);
+  };
+
+  const closeConvertDialog = () => {
+    setShowConvertDialog(false);
+    setConvertConsultation(null);
+    setConvertData({ targetCaseStage: CaseStage.RECEPTION, caseDepartmentId: "" });
+  };
+
+  const handleConvertToCase = async () => {
+    if (!convertConsultation) return;
+    // Client-side body validation per spec: targetCaseStage and
+    // caseDepartmentId are both required by the endpoint.
+    if (!convertData.targetCaseStage) {
+      toast({ title: "اختر مرحلة بداية القضية", variant: "destructive" });
+      return;
+    }
+    if (!convertData.caseDepartmentId) {
+      toast({ title: "اختر قسم القضية", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${convertConsultation.id}/convert-to-case`, {
+        targetCaseStage: convertData.targetCaseStage,
+        caseDepartmentId: convertData.caseDepartmentId,
+      });
+      await refreshConsultations();
+      toast({
+        title: "تم تحويل الاستشارة لقضية",
+        description: "تم إنشاء القضية وتحديث حالة الاستشارة إلى \"محولة\".",
+      });
+      closeConvertDialog();
+    } catch (err) {
+      toast({ title: "فشل تحويل الاستشارة", description: extractApiError(err), variant: "destructive" });
     } finally {
       setActionInProgress(false);
     }
@@ -798,6 +871,18 @@ export default function ConsultationsPage() {
                               <FileText className="w-4 h-4 ml-2" />
                               تسجيل نتيجة الأخذ بالملاحظات
                             </DropdownMenuItem>
+                          )}
+                          {user && canConvertToCase(consultation, user.role, user.departmentId) && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid={`button-convert-to-case-${consultation.id}`}
+                                onClick={() => openConvertDialog(consultation)}
+                              >
+                                <FileSymlink className="w-4 h-4 ml-2" />
+                                تحويل لقضية
+                              </DropdownMenuItem>
+                            </>
                           )}
                           {isDeptHead && consultation.departmentId === user?.departmentId && (
                             <>
@@ -1328,6 +1413,90 @@ export default function ConsultationsPage() {
               className="bg-green-600 hover:bg-green-700 text-white"
             >
               تم
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showConvertDialog}
+        onOpenChange={(open) => { if (!open) closeConvertDialog(); }}
+      >
+        <DialogContent dir="rtl" className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSymlink className="w-5 h-5" />
+              تحويل الاستشارة لقضية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم إنشاء قضية جديدة مرتبطة بهذه الاستشارة. حالة الاستشارة ستصبح
+              <strong> "محولة" </strong>
+              ولن يمكن التراجع. اختر مرحلة بداية القضية والقسم.
+            </p>
+            <div>
+              <Label>مرحلة بداية القضية <span className="text-red-500">*</span></Label>
+              <Select
+                value={convertData.targetCaseStage}
+                onValueChange={(value) => setConvertData({ ...convertData, targetCaseStage: value })}
+              >
+                <SelectTrigger data-testid="select-target-case-stage">
+                  <SelectValue placeholder="اختر المرحلة" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CaseStagesOrder.map((stage) => (
+                    <SelectItem key={stage} value={stage}>
+                      {CaseStageLabels[stage] || stage}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>قسم القضية <span className="text-red-500">*</span></Label>
+              <Select
+                value={convertData.caseDepartmentId}
+                onValueChange={(value) => setConvertData({ ...convertData, caseDepartmentId: value })}
+              >
+                <SelectTrigger data-testid="select-case-department">
+                  <SelectValue placeholder="اختر القسم" />
+                </SelectTrigger>
+                <SelectContent>
+                  {departments.map((dept) => (
+                    <SelectItem key={dept.id} value={dept.id}>
+                      {dept.name}
+                      {convertConsultation && dept.id === convertConsultation.departmentId
+                        ? " (افتراضي)"
+                        : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                الافتراضي هو قسم الاستشارة. يمكنك اختيار قسم مختلف للقضية الجديدة.
+              </p>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={closeConvertDialog}
+              data-testid="button-cancel-convert"
+            >
+              إلغاء
+            </Button>
+            <Button
+              onClick={handleConvertToCase}
+              disabled={
+                actionInProgress ||
+                !convertData.targetCaseStage ||
+                !convertData.caseDepartmentId
+              }
+              data-testid="button-confirm-convert"
+            >
+              <FileSymlink className="w-4 h-4 ml-2" />
+              تحويل لقضية
             </Button>
           </DialogFooter>
         </DialogContent>
