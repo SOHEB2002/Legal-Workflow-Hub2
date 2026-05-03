@@ -57,6 +57,7 @@ import type { Consultation, ConsultationStatusValue, CaseTypeValue, DeliveryType
 import { ConsultationStatus, ConsultationStatusLabels, DeliveryType, Department } from "@shared/schema";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
+import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
 import { DialogFooter } from "@/components/ui/dialog";
 import { sendConsultationReminder, requestConsultationTransfer } from "@/lib/notification-triggers";
 
@@ -530,7 +531,7 @@ export default function ConsultationsPage() {
       </Card>
 
       <Dialog open={!!selectedConsultation} onOpenChange={(open) => !open && setSelectedConsultation(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <span>تفاصيل الاستشارة</span>
@@ -539,18 +540,16 @@ export default function ConsultationsPage() {
           </DialogHeader>
           {selectedConsultation && (
             <div className="space-y-4">
+              <div className="border rounded-lg p-4 bg-muted/30">
+                <h4 className="font-semibold mb-4 text-center">مراحل الاستشارة</h4>
+                <ConsultationStagesBar currentStage={selectedConsultation.currentStage} />
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-muted-foreground">العميل</Label>
                   <p className="font-medium">
                     <BidiText>{getClientName(selectedConsultation.clientId)}</BidiText>
                   </p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">الحالة</Label>
-                  <Badge className={getStatusColor(selectedConsultation.status)}>
-                    {ConsultationStatusLabels[selectedConsultation.status]}
-                  </Badge>
                 </div>
                 <div>
                   <Label className="text-muted-foreground">النوع</Label>
