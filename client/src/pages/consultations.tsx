@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,7 +46,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -332,8 +333,27 @@ export default function ConsultationsPage() {
   const { toast } = useToast();
   const lawyers = users.filter(u => u.canBeAssignedConsultations);
 
+  const [, setLocation] = useLocation();
   const [advFilters, setAdvFilters] = useState<AdvancedConsultationsFilters>(EMPTY_CONSULTATIONS_FILTERS);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+
+  // Cross-module deep-link: /consultations?openConsultation=<id> opens the
+  // detail dialog for that consultation. Used by the "أُنشئت من استشارة"
+  // back-link on the cases-page detail dialog. Read once on mount; the
+  // second effect below waits for the consultation to land in the loaded
+  // list and then opens the dialog. Param is stripped from the URL so a
+  // refresh doesn't re-open the same dialog.
+  const [pendingOpenConsId, setPendingOpenConsId] = useState<string | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("openConsultation");
+    if (id) {
+      setPendingOpenConsId(id);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("openConsultation");
+      window.history.replaceState({}, "", url);
+    }
+  }, []);
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
 
   const [showAssignDialog, setShowAssignDialog] = useState(false);
@@ -769,6 +789,24 @@ export default function ConsultationsPage() {
     resetForm();
   };
 
+  // Resolve the pending deep-link open once the consultation arrives in
+  // the loaded list. Done in an effect rather than directly so that
+  // navigating to /consultations?openConsultation=<id> on a cold tab
+  // (consultations not yet fetched) still works.
+  useEffect(() => {
+    if (!pendingOpenConsId) return;
+    const c = consultations.find((x) => x.id === pendingOpenConsId);
+    if (c) {
+      setSelectedConsultation(c);
+      addRecentVisit(
+        "consultation",
+        c.id,
+        `استشارة #${c.id.slice(0, 6)} - ${getClientName(c.clientId)}`,
+      );
+      setPendingOpenConsId(null);
+    }
+  }, [pendingOpenConsId, consultations, addRecentVisit, getClientName]);
+
   const filterLawyers = users.filter(u => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
 
   const filteredConsultations = consultations.filter((consultation) => {
@@ -1109,6 +1147,17 @@ export default function ConsultationsPage() {
           </DialogHeader>
           {selectedConsultation && (
             <div className="space-y-4">
+              {selectedConsultation.status === "converted" && selectedConsultation.convertedToCaseId && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary hover-elevate rounded px-2 py-1 -mx-2"
+                  onClick={() => setLocation(`/cases?openCase=${selectedConsultation.convertedToCaseId}`)}
+                  data-testid="link-go-to-converted-case"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  اذهب للقضية
+                </button>
+              )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل الاستشارة</h4>
                 <ConsultationStagesBar currentStage={selectedConsultation.currentStage} />

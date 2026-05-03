@@ -268,11 +268,24 @@ export default function CasesPage() {
     refreshCases();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Cross-module deep-link: /cases?openCase=<id> opens the detail dialog
+  // for that case. Used by the "اذهب للقضية" link on the consultations
+  // detail dialog after a convert-to-case. Read once on mount; the
+  // pending id is resolved by the second effect below once cases load.
+  // Param is stripped from the URL so a refresh doesn't re-open the dialog.
+  const [pendingOpenCaseId, setPendingOpenCaseId] = useState<string | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const s = params.get("status");
     if (s === "pending_review") setStatusFilter(CaseStage.REVIEW_COMMITTEE);
     else if (s === "ready") setStatusFilter(CaseStage.READY_TO_SUBMIT);
+    const openCaseId = params.get("openCase");
+    if (openCaseId) {
+      setPendingOpenCaseId(openCaseId);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("openCase");
+      window.history.replaceState({}, "", url);
+    }
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -774,6 +787,45 @@ export default function CasesPage() {
     fetchComments(caseItem.id);
     addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
   };
+
+  // Resolve a pending /cases?openCase=<id> deep-link once the case
+  // arrives in the loaded list. Runs after refreshCases() resolves on
+  // a cold tab and after subsequent updates that might add the case.
+  useEffect(() => {
+    if (!pendingOpenCaseId) return;
+    const c = cases.find((x) => x.id === pendingOpenCaseId);
+    if (c) {
+      openDetailsDialog(c);
+      setPendingOpenCaseId(null);
+    }
+  }, [pendingOpenCaseId, cases]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Source-consultation lookup for the "أُنشئت من استشارة #X" back-link
+  // on the case detail dialog. Fetched on demand by ID via the existing
+  // GET /api/consultations/:id endpoint — a small per-open round-trip,
+  // chosen over JOINing into /api/cases (would require a server change
+  // and would pay the cost on every list response, not just on open).
+  const [sourceConsultation, setSourceConsultation] = useState<{ id: string; consultationNumber: string } | null>(null);
+  useEffect(() => {
+    const sourceId = selectedCase ? ((selectedCase as any).convertedFromConsultationId as string | null) : null;
+    if (!sourceId) {
+      setSourceConsultation(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/consultations/${sourceId}`);
+        const data = await res.json();
+        if (!cancelled) {
+          setSourceConsultation({ id: data.id, consultationNumber: data.consultationNumber });
+        }
+      } catch {
+        if (!cancelled) setSourceConsultation(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedCase?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openReviewDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
@@ -1487,6 +1539,17 @@ export default function CasesPage() {
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
+              {sourceConsultation && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary hover-elevate rounded px-2 py-1 -mx-2"
+                  onClick={() => setLocation(`/consultations?openConsultation=${sourceConsultation.id}`)}
+                  data-testid="link-go-to-source-consultation"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  أُنشئت من استشارة <LtrInline>#{sourceConsultation.consultationNumber}</LtrInline>
+                </button>
+              )}
               {selectedCase.caseClassification === CaseClassification.IN_COURT &&
                selectedCase.nextHearingDate &&
                new Date(selectedCase.nextHearingDate) > new Date() && (
