@@ -45,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2 } from "lucide-react";
+import { Plus, Search, MessageSquare, Send, CheckCircle, XCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -53,13 +53,90 @@ import { useClients } from "@/lib/clients-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
-import type { Consultation, ConsultationStatusValue, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
-import { ConsultationStatus, ConsultationStatusLabels, DeliveryType, Department } from "@shared/schema";
+import type { Consultation, ConsultationStatusValue, ConsultationStageValue, CaseTypeValue, DeliveryTypeValue } from "@shared/schema";
+import {
+  ConsultationStatus,
+  ConsultationStatusLabels,
+  ConsultationStage,
+  ConsultationStageLabels,
+  ConsultationStagesAll,
+  ConsultationStagesOrder,
+  DeliveryType,
+  Department,
+} from "@shared/schema";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
 import { DialogFooter } from "@/components/ui/dialog";
+import { apiRequest } from "@/lib/queryClient";
 import { sendConsultationReminder, requestConsultationTransfer } from "@/lib/notification-triggers";
+
+// Per consultations-rebuild-spec.md §3.2.1 ALLOWED_CONSULTATION_TRANSITIONS.
+// Only includes the linear forward steps that the generic /advance-stage
+// endpoint serves. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES outcomes are
+// decision-based and routed through the dedicated endpoints, so they're
+// intentionally absent here — those dialogs land in subsequent commits.
+const LINEAR_ADVANCE: Partial<Record<ConsultationStageValue, { target: ConsultationStageValue; roles: string[] }>> = {
+  [ConsultationStage.RECEIVED]: { target: ConsultationStage.STUDY,           roles: ["admin_support", "department_head", "branch_manager"] },
+  [ConsultationStage.STUDY]:    { target: ConsultationStage.DRAFTING,        roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  [ConsultationStage.DRAFTING]: { target: ConsultationStage.INTERNAL_REVIEW, roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  [ConsultationStage.READY]:    { target: ConsultationStage.COMPLETED,       roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+};
+
+function getAdvanceTarget(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): ConsultationStageValue | null {
+  if (consultation.status !== "active") return null;
+  const rule = LINEAR_ADVANCE[consultation.currentStage];
+  if (!rule) return null;
+  // Department head can only act inside their own department
+  if (userRole === "department_head" && consultation.departmentId !== userDeptId) return null;
+  const isAssignedLawyer = !!consultation.assignedTo && consultation.assignedTo === userId;
+  const effectiveRoles = isAssignedLawyer ? [userRole, "assigned_lawyer"] : [userRole];
+  if (!effectiveRoles.some(r => rule.roles.includes(r))) return null;
+  return rule.target;
+}
+
+// Mirrors the consultation-rollback block in server/routes.ts
+// validateStageTransition: dept_head / branch_manager → any prior stage,
+// assigned_lawyer → one step back. Uses ConsultationStagesAll when the
+// consultation is currently in TAKING_NOTES so the conditional stage is
+// reachable for rollback; otherwise the linear order is sufficient.
+function getReturnTargets(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): ConsultationStageValue[] {
+  if (consultation.status !== "active") return [];
+  if (userRole === "department_head" && consultation.departmentId !== userDeptId) return [];
+  const stages = consultation.currentStage === ConsultationStage.TAKING_NOTES
+    ? ConsultationStagesAll
+    : ConsultationStagesOrder;
+  const currentIdx = stages.indexOf(consultation.currentStage);
+  if (currentIdx <= 0) return [];
+  const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
+  if (isHeadOrManager) return stages.slice(0, currentIdx);
+  const isAssignedLawyer = !!consultation.assignedTo && consultation.assignedTo === userId;
+  if (isAssignedLawyer) return [stages[currentIdx - 1]];
+  return [];
+}
+
+function extractApiError(err: unknown): string {
+  const msg = (err as any)?.message || "";
+  // format from throwIfResNotOk: "400: {"error":"..."}"
+  const match = msg.match(/^\d+: (.+)$/s);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (parsed?.error) return parsed.error;
+    } catch {}
+  }
+  return msg || "حدث خطأ غير متوقع";
+}
 
 function getStatusColor(status: ConsultationStatusValue) {
   switch (status) {
@@ -94,6 +171,7 @@ export default function ConsultationsPage() {
     markDelivered,
     closeConsultation,
     deleteConsultation,
+    refreshConsultations,
   } = useConsultations();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
@@ -114,6 +192,15 @@ export default function ConsultationsPage() {
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [assignConsultationId, setAssignConsultationId] = useState<string | null>(null);
   const [assignData, setAssignData] = useState({ lawyerId: "", departmentId: "" });
+
+  const [actionInProgress, setActionInProgress] = useState(false);
+
+  const [showAdvanceDialog, setShowAdvanceDialog] = useState(false);
+  const [advanceConsultation, setAdvanceConsultation] = useState<Consultation | null>(null);
+
+  const [showReturnDialog, setShowReturnDialog] = useState(false);
+  const [returnConsultation, setReturnConsultation] = useState<Consultation | null>(null);
+  const [returnTargetStage, setReturnTargetStage] = useState<string>("");
 
   const [showReminderDialog, setShowReminderDialog] = useState(false);
   const [reminderConsultation, setReminderConsultation] = useState<Consultation | null>(null);
@@ -165,10 +252,16 @@ export default function ConsultationsPage() {
   const [transferConsultationId, setTransferConsultationId] = useState<string | null>(null);
   const [transferData, setTransferData] = useState({ toDepartmentId: "", reason: "" });
 
-  const canAssignConsultation = (c: Consultation) =>
-    c.status === ConsultationStatus.RECEIVED &&
-    (user?.role === "branch_manager" ||
-     (permissions.canAssignInDepartment && c.departmentId === user?.departmentId));
+  // Aligns with the /api/consultations/:id/assign endpoint role gate
+  // (admin_support, department_head, branch_manager) per §3.2.1. Admin
+  // support and branch manager are global; dept_head is scoped to their
+  // own department.
+  const canAssignConsultation = (c: Consultation) => {
+    if (c.status !== "active" || c.currentStage !== ConsultationStage.RECEIVED) return false;
+    if (user?.role === "branch_manager" || user?.role === "admin_support") return true;
+    if (user?.role === "department_head" && c.departmentId === user?.departmentId) return true;
+    return false;
+  };
 
   const openAssignDialog = (c: Consultation) => {
     setAssignConsultationId(c.id);
@@ -201,13 +294,86 @@ export default function ConsultationsPage() {
     setTransferConsultationId(null);
   };
 
-  const handleAssignConsultation = () => {
-    if (!assignConsultationId || !assignData.lawyerId || !assignData.departmentId) return;
-    assignConsultation(assignConsultationId, assignData.lawyerId, assignData.departmentId);
-    toast({ title: "تم إسناد الاستشارة بنجاح" });
-    setShowAssignDialog(false);
-    setAssignConsultationId(null);
-    setAssignData({ lawyerId: "", departmentId: "" });
+  const handleAssignConsultation = async () => {
+    if (!assignConsultationId || !assignData.lawyerId) return;
+    setActionInProgress(true);
+    try {
+      // The /assign endpoint sets assignedTo and, when currentStage is
+      // RECEIVED, advances to STUDY in the same write. departmentId is
+      // already set on the consultation; the dept dropdown above is only
+      // used here to filter the lawyer list.
+      await apiRequest("POST", `/api/consultations/${assignConsultationId}/assign`, {
+        assignedTo: assignData.lawyerId,
+      });
+      await refreshConsultations();
+      toast({ title: "تم إسناد الاستشارة بنجاح" });
+      setShowAssignDialog(false);
+      setAssignConsultationId(null);
+      setAssignData({ lawyerId: "", departmentId: "" });
+    } catch (err) {
+      toast({ title: "فشل إسناد الاستشارة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const openAdvanceDialog = (c: Consultation) => {
+    setAdvanceConsultation(c);
+    setShowAdvanceDialog(true);
+  };
+
+  const handleAdvanceStage = async () => {
+    if (!advanceConsultation || !user) return;
+    const target = getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId);
+    if (!target) {
+      toast({ title: "لا يمكن نقل الاستشارة", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${advanceConsultation.id}/advance-stage`, {
+        targetStage: target,
+      });
+      await refreshConsultations();
+      toast({ title: "تم نقل الاستشارة للمرحلة التالية" });
+      setShowAdvanceDialog(false);
+      setAdvanceConsultation(null);
+    } catch (err) {
+      toast({ title: "فشل نقل الاستشارة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const openReturnDialog = (c: Consultation) => {
+    setReturnConsultation(c);
+    const targets = user
+      ? getReturnTargets(c, user.role, user.id, user.departmentId)
+      : [];
+    // Default to the immediately prior stage when available — that's the
+    // only choice an assigned_lawyer will see, and a sensible default for
+    // dept_head / branch_manager too.
+    setReturnTargetStage(targets.length > 0 ? targets[targets.length - 1] : "");
+    setShowReturnDialog(true);
+  };
+
+  const handleReturnStage = async () => {
+    if (!returnConsultation || !returnTargetStage) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${returnConsultation.id}/return-stage`, {
+        targetStage: returnTargetStage,
+      });
+      await refreshConsultations();
+      toast({ title: "تم إرجاع الاستشارة للمرحلة السابقة" });
+      setShowReturnDialog(false);
+      setReturnConsultation(null);
+      setReturnTargetStage("");
+    } catch (err) {
+      toast({ title: "فشل إرجاع الاستشارة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
   };
 
   const handleSendToReview = (consultation: Consultation) => {
@@ -445,6 +611,24 @@ export default function ConsultationsPage() {
                             <DropdownMenuItem data-testid={`button-assign-consultation-${consultation.id}`} onClick={() => openAssignDialog(consultation)}>
                               <UserPlus className="w-4 h-4 ml-2" />
                               إسناد الاستشارة
+                            </DropdownMenuItem>
+                          )}
+                          {user && getAdvanceTarget(consultation, user.role, user.id, user.departmentId) && (
+                            <DropdownMenuItem
+                              data-testid={`button-advance-consultation-${consultation.id}`}
+                              onClick={() => openAdvanceDialog(consultation)}
+                            >
+                              <ChevronLeft className="w-4 h-4 ml-2" />
+                              المرحلة التالية
+                            </DropdownMenuItem>
+                          )}
+                          {user && getReturnTargets(consultation, user.role, user.id, user.departmentId).length > 0 && (
+                            <DropdownMenuItem
+                              data-testid={`button-return-consultation-${consultation.id}`}
+                              onClick={() => openReturnDialog(consultation)}
+                            >
+                              <ChevronRight className="w-4 h-4 ml-2" />
+                              المرحلة السابقة
                             </DropdownMenuItem>
                           )}
                           {(consultation.status === ConsultationStatus.STUDY ||
@@ -720,13 +904,102 @@ export default function ConsultationsPage() {
             <Button variant="outline" onClick={() => setShowAssignDialog(false)} data-testid="button-cancel-assign">
               إلغاء
             </Button>
-            <Button onClick={handleAssignConsultation} disabled={!assignData.lawyerId || !assignData.departmentId} data-testid="button-confirm-assign">
+            <Button
+              onClick={handleAssignConsultation}
+              disabled={!assignData.lawyerId || actionInProgress}
+              data-testid="button-confirm-assign"
+            >
               <UserPlus className="w-4 h-4 ml-2" />
               إسناد
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={showAdvanceDialog} onOpenChange={(open) => { if (!open) { setShowAdvanceDialog(false); setAdvanceConsultation(null); } }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>نقل الاستشارة للمرحلة التالية</AlertDialogTitle>
+            <AlertDialogDescription>
+              {advanceConsultation && user ? (
+                (() => {
+                  const target = getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId);
+                  const fromLabel = ConsultationStageLabels[advanceConsultation.currentStage] || advanceConsultation.currentStage;
+                  const toLabel = target ? (ConsultationStageLabels[target] || target) : "";
+                  return (
+                    <>
+                      سيتم نقل الاستشارة من <strong>{fromLabel}</strong> إلى <strong>{toLabel}</strong>.
+                    </>
+                  );
+                })()
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel data-testid="button-cancel-advance">إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleAdvanceStage}
+              disabled={actionInProgress}
+              data-testid="button-confirm-advance"
+            >
+              تأكيد
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showReturnDialog} onOpenChange={(open) => { if (!open) { setShowReturnDialog(false); setReturnConsultation(null); setReturnTargetStage(""); } }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>إرجاع الاستشارة لمرحلة سابقة</AlertDialogTitle>
+            <AlertDialogDescription>
+              {returnConsultation && user ? (() => {
+                const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId);
+                if (targets.length === 1) {
+                  const lbl = ConsultationStageLabels[targets[0]] || targets[0];
+                  return (
+                    <>
+                      يمكنك إرجاع الاستشارة إلى المرحلة السابقة فقط: <strong>{lbl}</strong>.
+                    </>
+                  );
+                }
+                return <>اختر المرحلة التي تريد إرجاع الاستشارة إليها.</>;
+              })() : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {returnConsultation && user && (() => {
+            const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId);
+            if (targets.length <= 1) return null;
+            return (
+              <div className="mt-3 space-y-1" dir="rtl">
+                <Label className="text-sm font-semibold">المرحلة المستهدفة <span className="text-red-500">*</span></Label>
+                <Select value={returnTargetStage} onValueChange={setReturnTargetStage}>
+                  <SelectTrigger data-testid="select-return-target-stage">
+                    <SelectValue placeholder="اختر المرحلة" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {targets.map((stage) => (
+                      <SelectItem key={stage} value={stage}>
+                        {ConsultationStageLabels[stage] || stage}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            );
+          })()}
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel data-testid="button-cancel-return">إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleReturnStage}
+              disabled={actionInProgress || !returnTargetStage}
+              data-testid="button-confirm-return"
+            >
+              تأكيد
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={showTransferDialog} onOpenChange={setShowTransferDialog}>
         <DialogContent className="max-w-md">
