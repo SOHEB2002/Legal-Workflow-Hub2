@@ -10,12 +10,14 @@ import {
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
+  type ConsultationDeliveryExtension,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
   consultationStudies, consultationDrafts, consultationReviews,
-  consultationCommitteeDecisions, consultationNoteOutcomes
+  consultationCommitteeDecisions, consultationNoteOutcomes,
+  consultationDeliveryExtensions
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
@@ -168,6 +170,15 @@ export interface IStorage {
   getConsultationCommitteeDecisions(consultationId: string): Promise<ConsultationCommitteeDecision[]>;
   createConsultationNoteOutcome(data: { consultationId: string; outcome: string; notes: string; recordedBy: string }): Promise<ConsultationNoteOutcome>;
   getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]>;
+  // Phase-5: extend the consultation's expectedDeliveryDate. Insert + update
+  // run inside one transaction so the audit row and the consultation row
+  // can never get out of sync.
+  extendConsultationDelivery(
+    consultationId: string,
+    data: { newExpectedDeliveryDate: Date; reason: string },
+    extendedBy: string,
+  ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }>;
+  getConsultationDeliveryExtensions(consultationId: string): Promise<ConsultationDeliveryExtension[]>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -1554,6 +1565,83 @@ export class DatabaseStorage implements IStorage {
       notes: r.notes ?? "",
       recordedBy: r.recordedBy,
       recordedAt: toISOString(r.recordedAt),
+    }));
+  }
+
+  // ==================== Delivery-date extension (Phase-5) ====================
+
+  // Inserts the audit row and updates consultations.expectedDeliveryDate
+  // in one transaction. Sentinel errors mirror the convert-to-case method
+  // so the route handler can map them to specific 4xx codes:
+  //   CONSULTATION_NOT_FOUND, CONSULTATION_NOT_ACTIVE,
+  //   EXTENSION_NOT_FORWARD (new date is not strictly after the old one).
+  async extendConsultationDelivery(
+    consultationId: string,
+    data: { newExpectedDeliveryDate: Date; reason: string },
+    extendedBy: string,
+  ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, consultationId));
+      if (!existing) throw new Error("CONSULTATION_NOT_FOUND");
+      if (existing.status !== "active") throw new Error("CONSULTATION_NOT_ACTIVE");
+
+      const oldDate = existing.expectedDeliveryDate ?? null;
+      // "Extension" means moving the date forward. Reject same/earlier
+      // values so the audit log carries meaningful events; the route
+      // surfaces this as a 400.
+      if (oldDate && data.newExpectedDeliveryDate.getTime() <= new Date(oldDate).getTime()) {
+        throw new Error("EXTENSION_NOT_FORWARD");
+      }
+
+      const now = new Date();
+      const extensionId = randomUUID();
+      const extensionRow = {
+        id: extensionId,
+        consultationId,
+        oldExpectedDeliveryDate: oldDate,
+        newExpectedDeliveryDate: data.newExpectedDeliveryDate,
+        reason: data.reason,
+        extendedBy,
+        extendedAt: now,
+      };
+      await tx.insert(consultationDeliveryExtensions).values(extensionRow as any);
+
+      const updated = await tx.update(consultations)
+        .set({
+          expectedDeliveryDate: data.newExpectedDeliveryDate,
+          updatedAt: now,
+        } as any)
+        .where(eq(consultations.id, consultationId))
+        .returning();
+      if (!updated.length) throw new Error("CONSULTATION_UPDATE_FAILED");
+
+      return {
+        extension: {
+          id: extensionRow.id,
+          consultationId: extensionRow.consultationId,
+          oldExpectedDeliveryDate: oldDate ? toISOString(oldDate) : null,
+          newExpectedDeliveryDate: toISOString(extensionRow.newExpectedDeliveryDate),
+          reason: extensionRow.reason,
+          extendedBy: extensionRow.extendedBy,
+          extendedAt: toISOString(extensionRow.extendedAt),
+        },
+        consultation: mapDbConsultation(updated[0]),
+      };
+    });
+  }
+
+  async getConsultationDeliveryExtensions(consultationId: string): Promise<ConsultationDeliveryExtension[]> {
+    const rows = await db.select().from(consultationDeliveryExtensions)
+      .where(eq(consultationDeliveryExtensions.consultationId, consultationId))
+      .orderBy(asc(consultationDeliveryExtensions.extendedAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      oldExpectedDeliveryDate: r.oldExpectedDeliveryDate ? toISOString(r.oldExpectedDeliveryDate) : null,
+      newExpectedDeliveryDate: toISOString(r.newExpectedDeliveryDate),
+      reason: r.reason ?? "",
+      extendedBy: r.extendedBy,
+      extendedAt: toISOString(r.extendedAt),
     }));
   }
 

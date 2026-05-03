@@ -117,7 +117,13 @@ export const consultations = pgTable("consultations", {
   consultationNumber: varchar("consultation_number", { length: 50 }).notNull().unique(),
   clientId: varchar("client_id", { length: 255 }).notNull(),
   consultationType: varchar("consultation_type", { length: 255 }).notNull(),
-  deliveryType: varchar("delivery_type", { length: 50 }).notNull(),
+  // @deprecated Phase-5 — the delivery-type concept (مكتوبة / شفهية) was
+  // dropped from the UI. Existing rows retain their value and the column
+  // stays for backwards compat with downstream readers; new inserts fall
+  // back to the default "مكتوبة" the storage layer supplies. Don't surface
+  // it in new UI; the early-close reason "answered_verbally" already
+  // covers the verbal-delivery case.
+  deliveryType: varchar("delivery_type", { length: 50 }).notNull().default("مكتوبة"),
   currentStage: varchar("current_stage", { length: 50 }).notNull().default("استلام"),
   status: varchar("status", { length: 20 }).notNull().default("active"),
   departmentId: varchar("department_id", { length: 255 }).notNull(),
@@ -184,6 +190,21 @@ export const consultationNoteOutcomes = pgTable("consultation_note_outcomes", {
   notes: text("notes").notNull().default(""),
   recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
   recordedAt: timestamp("recorded_at").defaultNow(),
+});
+
+// Phase-5 — audit log for expectedDeliveryDate extensions. Each row
+// captures one extension (old → new) so the dialog can show a history
+// list. The corresponding consultations.expectedDeliveryDate is updated
+// in the same transaction as the insert (see storage.extendConsultationDelivery).
+// Migration: script/add-consultation-delivery-extensions.sql.
+export const consultationDeliveryExtensions = pgTable("consultation_delivery_extensions", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  oldExpectedDeliveryDate: timestamp("old_expected_delivery_date"),
+  newExpectedDeliveryDate: timestamp("new_expected_delivery_date").notNull(),
+  reason: text("reason").notNull().default(""),
+  extendedBy: varchar("extended_by", { length: 255 }).notNull(),
+  extendedAt: timestamp("extended_at").defaultNow(),
 });
 
 export const hearings = pgTable("hearings", {
@@ -463,6 +484,7 @@ export const insertConsultationDraftDbSchema = createInsertSchema(consultationDr
 export const insertConsultationReviewDbSchema = createInsertSchema(consultationReviews).omit({ createdAt: true });
 export const insertConsultationCommitteeDecisionDbSchema = createInsertSchema(consultationCommitteeDecisions).omit({ decidedAt: true });
 export const insertConsultationNoteOutcomeDbSchema = createInsertSchema(consultationNoteOutcomes).omit({ recordedAt: true });
+export const insertConsultationDeliveryExtensionDbSchema = createInsertSchema(consultationDeliveryExtensions).omit({ extendedAt: true });
 export const insertSavedFilterDbSchema = createInsertSchema(savedFilters).omit({ createdAt: true });
 
 // ==================== Select Types ====================
@@ -1487,6 +1509,20 @@ export interface ConsultationNoteOutcome {
   recordedAt: string;
 }
 
+// Phase-5 — one row per expectedDeliveryDate extension. The dialog
+// renders these as a collapsible history list. oldExpectedDeliveryDate
+// is nullable so the very first extension on a row that never had a
+// computed due date (legacy data) still records cleanly.
+export interface ConsultationDeliveryExtension {
+  id: string;
+  consultationId: string;
+  oldExpectedDeliveryDate: string | null;
+  newExpectedDeliveryDate: string;
+  reason: string;
+  extendedBy: string;
+  extendedAt: string;
+}
+
 export interface Hearing {
   id: string;
   caseId: string;
@@ -1783,7 +1819,10 @@ export type InsertCase = z.infer<typeof insertCaseSchema>;
 export const insertConsultationSchema = z.object({
   clientId: z.string().min(1, "العميل مطلوب"),
   consultationType: z.string().min(1, "نوع الاستشارة مطلوب"),
-  deliveryType: z.enum(["مكتوبة", "شفهية"]),
+  // @deprecated Phase-5 — deliveryType was retired from the UI. Kept
+  // optional in the API schema so older clients still validate; the
+  // server falls back to "مكتوبة" via the column default.
+  deliveryType: z.enum(["مكتوبة", "شفهية"]).optional(),
   departmentId: z.string().optional(),
   questionSummary: z.string().min(1, "ملخص السؤال مطلوب"),
   whatsappGroupLink: z.string().optional().default(""),
@@ -1795,6 +1834,17 @@ export const insertConsultationSchema = z.object({
 });
 
 export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
+
+// Phase-5 — body for POST /api/consultations/:id/extend-delivery.
+// newExpectedDeliveryDate must parse as a date; we keep it as a string in
+// the wire format and let the route turn it into a Date. reason is
+// required (free text) so the audit log carries enough context.
+export const extendConsultationDeliverySchema = z.object({
+  newExpectedDeliveryDate: z.string().min(1, "تاريخ التسليم الجديد مطلوب"),
+  reason: z.string().min(1, "سبب التمديد مطلوب"),
+});
+
+export type ExtendConsultationDeliveryInput = z.infer<typeof extendConsultationDeliverySchema>;
 
 export const insertHearingSchema = z.object({
   caseId: z.string().min(1, "القضية مطلوبة"),

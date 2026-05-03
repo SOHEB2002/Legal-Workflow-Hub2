@@ -84,11 +84,13 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
   }, [user, fetchConsultations]);
 
   const addConsultation = async (data: Partial<Consultation>, createdBy: string): Promise<Consultation> => {
+    // Phase-5: deliveryType is no longer sent from the UI (the field was
+    // retired from the create dialog). Server falls back to "مكتوبة" via
+    // the column default + storage layer fallback.
     const consultationData = {
       consultationNumber: generateConsultationNumber(),
       clientId: data.clientId || "",
       consultationType: data.consultationType || "عام",
-      deliveryType: data.deliveryType || "مكتوبة",
       departmentId: data.departmentId || "",
       assignedTo: null,
       questionSummary: data.questionSummary || "",

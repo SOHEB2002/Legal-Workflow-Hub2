@@ -8,6 +8,7 @@ import {
   insertClientSchema,
   insertCaseSchema,
   insertConsultationSchema,
+  extendConsultationDeliverySchema,
   insertHearingSchema,
   insertFieldTaskSchema,
   insertAttachmentSchema,
@@ -2686,6 +2687,90 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[convert-to-case] error:", error);
       res.status(500).json({ error: error.message || "فشل تحويل الاستشارة" });
+    }
+  });
+
+  // POST /api/consultations/:id/extend-delivery
+  // Body: { newExpectedDeliveryDate: ISO string, reason: string }.
+  // Inserts an audit row in consultation_delivery_extensions and updates
+  // consultations.expectedDeliveryDate in a single DB transaction.
+  // Allowed roles (Phase-5): department_head (own dept), branch_manager.
+  app.post("/api/consultations/:id/extend-delivery", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      // Role gate. branch_manager is global; department_head is scoped to
+      // their own department, mirroring assign / early-close.
+      if (reqUser.role === "branch_manager") {
+        // ok
+      } else if (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) {
+        // ok
+      } else {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتمديد التسليم" });
+      }
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const parsed = extendConsultationDeliverySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
+      }
+
+      const newDate = new Date(parsed.data.newExpectedDeliveryDate);
+      if (Number.isNaN(newDate.getTime())) {
+        return res.status(400).json({ error: "تاريخ التسليم الجديد غير صحيح" });
+      }
+
+      try {
+        const result = await storage.extendConsultationDelivery(
+          consultation.id,
+          { newExpectedDeliveryDate: newDate, reason: parsed.data.reason.trim() },
+          reqUser.id,
+        );
+        res.status(201).json(result);
+      } catch (e: any) {
+        const msg = e?.message || "";
+        if (msg === "CONSULTATION_NOT_FOUND") return res.status(404).json({ error: "الاستشارة غير موجودة" });
+        if (msg === "CONSULTATION_NOT_ACTIVE") return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+        if (msg === "EXTENSION_NOT_FORWARD") {
+          return res.status(400).json({ error: "تاريخ التسليم الجديد يجب أن يكون بعد التاريخ الحالي" });
+        }
+        if (msg === "CONSULTATION_UPDATE_FAILED") {
+          return res.status(500).json({ error: "فشل تمديد التسليم، تم التراجع عن جميع التغييرات" });
+        }
+        throw e;
+      }
+    } catch (error: any) {
+      console.error("[extend-delivery] error:", error);
+      res.status(500).json({ error: error.message || "فشل تمديد التسليم" });
+    }
+  });
+
+  // GET /api/consultations/:id/delivery-extensions
+  // Returns the chronological list of expectedDeliveryDate extensions
+  // for a consultation. Auth/visibility piggybacks off canModifyConsultation
+  // — anyone allowed to view the consultation can see its history.
+  app.get("/api/consultations/:id/delivery-extensions", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (!canModifyConsultation(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
+      }
+
+      const rows = await storage.getConsultationDeliveryExtensions(consultation.id);
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
 

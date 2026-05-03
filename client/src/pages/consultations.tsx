@@ -58,12 +58,12 @@ import type {
   Consultation,
   ConsultationStageValue,
   CaseTypeValue,
-  DeliveryTypeValue,
   InternalReviewDecisionValue,
   CommitteeDecisionValue,
   NoteOutcomeValue,
   ConsultationClosureReasonValue,
   ConsultationCategoryValue,
+  ConsultationDeliveryExtension,
 } from "@shared/schema";
 import {
   ConsultationStage,
@@ -79,7 +79,6 @@ import {
   CaseStage,
   CaseStageLabels,
   CaseStagesOrder,
-  DeliveryType,
   Department,
 } from "@shared/schema";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
@@ -450,6 +449,17 @@ export default function ConsultationsPage() {
   const [earlyCloseOtherText, setEarlyCloseOtherText] = useState("");
   const [earlyCloseNotes, setEarlyCloseNotes] = useState("");
 
+  // Phase-5 — extend-delivery dialog + history list state. extensions are
+  // fetched once when the details dialog opens (see useEffect below);
+  // refreshed after a successful extension so the list reflects the new
+  // entry without a full consultations refresh.
+  const [showExtendDialog, setShowExtendDialog] = useState(false);
+  const [extendConsultation, setExtendConsultation] = useState<Consultation | null>(null);
+  const [extendNewDate, setExtendNewDate] = useState<string>("");
+  const [extendReason, setExtendReason] = useState<string>("");
+  const [deliveryExtensions, setDeliveryExtensions] = useState<ConsultationDeliveryExtension[]>([]);
+  const [extensionsExpanded, setExtensionsExpanded] = useState(false);
+
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
     setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "" });
@@ -630,6 +640,79 @@ export default function ConsultationsPage() {
     setEarlyCloseReason("");
     setEarlyCloseOtherText("");
     setEarlyCloseNotes("");
+  };
+
+  // Phase-5: matches the server gate on POST /extend-delivery —
+  // department_head (own dept) and branch_manager only.
+  const canExtendDelivery = (c: Consultation): boolean => {
+    if (!user) return false;
+    if (c.status !== "active") return false;
+    if (user.role === "branch_manager") return true;
+    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+    return false;
+  };
+
+  const openExtendDialog = (c: Consultation) => {
+    setExtendConsultation(c);
+    // Pre-fill with the current expected date as a starting point so the
+    // user only needs to push it forward. ISO datetime-local format is
+    // YYYY-MM-DDTHH:mm, so slice to that length.
+    const seed = c.expectedDeliveryDate ? new Date(c.expectedDeliveryDate) : new Date();
+    const local = new Date(seed.getTime() - seed.getTimezoneOffset() * 60_000)
+      .toISOString()
+      .slice(0, 16);
+    setExtendNewDate(local);
+    setExtendReason("");
+    setShowExtendDialog(true);
+  };
+
+  const closeExtendDialog = () => {
+    setShowExtendDialog(false);
+    setExtendConsultation(null);
+    setExtendNewDate("");
+    setExtendReason("");
+  };
+
+  const fetchDeliveryExtensions = async (consultationId: string) => {
+    try {
+      const res = await apiRequest("GET", `/api/consultations/${consultationId}/delivery-extensions`);
+      const rows = (await res.json()) as ConsultationDeliveryExtension[];
+      setDeliveryExtensions(Array.isArray(rows) ? rows : []);
+    } catch {
+      setDeliveryExtensions([]);
+    }
+  };
+
+  const handleExtendDelivery = async () => {
+    if (!extendConsultation) return;
+    if (!extendNewDate) {
+      toast({ title: "اختر تاريخ التسليم الجديد", variant: "destructive" });
+      return;
+    }
+    if (!extendReason.trim()) {
+      toast({ title: "أدخل سبب التمديد", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      // datetime-local has no timezone info; constructing a Date from it
+      // interprets it as local time, then toISOString() converts to UTC
+      // for the wire — server stores a Date, so timezone round-trips
+      // cleanly.
+      const iso = new Date(extendNewDate).toISOString();
+      await apiRequest("POST", `/api/consultations/${extendConsultation.id}/extend-delivery`, {
+        newExpectedDeliveryDate: iso,
+        reason: extendReason.trim(),
+      });
+      await refreshConsultations();
+      await fetchDeliveryExtensions(extendConsultation.id);
+      toast({ title: "تم تمديد تاريخ التسليم" });
+      closeExtendDialog();
+    } catch (err) {
+      toast({ title: "فشل تمديد التسليم", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
   };
 
   const handleEarlyClose = async () => {
@@ -814,7 +897,6 @@ export default function ConsultationsPage() {
   const [formData, setFormData] = useState({
     clientId: "",
     consultationType: "عام" as CaseTypeValue,
-    deliveryType: "مكتوبة" as DeliveryTypeValue,
     departmentId: "",
     questionSummary: "",
     // Phase-4: SLA category. Defaults to "عادية" (3-day SLA). Set once
@@ -826,7 +908,6 @@ export default function ConsultationsPage() {
     setFormData({
       clientId: "",
       consultationType: "عام",
-      deliveryType: "مكتوبة",
       departmentId: "",
       questionSummary: "",
       category: ConsultationCategory.STANDARD,
@@ -870,6 +951,21 @@ export default function ConsultationsPage() {
       setSelectedConsultation(fresh);
     }
   }, [consultations, selectedConsultation]);
+
+  // Phase-5: fetch the delivery-extension history once per dialog open.
+  // Triggered on selectedConsultation.id change (not the whole object) so
+  // the per-list-refresh sync above doesn't re-fetch on every keystroke.
+  // Also collapses the list back when switching consultations.
+  useEffect(() => {
+    if (!selectedConsultation) {
+      setDeliveryExtensions([]);
+      setExtensionsExpanded(false);
+      return;
+    }
+    setExtensionsExpanded(false);
+    fetchDeliveryExtensions(selectedConsultation.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConsultation?.id]);
 
   const filterLawyers = users.filter(u => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
 
@@ -964,23 +1060,6 @@ export default function ConsultationsPage() {
                   />
                 </div>
                 <div>
-                  <Label>طريقة التسليم</Label>
-                  <Select
-                    value={formData.deliveryType}
-                    onValueChange={(value: DeliveryTypeValue) =>
-                      setFormData({ ...formData, deliveryType: value })
-                    }
-                  >
-                    <SelectTrigger data-testid="select-delivery-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="مكتوبة">مكتوبة</SelectItem>
-                      <SelectItem value="شفهية">شفهية</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
                   <Label>القسم</Label>
                   <Select
                     value={formData.departmentId}
@@ -1060,41 +1139,41 @@ export default function ConsultationsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="text-right">رقم الاستشارة</TableHead>
-                <TableHead className="text-right">العميل</TableHead>
-                <TableHead className="text-right">النوع</TableHead>
-                <TableHead className="text-right">الحالة</TableHead>
-                <TableHead className="text-right">القسم</TableHead>
-                <TableHead className="text-right">المحامي المسؤول</TableHead>
-                <TableHead className="text-right">التصنيف</TableHead>
-                <TableHead className="text-right">التسليم المتوقع</TableHead>
-                <TableHead className="text-right">التسليم</TableHead>
-                <TableHead className="text-right">الإجراءات</TableHead>
+                {/* Phase-5: all table cells (header + body) center-aligned. */}
+                <TableHead className="text-center">رقم الاستشارة</TableHead>
+                <TableHead className="text-center">العميل</TableHead>
+                <TableHead className="text-center">النوع</TableHead>
+                <TableHead className="text-center">الحالة</TableHead>
+                <TableHead className="text-center">القسم</TableHead>
+                <TableHead className="text-center">المحامي المسؤول</TableHead>
+                <TableHead className="text-center">التصنيف</TableHead>
+                <TableHead className="text-center">التسليم المتوقع</TableHead>
+                <TableHead className="text-center">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredConsultations.map((consultation) => (
                 <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`}>
-                  <TableCell className="font-medium">
+                  <TableCell className="text-center font-medium">
                     <LtrInline>{consultation.consultationNumber}</LtrInline>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
                     <BidiText>{getClientName(consultation.clientId)}</BidiText>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
                     <Badge variant="outline">{consultation.consultationType}</Badge>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-center">
                     {(() => {
                       const b = getConsultationDisplayBadge(consultation);
                       return <Badge className={b.className}>{b.label}</Badge>;
                     })()}
                   </TableCell>
-                  <TableCell>{getDepartmentName(consultation.departmentId)}</TableCell>
-                  <TableCell data-testid={`cell-assigned-lawyer-${consultation.id}`}>
+                  <TableCell className="text-center">{getDepartmentName(consultation.departmentId)}</TableCell>
+                  <TableCell className="text-center" data-testid={`cell-assigned-lawyer-${consultation.id}`}>
                     <BidiText>{getLawyerName(consultation.assignedTo)}</BidiText>
                   </TableCell>
-                  <TableCell data-testid={`cell-category-${consultation.id}`}>
+                  <TableCell className="text-center" data-testid={`cell-category-${consultation.id}`}>
                     <Badge
                       variant="outline"
                       className={getCategoryBadgeClassName(consultation.category)}
@@ -1102,7 +1181,7 @@ export default function ConsultationsPage() {
                       {consultation.category}
                     </Badge>
                   </TableCell>
-                  <TableCell data-testid={`cell-expected-delivery-${consultation.id}`}>
+                  <TableCell className="text-center" data-testid={`cell-expected-delivery-${consultation.id}`}>
                     {(() => {
                       const overdue = isConsultationOverdue(consultation);
                       const text = formatExpectedDate(consultation.expectedDeliveryDate);
@@ -1121,13 +1200,8 @@ export default function ConsultationsPage() {
                       );
                     })()}
                   </TableCell>
-                  <TableCell>
-                    <Badge variant={consultation.deliveryType === "مكتوبة" ? "secondary" : "outline"}>
-                      {consultation.deliveryType}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1">
+                  <TableCell className="text-center">
+                    <div className="flex items-center justify-center gap-1">
                       <Button
                         size="icon"
                         variant="ghost"
@@ -1382,10 +1456,24 @@ export default function ConsultationsPage() {
                         إغلاق مبكر
                       </Button>
                     )}
+                    {canExtendDelivery(selectedConsultation) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-extend-delivery-${selectedConsultation.id}`}
+                        onClick={() => openExtendDialog(selectedConsultation)}
+                      >
+                        <AlertTriangle className="w-4 h-4 ml-1" />
+                        تمديد التسليم
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              {/* Phase-5: dialog body content right-aligned (RTL natural).
+                  text-right on the wrapping divs propagates to the Label
+                  + p children. */}
+              <div className="grid grid-cols-2 gap-4 text-right">
                 <div>
                   <Label className="text-muted-foreground">العميل</Label>
                   <p className="font-medium">
@@ -1395,10 +1483,6 @@ export default function ConsultationsPage() {
                 <div>
                   <Label className="text-muted-foreground">النوع</Label>
                   <p>{selectedConsultation.consultationType}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">طريقة التسليم</Label>
-                  <p>{selectedConsultation.deliveryType}</p>
                 </div>
                 <div>
                   <Label className="text-muted-foreground">المحامي المسؤول</Label>
@@ -1437,22 +1521,71 @@ export default function ConsultationsPage() {
                   </p>
                 </div>
               </div>
-              <div>
+              <div className="text-right">
                 <Label className="text-muted-foreground">ملخص السؤال</Label>
                 <p className="p-3 bg-muted rounded-md">{selectedConsultation.questionSummary}</p>
               </div>
               {selectedConsultation.response && (
-                <div>
+                <div className="text-right">
                   <Label className="text-muted-foreground">الرد</Label>
                   <p className="p-3 bg-muted rounded-md">{selectedConsultation.response}</p>
                 </div>
               )}
               {selectedConsultation.reviewNotes && (
-                <div>
+                <div className="text-right">
                   <Label className="text-muted-foreground">ملاحظات المراجعة</Label>
                   <p className="p-3 bg-destructive/10 text-destructive rounded-md">
                     {selectedConsultation.reviewNotes}
                   </p>
+                </div>
+              )}
+
+              {/* Phase-5: collapsible delivery-extension history. Fetched
+                  on dialog-open (see useEffect below). Hidden when there
+                  are no extensions to avoid noise. */}
+              {deliveryExtensions.length > 0 && (
+                <div className="text-right border rounded-lg p-3 bg-muted/20">
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 text-sm font-medium w-full text-right"
+                    onClick={() => setExtensionsExpanded((v) => !v)}
+                    data-testid="button-toggle-extensions"
+                  >
+                    <span>سجل تمديدات التسليم ({deliveryExtensions.length})</span>
+                    <ChevronLeft
+                      className={
+                        "w-4 h-4 transition-transform " +
+                        (extensionsExpanded ? "-rotate-90" : "")
+                      }
+                    />
+                  </button>
+                  {extensionsExpanded && (
+                    <ul className="mt-3 space-y-2" data-testid="list-delivery-extensions">
+                      {deliveryExtensions.map((ext) => (
+                        <li
+                          key={ext.id}
+                          className="text-xs border-r-2 border-primary/40 pr-3 py-1"
+                          data-testid={`extension-${ext.id}`}
+                        >
+                          <div className="font-medium">
+                            <LtrInline>{formatExpectedDate(ext.oldExpectedDeliveryDate)}</LtrInline>
+                            {" ← "}
+                            <LtrInline>{formatExpectedDate(ext.newExpectedDeliveryDate)}</LtrInline>
+                          </div>
+                          {ext.reason && (
+                            <div className="text-muted-foreground mt-0.5">
+                              <BidiText>{ext.reason}</BidiText>
+                            </div>
+                          )}
+                          <div className="text-muted-foreground mt-0.5">
+                            بواسطة <BidiText>{getLawyerName(ext.extendedBy)}</BidiText>
+                            {" • "}
+                            <LtrInline>{formatExpectedDate(ext.extendedAt)}</LtrInline>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               )}
             </div>
@@ -2051,6 +2184,71 @@ export default function ConsultationsPage() {
             >
               <XCircle className="w-4 h-4 ml-2" />
               تأكيد الإغلاق
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showExtendDialog}
+        onOpenChange={(open) => { if (!open) closeExtendDialog(); }}
+      >
+        <DialogContent dir="rtl" className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5" />
+              تمديد تاريخ التسليم
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 text-right">
+            <p className="text-sm text-muted-foreground">
+              التمديد يسجَّل في سجل التمديدات ويصبح هو التاريخ المتوقع الجديد.
+              لا يمكن أن يكون قبل التاريخ الحالي أو مساوياً له.
+            </p>
+            {extendConsultation && (
+              <div className="text-xs text-muted-foreground">
+                التاريخ الحالي:{" "}
+                <LtrInline>{formatExpectedDate(extendConsultation.expectedDeliveryDate)}</LtrInline>
+              </div>
+            )}
+            <div>
+              <Label>تاريخ التسليم الجديد <span className="text-red-500">*</span></Label>
+              <Input
+                type="datetime-local"
+                value={extendNewDate}
+                onChange={(e) => setExtendNewDate(e.target.value)}
+                data-testid="input-extend-new-date"
+              />
+            </div>
+            <div>
+              <Label>سبب التمديد <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-extend-reason"
+                value={extendReason}
+                onChange={(e) => setExtendReason(e.target.value)}
+                placeholder="اكتب سبب تمديد التسليم..."
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={closeExtendDialog}
+              data-testid="button-cancel-extend"
+            >
+              إلغاء
+            </Button>
+            <Button
+              onClick={handleExtendDelivery}
+              disabled={
+                actionInProgress ||
+                !extendNewDate ||
+                !extendReason.trim()
+              }
+              data-testid="button-confirm-extend"
+            >
+              تأكيد التمديد
             </Button>
           </DialogFooter>
         </DialogContent>
