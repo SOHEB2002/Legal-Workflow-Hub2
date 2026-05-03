@@ -301,7 +301,21 @@ function mapDbClient(dbClient: any): Client {
   };
 }
 
-// Map DB consultation to interface Consultation
+// Map DB consultation to interface Consultation.
+//
+// Every key in the Consultation interface MUST be present in the returned
+// object — JSON.stringify drops keys whose value is undefined, so a row
+// where Drizzle hands us undefined for a column (e.g. because the running
+// server's compiled schema lacks the column declaration) would silently
+// vanish from the API response and the client would render "—" for
+// stage/status badges with no error to point at.
+//
+// To make that failure mode loud rather than silent: every nullable
+// field below uses `?? null` (NOT `|| null` — we want to preserve "" for
+// text fields that legitimately store empty strings) so the key is
+// always emitted. The two not-null columns (currentStage, status) get
+// explicit fallbacks too as defense in depth even though the table
+// declares them NOT NULL with defaults.
 function mapDbConsultation(dbCon: any): Consultation {
   return {
     id: dbCon.id,
@@ -309,19 +323,19 @@ function mapDbConsultation(dbCon: any): Consultation {
     clientId: dbCon.clientId,
     consultationType: dbCon.consultationType,
     deliveryType: dbCon.deliveryType,
-    currentStage: dbCon.currentStage,
-    status: dbCon.status,
-    closureReason: dbCon.closureReason || null,
-    closureReasonOther: dbCon.closureReasonOther || null,
+    currentStage: dbCon.currentStage ?? "استلام",
+    status: dbCon.status ?? "active",
+    closureReason: dbCon.closureReason ?? null,
+    closureReasonOther: dbCon.closureReasonOther ?? null,
     departmentId: dbCon.departmentId,
-    assignedTo: dbCon.assignedTo,
+    assignedTo: dbCon.assignedTo ?? null,
     questionSummary: dbCon.questionSummary,
-    response: dbCon.response || "",
-    convertedToCaseId: dbCon.convertedToCaseId,
-    whatsappGroupLink: dbCon.whatsappGroupLink || "",
-    googleDriveFolderId: dbCon.googleDriveFolderId || "",
-    reviewNotes: dbCon.reviewNotes || "",
-    reviewDecision: dbCon.reviewDecision,
+    response: dbCon.response ?? "",
+    convertedToCaseId: dbCon.convertedToCaseId ?? null,
+    whatsappGroupLink: dbCon.whatsappGroupLink ?? "",
+    googleDriveFolderId: dbCon.googleDriveFolderId ?? "",
+    reviewNotes: dbCon.reviewNotes ?? "",
+    reviewDecision: dbCon.reviewDecision ?? null,
     createdBy: dbCon.createdBy,
     createdAt: toISOString(dbCon.createdAt),
     updatedAt: toISOString(dbCon.updatedAt),
