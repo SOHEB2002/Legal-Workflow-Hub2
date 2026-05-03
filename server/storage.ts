@@ -10,7 +10,7 @@ import {
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
-  CaseStatus, CaseStage, CaseClassification, ConsultationStage,
+  CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
   consultationStudies, consultationDrafts, consultationReviews,
@@ -759,13 +759,19 @@ export class DatabaseStorage implements IStorage {
     const consultationNumber = `CON-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     const now = new Date();
     
+    // Pre-rebuild this method conflated the two: it wrote the stage value
+    // ("استلام") into the status column. Status now is a separate
+    // lifecycle enum (active | converted | closed) per spec §3.1.2;
+    // currentStage carries the workflow position. Keep them apart at the
+    // insert site so the column defaults aren't the only line of defence.
     const newConsultation = {
       id,
       consultationNumber,
       clientId: data.clientId || "",
       consultationType: data.consultationType || "عام",
       deliveryType: data.deliveryType || "مكتوبة",
-      status: "استلام",
+      currentStage: ConsultationStage.RECEIVED,
+      status: ConsultationStatus.ACTIVE,
       departmentId: data.departmentId || "",
       assignedTo: data.assignedTo || null,
       questionSummary: data.questionSummary || "",
