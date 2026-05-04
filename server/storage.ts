@@ -13,12 +13,13 @@ import {
   type ConsultationDeliveryExtension, type ConsultationActivity,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
-  ConsultationActivityType,
+  ConsultationActivityType, MemoActivityType, type MemoActivity,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
-  consultationDeliveryExtensions, consultationActivityLog
+  consultationDeliveryExtensions, consultationActivityLog,
+  memoActivityLog
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
@@ -204,6 +205,14 @@ export interface IStorage {
     data: Partial<Consultation>,
     activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
   ): Promise<Consultation | undefined>;
+  // Phase-8 — pause / unpause + activity log writers across the 3 entities.
+  pauseConsultation(id: string, input: { reason: string; performedBy: string }): Promise<Consultation | undefined>;
+  unpauseConsultation(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
+  pauseCase(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
+  unpauseCase(id: string, input: { notes?: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
+  pauseMemo(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
+  unpauseMemo(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
+  getMemoActivities(memoId: string): Promise<MemoActivity[]>;
   // Atomic helper-row + stage update + log for the three workflow
   // endpoints whose route used to issue two separate storage calls.
   recordConsultationInternalReview(input: {
@@ -985,6 +994,71 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // Phase-8 — pause / unpause. Atomic update + activity log insert in a
+  // single transaction so the consultation row and its log entry can never
+  // drift. Uses the dedicated path (not updateConsultationAndLog) because
+  // pausedAt is a Date column that needs explicit conversion. The route
+  // layer enforces the active/paused gate before calling — these helpers
+  // assume the caller already checked.
+  async pauseConsultation(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(consultations).set({
+        status: ConsultationStatus.PAUSED,
+        pauseReason: input.reason,
+        pausedBy: input.performedBy,
+        pausedAt: now,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.PAUSED,
+        description: `تم تعليق الاستشارة — السبب: ${input.reason}`,
+        metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  async unpauseConsultation(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(consultations).set({
+        status: ConsultationStatus.ACTIVE,
+        pauseReason: null,
+        pausedBy: null,
+        pausedAt: null,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.UNPAUSED,
+        description: notes ? `تم إلغاء التعليق — ${notes}` : "تم إلغاء التعليق",
+        metadata: notes ? { notes } : {},
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
   async deleteConsultation(id: string): Promise<boolean> {
     await db.delete(attachments).where(and(eq(attachments.entityType, "consultation"), eq(attachments.entityId, id)));
     await db.delete(fieldTasks).where(eq(fieldTasks.consultationId, id));
@@ -1378,8 +1452,88 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteMemo(id: string): Promise<boolean> {
+    // Phase-8 — clear activity log rows first. The SQL FK is ON DELETE
+    // CASCADE so this is belt-and-braces; keeps behavior consistent if
+    // the FK is dropped.
+    await db.delete(memoActivityLog).where(eq(memoActivityLog.memoId, id));
     const result = await db.delete(memos).where(eq(memos.id, id)).returning();
     return result.length > 0;
+  }
+
+  // Phase-8 — pause / unpause on memos. Atomic update + memo_activity_log
+  // insert in one transaction. Memo status is left alone (it's workflow
+  // state, not lifecycle); pause is detected via paused_at IS NOT NULL.
+  async pauseMemo(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        pauseReason: input.reason,
+        pausedBy: input.performedBy,
+        pausedAt: now,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.PAUSED,
+        description: `تم تعليق المذكرة — السبب: ${input.reason}`,
+        metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  async unpauseMemo(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        pauseReason: null,
+        pausedBy: null,
+        pausedAt: null,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.UNPAUSED,
+        description: notes ? `تم إلغاء تعليق المذكرة — ${notes}` : "تم إلغاء تعليق المذكرة",
+        metadata: notes ? { notes } : {},
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — memo activity log readers. Mirrors getConsultationActivities.
+  async getMemoActivities(memoId: string): Promise<MemoActivity[]> {
+    const rows = await db.select().from(memoActivityLog)
+      .where(eq(memoActivityLog.memoId, memoId))
+      .orderBy(asc(memoActivityLog.performedAt));
+    return rows.map((row) => ({
+      id: row.id,
+      memoId: row.memoId,
+      activityType: row.activityType,
+      description: row.description,
+      metadata: (row.metadata as Record<string, any>) ?? {},
+      performedBy: row.performedBy ?? null,
+      performedAt: toISOString(row.performedAt),
+    }));
   }
 
   // ==================== Attachments ====================
@@ -2117,6 +2271,68 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(caseActivityLog)
       .where(eq(caseActivityLog.caseId, caseId))
       .orderBy(desc(caseActivityLog.createdAt));
+  }
+
+  // Phase-8 — pause / unpause on cases. Atomic update + case_activity_log
+  // insert in one transaction. Cases status (workflow stage) is left
+  // alone; pause is detected via paused_at IS NOT NULL.
+  async pauseCase(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(lawCases).set({
+        pauseReason: input.reason,
+        pausedBy: input.performedBy,
+        pausedAt: now,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "paused",
+        title: "تعليق القضية",
+        details: input.reason,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  async unpauseCase(
+    id: string,
+    input: { notes?: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(lawCases).set({
+        pauseReason: null,
+        pausedBy: null,
+        pausedAt: null,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "unpaused",
+        title: "إلغاء تعليق القضية",
+        details: notes || null,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
   }
 
   // ==================== Case Notes ====================

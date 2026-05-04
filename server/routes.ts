@@ -2891,6 +2891,300 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Phase-8: Pause / Unpause (consultations + cases + memos) ====================
+  // Allowed roles for pause + unpause across all 3 entities:
+  //   - branch_manager       (always)
+  //   - admin_support        (always)
+  //   - department_head      (only when entity is in own department)
+  //   - assigned lawyer      (only when entity.assignedTo / primary /
+  //                           responsible / assignedLawyers === user.id)
+
+  // POST /api/consultations/:id/pause
+  // Body: { reason }. Sets status="paused", fills pause_* columns,
+  // inserts a "paused" activity-log row in the same DB transaction.
+  app.post("/api/consultations/:id/pause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      // Permission gate (narrower than canModifyConsultation — no
+      // cases_review_head / consultations_review_head per spec).
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        consultation.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه الاستشارة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "لا يمكن تعليق استشارة ليست نشطة" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+
+      const updated = await storage.pauseConsultation(consultation.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تعليق الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/pause] error:", error);
+      res.status(500).json({ error: error.message || "فشل تعليق الاستشارة" });
+    }
+  });
+
+  // POST /api/consultations/:id/unpause
+  // Body: { notes? }. Clears pause_* columns and flips status back to
+  // "active". Stage stays where it was. Notes are optional and recorded
+  // on the activity-log entry when present.
+  app.post("/api/consultations/:id/unpause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        consultation.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه الاستشارة" });
+
+      if (consultation.status !== "paused") {
+        return res.status(400).json({ error: "هذه الاستشارة ليست معلّقة" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.unpauseConsultation(consultation.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/unpause] error:", error);
+      res.status(500).json({ error: error.message || "فشل إلغاء التعليق" });
+    }
+  });
+
+  // POST /api/cases/:id/pause
+  // Body: { reason }. Sets pause_* columns; status (workflow stage) is
+  // intentionally left alone — pause is detected via paused_at IS NOT
+  // NULL on cases. Inserts a "paused" case_activity_log row.
+  app.post("/api/cases/:id/pause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      // Cases "assigned lawyer" = primary OR responsible OR member of
+      // assignedLawyers array.
+      const isAssignedLawyer =
+        lawCase.primaryLawyerId === reqUser.id ||
+        lawCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        isAssignedLawyer;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه القضية" });
+
+      if (lawCase.pausedAt) {
+        return res.status(400).json({ error: "هذه القضية معلّقة بالفعل" });
+      }
+      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+        return res.status(400).json({ error: "لا يمكن تعليق قضية مغلقة أو مؤرشفة" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = performer?.name || reqUser.id;
+      const updated = await storage.pauseCase(lawCase.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تعليق القضية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/pause] error:", error);
+      res.status(500).json({ error: error.message || "فشل تعليق القضية" });
+    }
+  });
+
+  // POST /api/cases/:id/unpause
+  // Body: { notes? }. Clears pause_* columns. Stage untouched.
+  app.post("/api/cases/:id/unpause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const isAssignedLawyer =
+        lawCase.primaryLawyerId === reqUser.id ||
+        lawCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        isAssignedLawyer;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه القضية" });
+
+      if (!lawCase.pausedAt) {
+        return res.status(400).json({ error: "هذه القضية ليست معلّقة" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = performer?.name || reqUser.id;
+      const updated = await storage.unpauseCase(lawCase.id, {
+        notes,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/unpause] error:", error);
+      res.status(500).json({ error: error.message || "فشل إلغاء التعليق" });
+    }
+  });
+
+  // POST /api/memos/:id/pause
+  // Body: { reason }. Sets pause_* columns on the memo. Memo status
+  // (workflow state) is left alone; pause is detected via paused_at IS
+  // NOT NULL. department_head check uses the parent case's departmentId
+  // because memos don't carry departmentId directly.
+  app.post("/api/memos/:id/pause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      // Department-scope check needs the parent case for dept_head.
+      const parentCase = reqUser.role === "department_head"
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
+        memo.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه المذكرة" });
+
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "هذه المذكرة معلّقة بالفعل" });
+      }
+      // Pausing a memo in a terminal status doesn't make sense — once
+      // approved/submitted/cancelled there's nothing to halt.
+      const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
+      if (TERMINAL_MEMO_STATUSES.has(memo.status)) {
+        return res.status(400).json({ error: "لا يمكن تعليق مذكرة في حالة نهائية" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+
+      const updated = await storage.pauseMemo(memo.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تعليق المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/pause] error:", error);
+      res.status(500).json({ error: error.message || "فشل تعليق المذكرة" });
+    }
+  });
+
+  // POST /api/memos/:id/unpause
+  // Body: { notes? }. Clears pause_* columns.
+  app.post("/api/memos/:id/unpause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      const parentCase = reqUser.role === "department_head"
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
+        memo.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه المذكرة" });
+
+      if (!memo.pausedAt) {
+        return res.status(400).json({ error: "هذه المذكرة ليست معلّقة" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.unpauseMemo(memo.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/unpause] error:", error);
+      res.status(500).json({ error: error.message || "فشل إلغاء التعليق" });
+    }
+  });
+
+  // GET /api/memos/:id/activities
+  // Returns the chronological activity log for a memo. Visibility gate
+  // mirrors the memo edit gate (assignee / case primary / dept head /
+  // any role with canChangeMemoStatus or canReviewMemos).
+  app.get("/api/memos/:id/activities", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      // Visibility — anyone who can act on the memo can read its log.
+      const parentCase = await storage.getCaseById(memo.caseId);
+      const isAssigned = memo.assignedTo === reqUser.id;
+      const isCaseLawyer = !!parentCase && (
+        parentCase.primaryLawyerId === reqUser.id ||
+        parentCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(reqUser.id))
+      );
+      const isDeptHead = reqUser.role === "department_head"
+        && !!parentCase && parentCase.departmentId === reqUser.departmentId;
+      const isAdmin = ["branch_manager", "admin_support", "cases_review_head"].includes(reqUser.role);
+      if (!(isAssigned || isCaseLawyer || isDeptHead || isAdmin)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه المذكرة" });
+      }
+
+      const rows = await storage.getMemoActivities(memo.id);
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // ==================== Hearings ====================
 
   app.get("/api/hearings", requireAuth, async (req, res) => {
