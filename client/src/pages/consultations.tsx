@@ -46,7 +46,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -250,11 +250,12 @@ const ConsultationClosureReasonLabels: Record<ConsultationClosureReasonValue, st
   other:             "أخرى",
 };
 
-// Arabic display labels for the simplified active/converted/closed
+// Arabic display labels for the simplified active/paused/converted/closed
 // status enum. Schema entries are English keys post-rebuild; we localise
 // at the page boundary the same way as ClosureReason.
-const ConsultationStatusDisplayLabels: Record<"active" | "converted" | "closed", string> = {
+const ConsultationStatusDisplayLabels: Record<"active" | "paused" | "converted" | "closed", string> = {
   active:    "نشطة",
+  paused:    "معلّقة",
   converted: "محولة لقضية",
   closed:    "مقفلة",
 };
@@ -287,9 +288,16 @@ function getStageBadgeColor(stage: ConsultationStageValue): string {
 
 // Combined badge: derives label + colour from currentStage + status.
 //   active     → live stage label + stage colour (drives the row's eye)
+//   paused     → "معلّقة" + amber (Phase-8 — orthogonal to stage)
 //   converted  → "محولة لقضية" + violet
 //   closed     → "مقفلة" + muted
 function getConsultationDisplayBadge(c: Consultation): { label: string; className: string } {
+  if (c.status === "paused") {
+    return {
+      label: ConsultationStatusDisplayLabels.paused,
+      className: "bg-amber-500/20 text-amber-600 border-amber-500/30",
+    };
+  }
   if (c.status === "converted") {
     return {
       label: ConsultationStatusDisplayLabels.converted,
@@ -306,6 +314,20 @@ function getConsultationDisplayBadge(c: Consultation): { label: string; classNam
     label: ConsultationStageLabels[c.currentStage] || c.currentStage,
     className: getStageBadgeColor(c.currentStage),
   };
+}
+
+// Phase-8 — pause permission gate. Mirrors the server check in
+// /api/consultations/:id/pause and /unpause. Narrower than
+// canModifyConsultation: branch_manager / admin_support / dept_head
+// (own dept) / assigned lawyer of the specific consultation.
+function canPauseConsultation(
+  c: Consultation,
+  user: { id: string; role: string; departmentId: string | null } | null,
+): boolean {
+  if (!user) return false;
+  if (user.role === "branch_manager" || user.role === "admin_support") return true;
+  if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+  return c.assignedTo === user.id;
 }
 
 // Phase-4 SLA helpers — overdue is "active consultation whose
@@ -584,6 +606,75 @@ export default function ConsultationsPage() {
   // consultation row, so the timeline always reflects the latest state.
   const [activityLog, setActivityLog] = useState<ConsultationActivity[]>([]);
   const [activityLogExpanded, setActivityLogExpanded] = useState(true);
+
+  // Phase-8 — pause / unpause dialog state. Two separate dialogs because
+  // the entry vs exit forms differ (reason required on pause, optional
+  // notes on unpause).
+  const [showPauseDialog, setShowPauseDialog] = useState(false);
+  const [pauseTarget, setPauseTarget] = useState<Consultation | null>(null);
+  const [pauseReason, setPauseReason] = useState("");
+  const [showUnpauseDialog, setShowUnpauseDialog] = useState(false);
+  const [unpauseTarget, setUnpauseTarget] = useState<Consultation | null>(null);
+  const [unpauseNotes, setUnpauseNotes] = useState("");
+
+  const openPauseDialog = (c: Consultation) => {
+    setPauseTarget(c);
+    setPauseReason("");
+    setShowPauseDialog(true);
+  };
+  const closePauseDialog = () => {
+    setShowPauseDialog(false);
+    setPauseTarget(null);
+    setPauseReason("");
+  };
+  const openUnpauseDialog = (c: Consultation) => {
+    setUnpauseTarget(c);
+    setUnpauseNotes("");
+    setShowUnpauseDialog(true);
+  };
+  const closeUnpauseDialog = () => {
+    setShowUnpauseDialog(false);
+    setUnpauseTarget(null);
+    setUnpauseNotes("");
+  };
+
+  const handlePause = async () => {
+    if (!pauseTarget) return;
+    const reason = pauseReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${pauseTarget.id}/pause`, { reason });
+      await refreshConsultations();
+      toast({ title: "تم تعليق الاستشارة" });
+      closePauseDialog();
+    } catch (err) {
+      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const handleUnpause = async () => {
+    if (!unpauseTarget) return;
+    setActionInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = unpauseNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/consultations/${unpauseTarget.id}/unpause`, body);
+      await refreshConsultations();
+      toast({ title: "تم إلغاء التعليق" });
+      closeUnpauseDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -1439,6 +1530,24 @@ export default function ConsultationsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {/* Phase-8 — when paused, all workflow actions hide.
+                              Only "إلغاء التعليق" (and delete for branch_manager)
+                              are available. The pause/unpause action itself is
+                              rendered below the workflow block. */}
+                          {consultation.status === "paused" ? (
+                            <>
+                              {canPauseConsultation(consultation, user) && (
+                                <DropdownMenuItem
+                                  data-testid={`button-unpause-consultation-${consultation.id}`}
+                                  onClick={() => openUnpauseDialog(consultation)}
+                                >
+                                  <Play className="w-4 h-4 ml-2" />
+                                  إلغاء التعليق
+                                </DropdownMenuItem>
+                              )}
+                            </>
+                          ) : (
+                            <>
                           {canAssignConsultation(consultation) && (
                             <DropdownMenuItem data-testid={`button-assign-consultation-${consultation.id}`} onClick={() => openAssignDialog(consultation)}>
                               <UserPlus className="w-4 h-4 ml-2" />
@@ -1530,6 +1639,24 @@ export default function ConsultationsPage() {
                               </DropdownMenuItem>
                             </>
                           )}
+                          {/* Phase-8 — pause action (when active). Sits between
+                              workflow actions and the destructive delete so it
+                              reads as a "park this for now" affordance. */}
+                          {consultation.status === "active" && canPauseConsultation(consultation, user) && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid={`button-pause-consultation-${consultation.id}`}
+                                className="text-amber-600 focus:text-amber-700"
+                                onClick={() => openPauseDialog(consultation)}
+                              >
+                                <Pause className="w-4 h-4 ml-2" />
+                                تعليق
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                            </>
+                          )}
                           {user?.role === "branch_manager" && (
                             <>
                               <DropdownMenuSeparator />
@@ -1564,6 +1691,36 @@ export default function ConsultationsPage() {
           </DialogHeader>
           {selectedConsultation && (
             <div className="space-y-4">
+              {/* Phase-8 — paused banner. Renders at the top of the details
+                  dialog whenever status='paused' so the reason / who / when
+                  is visible without scrolling to the activity log. */}
+              {selectedConsultation.status === "paused" && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                  data-testid="banner-consultation-paused"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <Pause className="w-4 h-4" />
+                    هذه الاستشارة معلّقة
+                  </div>
+                  {selectedConsultation.pauseReason && (
+                    <div className="mt-1">
+                      السبب: <BidiText>{selectedConsultation.pauseReason}</BidiText>
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-amber-700/80">
+                    {selectedConsultation.pausedBy && (
+                      <>بواسطة <BidiText>{getLawyerName(selectedConsultation.pausedBy)}</BidiText></>
+                    )}
+                    {selectedConsultation.pausedAt && (
+                      <>
+                        {selectedConsultation.pausedBy ? " — " : ""}
+                        في <LtrInline>{formatExpectedDate(selectedConsultation.pausedAt)}</LtrInline>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               {selectedConsultation.status === "converted" && selectedConsultation.convertedToCaseId && (
                 <button
                   type="button"
@@ -2483,6 +2640,82 @@ export default function ConsultationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Phase-8 — pause dialog. Reason is required; the server also
+          enforces the trim/min-1 check. */}
+      <AlertDialog open={showPauseDialog} onOpenChange={(open) => { if (!open) closePauseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Pause className="w-5 h-5 text-amber-600" />
+              تعليق الاستشارة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إيقاف العمل على هذه الاستشارة مؤقتاً مع الاحتفاظ بمرحلتها الحالية.
+              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-pause-reason"
+              value={pauseReason}
+              onChange={(e) => setPauseReason(e.target.value)}
+              placeholder="اكتب سبب التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closePauseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-pause"
+              onClick={handlePause}
+              disabled={actionInProgress || !pauseReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <Pause className="w-4 h-4 ml-2" />
+              تأكيد التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — unpause dialog. Notes optional; passed through to the
+          activity-log description when present. */}
+      <AlertDialog open={showUnpauseDialog} onOpenChange={(open) => { if (!open) closeUnpauseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Play className="w-5 h-5" />
+              إلغاء تعليق الاستشارة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود الاستشارة إلى الحالة النشطة عند نفس مرحلتها قبل التعليق.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-unpause-notes"
+              value={unpauseNotes}
+              onChange={(e) => setUnpauseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeUnpauseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-unpause"
+              onClick={handleUnpause}
+              disabled={actionInProgress}
+            >
+              <Play className="w-4 h-4 ml-2" />
+              تأكيد إلغاء التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
