@@ -2101,6 +2101,11 @@ export const hearingResultSchema = z.object({
   opponentResponseRequired: z.boolean().optional().default(false),
   // Conciliation result
   conciliationResult: z.enum(["تم_الصلح", "لم_يتم_الصلح"]).nullable().optional(),
+  // Settlement-only cases (isSettlementCase=true) need an explicit choice on
+  // "لم يتم الصلح": "close" finalizes and closes the case, "continue" flips
+  // isSettlementCase=false and routes the case onto the regular litigation
+  // path. Non-settlement cases ignore this field.
+  afterFailedSettlementChoice: z.enum(["close", "continue"]).nullable().optional(),
   userId: z.string().optional(),
   caseId: z.string().nullable().optional(),
 });

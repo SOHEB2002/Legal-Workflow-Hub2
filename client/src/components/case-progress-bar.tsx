@@ -255,11 +255,17 @@ export function CaseProgressBar({
     setCourtCaseNumber("");
   };
 
-  const handleSettlementDecision = (target: "تحصيل" | "أغلق_طلب_الصلح" | "مقفلة") => {
+  const handleSettlementDecision = (
+    target: "تحصيل" | "أغلق_طلب_الصلح" | "مقفلة",
+    extraFields?: Record<string, unknown>,
+  ) => {
     // Pass the target explicitly so the cases-context doesn't have to guess
     // the next stage from a linear stages array — same approach used for
-    // the platform-review accept buttons.
-    onMoveToNext("", undefined, undefined, undefined, target);
+    // the platform-review accept buttons. extraFields lets the caller flip
+    // additional columns in the same PATCH (e.g. clearing isSettlementCase
+    // when a settlement-only case chooses to continue litigation after a
+    // failed conciliation).
+    onMoveToNext("", undefined, undefined, extraFields, target);
   };
 
   const handlePlatformReviewAddNotes = () => {
@@ -529,20 +535,52 @@ export function CaseProgressBar({
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {isSettlementCase
-                    ? <>سيتم إغلاق القضية حيث إن القضية بدأت من مرحلة مداولة الصلح.</>
-                    : <>سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف مسار التقاضي في المحكمة.</>}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter className="gap-2">
-                <AlertDialogCancel>إلغاء</AlertDialogCancel>
-                <AlertDialogAction onClick={() => handleSettlementDecision(isSettlementCase ? "مقفلة" : "أغلق_طلب_الصلح")}>
-                  تأكيد
-                </AlertDialogAction>
-              </AlertDialogFooter>
+              {isSettlementCase ? (
+                <>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>لم يتم الصلح — اختر الإجراء</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      هذه القضية بدأت من مرحلة مداولة الصلح. اختر:
+                      <br />
+                      <strong>إغلاق القضية نهائياً</strong> — تُغلق القضية ولا تستكمل في المحكمة.
+                      <br />
+                      <strong>استكمال إجراءاتها</strong> — تُحوَّل إلى مسار التقاضي العادي وتنتقل إلى مرحلة "أغلق طلب الصلح".
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter className="gap-2 flex-wrap">
+                    <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => handleSettlementDecision("أغلق_طلب_الصلح", { isSettlementCase: false })}
+                      data-testid="button-settlement-failed-continue"
+                      className="bg-blue-600 hover:bg-blue-700"
+                    >
+                      استكمال إجراءاتها
+                    </AlertDialogAction>
+                    <AlertDialogAction
+                      onClick={() => handleSettlementDecision("مقفلة")}
+                      data-testid="button-settlement-failed-close"
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      إغلاق القضية نهائياً
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </>
+              ) : (
+                <>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف مسار التقاضي في المحكمة.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter className="gap-2">
+                    <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => handleSettlementDecision("أغلق_طلب_الصلح")}>
+                      تأكيد
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </>
+              )}
             </AlertDialogContent>
           </AlertDialog>
         </div>

@@ -73,6 +73,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -3017,37 +3018,132 @@ export default function CasesPage() {
                               <CheckCircle className="w-4 h-4 ml-1" />
                               تم الصلح — تحصيل
                             </Button>
-                            <Button
-                              size="sm"
-                              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
-                              disabled={stageTransitioning}
-                              data-testid={`button-settlement-failed-actions-${selectedCase.id}`}
-                              onClick={async () => {
-                                if (!user) return;
-                                setStageTransitioning(true);
-                                try {
-                                  const success = await moveToNextStage(
-                                    selectedCase.id,
-                                    user.id,
-                                    user.name,
-                                    "لم يتم الصلح",
-                                    user.role,
-                                    undefined,
-                                    undefined,
-                                    undefined,
-                                    "أغلق_طلب_الصلح",
-                                  );
-                                  if (success) {
-                                    toast({ title: "تم إغلاق طلب الصلح" });
-                                  }
-                                } finally {
-                                  setStageTransitioning(false);
-                                }
-                              }}
-                            >
-                              <AlertTriangle className="w-4 h-4 ml-1" />
-                              لم يتم الصلح — إغلاق طلب الصلح
-                            </Button>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+                                  disabled={stageTransitioning}
+                                  data-testid={`button-settlement-failed-actions-${selectedCase.id}`}
+                                >
+                                  <AlertTriangle className="w-4 h-4 ml-1" />
+                                  لم يتم الصلح — إغلاق طلب الصلح
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                {(selectedCase as any).isSettlementCase ? (
+                                  <>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>لم يتم الصلح — اختر الإجراء</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        هذه القضية بدأت من مرحلة مداولة الصلح. اختر:
+                                        <br />
+                                        <strong>إغلاق القضية نهائياً</strong> — تُغلق القضية ولا تستكمل في المحكمة.
+                                        <br />
+                                        <strong>استكمال إجراءاتها</strong> — تُحوَّل إلى مسار التقاضي العادي وتنتقل إلى مرحلة "أغلق طلب الصلح".
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter className="gap-2 flex-wrap">
+                                      <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        data-testid={`button-settlement-failed-continue-${selectedCase.id}`}
+                                        className="bg-blue-600 hover:bg-blue-700"
+                                        onClick={async () => {
+                                          if (!user) return;
+                                          setStageTransitioning(true);
+                                          try {
+                                            const success = await moveToNextStage(
+                                              selectedCase.id,
+                                              user.id,
+                                              user.name,
+                                              "لم يتم الصلح — استكمال الإجراءات",
+                                              user.role,
+                                              undefined,
+                                              undefined,
+                                              { isSettlementCase: false },
+                                              "أغلق_طلب_الصلح",
+                                            );
+                                            if (success) {
+                                              toast({ title: "تم تحويل القضية لمسار التقاضي العادي" });
+                                            }
+                                          } finally {
+                                            setStageTransitioning(false);
+                                          }
+                                        }}
+                                      >
+                                        استكمال إجراءاتها
+                                      </AlertDialogAction>
+                                      <AlertDialogAction
+                                        data-testid={`button-settlement-failed-close-${selectedCase.id}`}
+                                        className="bg-red-600 hover:bg-red-700"
+                                        onClick={async () => {
+                                          if (!user) return;
+                                          setStageTransitioning(true);
+                                          try {
+                                            const success = await moveToNextStage(
+                                              selectedCase.id,
+                                              user.id,
+                                              user.name,
+                                              "لم يتم الصلح — إغلاق نهائي",
+                                              user.role,
+                                              undefined,
+                                              undefined,
+                                              undefined,
+                                              "مقفلة",
+                                            );
+                                            if (success) {
+                                              toast({ title: "تم إغلاق القضية" });
+                                            }
+                                          } finally {
+                                            setStageTransitioning(false);
+                                          }
+                                        }}
+                                      >
+                                        إغلاق القضية نهائياً
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </>
+                                ) : (
+                                  <>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف مسار التقاضي في المحكمة.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter className="gap-2">
+                                      <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        onClick={async () => {
+                                          if (!user) return;
+                                          setStageTransitioning(true);
+                                          try {
+                                            const success = await moveToNextStage(
+                                              selectedCase.id,
+                                              user.id,
+                                              user.name,
+                                              "لم يتم الصلح",
+                                              user.role,
+                                              undefined,
+                                              undefined,
+                                              undefined,
+                                              "أغلق_طلب_الصلح",
+                                            );
+                                            if (success) {
+                                              toast({ title: "تم إغلاق طلب الصلح" });
+                                            }
+                                          } finally {
+                                            setStageTransitioning(false);
+                                          }
+                                        }}
+                                      >
+                                        تأكيد
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </>
+                                )}
+                              </AlertDialogContent>
+                            </AlertDialog>
                           </div>
                         </div>
                       )}
