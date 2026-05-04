@@ -213,6 +213,14 @@ export interface IStorage {
   pauseMemo(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
   unpauseMemo(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
   getMemoActivities(memoId: string): Promise<MemoActivity[]>;
+  // Phase-8 — await-completion / resume / skip across the 3 entities.
+  awaitConsultationCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Consultation | undefined>;
+  resumeConsultationFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
+  skipConsultationCompletion(id: string, input: { performedBy: string }): Promise<Consultation | undefined>;
+  awaitCaseCompletion(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
+  resumeCaseFromCompletion(id: string, input: { notes?: string; performedBy: string; performerName: string; isValidStage: (stage: string) => boolean }): Promise<{ ok: true; lawCase: LawCase } | { ok: false; reason: "INVALID_SAVED_STAGE" | "NOT_FOUND" }>;
+  awaitMemoCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
+  resumeMemoFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
   // Atomic helper-row + stage update + log for the three workflow
   // endpoints whose route used to issue two separate storage calls.
   recordConsultationInternalReview(input: {
@@ -1029,6 +1037,105 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // Phase-8 — await-completion / resume-from-completion / skip-completion.
+  // Awaiting-completion is an orthogonal "park here, missing data" detour:
+  // saves the current stage, switches to RECEIVED_PENDING_COMPLETION, and
+  // sets awaiting_completion=true. Resume restores the saved stage. Skip
+  // is the explicit "no upload needed, jump to STUDY" action available
+  // only from RECEIVED_PENDING_COMPLETION when NOT in awaiting mode (the
+  // two paths don't conflict because awaiting=true rows are never
+  // advanced via the normal mechanism).
+  async awaitConsultationCompletion(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      await tx.update(consultations).set({
+        currentStage: ConsultationStage.RECEIVED_PENDING_COMPLETION,
+        savedStage: fromStage,
+        awaitingCompletion: true,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.AWAIT_COMPLETION,
+        description: `بانتظار استكمال البيانات — السبب: ${input.reason}`,
+        metadata: { reason: input.reason, savedStage: fromStage },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  async resumeConsultationFromCompletion(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      // Fall back to STUDY if saved_stage was never recorded (legacy /
+      // hand-edited rows). The route layer already enforces awaiting=true
+      // before calling, so saved_stage really should be set, but defending
+      // here keeps the transaction from corrupting state on edge data.
+      const targetStage = existing.savedStage || ConsultationStage.STUDY;
+      await tx.update(consultations).set({
+        currentStage: targetStage,
+        savedStage: null,
+        awaitingCompletion: false,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.RESUME_FROM_COMPLETION,
+        description: notes
+          ? `العودة من الاستكمال إلى ${targetStage} — ${notes}`
+          : `العودة من الاستكمال إلى ${targetStage}`,
+        metadata: { notes: notes || undefined, returnedToStage: targetStage },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  async skipConsultationCompletion(
+    id: string,
+    input: { performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(consultations).set({
+        currentStage: ConsultationStage.STUDY,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.COMPLETION_SKIPPED,
+        description: "تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى دراسة",
+        metadata: {},
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
   async unpauseConsultation(
     id: string,
     input: { notes?: string; performedBy: string },
@@ -1483,6 +1590,66 @@ export class DatabaseStorage implements IStorage {
         activityType: MemoActivityType.PAUSED,
         description: `تم تعليق المذكرة — السبب: ${input.reason}`,
         metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — await-completion / resume on memos. Memos don't have a
+  // dedicated "pending completion" status (they have no stage flow);
+  // instead awaiting_completion=true is purely a flag and saved_stage
+  // captures the memo's status as a snapshot for symmetry. The memo's
+  // workflow status is intentionally NOT changed by these endpoints.
+  async awaitMemoCompletion(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        awaitingCompletion: true,
+        savedStage: existing.status,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.AWAIT_COMPLETION,
+        description: `بانتظار استكمال البيانات — السبب: ${input.reason}`,
+        metadata: { reason: input.reason, savedStage: existing.status },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  async resumeMemoFromCompletion(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        awaitingCompletion: false,
+        savedStage: null,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.RESUME_FROM_COMPLETION,
+        description: notes ? `العودة من الاستكمال — ${notes}` : "العودة من الاستكمال",
+        metadata: notes ? { notes } : {},
         performedBy: input.performedBy,
         performedAt: now,
       } as any);
@@ -2302,6 +2469,119 @@ export class DatabaseStorage implements IStorage {
       } as any);
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
       return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — await-completion / resume on cases. Mirrors the
+  // consultations pattern but writes case_activity_log + appends to
+  // stageHistory (the case-side audit trail). Cases already have
+  // "استكمال_البيانات" as a regular forward stage; await-completion
+  // routes the case INTO that stage from any other stage, with
+  // saved_stage holding the value to restore on resume.
+  async awaitCaseCompletion(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const targetStage = "استكمال_البيانات";
+      const existingHistory = Array.isArray((existing as any).stageHistory)
+        ? (existing as any).stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: `بانتظار استكمال البيانات — ${input.reason}`,
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: targetStage,
+        savedStage: fromStage,
+        awaitingCompletion: true,
+        stageHistory,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "await_completion",
+        title: "بانتظار استكمال البيانات",
+        details: input.reason,
+        previousValue: fromStage,
+        newValue: targetStage,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  async resumeCaseFromCompletion(
+    id: string,
+    input: {
+      notes?: string;
+      performedBy: string;
+      performerName: string;
+      // Stage-list validator the route hands in. Cases have 5 stage
+      // paths depending on caseType + classification, so the caller
+      // resolves the right list and we just check membership.
+      isValidStage: (stage: string) => boolean;
+    },
+  ): Promise<{ ok: true; lawCase: LawCase } | { ok: false; reason: "INVALID_SAVED_STAGE" | "NOT_FOUND" }> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return { ok: false, reason: "NOT_FOUND" } as const;
+      const targetStage = existing.savedStage;
+      if (!targetStage || !input.isValidStage(targetStage)) {
+        return { ok: false, reason: "INVALID_SAVED_STAGE" } as const;
+      }
+      const now = new Date();
+      const existingHistory = Array.isArray((existing as any).stageHistory)
+        ? (existing as any).stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: input.notes?.trim() || "العودة من الاستكمال",
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: targetStage,
+        savedStage: null,
+        awaitingCompletion: false,
+        stageHistory,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "resume_from_completion",
+        title: `العودة من الاستكمال إلى ${targetStage}`,
+        details: notes || null,
+        previousValue: "استكمال_البيانات",
+        newValue: targetStage,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated
+        ? { ok: true as const, lawCase: mapDbCase(updated) }
+        : { ok: false, reason: "NOT_FOUND" } as const;
     });
   }
 
