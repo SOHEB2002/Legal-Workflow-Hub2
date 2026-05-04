@@ -455,6 +455,75 @@ export default function MemosPage() {
     }
   };
 
+  // Phase-8 — await-completion / resume on memos. Same permission gate
+  // as pause. Memos don't have a stage flow so saved_stage holds the
+  // memo status as a snapshot; resume just clears the flag.
+  const [showAwaitMemoDialog, setShowAwaitMemoDialog] = useState(false);
+  const [awaitMemoTarget, setAwaitMemoTarget] = useState<Memo | null>(null);
+  const [awaitMemoReason, setAwaitMemoReason] = useState("");
+  const [showResumeMemoDialog, setShowResumeMemoDialog] = useState(false);
+  const [resumeMemoTarget, setResumeMemoTarget] = useState<Memo | null>(null);
+  const [resumeMemoNotes, setResumeMemoNotes] = useState("");
+
+  const openAwaitMemoDialog = (memo: Memo) => {
+    setAwaitMemoTarget(memo);
+    setAwaitMemoReason("");
+    setShowAwaitMemoDialog(true);
+  };
+  const closeAwaitMemoDialog = () => {
+    setShowAwaitMemoDialog(false);
+    setAwaitMemoTarget(null);
+    setAwaitMemoReason("");
+  };
+  const openResumeMemoDialog = (memo: Memo) => {
+    setResumeMemoTarget(memo);
+    setResumeMemoNotes("");
+    setShowResumeMemoDialog(true);
+  };
+  const closeResumeMemoDialog = () => {
+    setShowResumeMemoDialog(false);
+    setResumeMemoTarget(null);
+    setResumeMemoNotes("");
+  };
+
+  const handleAwaitMemo = async () => {
+    if (!awaitMemoTarget) return;
+    const reason = awaitMemoReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل السبب", variant: "destructive" });
+      return;
+    }
+    setPauseMemoInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${awaitMemoTarget.id}/await-completion`, { reason });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تعيين المذكرة بانتظار الاستكمال" });
+      closeAwaitMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
+  };
+
+  const handleResumeMemo = async () => {
+    if (!resumeMemoTarget) return;
+    setPauseMemoInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = resumeMemoNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/memos/${resumeMemoTarget.id}/resume-from-completion`, body);
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم العودة من الاستكمال" });
+      closeResumeMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
+  };
+
   const getUserName = (id: string | null): string => {
     if (!id) return "-";
     const u = getUserById(id);
@@ -743,6 +812,18 @@ export default function MemosPage() {
                                 معلّق
                               </Badge>
                             )}
+                            {/* Phase-8 — awaiting-completion indicator. */}
+                            {memo.awaitingCompletion && !isMemoPaused(memo) && (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                                data-testid={`badge-memo-awaiting-${memo.id}`}
+                                title="بانتظار استكمال البيانات"
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                                بانتظار
+                              </Badge>
+                            )}
                             {memo.hearingId && getHearingById(memo.hearingId)?.opponentResponseRequired && (
                               <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600 dark:text-orange-400 px-1 py-0">
                                 رد خصم
@@ -791,6 +872,37 @@ export default function MemosPage() {
                                 <Ban className="w-4 h-4" />
                               </Button>
                             )}
+                            {/* Phase-8 — await-completion / resume action.
+                                Mirrors the pause/unpause pair. Hidden when
+                                paused (server requires unpause first) and
+                                when in a terminal status. */}
+                            {!isMemoPaused(memo) && memo.awaitingCompletion
+                              ? canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-green-600 hover:text-green-700"
+                                    title="تم الاستكمال"
+                                    data-testid={`button-resume-memo-${memo.id}`}
+                                    onClick={() => openResumeMemoDialog(memo)}
+                                  >
+                                    <CheckCircle className="w-4 h-4" />
+                                  </Button>
+                                )
+                              : !isMemoPaused(memo)
+                                && !TERMINAL_MEMO_STATUSES.has(memo.status)
+                                && canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-amber-600 hover:text-amber-700"
+                                    title="بانتظار استكمال البيانات"
+                                    data-testid={`button-await-memo-${memo.id}`}
+                                    onClick={() => openAwaitMemoDialog(memo)}
+                                  >
+                                    <AlertTriangle className="w-4 h-4" />
+                                  </Button>
+                                )}
                             {/* Phase-8 — pause / unpause action. Pause shown
                                 when not paused, not in a terminal status, and
                                 user has permission. Unpause replaces it
@@ -1080,6 +1192,26 @@ export default function MemosPage() {
                 </DialogTitle>
               </DialogHeader>
               <div className="space-y-6">
+                {/* Phase-8 — awaiting-completion banner. Memos don't have a
+                    stage flow; saved_stage holds the memo status as a
+                    snapshot. Surfaces the snapshot so the user knows what
+                    state will be restored on resume. */}
+                {detailMemo.awaitingCompletion && !isMemoPaused(detailMemo) && (
+                  <div
+                    className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                    data-testid="banner-memo-awaiting"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <AlertTriangle className="w-4 h-4" />
+                      هذه المذكرة بانتظار استكمال البيانات
+                    </div>
+                    {detailMemo.savedStage && (
+                      <div className="mt-1 text-xs">
+                        الحالة المحفوظة: <BidiText>{MemoStatusLabels[detailMemo.savedStage as MemoStatusValue] || detailMemo.savedStage}</BidiText>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {/* Phase-8 — paused banner. Renders at the top of the
                     details dialog so the reason / who / when is visible
                     without scrolling to the activity log. */}
@@ -1342,6 +1474,80 @@ export default function MemosPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Phase-8 — await-completion memo dialog. Reason required. */}
+      <AlertDialog open={showAwaitMemoDialog} onOpenChange={(open) => { if (!open) closeAwaitMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              بانتظار استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستُحفظ حالة المذكرة الحالية كلقطة، وتُوضع المذكرة بانتظار استكمال البيانات.
+              عند اكتمال البيانات استخدم زر "تم الاستكمال" للعودة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>السبب <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-memo-await-reason"
+              value={awaitMemoReason}
+              onChange={(e) => setAwaitMemoReason(e.target.value)}
+              placeholder="ما هي البيانات أو المرفقات الناقصة؟"
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeAwaitMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-await-memo"
+              onClick={handleAwaitMemo}
+              disabled={pauseMemoInProgress || !awaitMemoReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <AlertTriangle className="w-4 h-4 ml-2" />
+              تأكيد
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — resume memo dialog. Notes optional. */}
+      <AlertDialog open={showResumeMemoDialog} onOpenChange={(open) => { if (!open) closeResumeMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              تم الاستكمال
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود المذكرة من حالة الانتظار. الحالة الحالية للمذكرة لن تتغير.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-memo-resume-notes"
+              value={resumeMemoNotes}
+              onChange={(e) => setResumeMemoNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول ما تم استكماله..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeResumeMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-resume-memo"
+              onClick={handleResumeMemo}
+              disabled={pauseMemoInProgress}
+            >
+              <CheckCircle className="w-4 h-4 ml-2" />
+              تأكيد العودة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Phase-8 — pause memo dialog */}
       <AlertDialog open={showPauseMemoDialog} onOpenChange={(open) => { if (!open) closePauseMemoDialog(); }}>
