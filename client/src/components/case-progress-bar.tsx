@@ -750,14 +750,14 @@ export function CaseProgressBar({
                 data-testid="button-skip-data-completion"
               >
                 <SkipForward className="w-4 h-4 ml-1" />
-                الدعوى مكتملة - تجاوز استكمال البيانات
+                الدعوى مكتملة - تجاوز استكمال المرفقات والبيانات
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>تجاوز مرحلة استكمال البيانات</AlertDialogTitle>
+                <AlertDialogTitle>تجاوز مرحلة استكمال المرفقات والبيانات</AlertDialogTitle>
                 <AlertDialogDescription>
-                  سيتم تجاوز مرحلة "استكمال البيانات" والانتقال مباشرةً إلى مرحلة{" "}
+                  سيتم تجاوز مرحلة "استكمال المرفقات والبيانات" والانتقال مباشرةً إلى مرحلة{" "}
                   <strong>
                     {stagesOrder[currentIndex + 2]
                       ? getStageLabel(stagesOrder[currentIndex + 2])

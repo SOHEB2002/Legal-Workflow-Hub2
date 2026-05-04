@@ -46,7 +46,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -113,7 +113,13 @@ const LAWYER_FILTER_EXCLUDED_ROLES = new Set([
 // decision-based and routed through the dedicated endpoints, so they're
 // intentionally absent here — those dialogs land in subsequent commits.
 const LINEAR_ADVANCE: Partial<Record<ConsultationStageValue, { target: ConsultationStageValue; roles: string[] }>> = {
-  [ConsultationStage.RECEIVED]: { target: ConsultationStage.STUDY,           roles: ["admin_support", "department_head", "branch_manager"] },
+  // Phase-8 — RECEIVED now advances to RECEIVED_PENDING_COMPLETION (the new
+  // stage), and RECEIVED_PENDING_COMPLETION advances to STUDY. The "تجاوز"
+  // (skip) button on the new stage hits a separate /skip-completion
+  // endpoint that lands on STUDY too but logs completion_skipped — same
+  // target, different audit entry.
+  [ConsultationStage.RECEIVED]:                    { target: ConsultationStage.RECEIVED_PENDING_COMPLETION, roles: ["admin_support", "department_head", "branch_manager"] },
+  [ConsultationStage.RECEIVED_PENDING_COMPLETION]: { target: ConsultationStage.STUDY,                       roles: ["admin_support", "department_head", "branch_manager"] },
   [ConsultationStage.STUDY]:    { target: ConsultationStage.DRAFTING,        roles: ["assigned_lawyer", "department_head", "branch_manager"] },
   [ConsultationStage.DRAFTING]: { target: ConsultationStage.INTERNAL_REVIEW, roles: ["assigned_lawyer", "department_head", "branch_manager"] },
   [ConsultationStage.READY]:    { target: ConsultationStage.COMPLETED,       roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
@@ -126,6 +132,9 @@ function getAdvanceTarget(
   userDeptId: string | null,
 ): ConsultationStageValue | null {
   if (consultation.status !== "active") return null;
+  // Phase-8 — awaiting-completion rows are NEVER advanced via the normal
+  // mechanism (the resume action is what restores the saved stage).
+  if (consultation.awaitingCompletion) return null;
   const rule = LINEAR_ADVANCE[consultation.currentStage];
   if (!rule) return null;
   // Department head can only act inside their own department
@@ -148,6 +157,8 @@ function getReturnTargets(
   userDeptId: string | null,
 ): ConsultationStageValue[] {
   if (consultation.status !== "active") return [];
+  // Phase-8 — awaiting-completion rows are parked: hide return like advance.
+  if (consultation.awaitingCompletion) return [];
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return [];
   const stages = consultation.currentStage === ConsultationStage.TAKING_NOTES
     ? ConsultationStagesAll
@@ -250,11 +261,12 @@ const ConsultationClosureReasonLabels: Record<ConsultationClosureReasonValue, st
   other:             "أخرى",
 };
 
-// Arabic display labels for the simplified active/converted/closed
+// Arabic display labels for the simplified active/paused/converted/closed
 // status enum. Schema entries are English keys post-rebuild; we localise
 // at the page boundary the same way as ClosureReason.
-const ConsultationStatusDisplayLabels: Record<"active" | "converted" | "closed", string> = {
+const ConsultationStatusDisplayLabels: Record<"active" | "paused" | "converted" | "closed", string> = {
   active:    "نشطة",
+  paused:    "معلّقة",
   converted: "محولة لقضية",
   closed:    "مقفلة",
 };
@@ -287,9 +299,16 @@ function getStageBadgeColor(stage: ConsultationStageValue): string {
 
 // Combined badge: derives label + colour from currentStage + status.
 //   active     → live stage label + stage colour (drives the row's eye)
+//   paused     → "معلّقة" + amber (Phase-8 — orthogonal to stage)
 //   converted  → "محولة لقضية" + violet
 //   closed     → "مقفلة" + muted
 function getConsultationDisplayBadge(c: Consultation): { label: string; className: string } {
+  if (c.status === "paused") {
+    return {
+      label: ConsultationStatusDisplayLabels.paused,
+      className: "bg-amber-500/20 text-amber-600 border-amber-500/30",
+    };
+  }
   if (c.status === "converted") {
     return {
       label: ConsultationStatusDisplayLabels.converted,
@@ -306,6 +325,20 @@ function getConsultationDisplayBadge(c: Consultation): { label: string; classNam
     label: ConsultationStageLabels[c.currentStage] || c.currentStage,
     className: getStageBadgeColor(c.currentStage),
   };
+}
+
+// Phase-8 — pause permission gate. Mirrors the server check in
+// /api/consultations/:id/pause and /unpause. Narrower than
+// canModifyConsultation: branch_manager / admin_support / dept_head
+// (own dept) / assigned lawyer of the specific consultation.
+function canPauseConsultation(
+  c: Consultation,
+  user: { id: string; role: string; departmentId: string | null } | null,
+): boolean {
+  if (!user) return false;
+  if (user.role === "branch_manager" || user.role === "admin_support") return true;
+  if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+  return c.assignedTo === user.id;
 }
 
 // Phase-4 SLA helpers — overdue is "active consultation whose
@@ -328,6 +361,15 @@ function formatExpectedDate(iso: string | null): string {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toISOString().slice(0, 10);
 }
+
+// Phase-7 default sort: order by SLA urgency (سريعة → عادية → طويلة), then
+// newest-first within a category. Lives at module scope so the comparator
+// closure stays referentially stable across renders.
+const CATEGORY_SORT_RANK: Record<ConsultationCategoryValue, number> = {
+  [ConsultationCategory.QUICK]:    0,
+  [ConsultationCategory.STANDARD]: 1,
+  [ConsultationCategory.LONG]:     2,
+};
 
 // Per-category badge palette. Quick = amber (urgent), standard = neutral,
 // long = blue (low-pressure). Keeps the table readable at a glance without
@@ -575,6 +617,168 @@ export default function ConsultationsPage() {
   // consultation row, so the timeline always reflects the latest state.
   const [activityLog, setActivityLog] = useState<ConsultationActivity[]>([]);
   const [activityLogExpanded, setActivityLogExpanded] = useState(true);
+
+  // Phase-8 — pause / unpause dialog state. Two separate dialogs because
+  // the entry vs exit forms differ (reason required on pause, optional
+  // notes on unpause).
+  const [showPauseDialog, setShowPauseDialog] = useState(false);
+  const [pauseTarget, setPauseTarget] = useState<Consultation | null>(null);
+  const [pauseReason, setPauseReason] = useState("");
+  const [showUnpauseDialog, setShowUnpauseDialog] = useState(false);
+  const [unpauseTarget, setUnpauseTarget] = useState<Consultation | null>(null);
+  const [unpauseNotes, setUnpauseNotes] = useState("");
+
+  const openPauseDialog = (c: Consultation) => {
+    setPauseTarget(c);
+    setPauseReason("");
+    setShowPauseDialog(true);
+  };
+  const closePauseDialog = () => {
+    setShowPauseDialog(false);
+    setPauseTarget(null);
+    setPauseReason("");
+  };
+  const openUnpauseDialog = (c: Consultation) => {
+    setUnpauseTarget(c);
+    setUnpauseNotes("");
+    setShowUnpauseDialog(true);
+  };
+  const closeUnpauseDialog = () => {
+    setShowUnpauseDialog(false);
+    setUnpauseTarget(null);
+    setUnpauseNotes("");
+  };
+
+  const handlePause = async () => {
+    if (!pauseTarget) return;
+    const reason = pauseReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${pauseTarget.id}/pause`, { reason });
+      await refreshConsultations();
+      toast({ title: "تم تعليق الاستشارة" });
+      closePauseDialog();
+    } catch (err) {
+      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const handleUnpause = async () => {
+    if (!unpauseTarget) return;
+    setActionInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = unpauseNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/consultations/${unpauseTarget.id}/unpause`, body);
+      await refreshConsultations();
+      toast({ title: "تم إلغاء التعليق" });
+      closeUnpauseDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  // Phase-8 — await-completion / resume / skip dialog state. Same
+  // permission gate as pause (canPauseConsultation).
+  const [showAwaitDialog, setShowAwaitDialog] = useState(false);
+  const [awaitTarget, setAwaitTarget] = useState<Consultation | null>(null);
+  const [awaitReason, setAwaitReason] = useState("");
+  const [showResumeDialog, setShowResumeDialog] = useState(false);
+  const [resumeTarget, setResumeTarget] = useState<Consultation | null>(null);
+  const [resumeNotes, setResumeNotes] = useState("");
+  const [showSkipDialog, setShowSkipDialog] = useState(false);
+  const [skipTarget, setSkipTarget] = useState<Consultation | null>(null);
+
+  const openAwaitDialog = (c: Consultation) => {
+    setAwaitTarget(c);
+    setAwaitReason("");
+    setShowAwaitDialog(true);
+  };
+  const closeAwaitDialog = () => {
+    setShowAwaitDialog(false);
+    setAwaitTarget(null);
+    setAwaitReason("");
+  };
+  const openResumeDialog = (c: Consultation) => {
+    setResumeTarget(c);
+    setResumeNotes("");
+    setShowResumeDialog(true);
+  };
+  const closeResumeDialog = () => {
+    setShowResumeDialog(false);
+    setResumeTarget(null);
+    setResumeNotes("");
+  };
+  const openSkipDialog = (c: Consultation) => {
+    setSkipTarget(c);
+    setShowSkipDialog(true);
+  };
+  const closeSkipDialog = () => {
+    setShowSkipDialog(false);
+    setSkipTarget(null);
+  };
+
+  const handleAwaitCompletion = async () => {
+    if (!awaitTarget) return;
+    const reason = awaitReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل السبب", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${awaitTarget.id}/await-completion`, { reason });
+      await refreshConsultations();
+      toast({ title: "تم الانتقال إلى مرحلة الاستكمال" });
+      closeAwaitDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const handleResumeFromCompletion = async () => {
+    if (!resumeTarget) return;
+    setActionInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = resumeNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/consultations/${resumeTarget.id}/resume-from-completion`, body);
+      await refreshConsultations();
+      toast({ title: "تم العودة من الاستكمال" });
+      closeResumeDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const handleSkipCompletion = async () => {
+    if (!skipTarget) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${skipTarget.id}/skip-completion`, {});
+      await refreshConsultations();
+      toast({ title: "تم تجاوز مرحلة الاستكمال" });
+      closeSkipDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -1166,6 +1370,18 @@ export default function ConsultationsPage() {
     return true;
   });
 
+  // Phase-7 default ordering: SLA category (سريعة → عادية → طويلة), then
+  // createdAt DESC within a category. No click-to-sort exists yet, so the
+  // ordering is enforced here in the derivation step.
+  const sortedConsultations = [...filteredConsultations].sort((a, b) => {
+    const ra = CATEGORY_SORT_RANK[a.category] ?? 99;
+    const rb = CATEGORY_SORT_RANK[b.category] ?? 99;
+    if (ra !== rb) return ra - rb;
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return tb - ta;
+  });
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1279,6 +1495,81 @@ export default function ConsultationsPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {/* Phase-7 quick filters: always-visible single-select dropdowns
+              for the 3 most-used facets. Drive the same advFilters state as
+              the advanced popover (lawyers/stages multi-select arrays are
+              collapsed to a single value here — picking one replaces the
+              whole array; "all" clears it). When the popover sets length>1,
+              the dropdown displays "all" because a single-select control
+              can't represent a multi-selection. */}
+          <div
+            className="flex flex-wrap items-center gap-3 mb-4"
+            data-testid="consultations-quick-filters"
+          >
+            <div className="min-w-[180px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">القسم</Label>
+              <Select
+                value={advFilters.departmentId || "all"}
+                onValueChange={(v) =>
+                  setAdvFilters({ ...advFilters, departmentId: v === "all" ? "" : v })
+                }
+              >
+                <SelectTrigger data-testid="quick-filter-department">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل الأقسام</SelectItem>
+                  {departments.map((d) => (
+                    <SelectItem key={String(d.id)} value={String(d.id)}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-[200px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">المحامي المسؤول</Label>
+              <Select
+                value={advFilters.lawyers.length === 1 ? advFilters.lawyers[0] : "all"}
+                onValueChange={(v) =>
+                  setAdvFilters({ ...advFilters, lawyers: v === "all" ? [] : [v] })
+                }
+              >
+                <SelectTrigger data-testid="quick-filter-lawyer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل المحامين</SelectItem>
+                  {filterLawyers.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-[180px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">المرحلة</Label>
+              <Select
+                value={advFilters.stages.length === 1 ? advFilters.stages[0] : "all"}
+                onValueChange={(v) =>
+                  setAdvFilters({ ...advFilters, stages: v === "all" ? [] : [v] })
+                }
+              >
+                <SelectTrigger data-testid="quick-filter-stage">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل المراحل</SelectItem>
+                  {ConsultationStagesAll.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {ConsultationStageLabels[s] || s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -1294,7 +1585,7 @@ export default function ConsultationsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredConsultations.map((consultation) => (
+              {sortedConsultations.map((consultation) => (
                 <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`}>
                   <TableCell className="text-center font-medium">
                     <LtrInline>{consultation.consultationNumber}</LtrInline>
@@ -1306,10 +1597,26 @@ export default function ConsultationsPage() {
                     <Badge variant="outline">{consultation.consultationType}</Badge>
                   </TableCell>
                   <TableCell className="text-center">
-                    {(() => {
-                      const b = getConsultationDisplayBadge(consultation);
-                      return <Badge className={b.className}>{b.label}</Badge>;
-                    })()}
+                    <div className="inline-flex items-center gap-1">
+                      {(() => {
+                        const b = getConsultationDisplayBadge(consultation);
+                        return <Badge className={b.className}>{b.label}</Badge>;
+                      })()}
+                      {/* Phase-8 — awaiting-completion indicator. Distinct
+                          amber pill so it reads as orthogonal even though
+                          the stage badge is also showing PENDING_COMPLETION. */}
+                      {consultation.awaitingCompletion && consultation.status === "active" && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-awaiting-${consultation.id}`}
+                          title="بانتظار استكمال البيانات"
+                        >
+                          <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                          بانتظار
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-center">{getDepartmentName(consultation.departmentId)}</TableCell>
                   <TableCell className="text-center" data-testid={`cell-assigned-lawyer-${consultation.id}`}>
@@ -1343,6 +1650,39 @@ export default function ConsultationsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {/* Phase-8 — when paused, all workflow actions hide.
+                              Only "إلغاء التعليق" (and delete for branch_manager)
+                              are available. The pause/unpause action itself is
+                              rendered below the workflow block.
+                              When awaiting completion, similarly hide all workflow
+                              actions except the resume action — same permission
+                              gate as pause. */}
+                          {consultation.status === "paused" ? (
+                            <>
+                              {canPauseConsultation(consultation, user) && (
+                                <DropdownMenuItem
+                                  data-testid={`button-unpause-consultation-${consultation.id}`}
+                                  onClick={() => openUnpauseDialog(consultation)}
+                                >
+                                  <Play className="w-4 h-4 ml-2" />
+                                  إلغاء التعليق
+                                </DropdownMenuItem>
+                              )}
+                            </>
+                          ) : consultation.awaitingCompletion ? (
+                            <>
+                              {canPauseConsultation(consultation, user) && (
+                                <DropdownMenuItem
+                                  data-testid={`button-resume-completion-${consultation.id}`}
+                                  onClick={() => openResumeDialog(consultation)}
+                                >
+                                  <CheckCircle className="w-4 h-4 ml-2" />
+                                  تم الاستكمال
+                                </DropdownMenuItem>
+                              )}
+                            </>
+                          ) : (
+                            <>
                           {canAssignConsultation(consultation) && (
                             <DropdownMenuItem data-testid={`button-assign-consultation-${consultation.id}`} onClick={() => openAssignDialog(consultation)}>
                               <UserPlus className="w-4 h-4 ml-2" />
@@ -1356,6 +1696,22 @@ export default function ConsultationsPage() {
                             >
                               <ChevronLeft className="w-4 h-4 ml-2" />
                               المرحلة التالية
+                            </DropdownMenuItem>
+                          )}
+                          {/* Phase-8 — "تجاوز" (skip) button shown only when
+                              currently in PENDING_COMPLETION stage AND not in
+                              await mode. Same target as the normal advance to
+                              STUDY but logs completion_skipped distinctly. */}
+                          {consultation.status === "active"
+                            && consultation.currentStage === ConsultationStage.RECEIVED_PENDING_COMPLETION
+                            && !consultation.awaitingCompletion
+                            && canPauseConsultation(consultation, user) && (
+                            <DropdownMenuItem
+                              data-testid={`button-skip-completion-${consultation.id}`}
+                              onClick={() => openSkipDialog(consultation)}
+                            >
+                              <FileSymlink className="w-4 h-4 ml-2" />
+                              تجاوز مرحلة الاستكمال
                             </DropdownMenuItem>
                           )}
                           {user && getReturnTargets(consultation, user.role, user.id, user.departmentId).length > 0 && (
@@ -1434,6 +1790,42 @@ export default function ConsultationsPage() {
                               </DropdownMenuItem>
                             </>
                           )}
+                          {/* Phase-8 — pause + await-completion actions. Both
+                              sit between workflow actions and the destructive
+                              delete. Await-completion is hidden when already in
+                              await mode (rendered in the awaiting branch above)
+                              and when already in PENDING_COMPLETION stage (the
+                              tautology guard the server also enforces). */}
+                          {consultation.status === "active" && !consultation.awaitingCompletion
+                            && consultation.currentStage !== ConsultationStage.RECEIVED_PENDING_COMPLETION
+                            && canPauseConsultation(consultation, user) && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid={`button-await-completion-${consultation.id}`}
+                                className="text-amber-600 focus:text-amber-700"
+                                onClick={() => openAwaitDialog(consultation)}
+                              >
+                                <AlertTriangle className="w-4 h-4 ml-2" />
+                                بانتظار استكمال البيانات
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {consultation.status === "active" && canPauseConsultation(consultation, user) && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid={`button-pause-consultation-${consultation.id}`}
+                                className="text-amber-600 focus:text-amber-700"
+                                onClick={() => openPauseDialog(consultation)}
+                              >
+                                <Pause className="w-4 h-4 ml-2" />
+                                تعليق
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                            </>
+                          )}
                           {user?.role === "branch_manager" && (
                             <>
                               <DropdownMenuSeparator />
@@ -1468,6 +1860,57 @@ export default function ConsultationsPage() {
           </DialogHeader>
           {selectedConsultation && (
             <div className="space-y-4">
+              {/* Phase-8 — awaiting-completion banner. When awaitingCompletion
+                  is true, the consultation's stage is RECEIVED_PENDING_COMPLETION
+                  (set by the server) — but unlike the normal flow at that stage,
+                  the resume action restores savedStage rather than advancing.
+                  Show savedStage so the user knows where they'll return. */}
+              {selectedConsultation.status === "active" && selectedConsultation.awaitingCompletion && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                  data-testid="banner-consultation-awaiting"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <AlertTriangle className="w-4 h-4" />
+                    هذه الاستشارة بانتظار استكمال البيانات
+                  </div>
+                  {selectedConsultation.savedStage && (
+                    <div className="mt-1 text-xs">
+                      ستعود إلى: <BidiText>{ConsultationStageLabels[selectedConsultation.savedStage as ConsultationStageValue] || selectedConsultation.savedStage}</BidiText>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Phase-8 — paused banner. Renders at the top of the details
+                  dialog whenever status='paused' so the reason / who / when
+                  is visible without scrolling to the activity log. */}
+              {selectedConsultation.status === "paused" && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                  data-testid="banner-consultation-paused"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <Pause className="w-4 h-4" />
+                    هذه الاستشارة معلّقة
+                  </div>
+                  {selectedConsultation.pauseReason && (
+                    <div className="mt-1">
+                      السبب: <BidiText>{selectedConsultation.pauseReason}</BidiText>
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-amber-700/80">
+                    {selectedConsultation.pausedBy && (
+                      <>بواسطة <BidiText>{getLawyerName(selectedConsultation.pausedBy)}</BidiText></>
+                    )}
+                    {selectedConsultation.pausedAt && (
+                      <>
+                        {selectedConsultation.pausedBy ? " — " : ""}
+                        في <LtrInline>{formatExpectedDate(selectedConsultation.pausedAt)}</LtrInline>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               {selectedConsultation.status === "converted" && selectedConsultation.convertedToCaseId && (
                 <button
                   type="button"
@@ -2387,6 +2830,187 @@ export default function ConsultationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Phase-8 — await-completion dialog. Reason required. */}
+      <AlertDialog open={showAwaitDialog} onOpenChange={(open) => { if (!open) closeAwaitDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              بانتظار استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستُحفظ المرحلة الحالية وتُنقل الاستشارة مؤقتاً إلى مرحلة "استكمال المرفقات والبيانات".
+              عند اكتمال البيانات استخدم زر "تم الاستكمال" للعودة إلى المرحلة المحفوظة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>السبب <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-await-reason"
+              value={awaitReason}
+              onChange={(e) => setAwaitReason(e.target.value)}
+              placeholder="ما هي البيانات أو المرفقات الناقصة؟"
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeAwaitDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-await"
+              onClick={handleAwaitCompletion}
+              disabled={actionInProgress || !awaitReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <AlertTriangle className="w-4 h-4 ml-2" />
+              تأكيد
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — resume from completion dialog. Notes optional. */}
+      <AlertDialog open={showResumeDialog} onOpenChange={(open) => { if (!open) closeResumeDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              تم الاستكمال
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود الاستشارة إلى المرحلة المحفوظة قبل دخول مرحلة الاستكمال
+              {resumeTarget?.savedStage && (
+                <>: <strong>{ConsultationStageLabels[resumeTarget.savedStage as ConsultationStageValue] || resumeTarget.savedStage}</strong></>
+              )}
+              .
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-resume-notes"
+              value={resumeNotes}
+              onChange={(e) => setResumeNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول ما تم استكماله..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeResumeDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-resume"
+              onClick={handleResumeFromCompletion}
+              disabled={actionInProgress}
+            >
+              <CheckCircle className="w-4 h-4 ml-2" />
+              تأكيد العودة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — skip-completion dialog. No body; just confirms intent. */}
+      <AlertDialog open={showSkipDialog} onOpenChange={(open) => { if (!open) closeSkipDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <FileSymlink className="w-5 h-5" />
+              تجاوز مرحلة الاستكمال
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم تجاوز مرحلة "استكمال المرفقات والبيانات" والانتقال مباشرة إلى مرحلة "دراسة".
+              استخدم هذا الخيار فقط عندما لا تكون هناك بيانات أو مرفقات ناقصة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeSkipDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-skip"
+              onClick={handleSkipCompletion}
+              disabled={actionInProgress}
+            >
+              <FileSymlink className="w-4 h-4 ml-2" />
+              تأكيد التجاوز
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — pause dialog. Reason is required; the server also
+          enforces the trim/min-1 check. */}
+      <AlertDialog open={showPauseDialog} onOpenChange={(open) => { if (!open) closePauseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Pause className="w-5 h-5 text-amber-600" />
+              تعليق الاستشارة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إيقاف العمل على هذه الاستشارة مؤقتاً مع الاحتفاظ بمرحلتها الحالية.
+              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-pause-reason"
+              value={pauseReason}
+              onChange={(e) => setPauseReason(e.target.value)}
+              placeholder="اكتب سبب التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closePauseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-pause"
+              onClick={handlePause}
+              disabled={actionInProgress || !pauseReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <Pause className="w-4 h-4 ml-2" />
+              تأكيد التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — unpause dialog. Notes optional; passed through to the
+          activity-log description when present. */}
+      <AlertDialog open={showUnpauseDialog} onOpenChange={(open) => { if (!open) closeUnpauseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Play className="w-5 h-5" />
+              إلغاء تعليق الاستشارة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود الاستشارة إلى الحالة النشطة عند نفس مرحلتها قبل التعليق.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-unpause-notes"
+              value={unpauseNotes}
+              onChange={(e) => setUnpauseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeUnpauseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-unpause"
+              onClick={handleUnpause}
+              disabled={actionInProgress}
+            >
+              <Play className="w-4 h-4 ml-2" />
+              تأكيد إلغاء التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>

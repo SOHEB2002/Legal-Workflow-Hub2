@@ -159,7 +159,7 @@ const CASE_BACKWARD_TRANSITIONS: TransitionRule[] = [
     from: CaseStage.STUDY,
     to: CaseStage.DATA_COMPLETION,
     allowedRoles: [UserRole.BRANCH_MANAGER, UserRole.DEPARTMENT_HEAD],
-    label: "إرجاع لاستكمال البيانات",
+    label: "إرجاع لاستكمال المرفقات والبيانات",
   },
   {
     from: CaseStage.DRAFTING,
@@ -313,7 +313,7 @@ const CASE_STAGE_INFO: StageInfo[] = [
   },
   {
     stage: CaseStage.DATA_COMPLETION,
-    label: "استكمال البيانات",
+    label: "استكمال المرفقات والبيانات",
     description: "رئيس القسم يراجع البيانات ويُسند للمحامي",
     responsibleRoles: [UserRole.DEPARTMENT_HEAD, UserRole.BRANCH_MANAGER],
   },
