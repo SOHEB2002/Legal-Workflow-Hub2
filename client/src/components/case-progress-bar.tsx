@@ -78,6 +78,42 @@ export function CaseProgressBar({
     memoRequired,
     isSettlementCase,
   );
+  // Defensive fallback. caseType on a case row is a free-text user input
+  // (the create form lets the user type "بيع وتوريد", "نزاع تجاري", etc.),
+  // and the parent's IIFE in cases.tsx tries to recover by mapping
+  // departmentId → department name, but that mapping silently returns "غير
+  // محدد" for any id outside the hardcoded 1–4 list and the IIFE then
+  // defaults to "عام". Result: a commercial case at قيد_التدقيق_في_تراضي was
+  // rendering the 12-stage general path with the current-stage highlight
+  // collapsed to step 1. Mirror the same recovery cases-context.tsx uses
+  // for moveToNextStage: if the primary path doesn't contain the case's
+  // current stage, scan every variant for this classification and pick the
+  // first one that does.
+  if (stagesOrder.indexOf(normalizedStage) < 0) {
+    if (effectiveClassification === "قيد_الدراسة") {
+      const types: CaseTypeValue[] = ["تجاري", "عمالي", "إداري", "عام"];
+      for (const t of types) {
+        const v = getStagesForClassification(effectiveClassification, t);
+        if (v.indexOf(normalizedStage) >= 0) {
+          stagesOrder = v;
+          break;
+        }
+      }
+    } else if (effectiveClassification === "منظورة_بالمحكمة") {
+      const variants = [
+        getStagesForClassification(effectiveClassification, undefined, undefined, false, true),
+        getStagesForClassification(effectiveClassification, undefined, "مدعى_عليه", true),
+        getStagesForClassification(effectiveClassification, undefined, "مدعي", true),
+        getStagesForClassification(effectiveClassification, undefined, undefined, false),
+      ];
+      for (const v of variants) {
+        if (v.indexOf(normalizedStage) >= 0) {
+          stagesOrder = v;
+          break;
+        }
+      }
+    }
+  }
   // Dynamic bridge for IN_COURT cases: if a memo was added after the case
   // already reached دراسة on the no-memo path, the memo variant returned
   // above doesn't include دراسة. Splice دراسة in just before the drafting
