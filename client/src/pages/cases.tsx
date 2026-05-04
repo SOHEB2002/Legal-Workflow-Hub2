@@ -33,6 +33,8 @@ import {
   X,
   MessageSquare,
   UserCog,
+  Pause,
+  Play,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -257,6 +259,79 @@ export default function CasesPage() {
     return msg || "حدث خطأ غير متوقع";
   };
 
+  // Phase-8 — pause permission gate. Mirrors the server check on
+  // /api/cases/:id/pause and /unpause: branch_manager / admin_support /
+  // dept_head (own dept) / assigned lawyer (primary | responsible | in
+  // assignedLawyers array).
+  const canPauseCase = (c: LawCase): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
+    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+  };
+
+  const isCasePaused = (c: LawCase): boolean => !!c.pausedAt;
+
+  const openPauseCaseDialog = (c: LawCase) => {
+    setPauseCaseTarget(c);
+    setPauseCaseReason("");
+    setShowPauseCaseDialog(true);
+  };
+  const closePauseCaseDialog = () => {
+    setShowPauseCaseDialog(false);
+    setPauseCaseTarget(null);
+    setPauseCaseReason("");
+  };
+  const openUnpauseCaseDialog = (c: LawCase) => {
+    setUnpauseCaseTarget(c);
+    setUnpauseCaseNotes("");
+    setShowUnpauseCaseDialog(true);
+  };
+  const closeUnpauseCaseDialog = () => {
+    setShowUnpauseCaseDialog(false);
+    setUnpauseCaseTarget(null);
+    setUnpauseCaseNotes("");
+  };
+
+  const handlePauseCase = async () => {
+    if (!pauseCaseTarget) return;
+    const reason = pauseCaseReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
+      return;
+    }
+    setPauseActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/cases/${pauseCaseTarget.id}/pause`, { reason });
+      await refreshCases();
+      toast({ title: "تم تعليق القضية" });
+      closePauseCaseDialog();
+    } catch (err) {
+      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseActionInProgress(false);
+    }
+  };
+
+  const handleUnpauseCase = async () => {
+    if (!unpauseCaseTarget) return;
+    setPauseActionInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = unpauseCaseNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/cases/${unpauseCaseTarget.id}/unpause`, body);
+      await refreshCases();
+      toast({ title: "تم إلغاء تعليق القضية" });
+      closeUnpauseCaseDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseActionInProgress(false);
+    }
+  };
+
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
@@ -295,6 +370,15 @@ export default function CasesPage() {
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  // Phase-8 — pause / unpause dialog state. Mirrors the consultations
+  // page; same pattern (required reason / optional notes).
+  const [showPauseCaseDialog, setShowPauseCaseDialog] = useState(false);
+  const [pauseCaseTarget, setPauseCaseTarget] = useState<LawCase | null>(null);
+  const [pauseCaseReason, setPauseCaseReason] = useState("");
+  const [showUnpauseCaseDialog, setShowUnpauseCaseDialog] = useState(false);
+  const [unpauseCaseTarget, setUnpauseCaseTarget] = useState<LawCase | null>(null);
+  const [unpauseCaseNotes, setUnpauseCaseNotes] = useState("");
+  const [pauseActionInProgress, setPauseActionInProgress] = useState(false);
   const selectedCase = selectedCaseId ? getCaseById(selectedCaseId) || null : null;
   const [rejectNotes, setRejectNotes] = useState("");
   const [newComment, setNewComment] = useState("");
@@ -1048,6 +1132,19 @@ export default function CasesPage() {
                       <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
                         {getStageLabel(c.currentStage)}
                       </Badge>
+                      {/* Phase-8 — paused indicator. Distinct amber badge so
+                          it reads as orthogonal to the stage. */}
+                      {isCasePaused(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-paused-${c.id}`}
+                          title={c.pauseReason || "معلّقة"}
+                        >
+                          <Pause className="w-2.5 h-2.5 ml-1" />
+                          معلّقة
+                        </Badge>
+                      )}
                       {(c.currentStage === "قيد_التدقيق_في_تراضي" ||
                         c.currentStage === "قيد_التدقيق_في_ناجز" ||
                         c.currentStage === "قيد_التدقيق_في_معين") &&
@@ -1088,6 +1185,36 @@ export default function CasesPage() {
                           <UserCog className="w-4 h-4" />
                         </Button>
                       )}
+                      {/* Phase-8 — pause / unpause action. Pause shows when
+                          not paused, status not closed, not archived, and the
+                          user has permission. Unpause replaces it when paused.
+                          Workflow actions on the case are accessed via the
+                          details dialog, not this row, so we don't need to
+                          gate other inline buttons here. */}
+                      {isCasePaused(c)
+                        ? canPauseCase(c) && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              title="إلغاء التعليق"
+                              data-testid={`button-unpause-case-${c.id}`}
+                              onClick={() => openUnpauseCaseDialog(c)}
+                            >
+                              <Play className="w-4 h-4" />
+                            </Button>
+                          )
+                        : c.status !== "مغلق" && !(c as any).isArchived && canPauseCase(c) && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="text-amber-600 hover:text-amber-700"
+                              title="تعليق القضية"
+                              data-testid={`button-pause-case-${c.id}`}
+                              onClick={() => openPauseCaseDialog(c)}
+                            >
+                              <Pause className="w-4 h-4" />
+                            </Button>
+                          )}
                       {user?.role === "branch_manager" && (
                         <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive" title="حذف القضية" data-testid={`button-delete-case-${c.id}`} onClick={() => { setCaseToDelete(c); setShowDeleteDialog(true); }}>
                           <Trash2 className="w-4 h-4" />
@@ -1539,6 +1666,36 @@ export default function CasesPage() {
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
+              {/* Phase-8 — paused banner. Renders at the top of the details
+                  dialog when the case is paused so reason / who / when is
+                  visible without scrolling. */}
+              {isCasePaused(selectedCase) && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                  data-testid="banner-case-paused"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <Pause className="w-4 h-4" />
+                    هذه القضية معلّقة
+                  </div>
+                  {selectedCase.pauseReason && (
+                    <div className="mt-1">
+                      السبب: <BidiText>{selectedCase.pauseReason}</BidiText>
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-amber-700/80">
+                    {selectedCase.pausedBy && (
+                      <>بواسطة <BidiText>{getLawyerName(selectedCase.pausedBy)}</BidiText></>
+                    )}
+                    {selectedCase.pausedAt && (
+                      <>
+                        {selectedCase.pausedBy ? " — " : ""}
+                        في <LtrInline>{new Date(selectedCase.pausedAt).toISOString().slice(0, 10)}</LtrInline>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
               {sourceConsultation && (
                 <button
                   type="button"
@@ -3366,6 +3523,80 @@ export default function CasesPage() {
               data-testid="button-hearing-prompt-add"
             >
               نعم، إضافة جلسة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — pause case dialog */}
+      <AlertDialog open={showPauseCaseDialog} onOpenChange={(open) => { if (!open) closePauseCaseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Pause className="w-5 h-5 text-amber-600" />
+              تعليق القضية
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إيقاف العمل على هذه القضية مؤقتاً مع الاحتفاظ بمرحلتها الحالية.
+              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-case-pause-reason"
+              value={pauseCaseReason}
+              onChange={(e) => setPauseCaseReason(e.target.value)}
+              placeholder="اكتب سبب التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closePauseCaseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-pause-case"
+              onClick={handlePauseCase}
+              disabled={pauseActionInProgress || !pauseCaseReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <Pause className="w-4 h-4 ml-2" />
+              تأكيد التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — unpause case dialog */}
+      <AlertDialog open={showUnpauseCaseDialog} onOpenChange={(open) => { if (!open) closeUnpauseCaseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Play className="w-5 h-5" />
+              إلغاء تعليق القضية
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود القضية للعمل عند نفس مرحلتها قبل التعليق.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-case-unpause-notes"
+              value={unpauseCaseNotes}
+              onChange={(e) => setUnpauseCaseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeUnpauseCaseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-unpause-case"
+              onClick={handleUnpauseCase}
+              disabled={pauseActionInProgress}
+            >
+              <Play className="w-4 h-4 ml-2" />
+              تأكيد إلغاء التعليق
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
