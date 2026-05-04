@@ -55,9 +55,21 @@ import {
   Check,
   ChevronsUpDown,
   UserCog,
+  Pause,
+  Play,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useMemos } from "@/lib/memos-context";
-import { queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -160,6 +172,16 @@ export default function MemosPage() {
   const [detailMemoId, setDetailMemoId] = useState<string | null>(null);
   const detailMemo = detailMemoId ? memos.find(m => m.id === detailMemoId) || null : null;
   const [submitting, setSubmitting] = useState(false);
+
+  // Phase-8 — pause / unpause dialog state. Mirrors the consultations
+  // and cases pages.
+  const [showPauseMemoDialog, setShowPauseMemoDialog] = useState(false);
+  const [pauseMemoTarget, setPauseMemoTarget] = useState<Memo | null>(null);
+  const [pauseMemoReason, setPauseMemoReason] = useState("");
+  const [showUnpauseMemoDialog, setShowUnpauseMemoDialog] = useState(false);
+  const [unpauseMemoTarget, setUnpauseMemoTarget] = useState<Memo | null>(null);
+  const [unpauseMemoNotes, setUnpauseMemoNotes] = useState("");
+  const [pauseMemoInProgress, setPauseMemoInProgress] = useState(false);
 
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDept, setFilterDept] = useState<string>("all");
@@ -339,6 +361,98 @@ export default function MemosPage() {
     if (relatedCase && (relatedCase.primaryLawyerId === user.id || relatedCase.responsibleLawyerId === user.id)) return true;
     if (memo.assignedTo === user.id) return true;
     return false;
+  };
+
+  // Phase-8 — pause permission gate. Mirrors the server check on
+  // /api/memos/:id/pause and /unpause: branch_manager / admin_support /
+  // dept_head (own dept, resolved via parent case) / assigned lawyer.
+  // Memos don't carry departmentId directly, so dept_head needs the
+  // parent case lookup.
+  const canPauseMemo = (memo: Memo): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head") {
+      const parent = cases.find(c => c.id === memo.caseId);
+      return !!parent && parent.departmentId === user.departmentId;
+    }
+    return memo.assignedTo === user.id;
+  };
+
+  const isMemoPaused = (memo: Memo): boolean => !!memo.pausedAt;
+
+  const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
+
+  const extractApiError = (err: unknown): string => {
+    const msg = (err as any)?.message || "";
+    // format from throwIfResNotOk: "400: {"error":"..."}"
+    // No /s flag: target lib doesn't support it; the body is single-line.
+    const match = /^(\d+):\s*([\s\S]+)$/.exec(msg);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[2]);
+        if (parsed?.error) return parsed.error;
+      } catch {}
+    }
+    return msg || "حدث خطأ غير متوقع";
+  };
+
+  const openPauseMemoDialog = (memo: Memo) => {
+    setPauseMemoTarget(memo);
+    setPauseMemoReason("");
+    setShowPauseMemoDialog(true);
+  };
+  const closePauseMemoDialog = () => {
+    setShowPauseMemoDialog(false);
+    setPauseMemoTarget(null);
+    setPauseMemoReason("");
+  };
+  const openUnpauseMemoDialog = (memo: Memo) => {
+    setUnpauseMemoTarget(memo);
+    setUnpauseMemoNotes("");
+    setShowUnpauseMemoDialog(true);
+  };
+  const closeUnpauseMemoDialog = () => {
+    setShowUnpauseMemoDialog(false);
+    setUnpauseMemoTarget(null);
+    setUnpauseMemoNotes("");
+  };
+
+  const handlePauseMemo = async () => {
+    if (!pauseMemoTarget) return;
+    const reason = pauseMemoReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
+      return;
+    }
+    setPauseMemoInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${pauseMemoTarget.id}/pause`, { reason });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تعليق المذكرة" });
+      closePauseMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
+  };
+
+  const handleUnpauseMemo = async () => {
+    if (!unpauseMemoTarget) return;
+    setPauseMemoInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = unpauseMemoNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/memos/${unpauseMemoTarget.id}/unpause`, body);
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم إلغاء تعليق المذكرة" });
+      closeUnpauseMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
   };
 
   const getUserName = (id: string | null): string => {
@@ -616,6 +730,19 @@ export default function MemosPage() {
                             <Badge className={getStatusBadgeClass(memo.status)}>
                               {MemoStatusLabels[memo.status]}
                             </Badge>
+                            {/* Phase-8 — paused indicator. Distinct amber badge
+                                so it reads as orthogonal to memo status. */}
+                            {isMemoPaused(memo) && (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                                data-testid={`badge-memo-paused-${memo.id}`}
+                                title={memo.pauseReason || "معلّق"}
+                              >
+                                <Pause className="w-2.5 h-2.5 ml-1" />
+                                معلّق
+                              </Badge>
+                            )}
                             {memo.hearingId && getHearingById(memo.hearingId)?.opponentResponseRequired && (
                               <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600 dark:text-orange-400 px-1 py-0">
                                 رد خصم
@@ -664,6 +791,34 @@ export default function MemosPage() {
                                 <Ban className="w-4 h-4" />
                               </Button>
                             )}
+                            {/* Phase-8 — pause / unpause action. Pause shown
+                                when not paused, not in a terminal status, and
+                                user has permission. Unpause replaces it
+                                (Play icon) when paused. */}
+                            {isMemoPaused(memo)
+                              ? canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    title="إلغاء التعليق"
+                                    data-testid={`button-unpause-memo-${memo.id}`}
+                                    onClick={() => openUnpauseMemoDialog(memo)}
+                                  >
+                                    <Play className="w-4 h-4" />
+                                  </Button>
+                                )
+                              : !TERMINAL_MEMO_STATUSES.has(memo.status) && canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-amber-600 hover:text-amber-700"
+                                    title="تعليق المذكرة"
+                                    data-testid={`button-pause-memo-${memo.id}`}
+                                    onClick={() => openPauseMemoDialog(memo)}
+                                  >
+                                    <Pause className="w-4 h-4" />
+                                  </Button>
+                                )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -925,6 +1080,36 @@ export default function MemosPage() {
                 </DialogTitle>
               </DialogHeader>
               <div className="space-y-6">
+                {/* Phase-8 — paused banner. Renders at the top of the
+                    details dialog so the reason / who / when is visible
+                    without scrolling to the activity log. */}
+                {isMemoPaused(detailMemo) && (
+                  <div
+                    className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                    data-testid="banner-memo-paused"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Pause className="w-4 h-4" />
+                      هذه المذكرة معلّقة
+                    </div>
+                    {detailMemo.pauseReason && (
+                      <div className="mt-1">
+                        السبب: <BidiText>{detailMemo.pauseReason}</BidiText>
+                      </div>
+                    )}
+                    <div className="mt-1 text-xs text-amber-700/80">
+                      {detailMemo.pausedBy && (
+                        <>بواسطة <BidiText>{getUserName(detailMemo.pausedBy)}</BidiText></>
+                      )}
+                      {detailMemo.pausedAt && (
+                        <>
+                          {detailMemo.pausedBy ? " — " : ""}
+                          في <LtrInline>{new Date(detailMemo.pausedAt).toISOString().slice(0, 10)}</LtrInline>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">النوع</p>
@@ -1157,6 +1342,80 @@ export default function MemosPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Phase-8 — pause memo dialog */}
+      <AlertDialog open={showPauseMemoDialog} onOpenChange={(open) => { if (!open) closePauseMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Pause className="w-5 h-5 text-amber-600" />
+              تعليق المذكرة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إيقاف العمل على هذه المذكرة مؤقتاً. حالة المذكرة الحالية تبقى كما هي.
+              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-memo-pause-reason"
+              value={pauseMemoReason}
+              onChange={(e) => setPauseMemoReason(e.target.value)}
+              placeholder="اكتب سبب التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closePauseMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-pause-memo"
+              onClick={handlePauseMemo}
+              disabled={pauseMemoInProgress || !pauseMemoReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <Pause className="w-4 h-4 ml-2" />
+              تأكيد التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — unpause memo dialog */}
+      <AlertDialog open={showUnpauseMemoDialog} onOpenChange={(open) => { if (!open) closeUnpauseMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Play className="w-5 h-5" />
+              إلغاء تعليق المذكرة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود المذكرة للعمل عند نفس حالتها قبل التعليق.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-memo-unpause-notes"
+              value={unpauseMemoNotes}
+              onChange={(e) => setUnpauseMemoNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeUnpauseMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-unpause-memo"
+              onClick={handleUnpauseMemo}
+              disabled={pauseMemoInProgress}
+            >
+              <Play className="w-4 h-4 ml-2" />
+              تأكيد إلغاء التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
