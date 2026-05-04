@@ -85,6 +85,7 @@ import {
   Department,
 } from "@shared/schema";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
   ConsultationsAdvancedFilters,
   EMPTY_CONSULTATIONS_FILTERS,
@@ -769,14 +770,13 @@ export default function ConsultationsPage() {
 
   const openExtendDialog = (c: Consultation) => {
     setExtendConsultation(c);
-    // Pre-fill with the current expected date as a starting point so the
-    // user only needs to push it forward. ISO datetime-local format is
-    // YYYY-MM-DDTHH:mm, so slice to that length.
+    // Pre-fill with the current expected date so the user only needs to push
+    // it forward. HijriDatePicker stores YYYY-MM-DD in local time.
     const seed = c.expectedDeliveryDate ? new Date(c.expectedDeliveryDate) : new Date();
-    const local = new Date(seed.getTime() - seed.getTimezoneOffset() * 60_000)
-      .toISOString()
-      .slice(0, 16);
-    setExtendNewDate(local);
+    const yyyy = seed.getFullYear();
+    const mm = String(seed.getMonth() + 1).padStart(2, "0");
+    const dd = String(seed.getDate()).padStart(2, "0");
+    setExtendNewDate(`${yyyy}-${mm}-${dd}`);
     setExtendReason("");
     setShowExtendDialog(true);
   };
@@ -823,11 +823,11 @@ export default function ConsultationsPage() {
     }
     setActionInProgress(true);
     try {
-      // datetime-local has no timezone info; constructing a Date from it
-      // interprets it as local time, then toISOString() converts to UTC
-      // for the wire — server stores a Date, so timezone round-trips
-      // cleanly.
-      const iso = new Date(extendNewDate).toISOString();
+      // HijriDatePicker emits YYYY-MM-DD. Anchor to local noon so the
+      // resulting timestamp is unambiguously "that day" regardless of TZ
+      // and is strictly after a same-day current value at any morning hour.
+      const [y, m, d] = extendNewDate.split("-").map(Number);
+      const iso = new Date(y, (m ?? 1) - 1, d ?? 1, 12, 0, 0).toISOString();
       await apiRequest("POST", `/api/consultations/${extendConsultation.id}/extend-delivery`, {
         newExpectedDeliveryDate: iso,
         reason: extendReason.trim(),
@@ -1290,7 +1290,6 @@ export default function ConsultationsPage() {
                 <TableHead className="text-center">القسم</TableHead>
                 <TableHead className="text-center">المحامي المسؤول</TableHead>
                 <TableHead className="text-center">التصنيف</TableHead>
-                <TableHead className="text-center">التسليم المتوقع</TableHead>
                 <TableHead className="text-center">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
@@ -1323,25 +1322,6 @@ export default function ConsultationsPage() {
                     >
                       {consultation.category}
                     </Badge>
-                  </TableCell>
-                  <TableCell className="text-center" data-testid={`cell-expected-delivery-${consultation.id}`}>
-                    {(() => {
-                      const overdue = isConsultationOverdue(consultation);
-                      const text = formatExpectedDate(consultation.expectedDeliveryDate);
-                      return (
-                        <span
-                          className={
-                            overdue
-                              ? "inline-flex items-center gap-1 text-destructive font-medium"
-                              : "text-muted-foreground"
-                          }
-                          title={overdue ? "تجاوزت تاريخ التسليم المتوقع" : undefined}
-                        >
-                          {overdue && <AlertTriangle className="w-3.5 h-3.5" />}
-                          <LtrInline>{text}</LtrInline>
-                        </span>
-                      );
-                    })()}
                   </TableCell>
                   <TableCell className="text-center">
                     <div className="flex items-center justify-center gap-1">
@@ -2368,10 +2348,9 @@ export default function ConsultationsPage() {
             )}
             <div>
               <Label>تاريخ التسليم الجديد <span className="text-red-500">*</span></Label>
-              <Input
-                type="datetime-local"
+              <HijriDatePicker
                 value={extendNewDate}
-                onChange={(e) => setExtendNewDate(e.target.value)}
+                onChange={setExtendNewDate}
                 data-testid="input-extend-new-date"
               />
             </div>
