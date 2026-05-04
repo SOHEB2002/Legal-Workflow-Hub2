@@ -1991,6 +1991,36 @@ export async function registerRoutes(
               previousValue: existing.currentStage,
               newValue: req.body.currentStage,
             });
+            // Settlement-only cases (isSettlementCase=true on InCourtSettlementStages)
+            // hit a fork at مداولة_الصلح on "لم يتم الصلح": close the case, or
+            // convert to the regular litigation path. Surface the choice as a
+            // dedicated activity so the timeline shows the user's decision and
+            // not just a generic stage_changed entry.
+            if (
+              existing.currentStage === "مداولة_الصلح" &&
+              (existing as any).isSettlementCase
+            ) {
+              if (req.body.currentStage === "مقفلة") {
+                await storage.logCaseActivity({
+                  caseId: String(req.params.id),
+                  userId: user.id,
+                  userName: user.name || user.id,
+                  actionType: "settlement_failed_closed",
+                  title: "لم يتم الصلح — تم إغلاق القضية نهائياً",
+                });
+              } else if (
+                req.body.currentStage === "أغلق_طلب_الصلح" &&
+                req.body.isSettlementCase === false
+              ) {
+                await storage.logCaseActivity({
+                  caseId: String(req.params.id),
+                  userId: user.id,
+                  userName: user.name || user.id,
+                  actionType: "settlement_failed_continued",
+                  title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
+                });
+              }
+            }
           } else {
             await storage.logCaseActivity({
               caseId: String(req.params.id),
@@ -4152,8 +4182,58 @@ export async function registerRoutes(
 
         // ==================== CONCILIATION: SETTLEMENT FAILED (لم_يتم_الصلح) ====================
         else if (data.result === HearingResult.SETTLEMENT_FAILED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "لم_يتم_الصلح")) {
-          caseUpdate.currentStage = "أغلق_طلب_الصلح";
-          await storage.updateCase(effectiveCaseId, caseUpdate);
+          // Settlement-only cases (started directly at مداولة_الصلح with
+          // isSettlementCase=true) sit on InCourtSettlementStages, which
+          // doesn't include أغلق_طلب_الصلح. The frontend must surface a
+          // choice — close the case or convert it to the regular litigation
+          // path — and forward the answer in afterFailedSettlementChoice.
+          // Non-settlement cases ignore the param and follow the normal
+          // path back to أغلق_طلب_الصلح.
+          const choice = String(data.afterFailedSettlementChoice || "").toLowerCase();
+          if ((existingCase as any).isSettlementCase && choice === "close") {
+            caseUpdate.currentStage = "مقفلة";
+            (caseUpdate as any).status = "مغلق";
+            (caseUpdate as any).closedAt = new Date().toISOString();
+            await storage.updateCase(effectiveCaseId, caseUpdate);
+            await storage.logCaseActivity({
+              caseId: effectiveCaseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: "settlement_failed_closed",
+              title: "لم يتم الصلح — تم إغلاق القضية نهائياً",
+            });
+          } else if ((existingCase as any).isSettlementCase && choice === "continue") {
+            caseUpdate.currentStage = "أغلق_طلب_الصلح";
+            (caseUpdate as any).isSettlementCase = false;
+            await storage.updateCase(effectiveCaseId, caseUpdate);
+            await storage.logCaseActivity({
+              caseId: effectiveCaseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: "settlement_failed_continued",
+              title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
+            });
+          } else {
+            if ((existingCase as any).isSettlementCase) {
+              console.warn("[hearing-result] settlement-only case at لم_يتم_الصلح missing afterFailedSettlementChoice; defaulting to close", {
+                caseId: effectiveCaseId,
+              });
+              caseUpdate.currentStage = "مقفلة";
+              (caseUpdate as any).status = "مغلق";
+              (caseUpdate as any).closedAt = new Date().toISOString();
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+              await storage.logCaseActivity({
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "settlement_failed_closed",
+                title: "لم يتم الصلح — تم إغلاق القضية نهائياً (تلقائي)",
+              });
+            } else {
+              caseUpdate.currentStage = "أغلق_طلب_الصلح";
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+            }
+          }
         }
 
         // ==================== OTHER / DEFAULT ====================
