@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, type CaseTypeValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
+import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +27,11 @@ interface CaseProgressBarProps {
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
-  caseType?: CaseTypeValue;
+  // Resolved canonical department name ("عام" / "تجاري" / "عمالي" / "إداري")
+  // used to pick the UnderStudy stage path. Callers should resolve this from
+  // the case's departmentId via useDepartments().getDepartmentName — DO NOT
+  // pass the case's caseType field, which is free-text user input.
+  departmentName?: string;
   clientRole?: string;
   memoRequired?: boolean;
   isSettlementCase?: boolean;
@@ -51,7 +55,7 @@ export function CaseProgressBar({
   userRole,
   disabled = false,
   caseClassification,
-  caseType,
+  departmentName,
   clientRole,
   memoRequired,
   isSettlementCase,
@@ -73,11 +77,44 @@ export function CaseProgressBar({
   const effectiveClassification = caseClassification || "قيد_الدراسة";
   let stagesOrder = getStagesForClassification(
     effectiveClassification as CaseClassificationValue,
-    caseType,
+    departmentName,
     clientRole,
     memoRequired,
     isSettlementCase,
   );
+  // Defensive safety net for cases where departmentName is missing or
+  // doesn't match one of the four canonical labels (legacy rows with no
+  // departmentId, the special "أخرى" department, or transient mismatches
+  // while the departments list is still loading from the server). After
+  // the schema switched to departmentName-driven routing this rarely
+  // triggers — but when it does, scan every variant for the classification
+  // and pick the first one that contains the case's current stage rather
+  // than collapsing the bar onto the wrong path with currentIndex=0.
+  if (stagesOrder.indexOf(normalizedStage) < 0) {
+    if (effectiveClassification === "قيد_الدراسة") {
+      const names: string[] = ["تجاري", "عمالي", "إداري", "عام"];
+      for (const n of names) {
+        const v = getStagesForClassification(effectiveClassification, n);
+        if (v.indexOf(normalizedStage) >= 0) {
+          stagesOrder = v;
+          break;
+        }
+      }
+    } else if (effectiveClassification === "منظورة_بالمحكمة") {
+      const variants = [
+        getStagesForClassification(effectiveClassification, undefined, undefined, false, true),
+        getStagesForClassification(effectiveClassification, undefined, "مدعى_عليه", true),
+        getStagesForClassification(effectiveClassification, undefined, "مدعي", true),
+        getStagesForClassification(effectiveClassification, undefined, undefined, false),
+      ];
+      for (const v of variants) {
+        if (v.indexOf(normalizedStage) >= 0) {
+          stagesOrder = v;
+          break;
+        }
+      }
+    }
+  }
   // Dynamic bridge for IN_COURT cases: if a memo was added after the case
   // already reached دراسة on the no-memo path, the memo variant returned
   // above doesn't include دراسة. Splice دراسة in just before the drafting

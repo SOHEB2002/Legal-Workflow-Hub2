@@ -478,16 +478,22 @@ export function validateCaseTransition(
   return { allowed: true, rule };
 }
 
-// Server handles all transition validation; client always allows forward
+// Server handles all transition validation; client always allows forward.
+// departmentName is the resolved canonical department label (e.g. "تجاري")
+// — required so the picked stagesOrder matches the case's actual workflow.
+// Without it, every قيد_الدراسة case is checked against the general path
+// and commercial/labor/admin cases at type-specific stages return
+// currentIndex=-1 and the validation rejects the move.
 export function validateCaseForward(
   currentStage: CaseStageValue,
   _userRole: UserRoleType,
   _userId?: string,
   _caseData?: any,
   classification?: CaseClassificationValue,
+  departmentName?: string,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
-  const stagesOrder = classification ? getStagesForClassification(classification) : CaseStagesOrder;
+  const stagesOrder = classification ? getStagesForClassification(classification, departmentName) : CaseStagesOrder;
   const currentIndex = stagesOrder.indexOf(normalizedCurrent);
 
   if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) {
@@ -500,16 +506,18 @@ export function validateCaseForward(
   return { allowed: true, rule: rule || undefined };
 }
 
-// Server handles all transition validation; client always allows backward
+// Server handles all transition validation; client always allows backward.
+// See validateCaseForward for why departmentName is required.
 export function validateCaseBackward(
   currentStage: CaseStageValue,
   _userRole: UserRoleType,
   _userId?: string,
   _caseData?: any,
   classification?: CaseClassificationValue,
+  departmentName?: string,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
-  const stagesOrder = classification ? getStagesForClassification(classification) : CaseStagesOrder;
+  const stagesOrder = classification ? getStagesForClassification(classification, departmentName) : CaseStagesOrder;
   const currentIndex = stagesOrder.indexOf(normalizedCurrent);
 
   if (currentIndex <= 0) {

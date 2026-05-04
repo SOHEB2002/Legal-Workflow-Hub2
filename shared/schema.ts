@@ -928,9 +928,17 @@ export const PostTrialStages: CaseStageValue[] = [
   "مقفلة",
 ];
 
+// Stage selection is keyed on the case's DEPARTMENT (a stable FK to the
+// departments table), not on caseType. caseType is a free-text user input
+// that often holds a sub-type label like "بيع وتوريد" / "نزاع تجاري" and
+// must not be used to route workflows. The four canonical department
+// names ("عام" / "تجاري" / "عمالي" / "إداري") map 1:1 to the four
+// UnderStudy stage arrays — callers should pass the resolved department
+// name (e.g. via getDepartmentName(departmentId) on the client, or
+// storage.getDepartmentById(departmentId)?.name on the server).
 export function getStagesForClassification(
   classification: CaseClassificationValue,
-  caseType?: CaseTypeValue,
+  departmentName?: string,
   clientRole?: string,
   memoRequired?: boolean,
   isSettlementCase?: boolean,
@@ -948,7 +956,7 @@ export function getStagesForClassification(
   }
 
   if (classification === "قيد_الدراسة") {
-    switch (caseType) {
+    switch (departmentName) {
       case "عام": return UnderStudyGeneralStages;
       case "تجاري": return UnderStudyCommercialStages;
       case "عمالي": return UnderStudyLaborStages;
