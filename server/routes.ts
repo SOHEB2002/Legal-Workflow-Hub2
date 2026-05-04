@@ -31,7 +31,6 @@ import {
   ConsultationClosureReason,
   ConsultationActivityType,
   getStagesForClassification,
-  type CaseTypeValue,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -334,11 +333,15 @@ function validateStageTransition(
   // Rollback logic for cases
   if (entityType === "case" && entityData) {
     const classification = entityData.caseClassification as string;
-    const caseType = entityData.caseType as CaseTypeValue;
+    // Stage selection routes on the case's DEPARTMENT, not on caseType
+    // (which is free-text user input). Callers stash the resolved
+    // department name on entityData.departmentName before invoking this
+    // function — see the PATCH /api/cases/:id handler.
+    const departmentName = (entityData.departmentName as string | undefined) ?? undefined;
     const clientRole = entityData.clientRole as string | undefined;
     const memoRequired = !!entityData.memoRequired;
     const isSettlementCase = !!entityData.isSettlementCase;
-    const stages = getStagesForClassification(classification as any, caseType, clientRole, memoRequired, isSettlementCase);
+    const stages = getStagesForClassification(classification as any, departmentName, clientRole, memoRequired, isSettlementCase);
     const currentIdx = stages.indexOf(currentStage as any);
     const targetIdx = stages.indexOf(targetStage as any);
 
@@ -1549,18 +1552,19 @@ export async function registerRoutes(
         );
 
         // Use merged case data for validation when classification also changes simultaneously.
-        // IMPORTANT: caseType on the row holds the case sub-type (e.g. "بيع وتوريد"),
-        // NOT the department label — but validateStageTransition's rollback logic
-        // calls getStagesForClassification(classification, caseType) to pick the
-        // path array. Override caseType on the merged copy with the resolved
-        // department name so commercial/admin/general paths are selected correctly.
+        // Stash the resolved department name on the merged copy under
+        // `departmentName` so validateStageTransition's rollback path —
+        // which calls getStagesForClassification(classification, departmentName)
+        // — picks the right commercial/labor/admin/general stage array. The
+        // case's own caseType field is free-text user input ("بيع وتوريد"
+        // etc.) and is NOT used for routing.
         const mergedCase: any = { ...existing, ...req.body };
         try {
           const dept = (existing as any).departmentId
             ? await storage.getDepartmentById((existing as any).departmentId)
             : null;
           if (dept?.name) {
-            mergedCase.caseType = dept.name;
+            mergedCase.departmentName = dept.name;
           }
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
@@ -1571,7 +1575,7 @@ export async function registerRoutes(
           from: existing.currentStage,
           to: req.body.currentStage,
           userRole: user?.role,
-          mergedCaseType: mergedCase.caseType,
+          mergedDepartmentName: mergedCase.departmentName,
           allowed: stageCheck.allowed,
           reason: stageCheck.reason,
         });
@@ -3405,9 +3409,14 @@ export async function registerRoutes(
         return res.status(400).json({ error: "القضية ليست بانتظار استكمال المرفقات والبيانات" });
       }
 
+      // Resolve the department name from departmentId — caseType is
+      // free-text and must not drive workflow routing.
+      const dept = (lawCase as any).departmentId
+        ? await storage.getDepartmentById((lawCase as any).departmentId)
+        : null;
       const validStages = new Set(getStagesForClassification(
         (lawCase as any).caseClassification,
-        (lawCase as any).caseType,
+        dept?.name,
         (lawCase as any).clientRole,
         !!(lawCase as any).memoRequired,
         !!(lawCase as any).isSettlementCase,

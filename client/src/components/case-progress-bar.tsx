@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, type CaseTypeValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
+import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +27,11 @@ interface CaseProgressBarProps {
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
-  caseType?: CaseTypeValue;
+  // Resolved canonical department name ("عام" / "تجاري" / "عمالي" / "إداري")
+  // used to pick the UnderStudy stage path. Callers should resolve this from
+  // the case's departmentId via useDepartments().getDepartmentName — DO NOT
+  // pass the case's caseType field, which is free-text user input.
+  departmentName?: string;
   clientRole?: string;
   memoRequired?: boolean;
   isSettlementCase?: boolean;
@@ -51,7 +55,7 @@ export function CaseProgressBar({
   userRole,
   disabled = false,
   caseClassification,
-  caseType,
+  departmentName,
   clientRole,
   memoRequired,
   isSettlementCase,
@@ -73,27 +77,24 @@ export function CaseProgressBar({
   const effectiveClassification = caseClassification || "قيد_الدراسة";
   let stagesOrder = getStagesForClassification(
     effectiveClassification as CaseClassificationValue,
-    caseType,
+    departmentName,
     clientRole,
     memoRequired,
     isSettlementCase,
   );
-  // Defensive fallback. caseType on a case row is a free-text user input
-  // (the create form lets the user type "بيع وتوريد", "نزاع تجاري", etc.),
-  // and the parent's IIFE in cases.tsx tries to recover by mapping
-  // departmentId → department name, but that mapping silently returns "غير
-  // محدد" for any id outside the hardcoded 1–4 list and the IIFE then
-  // defaults to "عام". Result: a commercial case at قيد_التدقيق_في_تراضي was
-  // rendering the 12-stage general path with the current-stage highlight
-  // collapsed to step 1. Mirror the same recovery cases-context.tsx uses
-  // for moveToNextStage: if the primary path doesn't contain the case's
-  // current stage, scan every variant for this classification and pick the
-  // first one that does.
+  // Defensive safety net for cases where departmentName is missing or
+  // doesn't match one of the four canonical labels (legacy rows with no
+  // departmentId, the special "أخرى" department, or transient mismatches
+  // while the departments list is still loading from the server). After
+  // the schema switched to departmentName-driven routing this rarely
+  // triggers — but when it does, scan every variant for the classification
+  // and pick the first one that contains the case's current stage rather
+  // than collapsing the bar onto the wrong path with currentIndex=0.
   if (stagesOrder.indexOf(normalizedStage) < 0) {
     if (effectiveClassification === "قيد_الدراسة") {
-      const types: CaseTypeValue[] = ["تجاري", "عمالي", "إداري", "عام"];
-      for (const t of types) {
-        const v = getStagesForClassification(effectiveClassification, t);
+      const names: string[] = ["تجاري", "عمالي", "إداري", "عام"];
+      for (const n of names) {
+        const v = getStagesForClassification(effectiveClassification, n);
         if (v.indexOf(normalizedStage) >= 0) {
           stagesOrder = v;
           break;

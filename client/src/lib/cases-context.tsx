@@ -78,32 +78,32 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const { getDepartmentName } = useDepartments();
   const backgroundRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Resolve the stage-order array for a case. Department resolution via
-  // getDepartmentName is the primary path ("تجاري" / "عام" / "عمالي" /
-  // "إداري"), but it returns "غير محدد" for any id that isn't in its
-  // hard-coded list — which silently routed commercial cases onto the
-  // general path and made moveToNextStage return false with no PATCH when
-  // the current stage (e.g. قيد_التدقيق_في_تراضي) didn't exist in that
-  // path. To make the client robust against department resolution failures,
-  // if the primary lookup doesn't contain the case's current stage we fall
-  // back to every known path and pick the first one that does.
+  // Resolve the stage-order array for a case. The case's departmentId (a
+  // stable FK to the departments table) is the routing key — getDepartmentName
+  // returns one of "عام" / "تجاري" / "عمالي" / "إداري" for the four canonical
+  // departments. Defensive fallback retained because getDepartmentName can
+  // still yield "غير محدد" (legacy rows with no departmentId, the special
+  // "أخرى" department, or transient mismatches while /api/departments is in
+  // flight): if the primary lookup doesn't contain the case's current stage
+  // we scan every variant and pick the first that does, which keeps
+  // moveToNextStage from returning false with no PATCH on edge-case data.
   const resolveStagesOrderForCase = (lawCase: LawCase): CaseStageValue[] => {
     const classification = (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue;
-    const deptLabel = getDepartmentName(lawCase.departmentId || "");
+    const departmentName = getDepartmentName(lawCase.departmentId || "");
     const clientRole = (lawCase as any).clientRole as string | undefined;
     const memoRequired = !!(lawCase as any).memoRequired;
     const isSettlementCase = !!(lawCase as any).isSettlementCase;
-    const primary = getStagesForClassification(classification, deptLabel as any, clientRole, memoRequired, isSettlementCase);
+    const primary = getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase);
     if (primary.indexOf(lawCase.currentStage) >= 0) return primary;
     // IN_COURT has multiple variants keyed on clientRole/memoRequired/isSettlementCase,
-    // not on caseType. Fall back across all IN_COURT variants if the current stage
+    // not on department. Fall back across all IN_COURT variants if the current stage
     // isn't in the primary choice.
     if (classification === "منظورة_بالمحكمة") {
       const variants = [
-        getStagesForClassification(classification, deptLabel as any, undefined, false, true),
-        getStagesForClassification(classification, deptLabel as any, "مدعى_عليه", true),
-        getStagesForClassification(classification, deptLabel as any, "مدعي", true),
-        getStagesForClassification(classification, deptLabel as any, undefined, false),
+        getStagesForClassification(classification, departmentName, undefined, false, true),
+        getStagesForClassification(classification, departmentName, "مدعى_عليه", true),
+        getStagesForClassification(classification, departmentName, "مدعي", true),
+        getStagesForClassification(classification, departmentName, undefined, false),
       ];
       for (const v of variants) {
         if (v.indexOf(lawCase.currentStage) >= 0) return v;
@@ -111,10 +111,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       return primary;
     }
     const candidates = [
-      getStagesForClassification(classification, "تجاري" as any, clientRole, memoRequired),
-      getStagesForClassification(classification, "عام" as any, clientRole, memoRequired),
-      getStagesForClassification(classification, "عمالي" as any, clientRole, memoRequired),
-      getStagesForClassification(classification, "إداري" as any, clientRole, memoRequired),
+      getStagesForClassification(classification, "تجاري", clientRole, memoRequired),
+      getStagesForClassification(classification, "عام", clientRole, memoRequired),
+      getStagesForClassification(classification, "عمالي", clientRole, memoRequired),
+      getStagesForClassification(classification, "إداري", clientRole, memoRequired),
     ];
     for (const c of candidates) {
       if (c.indexOf(lawCase.currentStage) >= 0) return c;
@@ -406,7 +406,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       nextStage = explicitTargetStage as CaseStageValue;
     } else {
       if (userRole) {
-        const validation = validateCaseForward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue);
+        const validation = validateCaseForward(
+          lawCase.currentStage,
+          userRole as UserRoleType,
+          userId,
+          lawCase,
+          (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
+          getDepartmentName(lawCase.departmentId || ""),
+        );
         if (!validation.allowed) {
           console.warn("انتقال مرفوض:", validation.reason);
           return false;
@@ -471,7 +478,14 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (!lawCase) return false;
 
     if (userRole) {
-      const validation = validateCaseBackward(lawCase.currentStage, userRole as UserRoleType, userId, lawCase, (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue);
+      const validation = validateCaseBackward(
+        lawCase.currentStage,
+        userRole as UserRoleType,
+        userId,
+        lawCase,
+        (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
+        getDepartmentName(lawCase.departmentId || ""),
+      );
       if (!validation.allowed) {
         console.warn("إرجاع مرفوض:", validation.reason);
         return false;

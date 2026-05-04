@@ -105,7 +105,7 @@ import {
   CaseClassificationLabels,
   getStageLabel,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
+import type { LawCase, CaseStageValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
@@ -1910,26 +1910,13 @@ export default function CasesPage() {
                   clientRole={(selectedCase as any).clientRole || undefined}
                   memoRequired={!!(selectedCase as any).memoRequired}
                   isSettlementCase={!!(selectedCase as any).isSettlementCase}
-                  caseType={(() => {
-                    // Resolve the department label used to pick the stage
-                    // path. Prefer the case's caseType field when it already
-                    // holds one of the four canonical values, otherwise fall
-                    // back to looking up the department by id. This handles
-                    // legacy rows where caseType stored a sub-type like
-                    // "بيع وتوريد" instead of the department label, which
-                    // was the recurring source of "commercial case shows the
-                    // general path" bugs.
-                    const CANONICAL = ["عام", "تجاري", "عمالي", "إداري"] as const;
-                    const raw = (selectedCase.caseType || "") as string;
-                    if ((CANONICAL as readonly string[]).includes(raw)) {
-                      return raw as CaseTypeValue;
-                    }
-                    const byId = getDepartmentName(selectedCase.departmentId || "");
-                    if ((CANONICAL as readonly string[]).includes(byId)) {
-                      return byId as CaseTypeValue;
-                    }
-                    return "عام" as CaseTypeValue;
-                  })()}
+                  // Stage selection routes on the case's DEPARTMENT (a stable
+                  // FK to the departments table), not on caseType. caseType
+                  // is free-text user input that often holds a sub-type label
+                  // ("بيع وتوريد" / "نزاع تجاري" / etc.) and must not drive
+                  // workflow routing. The bar has its own defensive fallback
+                  // for cases where this resolves to "غير محدد" or "أخرى".
+                  departmentName={getDepartmentName(selectedCase.departmentId || "")}
                   // Phase-8 — block all workflow actions while awaiting
                   // completion or paused. Resume / unpause live in the row
                   // icon area; the banner above explains the frozen state.
