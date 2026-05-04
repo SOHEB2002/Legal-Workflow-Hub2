@@ -207,6 +207,23 @@ export const consultationDeliveryExtensions = pgTable("consultation_delivery_ext
   extendedAt: timestamp("extended_at").defaultNow(),
 });
 
+// Phase-6 — chronological activity log for consultations. One row per
+// meaningful workflow event (created, assigned, stage transitions,
+// reviews, committee decisions, take-notes outcomes, delivery
+// extensions, conversion to case, early close, general notes). Inserts
+// happen server-side only, in the SAME DB transaction as the underlying
+// state change — see consultation handlers in routes.ts. Migration:
+// script/add-consultation-activity-log.sql.
+export const consultationActivityLog = pgTable("consultation_activity_log", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  activityType: varchar("activity_type", { length: 50 }).notNull(),
+  description: text("description").notNull(),
+  metadata: jsonb("metadata").default({}),
+  performedBy: varchar("performed_by", { length: 255 }),
+  performedAt: timestamp("performed_at").defaultNow(),
+});
+
 export const hearings = pgTable("hearings", {
   id: varchar("id", { length: 255 }).primaryKey(),
   caseId: varchar("case_id", { length: 255 }).notNull(),
@@ -485,6 +502,7 @@ export const insertConsultationReviewDbSchema = createInsertSchema(consultationR
 export const insertConsultationCommitteeDecisionDbSchema = createInsertSchema(consultationCommitteeDecisions).omit({ decidedAt: true });
 export const insertConsultationNoteOutcomeDbSchema = createInsertSchema(consultationNoteOutcomes).omit({ recordedAt: true });
 export const insertConsultationDeliveryExtensionDbSchema = createInsertSchema(consultationDeliveryExtensions).omit({ extendedAt: true });
+export const insertConsultationActivityLogDbSchema = createInsertSchema(consultationActivityLog).omit({ performedAt: true });
 export const insertSavedFilterDbSchema = createInsertSchema(savedFilters).omit({ createdAt: true });
 
 // ==================== Select Types ====================
@@ -510,6 +528,7 @@ export type DbConsultationDraft = typeof consultationDrafts.$inferSelect;
 export type DbConsultationReview = typeof consultationReviews.$inferSelect;
 export type DbConsultationCommitteeDecision = typeof consultationCommitteeDecisions.$inferSelect;
 export type DbConsultationNoteOutcome = typeof consultationNoteOutcomes.$inferSelect;
+export type DbConsultationActivityLog = typeof consultationActivityLog.$inferSelect;
 export type DbSavedFilter = typeof savedFilters.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
@@ -1521,6 +1540,51 @@ export interface ConsultationDeliveryExtension {
   reason: string;
   extendedBy: string;
   extendedAt: string;
+}
+
+// Phase-6 — activity-log entry mirroring the case_activity_log pattern.
+// One row per meaningful event on a consultation. metadata carries the
+// structured details specific to each activityType so the timeline
+// can render rich descriptions without extra joins.
+export const ConsultationActivityType = {
+  CREATED:            "created",
+  ASSIGNED:           "assigned",
+  STAGE_ADVANCED:     "stage_advanced",
+  STAGE_RETURNED:     "stage_returned",
+  INTERNAL_REVIEW:    "internal_review",
+  COMMITTEE_DECISION: "committee_decision",
+  TAKE_NOTES_OUTCOME: "take_notes_outcome",
+  DELIVERY_EXTENDED:  "delivery_extended",
+  CONVERTED_TO_CASE:  "converted_to_case",
+  EARLY_CLOSED:       "early_closed",
+  GENERAL_NOTE:       "general_note",
+} as const;
+
+export type ConsultationActivityTypeValue =
+  typeof ConsultationActivityType[keyof typeof ConsultationActivityType];
+
+export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValue, string> = {
+  created:            "إنشاء",
+  assigned:           "إسناد",
+  stage_advanced:     "تقدم في المرحلة",
+  stage_returned:     "إرجاع للمرحلة السابقة",
+  internal_review:    "مراجعة داخلية",
+  committee_decision: "قرار اللجنة",
+  take_notes_outcome: "نتيجة الأخذ بالملاحظات",
+  delivery_extended:  "تمديد تاريخ التسليم",
+  converted_to_case:  "تحويل إلى قضية",
+  early_closed:       "إغلاق مبكر",
+  general_note:       "ملاحظة عامة",
+};
+
+export interface ConsultationActivity {
+  id: string;
+  consultationId: string;
+  activityType: string;
+  description: string;
+  metadata: Record<string, any>;
+  performedBy: string | null;
+  performedAt: string;
 }
 
 export interface Hearing {

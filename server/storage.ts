@@ -10,14 +10,15 @@ import {
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
-  type ConsultationDeliveryExtension,
+  type ConsultationDeliveryExtension, type ConsultationActivity,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
+  ConsultationActivityType,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
-  consultationDeliveryExtensions
+  consultationDeliveryExtensions, consultationActivityLog
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
@@ -156,6 +157,7 @@ export interface IStorage {
     consultationId: string,
     caseFields: Partial<LawCase>,
     actorId: string,
+    activityCtx?: { targetCaseStage?: string },
   ): Promise<{ case: LawCase; consultation: Consultation }>;
 
   // Consultation helper tables (rebuild §3.1.3)
@@ -177,8 +179,57 @@ export interface IStorage {
     consultationId: string,
     data: { newExpectedDeliveryDate: Date; reason: string },
     extendedBy: string,
+    activity?: { description: string; metadata?: Record<string, any> },
   ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }>;
   getConsultationDeliveryExtensions(consultationId: string): Promise<ConsultationDeliveryExtension[]>;
+
+  // Phase-6 — consultation activity log. Inserts always run inside the
+  // SAME DB transaction as the underlying state change (see workflow
+  // handlers in routes.ts) so the log can never get out of sync with
+  // the consultation row. The bare insert helper exists for ad-hoc
+  // logging where transactional bundling isn't required.
+  createConsultationActivity(input: {
+    consultationId: string;
+    activityType: string;
+    description: string;
+    metadata?: Record<string, any>;
+    performedBy: string | null;
+  }): Promise<ConsultationActivity>;
+  getConsultationActivities(consultationId: string): Promise<ConsultationActivity[]>;
+  // Atomic update + log. Used by assign / advance-stage / return-stage /
+  // early-close so the activity row and the consultation update commit
+  // together.
+  updateConsultationAndLog(
+    id: string,
+    data: Partial<Consultation>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Consultation | undefined>;
+  // Atomic helper-row + stage update + log for the three workflow
+  // endpoints whose route used to issue two separate storage calls.
+  recordConsultationInternalReview(input: {
+    consultationId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: ConsultationReview; consultation: Consultation }>;
+  recordConsultationCommitteeDecision(input: {
+    consultationId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: ConsultationCommitteeDecision; consultation: Consultation }>;
+  recordConsultationNoteOutcome(input: {
+    consultationId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: ConsultationNoteOutcome; consultation: Consultation }>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -358,6 +409,19 @@ function mapDbConsultation(dbCon: any): Consultation {
     createdAt: toISOString(dbCon.createdAt),
     updatedAt: toISOString(dbCon.updatedAt),
     closedAt: toISOStringOrNull(dbCon.closedAt),
+  };
+}
+
+// Map DB consultation_activity_log row to ConsultationActivity (Phase-6).
+function mapDbConsultationActivity(row: any): ConsultationActivity {
+  return {
+    id: row.id,
+    consultationId: row.consultationId,
+    activityType: row.activityType,
+    description: row.description ?? "",
+    metadata: (row.metadata && typeof row.metadata === "object") ? row.metadata : {},
+    performedBy: row.performedBy ?? null,
+    performedAt: toISOString(row.performedAt),
   };
 }
 
@@ -832,28 +896,81 @@ export class DatabaseStorage implements IStorage {
       closedAt: null,
     };
 
-    await db.insert(consultations).values(newConsultation);
+    // Phase-6: insert the consultation row and the "created" activity row
+    // in a single transaction so the activity log can never get out of
+    // sync with the actual state.
+    await db.transaction(async (tx) => {
+      await tx.insert(consultations).values(newConsultation);
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.CREATED,
+        description: "تم إنشاء الاستشارة",
+        metadata: {},
+        performedBy: createdBy,
+        performedAt: now,
+      } as any);
+    });
     return mapDbConsultation(newConsultation);
   }
 
   async updateConsultation(id: string, data: Partial<Consultation>): Promise<Consultation | undefined> {
     const existing = await this.getConsultationById(id);
     if (!existing) return undefined;
-    
+
     const { createdAt, updatedAt, closedAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
     }
     await db.update(consultations).set(updateData).where(eq(consultations.id, id));
-    
+
     return this.getConsultationById(id);
+  }
+
+  // Phase-6 — atomic update + activity log. Used by workflow handlers
+  // (assign, advance-stage, return-stage, early-close) where the spec
+  // requires the activity row to be inserted in the same DB transaction
+  // as the consultation update. Returns undefined when the row is gone.
+  async updateConsultationAndLog(
+    id: string,
+    data: Partial<Consultation>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+
+      const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+      const now = new Date();
+      const updateData: any = { ...updateFields, updatedAt: now };
+      if (closedAt !== undefined) {
+        updateData.closedAt = closedAt ? new Date(closedAt) : null;
+      }
+      await tx.update(consultations).set(updateData).where(eq(consultations.id, id));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: activity.activityType,
+        description: activity.description,
+        metadata: activity.metadata ?? {},
+        performedBy: activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
   }
 
   async deleteConsultation(id: string): Promise<boolean> {
     await db.delete(attachments).where(and(eq(attachments.entityType, "consultation"), eq(attachments.entityId, id)));
     await db.delete(fieldTasks).where(eq(fieldTasks.consultationId, id));
     await db.delete(notifications).where(and(eq(notifications.relatedType, "consultation"), eq(notifications.relatedId, id)));
+    // Phase-6: activity-log rows. The SQL FK is ON DELETE CASCADE so this
+    // is belt-and-braces — keeps behavior consistent if the FK is dropped.
+    await db.delete(consultationActivityLog).where(eq(consultationActivityLog.consultationId, id));
     const result = await db.delete(consultations).where(eq(consultations.id, id)).returning();
     return result.length > 0;
   }
@@ -1470,6 +1587,61 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // Phase-6 — atomic internal-review record. Replaces the previously
+  // sequential pair (createConsultationReview + updateConsultation) so the
+  // review row, the consultation stage update, and the activity log are
+  // all part of one transaction. Used by POST /internal-review.
+  async recordConsultationInternalReview(input: {
+    consultationId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: ConsultationReview; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const reviewId = randomUUID();
+      const [reviewRow] = await tx.insert(consultationReviews).values({
+        id: reviewId,
+        consultationId: input.consultationId,
+        reviewerId: input.reviewerId,
+        decision: input.decision,
+        notes: input.notes,
+        createdAt: now,
+      } as any).returning();
+
+      await tx.update(consultations)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(consultations.id, input.consultationId));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        activityType: ConsultationActivityType.INTERNAL_REVIEW,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
+      if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
+
+      return {
+        review: {
+          id: reviewRow.id,
+          consultationId: reviewRow.consultationId,
+          reviewerId: reviewRow.reviewerId,
+          decision: reviewRow.decision,
+          notes: reviewRow.notes ?? "",
+          createdAt: toISOString(reviewRow.createdAt),
+        },
+        consultation: mapDbConsultation(updatedCon),
+      };
+    });
+  }
+
   async getConsultationReviews(consultationId: string): Promise<ConsultationReview[]> {
     const rows = await db.select().from(consultationReviews)
       .where(eq(consultationReviews.consultationId, consultationId))
@@ -1520,6 +1692,59 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // Phase-6 — atomic committee-decision record. Replaces the previously
+  // sequential pair so the decision row, the consultation stage update,
+  // and the activity log are all part of one transaction.
+  async recordConsultationCommitteeDecision(input: {
+    consultationId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: ConsultationCommitteeDecision; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [decisionRow] = await tx.insert(consultationCommitteeDecisions).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        decision: input.decision,
+        notes: input.notes,
+        decidedBy: input.decidedBy,
+        decidedAt: now,
+      } as any).returning();
+
+      await tx.update(consultations)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(consultations.id, input.consultationId));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        activityType: ConsultationActivityType.COMMITTEE_DECISION,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
+      if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
+
+      return {
+        decision: {
+          id: decisionRow.id,
+          consultationId: decisionRow.consultationId,
+          decision: decisionRow.decision,
+          notes: decisionRow.notes ?? "",
+          decidedBy: decisionRow.decidedBy,
+          decidedAt: toISOString(decisionRow.decidedAt),
+        },
+        consultation: mapDbConsultation(updatedCon),
+      };
+    });
+  }
+
   async getConsultationCommitteeDecisions(consultationId: string): Promise<ConsultationCommitteeDecision[]> {
     const rows = await db.select().from(consultationCommitteeDecisions)
       .where(eq(consultationCommitteeDecisions.consultationId, consultationId))
@@ -1554,6 +1779,60 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // Phase-6 — atomic take-notes-outcome record. Per spec §3.2.1 ALL
+  // outcomes (DONE | NOT_DONE | PARTIAL) advance to READY, so the next
+  // stage is always READY. Outcome row, consultation stage update, and
+  // activity log are all part of one transaction.
+  async recordConsultationNoteOutcome(input: {
+    consultationId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: ConsultationNoteOutcome; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [outcomeRow] = await tx.insert(consultationNoteOutcomes).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        outcome: input.outcome,
+        notes: input.notes,
+        recordedBy: input.recordedBy,
+        recordedAt: now,
+      } as any).returning();
+
+      await tx.update(consultations)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(consultations.id, input.consultationId));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        activityType: ConsultationActivityType.TAKE_NOTES_OUTCOME,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
+      if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
+
+      return {
+        outcome: {
+          id: outcomeRow.id,
+          consultationId: outcomeRow.consultationId,
+          outcome: outcomeRow.outcome,
+          notes: outcomeRow.notes ?? "",
+          recordedBy: outcomeRow.recordedBy,
+          recordedAt: toISOString(outcomeRow.recordedAt),
+        },
+        consultation: mapDbConsultation(updatedCon),
+      };
+    });
+  }
+
   async getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]> {
     const rows = await db.select().from(consultationNoteOutcomes)
       .where(eq(consultationNoteOutcomes.consultationId, consultationId))
@@ -1579,6 +1858,7 @@ export class DatabaseStorage implements IStorage {
     consultationId: string,
     data: { newExpectedDeliveryDate: Date; reason: string },
     extendedBy: string,
+    activity?: { description: string; metadata?: Record<string, any> },
   ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(consultations).where(eq(consultations.id, consultationId));
@@ -1615,6 +1895,19 @@ export class DatabaseStorage implements IStorage {
         .returning();
       if (!updated.length) throw new Error("CONSULTATION_UPDATE_FAILED");
 
+      // Phase-6 — log the extension as part of the same transaction.
+      if (activity) {
+        await tx.insert(consultationActivityLog).values({
+          id: randomUUID(),
+          consultationId,
+          activityType: ConsultationActivityType.DELIVERY_EXTENDED,
+          description: activity.description,
+          metadata: activity.metadata ?? {},
+          performedBy: extendedBy,
+          performedAt: now,
+        } as any);
+      }
+
       return {
         extension: {
           id: extensionRow.id,
@@ -1645,6 +1938,35 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  // ==================== Consultation Activity Log (Phase-6) ====================
+
+  async createConsultationActivity(input: {
+    consultationId: string;
+    activityType: string;
+    description: string;
+    metadata?: Record<string, any>;
+    performedBy: string | null;
+  }): Promise<ConsultationActivity> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationActivityLog).values({
+      id,
+      consultationId: input.consultationId,
+      activityType: input.activityType,
+      description: input.description,
+      metadata: input.metadata ?? {},
+      performedBy: input.performedBy,
+      performedAt: new Date(),
+    } as any).returning();
+    return mapDbConsultationActivity(row);
+  }
+
+  async getConsultationActivities(consultationId: string): Promise<ConsultationActivity[]> {
+    const rows = await db.select().from(consultationActivityLog)
+      .where(eq(consultationActivityLog.consultationId, consultationId))
+      .orderBy(desc(consultationActivityLog.performedAt));
+    return rows.map(mapDbConsultationActivity);
+  }
+
   // ==================== Convert consultation to case (rebuild §3.2.3) ====================
 
   // Single DB transaction. Helper-table copies (§3.2.3 steps 3-5) are
@@ -1660,6 +1982,7 @@ export class DatabaseStorage implements IStorage {
     consultationId: string,
     caseFields: Partial<LawCase>,
     actorId: string,
+    activityCtx?: { targetCaseStage?: string },
   ): Promise<{ case: LawCase; consultation: Consultation }> {
     return await db.transaction(async (tx) => {
       // 1. Read consultation inside the transaction (re-validate for race-safety)
@@ -1730,6 +2053,25 @@ export class DatabaseStorage implements IStorage {
         .where(eq(consultations.id, consultationId))
         .returning();
       if (!updatedConRows.length) throw new Error("CONSULTATION_UPDATE_FAILED");
+
+      // Phase-6 — log the conversion as part of the same transaction.
+      // Description uses the case number computed above so the timeline
+      // can render it without an extra lookup.
+      if (activityCtx) {
+        await tx.insert(consultationActivityLog).values({
+          id: randomUUID(),
+          consultationId,
+          activityType: ConsultationActivityType.CONVERTED_TO_CASE,
+          description: `تم تحويل الاستشارة إلى قضية رقم ${caseNumber}`,
+          metadata: {
+            newCaseId,
+            newCaseNumber: caseNumber,
+            targetCaseStage: activityCtx.targetCaseStage ?? null,
+          },
+          performedBy: actorId,
+          performedAt: now,
+        } as any);
+      }
 
       return {
         case: mapDbCase(newCaseRow),

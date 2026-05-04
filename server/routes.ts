@@ -24,10 +24,12 @@ import {
   CaseStagesOrder,
   ConsultationStage,
   ConsultationStagesAll,
+  ConsultationStageLabels,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
   ConsultationClosureReason,
+  ConsultationActivityType,
   getStagesForClassification,
   type CaseTypeValue,
   canCreateMemos,
@@ -2240,7 +2242,11 @@ export async function registerRoutes(
   app.post("/api/consultations", requireAuth, async (req, res) => {
     try {
       const validatedData = insertConsultationSchema.parse(req.body);
-      const createdBy = req.body.createdBy || "unknown";
+      const reqUser = (req as any).user;
+      // Phase-6: prefer the authenticated user id over the body-provided
+      // createdBy so the activity log's performedBy is always the real
+      // actor. Fall back for legacy clients that still pass it explicitly.
+      const createdBy = reqUser?.id || req.body.createdBy || "unknown";
       const newConsultation = await storage.createConsultation(validatedData, createdBy);
       res.status(201).json(newConsultation);
     } catch (error) {
@@ -2327,12 +2333,21 @@ export async function registerRoutes(
       const { valid } = await validateAssignedUsersActive([assignedTo]);
       if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
 
+      const lawyer = await storage.getUser(assignedTo);
+      const lawyerName = lawyer?.name || assignedTo;
+
       const updates: any = { assignedTo };
-      if (consultation.currentStage === ConsultationStage.RECEIVED) {
+      const autoAdvancedToStudy = consultation.currentStage === ConsultationStage.RECEIVED;
+      if (autoAdvancedToStudy) {
         updates.currentStage = ConsultationStage.STUDY;
       }
 
-      const updated = await storage.updateConsultation(consultation.id, updates);
+      const updated = await storage.updateConsultationAndLog(consultation.id, updates, {
+        activityType: ConsultationActivityType.ASSIGNED,
+        description: `تم إسناد الاستشارة لـ ${lawyerName}`,
+        metadata: { assignedTo, lawyerName, autoAdvancedToStudy },
+        performedBy: reqUser.id,
+      });
       if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
       res.json(updated);
     } catch (error: any) {
@@ -2370,7 +2385,18 @@ export async function registerRoutes(
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
-      const updated = await storage.updateConsultation(consultation.id, { currentStage: targetStage } as any);
+      const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
+      const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: ConsultationActivityType.STAGE_ADVANCED,
+          description: `انتقال من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: consultation.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
       if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
       res.json(updated);
     } catch (error: any) {
@@ -2407,7 +2433,18 @@ export async function registerRoutes(
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
-      const updated = await storage.updateConsultation(consultation.id, { currentStage: targetStage } as any);
+      const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
+      const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: ConsultationActivityType.STAGE_RETURNED,
+          description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: consultation.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
       if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
       res.json(updated);
     } catch (error: any) {
@@ -2453,20 +2490,28 @@ export async function registerRoutes(
         return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
       }
 
-      const review = await storage.createConsultationReview({
-        consultationId: consultation.id,
-        reviewerId: reqUser.id,
-        decision,
-        notes,
-      });
-
       const nextStage = decision === InternalReviewDecision.PASSED
         ? ConsultationStage.COMMITTEE
         : ConsultationStage.DRAFTING;
 
-      const updated = await storage.updateConsultation(consultation.id, { currentStage: nextStage } as any);
-      if (!updated) return res.status(500).json({ error: "فشل تحديث المرحلة" });
-      res.json({ review, consultation: updated });
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `مراجعة داخلية: ${decision} — ${truncatedNotes}`
+        : `مراجعة داخلية: ${decision}`;
+
+      const result = await storage.recordConsultationInternalReview({
+        consultationId: consultation.id,
+        reviewerId: reqUser.id,
+        decision,
+        notes,
+        nextStage,
+        activity: {
+          description,
+          metadata: { decision, notes, reviewerId: reqUser.id },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ review: result.review, consultation: result.consultation });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -2503,20 +2548,28 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة لجنة المراجعة" });
       }
 
-      const decisionRow = await storage.createConsultationCommitteeDecision({
-        consultationId: consultation.id,
-        decision,
-        notes,
-        decidedBy: reqUser.id,
-      });
-
       const nextStage = decision === CommitteeDecision.APPROVED
         ? ConsultationStage.READY
         : ConsultationStage.TAKING_NOTES;
 
-      const updated = await storage.updateConsultation(consultation.id, { currentStage: nextStage } as any);
-      if (!updated) return res.status(500).json({ error: "فشل تحديث المرحلة" });
-      res.json({ decision: decisionRow, consultation: updated });
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `قرار اللجنة: ${decision} — ${truncatedNotes}`
+        : `قرار اللجنة: ${decision}`;
+
+      const result = await storage.recordConsultationCommitteeDecision({
+        consultationId: consultation.id,
+        decision,
+        notes,
+        decidedBy: reqUser.id,
+        nextStage,
+        activity: {
+          description,
+          metadata: { decision, notes, decidedBy: reqUser.id },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ decision: result.decision, consultation: result.consultation });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -2554,16 +2607,24 @@ export async function registerRoutes(
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
       }
 
-      const outcomeRow = await storage.createConsultationNoteOutcome({
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `نتيجة الأخذ بالملاحظات: ${outcome} — ${truncatedNotes}`
+        : `نتيجة الأخذ بالملاحظات: ${outcome}`;
+
+      const result = await storage.recordConsultationNoteOutcome({
         consultationId: consultation.id,
         outcome,
         notes,
         recordedBy: reqUser.id,
+        nextStage: ConsultationStage.READY,
+        activity: {
+          description,
+          metadata: { outcome, notes },
+          performedBy: reqUser.id,
+        },
       });
-
-      const updated = await storage.updateConsultation(consultation.id, { currentStage: ConsultationStage.READY } as any);
-      if (!updated) return res.status(500).json({ error: "فشل تحديث المرحلة" });
-      res.json({ outcome: outcomeRow, consultation: updated });
+      res.json({ outcome: result.outcome, consultation: result.consultation });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -2605,12 +2666,26 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يجب توضيح سبب الإغلاق عند اختيار 'أخرى'" });
       }
 
-      const updated = await storage.updateConsultation(consultation.id, {
-        status: "closed",
-        closureReason: reason,
-        closureReasonOther: otherText.trim() || null,
-        closedAt: new Date(),
-      } as any);
+      const reasonLabel = reason;
+      const description = otherText.trim()
+        ? `إغلاق مبكر: ${reasonLabel} — ${otherText.trim().slice(0, 120)}`
+        : `إغلاق مبكر: ${reasonLabel}`;
+
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        {
+          status: "closed",
+          closureReason: reason,
+          closureReasonOther: otherText.trim() || null,
+          closedAt: new Date(),
+        } as any,
+        {
+          activityType: ConsultationActivityType.EARLY_CLOSED,
+          description,
+          metadata: { reason, closureReasonOther: otherText.trim() || null, notes: otherText.trim() || "" },
+          performedBy: reqUser.id,
+        },
+      );
 
       if (!updated) return res.status(500).json({ error: "فشل إغلاق الاستشارة" });
       res.json(updated);
@@ -2671,7 +2746,15 @@ export async function registerRoutes(
       };
 
       try {
-        const result = await storage.convertConsultationToCase(consultation.id, caseFields, reqUser.id);
+        // The case number is generated inside the storage transaction;
+        // the activity row is written there with the canonical description
+        // using that number.
+        const result = await storage.convertConsultationToCase(
+          consultation.id,
+          caseFields,
+          reqUser.id,
+          { targetCaseStage },
+        );
         res.status(201).json(result);
       } catch (e: any) {
         const msg = e?.message || "";
@@ -2728,10 +2811,20 @@ export async function registerRoutes(
       }
 
       try {
+        const reasonTrimmed = parsed.data.reason.trim();
+        const oldDateIso = consultation.expectedDeliveryDate || null;
+        const newDateIso = newDate.toISOString();
+        const fmtDate = (iso: string | null) => iso ? iso.slice(0, 10) : "—";
+        const description = `تم تمديد تاريخ التسليم من ${fmtDate(oldDateIso)} إلى ${fmtDate(newDateIso)} — ${reasonTrimmed}`;
+
         const result = await storage.extendConsultationDelivery(
           consultation.id,
-          { newExpectedDeliveryDate: newDate, reason: parsed.data.reason.trim() },
+          { newExpectedDeliveryDate: newDate, reason: reasonTrimmed },
           reqUser.id,
+          {
+            description,
+            metadata: { oldDate: oldDateIso, newDate: newDateIso, reason: reasonTrimmed },
+          },
         );
         res.status(201).json(result);
       } catch (e: any) {
@@ -2768,6 +2861,30 @@ export async function registerRoutes(
       }
 
       const rows = await storage.getConsultationDeliveryExtensions(consultation.id);
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // GET /api/consultations/:id/activities (Phase-6)
+  // Returns the chronological activity log for a consultation, newest
+  // first. Visibility piggybacks on canModifyConsultation — anyone
+  // allowed to view the consultation can read its log. Inserts happen
+  // server-side only inside the workflow handlers, so this endpoint is
+  // read-only.
+  app.get("/api/consultations/:id/activities", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (!canModifyConsultation(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
+      }
+
+      const rows = await storage.getConsultationActivities(consultation.id);
       res.json(rows);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "حدث خطأ" });

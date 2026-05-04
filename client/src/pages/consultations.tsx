@@ -46,7 +46,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -64,6 +64,7 @@ import type {
   ConsultationClosureReasonValue,
   ConsultationCategoryValue,
   ConsultationDeliveryExtension,
+  ConsultationActivity,
 } from "@shared/schema";
 import {
   ConsultationStage,
@@ -76,6 +77,8 @@ import {
   ConsultationClosureReason,
   ConsultationCategory,
   ConsultationCategoryLabels,
+  ConsultationActivityType,
+  ConsultationActivityTypeLabels,
   CaseStage,
   CaseStageLabels,
   CaseStagesOrder,
@@ -356,6 +359,112 @@ function canEarlyClose(
   return !!consultation.assignedTo && consultation.assignedTo === userId;
 }
 
+// Phase-6 — activity-type → icon component map. Kept inline for now
+// (consultations-only); promote to a shared helper if cases-side ever
+// adopts the same icon set.
+function getActivityIcon(activityType: string) {
+  switch (activityType) {
+    case ConsultationActivityType.CREATED:            return Sparkles;
+    case ConsultationActivityType.ASSIGNED:           return UserPlus;
+    case ConsultationActivityType.STAGE_ADVANCED:     return ChevronLeft;
+    case ConsultationActivityType.STAGE_RETURNED:     return ChevronRight;
+    case ConsultationActivityType.INTERNAL_REVIEW:    return ClipboardCheck;
+    case ConsultationActivityType.COMMITTEE_DECISION: return CheckCircle;
+    case ConsultationActivityType.TAKE_NOTES_OUTCOME: return ListChecks;
+    case ConsultationActivityType.DELIVERY_EXTENDED:  return AlertTriangle;
+    case ConsultationActivityType.CONVERTED_TO_CASE:  return FileSymlink;
+    case ConsultationActivityType.EARLY_CLOSED:       return XCircle;
+    case ConsultationActivityType.GENERAL_NOTE:       return MessageSquare;
+    default: return Clock;
+  }
+}
+
+// Returns Arabic relative time for the activity-log timestamp. Today
+// → "اليوم HH:MM"; yesterday → "أمس HH:MM"; older → ISO date. Times
+// are local because the backend serialises with toISOString() but the
+// user reads against their wall clock.
+function formatActivityTime(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  if (sameDay) return `اليوم ${hh}:${mm}`;
+  if (isYesterday) return `أمس ${hh}:${mm}`;
+  return `${d.toISOString().slice(0, 10)} ${hh}:${mm}`;
+}
+
+interface ConsultationActivityTimelineProps {
+  activities: ConsultationActivity[];
+  expanded: boolean;
+  onToggle: () => void;
+  getUserName: (id: string | null | undefined) => string;
+}
+
+function ConsultationActivityTimeline({
+  activities,
+  expanded,
+  onToggle,
+  getUserName,
+}: ConsultationActivityTimelineProps) {
+  return (
+    <div className="text-right border rounded-lg p-3 bg-muted/20" data-testid="consultation-activity-log">
+      <button
+        type="button"
+        className="flex items-center gap-2 text-sm font-medium w-full text-right"
+        onClick={onToggle}
+        data-testid="button-toggle-activity-log"
+      >
+        <span>سجل النشاط ({activities.length})</span>
+        <ChevronLeft
+          className={
+            "w-4 h-4 transition-transform " +
+            (expanded ? "-rotate-90" : "")
+          }
+        />
+      </button>
+      {expanded && (
+        <ul className="mt-3 space-y-3" data-testid="list-consultation-activities">
+          {activities.length === 0 && (
+            <li className="text-xs text-muted-foreground py-2">لا يوجد نشاط بعد</li>
+          )}
+          {activities.map((a) => {
+            const Icon = getActivityIcon(a.activityType);
+            const typeLabel = (ConsultationActivityTypeLabels as any)[a.activityType] || a.activityType;
+            return (
+              <li
+                key={a.id}
+                className="flex items-start gap-3 border-r-2 border-primary/40 pr-3 py-1"
+                data-testid={`activity-${a.id}`}
+              >
+                <span className="mt-0.5 inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary shrink-0">
+                  <Icon className="w-3.5 h-3.5" />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-muted-foreground">{typeLabel}</div>
+                  <div className="text-sm font-medium break-words">
+                    <BidiText>{a.description}</BidiText>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    بواسطة <BidiText>{getUserName(a.performedBy)}</BidiText>
+                    {" • "}
+                    <LtrInline>{formatActivityTime(a.performedAt)}</LtrInline>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function ConsultationsPage() {
   const {
     consultations,
@@ -459,6 +568,12 @@ export default function ConsultationsPage() {
   const [extendReason, setExtendReason] = useState<string>("");
   const [deliveryExtensions, setDeliveryExtensions] = useState<ConsultationDeliveryExtension[]>([]);
   const [extensionsExpanded, setExtensionsExpanded] = useState(false);
+
+  // Phase-6 — consultation activity log. Fetched when the details dialog
+  // opens and re-fetched after any workflow mutation that updates the
+  // consultation row, so the timeline always reflects the latest state.
+  const [activityLog, setActivityLog] = useState<ConsultationActivity[]>([]);
+  const [activityLogExpanded, setActivityLogExpanded] = useState(true);
 
   const openReminderDialog = (c: Consultation) => {
     setReminderConsultation(c);
@@ -680,6 +795,19 @@ export default function ConsultationsPage() {
       setDeliveryExtensions(Array.isArray(rows) ? rows : []);
     } catch {
       setDeliveryExtensions([]);
+    }
+  };
+
+  // Phase-6 — fetch the consultation activity log for the open dialog.
+  // Called on dialog open and after any workflow mutation that changes
+  // the consultation state.
+  const fetchActivityLog = async (consultationId: string) => {
+    try {
+      const res = await apiRequest("GET", `/api/consultations/${consultationId}/activities`);
+      const rows = (await res.json()) as ConsultationActivity[];
+      setActivityLog(Array.isArray(rows) ? rows : []);
+    } catch {
+      setActivityLog([]);
     }
   };
 
@@ -960,12 +1088,27 @@ export default function ConsultationsPage() {
     if (!selectedConsultation) {
       setDeliveryExtensions([]);
       setExtensionsExpanded(false);
+      setActivityLog([]);
+      setActivityLogExpanded(true);
       return;
     }
     setExtensionsExpanded(false);
+    setActivityLogExpanded(true);
     fetchDeliveryExtensions(selectedConsultation.id);
+    fetchActivityLog(selectedConsultation.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConsultation?.id]);
+
+  // Phase-6 — refresh the activity log whenever the consultation row
+  // mutates (the consultations list refreshes after every workflow
+  // mutation), so the timeline reflects new entries without manual
+  // re-open. The id-stable check above guards against unrelated
+  // re-renders, but updatedAt does change on every workflow action.
+  useEffect(() => {
+    if (!selectedConsultation) return;
+    fetchActivityLog(selectedConsultation.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConsultation?.updatedAt]);
 
   const filterLawyers = users.filter(u => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
 
@@ -1525,6 +1668,18 @@ export default function ConsultationsPage() {
                 <Label className="text-muted-foreground">ملخص السؤال</Label>
                 <p className="p-3 bg-muted rounded-md">{selectedConsultation.questionSummary}</p>
               </div>
+
+              {/* Phase-6 — consultation activity timeline. Default expanded.
+                  Newest first. Re-fetched on dialog open and on every
+                  consultation update so it stays in sync with the
+                  workflow handlers. */}
+              <ConsultationActivityTimeline
+                activities={activityLog}
+                expanded={activityLogExpanded}
+                onToggle={() => setActivityLogExpanded((v) => !v)}
+                getUserName={(id) => getLawyerName(id)}
+              />
+
               {selectedConsultation.response && (
                 <div className="text-right">
                   <Label className="text-muted-foreground">الرد</Label>
