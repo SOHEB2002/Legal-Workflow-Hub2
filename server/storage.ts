@@ -339,6 +339,13 @@ function mapDbCase(dbCase: any): LawCase {
     createdAt: toISOString(dbCase.createdAt),
     updatedAt: toISOString(dbCase.updatedAt),
     closedAt: toISOStringOrNull(dbCase.closedAt),
+    // Phase-8 — pause + await-completion. All nullable / boolean-default
+    // so legacy rows surface as "not paused, not awaiting".
+    pauseReason: dbCase.pauseReason ?? null,
+    pausedBy: dbCase.pausedBy ?? null,
+    pausedAt: toISOStringOrNull(dbCase.pausedAt),
+    awaitingCompletion: dbCase.awaitingCompletion ?? false,
+    savedStage: dbCase.savedStage ?? null,
   };
 }
 
@@ -409,6 +416,13 @@ function mapDbConsultation(dbCon: any): Consultation {
     createdAt: toISOString(dbCon.createdAt),
     updatedAt: toISOString(dbCon.updatedAt),
     closedAt: toISOStringOrNull(dbCon.closedAt),
+    // Phase-8 — pause + await-completion. All nullable / boolean-default
+    // so legacy rows surface as "not paused, not awaiting".
+    pauseReason: dbCon.pauseReason ?? null,
+    pausedBy: dbCon.pausedBy ?? null,
+    pausedAt: toISOStringOrNull(dbCon.pausedAt),
+    awaitingCompletion: dbCon.awaitingCompletion ?? false,
+    savedStage: dbCon.savedStage ?? null,
   };
 }
 
@@ -572,6 +586,13 @@ function mapDbMemo(dbMemo: any): Memo {
     reminderSentOverdue: dbMemo.reminderSentOverdue ?? false,
     createdAt: toISOString(dbMemo.createdAt),
     updatedAt: toISOString(dbMemo.updatedAt),
+    // Phase-8 — pause + await-completion. All nullable / boolean-default
+    // so legacy rows surface as "not paused, not awaiting".
+    pauseReason: dbMemo.pauseReason ?? null,
+    pausedBy: dbMemo.pausedBy ?? null,
+    pausedAt: toISOStringOrNull(dbMemo.pausedAt),
+    awaitingCompletion: dbMemo.awaitingCompletion ?? false,
+    savedStage: dbMemo.savedStage ?? null,
   };
 }
 

@@ -110,6 +110,17 @@ export const lawCases = pgTable("law_cases", {
   autoArchiveDate: varchar("auto_archive_date", { length: 50 }),
   isSettlementCase: boolean("is_settlement_case").default(false),
   convertedFromConsultationId: varchar("converted_from_consultation_id", { length: 255 }),
+  // Phase-8 — orthogonal pause + await-completion state. paused_at
+  // non-null means the case is paused; awaiting_completion=true means
+  // it's parked on a "missing data" detour with saved_stage holding
+  // the stage value to restore on resume. status (workflow stage) is
+  // intentionally NOT touched on pause — pause is detected via
+  // paused_at IS NOT NULL. See script/add-workflow-pause-and-await-completion.sql.
+  pauseReason:        text("pause_reason"),
+  pausedBy:           varchar("paused_by", { length: 255 }),
+  pausedAt:           timestamp("paused_at"),
+  awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
+  savedStage:         varchar("saved_stage", { length: 50 }),
 });
 
 export const consultations = pgTable("consultations", {
@@ -147,6 +158,17 @@ export const consultations = pgTable("consultations", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   closedAt: timestamp("closed_at"),
+  // Phase-8 — orthogonal pause + await-completion state. For
+  // consultations the route layer also flips status="paused" / "active"
+  // (ConsultationStatus has the new value); pause_at IS NOT NULL is
+  // still the canonical paused indicator for the FE. saved_stage holds
+  // the stage value to restore on resume from await_completion.
+  // See script/add-workflow-pause-and-await-completion.sql.
+  pauseReason:        text("pause_reason"),
+  pausedBy:           varchar("paused_by", { length: 255 }),
+  pausedAt:           timestamp("paused_at"),
+  awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
+  savedStage:         varchar("saved_stage", { length: 50 }),
 });
 
 export const consultationStudies = pgTable("consultation_studies", {
@@ -376,6 +398,16 @@ export const memos = pgTable("memos", {
   reminderSentOverdue: boolean("reminder_sent_overdue").default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  // Phase-8 — orthogonal pause + await-completion state. status (memo
+  // workflow state) is intentionally NOT touched on pause — pause is
+  // detected via paused_at IS NOT NULL. saved_stage on memos stores
+  // the memo status to restore on resume from await_completion.
+  // See script/add-workflow-pause-and-await-completion.sql.
+  pauseReason:        text("pause_reason"),
+  pausedBy:           varchar("paused_by", { length: 255 }),
+  pausedAt:           timestamp("paused_at"),
+  awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
+  savedStage:         varchar("saved_stage", { length: 50 }),
 });
 
 export const caseActivityLog = pgTable("case_activity_log", {
@@ -391,6 +423,20 @@ export const caseActivityLog = pgTable("case_activity_log", {
   relatedEntityType: varchar("related_entity_type", { length: 50 }),
   relatedEntityId: varchar("related_entity_id", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Phase-8 — memo activity log (mirrors consultation_activity_log).
+// One row per meaningful event on a memo. Inserts happen server-side in
+// the same DB transaction as the underlying state change.
+// Migration: script/add-memo-activity-log.sql.
+export const memoActivityLog = pgTable("memo_activity_log", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  activityType: varchar("activity_type", { length: 50 }).notNull(),
+  description: text("description").notNull(),
+  metadata: jsonb("metadata").default({}),
+  performedBy: varchar("performed_by", { length: 255 }),
+  performedAt: timestamp("performed_at").defaultNow(),
 });
 
 export const caseNotes = pgTable("case_notes", {
@@ -992,21 +1038,28 @@ export const ClientType = {
 export type ClientTypeValue = typeof ClientType[keyof typeof ClientType];
 
 // ==================== Consultation Stage (rebuild per consultations-rebuild-spec.md §3.1.1) ====================
+// Phase-8 — RECEIVED_PENDING_COMPLETION inserted at position 2 of the
+// linear path (between RECEIVED and STUDY). Distinct value from the
+// cases-side "استكمال_البيانات" (which is unchanged); both render with
+// the same Arabic label "استكمال المرفقات والبيانات" — the value is an
+// internal token, the label is what users see.
 export const ConsultationStage = {
-  RECEIVED: "استلام",
-  STUDY: "دراسة",
-  DRAFTING: "تحرير",
-  INTERNAL_REVIEW: "مراجعة_داخلية",
-  COMMITTEE: "لجنة_مراجعة",
-  TAKING_NOTES: "الأخذ_بالملاحظات",
-  READY: "جاهزة_للتسليم",
-  COMPLETED: "منجزة",
+  RECEIVED:                    "استلام",
+  RECEIVED_PENDING_COMPLETION: "استكمال_المرفقات_والبيانات",
+  STUDY:                       "دراسة",
+  DRAFTING:                    "تحرير",
+  INTERNAL_REVIEW:             "مراجعة_داخلية",
+  COMMITTEE:                   "لجنة_مراجعة",
+  TAKING_NOTES:                "الأخذ_بالملاحظات",
+  READY:                       "جاهزة_للتسليم",
+  COMPLETED:                   "منجزة",
 } as const;
 
 export type ConsultationStageValue = typeof ConsultationStage[keyof typeof ConsultationStage];
 
 export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
   "استلام": "استلام",
+  "استكمال_المرفقات_والبيانات": "استكمال المرفقات والبيانات",
   "دراسة": "دراسة",
   "تحرير": "تحرير",
   "مراجعة_داخلية": "مراجعة داخلية",
@@ -1017,8 +1070,13 @@ export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
 };
 
 // Linear happy-path order (excludes TAKING_NOTES, which is conditional).
+// Phase-8 — RECEIVED_PENDING_COMPLETION sits between RECEIVED and STUDY.
+// On entering this stage the FE shows a "تجاوز" button alongside the
+// normal advance, which jumps directly to STUDY without requiring any
+// document upload (handled in the await-completion route layer).
 export const ConsultationStagesOrder: ConsultationStageValue[] = [
   ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
   ConsultationStage.STUDY,
   ConsultationStage.DRAFTING,
   ConsultationStage.INTERNAL_REVIEW,
@@ -1030,8 +1088,11 @@ export const ConsultationStagesOrder: ConsultationStageValue[] = [
 // All consultation stages in canonical order, including the conditional
 // TAKING_NOTES branch (entered only when committee returns يوجد_ملاحظات).
 // Used for rollback validation; the linear-path Order excludes TAKING_NOTES.
+// TAKING_NOTES branches off ONLY from COMMITTEE and always returns to
+// READY after the outcome — it's not in the linear path on purpose.
 export const ConsultationStagesAll: ConsultationStageValue[] = [
   ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
   ConsultationStage.STUDY,
   ConsultationStage.DRAFTING,
   ConsultationStage.INTERNAL_REVIEW,
@@ -1068,18 +1129,25 @@ export const ConsultationCategoryLabels: Record<ConsultationCategoryValue, strin
 };
 
 // ==================== Consultation Status (per consultations-rebuild-spec.md §3.1.2) ====================
+// Phase-8 — PAUSED added as an orthogonal lifecycle value. The pause
+// route flips status to "paused" and clears it back to "active" on
+// unpause; pause_at IS NOT NULL is still the canonical paused indicator
+// for the FE (consistent with cases / memos which don't carry a status
+// value for pause).
 export const ConsultationStatus = {
-  ACTIVE: "active",
+  ACTIVE:    "active",
+  PAUSED:    "paused",
   CONVERTED: "converted",
-  CLOSED: "closed",
+  CLOSED:    "closed",
 } as const;
 
 export type ConsultationStatusValue = typeof ConsultationStatus[keyof typeof ConsultationStatus];
 
 export const ConsultationStatusLabels: Record<ConsultationStatusValue, string> = {
-  active: "active",
+  active:    "active",
+  paused:    "معلّقة",
   converted: "converted",
-  closed: "closed",
+  closed:    "closed",
 };
 // ==================== Consultation review/committee/outcome decision values ====================
 // Per consultations-rebuild-spec.md §3.1.3 / §3.2.1. Used by the dedicated
@@ -1426,6 +1494,14 @@ export interface LawCase {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  // Phase-8 — orthogonal pause + await-completion state. paused_at
+  // non-null is the canonical "this case is paused" indicator; status
+  // (workflow stage) is intentionally not touched.
+  pauseReason: string | null;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  awaitingCompletion: boolean;
+  savedStage: string | null;
 }
 
 export interface CaseComment {
@@ -1462,6 +1538,15 @@ export interface Consultation {
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  // Phase-8 — orthogonal pause + await-completion state. status also
+  // flips to "paused" / back to "active" on the consultations side
+  // (ConsultationStatus has the value); paused_at IS NOT NULL stays
+  // the canonical FE indicator across all 3 entities.
+  pauseReason: string | null;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  awaitingCompletion: boolean;
+  savedStage: string | null;
 }
 
 // Per consultations-rebuild-spec.md §3.2.2 (early-close): "match the cases
@@ -1546,40 +1631,89 @@ export interface ConsultationDeliveryExtension {
 // One row per meaningful event on a consultation. metadata carries the
 // structured details specific to each activityType so the timeline
 // can render rich descriptions without extra joins.
+// Phase-8 additions: paused / unpaused / await_completion /
+// resume_from_completion / completion_skipped. completion_skipped is
+// consultations-only (the "تجاوز" button on the new
+// RECEIVED_PENDING_COMPLETION stage); the other 4 also exist on cases
+// and memos.
 export const ConsultationActivityType = {
-  CREATED:            "created",
-  ASSIGNED:           "assigned",
-  STAGE_ADVANCED:     "stage_advanced",
-  STAGE_RETURNED:     "stage_returned",
-  INTERNAL_REVIEW:    "internal_review",
-  COMMITTEE_DECISION: "committee_decision",
-  TAKE_NOTES_OUTCOME: "take_notes_outcome",
-  DELIVERY_EXTENDED:  "delivery_extended",
-  CONVERTED_TO_CASE:  "converted_to_case",
-  EARLY_CLOSED:       "early_closed",
-  GENERAL_NOTE:       "general_note",
+  CREATED:                "created",
+  ASSIGNED:               "assigned",
+  STAGE_ADVANCED:         "stage_advanced",
+  STAGE_RETURNED:         "stage_returned",
+  INTERNAL_REVIEW:        "internal_review",
+  COMMITTEE_DECISION:     "committee_decision",
+  TAKE_NOTES_OUTCOME:     "take_notes_outcome",
+  DELIVERY_EXTENDED:      "delivery_extended",
+  CONVERTED_TO_CASE:      "converted_to_case",
+  EARLY_CLOSED:           "early_closed",
+  GENERAL_NOTE:           "general_note",
+  PAUSED:                 "paused",
+  UNPAUSED:               "unpaused",
+  AWAIT_COMPLETION:       "await_completion",
+  RESUME_FROM_COMPLETION: "resume_from_completion",
+  COMPLETION_SKIPPED:     "completion_skipped",
 } as const;
 
 export type ConsultationActivityTypeValue =
   typeof ConsultationActivityType[keyof typeof ConsultationActivityType];
 
 export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValue, string> = {
-  created:            "إنشاء",
-  assigned:           "إسناد",
-  stage_advanced:     "تقدم في المرحلة",
-  stage_returned:     "إرجاع للمرحلة السابقة",
-  internal_review:    "مراجعة داخلية",
-  committee_decision: "قرار اللجنة",
-  take_notes_outcome: "نتيجة الأخذ بالملاحظات",
-  delivery_extended:  "تمديد تاريخ التسليم",
-  converted_to_case:  "تحويل إلى قضية",
-  early_closed:       "إغلاق مبكر",
-  general_note:       "ملاحظة عامة",
+  created:                "إنشاء",
+  assigned:               "إسناد",
+  stage_advanced:         "تقدم في المرحلة",
+  stage_returned:         "إرجاع للمرحلة السابقة",
+  internal_review:        "مراجعة داخلية",
+  committee_decision:     "قرار اللجنة",
+  take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
+  delivery_extended:      "تمديد تاريخ التسليم",
+  converted_to_case:      "تحويل إلى قضية",
+  early_closed:           "إغلاق مبكر",
+  general_note:           "ملاحظة عامة",
+  paused:                 "تعليق",
+  unpaused:               "إلغاء التعليق",
+  await_completion:       "بانتظار استكمال البيانات",
+  resume_from_completion: "العودة من الاستكمال",
+  completion_skipped:     "تجاوز مرحلة الاستكمال",
 };
 
 export interface ConsultationActivity {
   id: string;
   consultationId: string;
+  activityType: string;
+  description: string;
+  metadata: Record<string, any>;
+  performedBy: string | null;
+  performedAt: string;
+}
+
+// Phase-8 — memo activity log mirroring ConsultationActivityType. Memos
+// don't have the consultation-specific stage workflow events, so the
+// memo type list is shorter — just creation + the cross-cutting Phase-8
+// pause / await-completion events. Stored as plain varchar so adding a
+// new event kind is a value change, not a DDL change.
+export const MemoActivityType = {
+  CREATED:                "created",
+  PAUSED:                 "paused",
+  UNPAUSED:               "unpaused",
+  AWAIT_COMPLETION:       "await_completion",
+  RESUME_FROM_COMPLETION: "resume_from_completion",
+} as const;
+
+export type MemoActivityTypeValue =
+  typeof MemoActivityType[keyof typeof MemoActivityType];
+
+export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
+  created:                "إنشاء",
+  paused:                 "تعليق",
+  unpaused:               "إلغاء التعليق",
+  await_completion:       "بانتظار استكمال البيانات",
+  resume_from_completion: "العودة من الاستكمال",
+};
+
+export interface MemoActivity {
+  id: string;
+  memoId: string;
   activityType: string;
   description: string;
   metadata: Record<string, any>;
@@ -1722,6 +1856,15 @@ export interface Memo {
   reminderSentOverdue: boolean;
   createdAt: string;
   updatedAt: string;
+  // Phase-8 — orthogonal pause + await-completion state. paused_at
+  // non-null is the canonical "this memo is paused" indicator; status
+  // (memo workflow state) is intentionally not touched. saved_stage
+  // stores the memo status to restore on resume from await_completion.
+  pauseReason: string | null;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  awaitingCompletion: boolean;
+  savedStage: string | null;
 }
 
 // ==================== أنواع التواصل مع العملاء ====================
@@ -2643,6 +2786,11 @@ export const CaseActivityActionLabels: Record<string, string> = {
   sent_to_review: "إحالة للمراجعة",
   returned_from_review: "إرجاع من المراجعة",
   approved_by_review: "اعتماد من المراجعة",
+  // Phase-8 — pause + await-completion activity entries on cases.
+  paused: "تعليق",
+  unpaused: "إلغاء التعليق",
+  await_completion: "بانتظار استكمال البيانات",
+  resume_from_completion: "العودة من الاستكمال",
 };
 
 export const CaseNoteCategoryLabels: Record<string, string> = {
