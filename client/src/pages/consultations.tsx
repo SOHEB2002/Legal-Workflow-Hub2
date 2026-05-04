@@ -329,6 +329,15 @@ function formatExpectedDate(iso: string | null): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Phase-7 default sort: order by SLA urgency (سريعة → عادية → طويلة), then
+// newest-first within a category. Lives at module scope so the comparator
+// closure stays referentially stable across renders.
+const CATEGORY_SORT_RANK: Record<ConsultationCategoryValue, number> = {
+  [ConsultationCategory.QUICK]:    0,
+  [ConsultationCategory.STANDARD]: 1,
+  [ConsultationCategory.LONG]:     2,
+};
+
 // Per-category badge palette. Quick = amber (urgent), standard = neutral,
 // long = blue (low-pressure). Keeps the table readable at a glance without
 // fighting the existing stage badge.
@@ -1166,6 +1175,18 @@ export default function ConsultationsPage() {
     return true;
   });
 
+  // Phase-7 default ordering: SLA category (سريعة → عادية → طويلة), then
+  // createdAt DESC within a category. No click-to-sort exists yet, so the
+  // ordering is enforced here in the derivation step.
+  const sortedConsultations = [...filteredConsultations].sort((a, b) => {
+    const ra = CATEGORY_SORT_RANK[a.category] ?? 99;
+    const rb = CATEGORY_SORT_RANK[b.category] ?? 99;
+    if (ra !== rb) return ra - rb;
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return tb - ta;
+  });
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1279,6 +1300,81 @@ export default function ConsultationsPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {/* Phase-7 quick filters: always-visible single-select dropdowns
+              for the 3 most-used facets. Drive the same advFilters state as
+              the advanced popover (lawyers/stages multi-select arrays are
+              collapsed to a single value here — picking one replaces the
+              whole array; "all" clears it). When the popover sets length>1,
+              the dropdown displays "all" because a single-select control
+              can't represent a multi-selection. */}
+          <div
+            className="flex flex-wrap items-center gap-3 mb-4"
+            data-testid="consultations-quick-filters"
+          >
+            <div className="min-w-[180px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">القسم</Label>
+              <Select
+                value={advFilters.departmentId || "all"}
+                onValueChange={(v) =>
+                  setAdvFilters({ ...advFilters, departmentId: v === "all" ? "" : v })
+                }
+              >
+                <SelectTrigger data-testid="quick-filter-department">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل الأقسام</SelectItem>
+                  {departments.map((d) => (
+                    <SelectItem key={String(d.id)} value={String(d.id)}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-[200px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">المحامي المسؤول</Label>
+              <Select
+                value={advFilters.lawyers.length === 1 ? advFilters.lawyers[0] : "all"}
+                onValueChange={(v) =>
+                  setAdvFilters({ ...advFilters, lawyers: v === "all" ? [] : [v] })
+                }
+              >
+                <SelectTrigger data-testid="quick-filter-lawyer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل المحامين</SelectItem>
+                  {filterLawyers.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-[180px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">المرحلة</Label>
+              <Select
+                value={advFilters.stages.length === 1 ? advFilters.stages[0] : "all"}
+                onValueChange={(v) =>
+                  setAdvFilters({ ...advFilters, stages: v === "all" ? [] : [v] })
+                }
+              >
+                <SelectTrigger data-testid="quick-filter-stage">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل المراحل</SelectItem>
+                  {ConsultationStagesAll.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {ConsultationStageLabels[s] || s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -1294,7 +1390,7 @@ export default function ConsultationsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredConsultations.map((consultation) => (
+              {sortedConsultations.map((consultation) => (
                 <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`}>
                   <TableCell className="text-center font-medium">
                     <LtrInline>{consultation.consultationNumber}</LtrInline>
