@@ -1328,15 +1328,15 @@ export async function registerRoutes(
         user.role === "cases_review_head" ||
         isAssignedLawyer(user, caseItem);
       if (!authorized) {
-        return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال البيانات" });
+        return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال المرفقات والبيانات" });
       }
 
       if (caseItem.currentStage !== "استلام") {
-        return res.status(400).json({ error: "تجاوز مرحلة استكمال البيانات متاح فقط من مرحلة الاستلام" });
+        return res.status(400).json({ error: "تجاوز مرحلة استكمال المرفقات والبيانات متاح فقط من مرحلة الاستلام" });
       }
 
       const { notes } = req.body;
-      const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال البيانات - الدعوى مكتملة";
+      const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال المرفقات والبيانات - الدعوى مكتملة";
       const now = new Date().toISOString();
       const existingHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
 
@@ -1385,7 +1385,7 @@ export async function registerRoutes(
           userId: user.id,
           userName: user.name,
           actionType: "stage_changed",
-          title: `تجاوز مرحلة استكمال البيانات والانتقال مباشرةً إلى ${skipTarget.replace(/_/g, " ")}`,
+          title: `تجاوز مرحلة استكمال المرفقات والبيانات والانتقال مباشرةً إلى ${skipTarget.replace(/_/g, " ")}`,
         });
       } catch (err: any) {
         console.error("[skip-data-completion] logCaseActivity FAILED (non-fatal)", {
@@ -3223,7 +3223,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
       }
       if (consultation.awaitingCompletion) {
-        return res.status(400).json({ error: "الاستشارة بالفعل بانتظار استكمال البيانات" });
+        return res.status(400).json({ error: "الاستشارة بالفعل بانتظار استكمال المرفقات والبيانات" });
       }
       // Tautology guard: parking on the same stage you're already in is
       // a no-op and would corrupt saved_stage on resume.
@@ -3265,7 +3265,7 @@ export async function registerRoutes(
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
 
       if (!consultation.awaitingCompletion) {
-        return res.status(400).json({ error: "الاستشارة ليست بانتظار استكمال البيانات" });
+        return res.status(400).json({ error: "الاستشارة ليست بانتظار استكمال المرفقات والبيانات" });
       }
 
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
@@ -3351,7 +3351,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "لا يمكن تغيير حالة قضية مغلقة أو مؤرشفة" });
       }
       if (lawCase.awaitingCompletion) {
-        return res.status(400).json({ error: "القضية بالفعل بانتظار استكمال البيانات" });
+        return res.status(400).json({ error: "القضية بالفعل بانتظار استكمال المرفقات والبيانات" });
       }
       if (lawCase.currentStage === "استكمال_البيانات") {
         return res.status(400).json({ error: "القضية بالفعل في مرحلة الاستكمال" });
@@ -3402,7 +3402,7 @@ export async function registerRoutes(
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
 
       if (!lawCase.awaitingCompletion) {
-        return res.status(400).json({ error: "القضية ليست بانتظار استكمال البيانات" });
+        return res.status(400).json({ error: "القضية ليست بانتظار استكمال المرفقات والبيانات" });
       }
 
       const validStages = new Set(getStagesForClassification(
@@ -3463,7 +3463,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة معلّقة — أزل التعليق أولاً" });
       }
       if (memo.awaitingCompletion) {
-        return res.status(400).json({ error: "المذكرة بالفعل بانتظار استكمال البيانات" });
+        return res.status(400).json({ error: "المذكرة بالفعل بانتظار استكمال المرفقات والبيانات" });
       }
       const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
       if (TERMINAL_MEMO_STATUSES.has(memo.status)) {
@@ -3507,7 +3507,7 @@ export async function registerRoutes(
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
 
       if (!memo.awaitingCompletion) {
-        return res.status(400).json({ error: "المذكرة ليست بانتظار استكمال البيانات" });
+        return res.status(400).json({ error: "المذكرة ليست بانتظار استكمال المرفقات والبيانات" });
       }
 
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;

@@ -1786,7 +1786,7 @@ export default function CasesPage() {
                       try {
                         const success = await skipDataCompletion(selectedCase.id, user.id, user.name, notes);
                         if (success) {
-                          toast({ title: "تم تجاوز استكمال البيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
+                          toast({ title: "تم تجاوز استكمال المرفقات والبيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
                         } else {
                           toast({ title: "تعذّر التجاوز", variant: "destructive" });
                         }

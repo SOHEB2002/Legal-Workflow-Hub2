@@ -691,7 +691,10 @@ export type CaseStatusValue = typeof CaseStatus[keyof typeof CaseStatus];
 
 export const CaseStatusLabels: Record<CaseStatusValue, string> = {
   "استلام": "استلام",
-  "استكمال_البيانات": "استكمال البيانات",
+  // Phase-8 — label-only rename (DB value "استكمال_البيانات" unchanged).
+  // Same Arabic display label as the consultations-side new stage value
+  // ConsultationStage.RECEIVED_PENDING_COMPLETION ("استكمال_المرفقات_والبيانات").
+  "استكمال_البيانات": "استكمال المرفقات والبيانات",
   "دراسة": "دراسة",
   "تحرير_المذكرة": "تحرير المذكرة",
   "لجنة_المراجعة": "لجنة المراجعة",
@@ -742,7 +745,9 @@ export type CaseStageValue = typeof CaseStage[keyof typeof CaseStage];
 export const CaseStageLabels: Record<CaseStageValue, string> = {
   "استلام": "استلام",
   "تحديد_تاريخ_التقادم": "تحديد تاريخ التقادم",
-  "استكمال_البيانات": "استكمال البيانات",
+  // Phase-8 — label-only rename (DB value unchanged); shared label with
+  // the consultations-side equivalent stage.
+  "استكمال_البيانات": "استكمال المرفقات والبيانات",
   "دراسة": "دراسة",
   "توجيه_العميل_بالتسوية": "توجيه العميل بالتسوية",
   "بانتظار_رفع_العميل_للتسوية": "بانتظار رفع العميل للتسوية",
@@ -1672,7 +1677,7 @@ export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValu
   general_note:           "ملاحظة عامة",
   paused:                 "تعليق",
   unpaused:               "إلغاء التعليق",
-  await_completion:       "بانتظار استكمال البيانات",
+  await_completion:       "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
   completion_skipped:     "تجاوز مرحلة الاستكمال",
 };
@@ -1707,7 +1712,7 @@ export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
   created:                "إنشاء",
   paused:                 "تعليق",
   unpaused:               "إلغاء التعليق",
-  await_completion:       "بانتظار استكمال البيانات",
+  await_completion:       "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
 };
 
@@ -2789,7 +2794,7 @@ export const CaseActivityActionLabels: Record<string, string> = {
   // Phase-8 — pause + await-completion activity entries on cases.
   paused: "تعليق",
   unpaused: "إلغاء التعليق",
-  await_completion: "بانتظار استكمال البيانات",
+  await_completion: "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
 };
 
