@@ -1489,9 +1489,26 @@ export async function registerRoutes(
           existing.currentStage === "قيد_التدقيق_في_معين") &&
         typeof req.body.currentStage === "string" &&
         req.body.currentStage !== existing.currentStage;
-      const effectiveDataFields = isCourtAcceptTransition
-        ? caseDataFields.filter((f) => f !== "courtCaseNumber")
-        : caseDataFields;
+      // Settlement-only cases that pick "استكمال إجراءاتها" on لم يتم الصلح
+      // ride caseClassification + isSettlementCase as part of the same PATCH
+      // that flips currentStage مداولة_الصلح → أغلق_طلب_الصلح. The flip moves
+      // the case from InCourtSettlementStages onto the regular UnderStudy
+      // path so the progress bar resolves correctly. Treat caseClassification
+      // here as a stage-transition payload rather than a free-form data edit
+      // so the assigned lawyer can submit it without canEditCaseData.
+      const isSettlementContinueTransition =
+        existing.currentStage === "مداولة_الصلح" &&
+        (existing as any).isSettlementCase === true &&
+        req.body.currentStage === "أغلق_طلب_الصلح" &&
+        req.body.isSettlementCase === false &&
+        req.body.caseClassification === "قيد_الدراسة";
+      let effectiveDataFields = caseDataFields;
+      if (isCourtAcceptTransition) {
+        effectiveDataFields = effectiveDataFields.filter((f) => f !== "courtCaseNumber");
+      }
+      if (isSettlementContinueTransition) {
+        effectiveDataFields = effectiveDataFields.filter((f) => f !== "caseClassification");
+      }
       const hasDataFields = Object.keys(req.body).some((k) => effectiveDataFields.includes(k));
 
       if (hasDataFields && !canEditCaseData(user)) {
@@ -2012,12 +2029,22 @@ export async function registerRoutes(
                 req.body.currentStage === "أغلق_طلب_الصلح" &&
                 req.body.isSettlementCase === false
               ) {
+                const prevClassification = (existing as any).caseClassification || "منظورة_بالمحكمة";
+                const newClassification = req.body.caseClassification || prevClassification;
                 await storage.logCaseActivity({
                   caseId: String(req.params.id),
                   userId: user.id,
                   userName: user.name || user.id,
                   actionType: "settlement_failed_continued",
                   title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
+                  previousValue: prevClassification,
+                  newValue: newClassification,
+                  details: JSON.stringify({
+                    stageFrom: "مداولة_الصلح",
+                    stageTo: "أغلق_طلب_الصلح",
+                    classificationFrom: prevClassification,
+                    classificationTo: newClassification,
+                  }),
                 });
               }
             }
@@ -4203,8 +4230,15 @@ export async function registerRoutes(
               title: "لم يتم الصلح — تم إغلاق القضية نهائياً",
             });
           } else if ((existingCase as any).isSettlementCase && choice === "continue") {
+            // Move the case off InCourtSettlementStages onto the regular
+            // UnderStudy path so the progress bar resolves correctly. The
+            // current stage أغلق_طلب_الصلح exists in the UnderStudy general
+            // / commercial / labor arrays, and the resolver will pick the
+            // right one from the case's department.
+            const prevClassification = (existingCase as any).caseClassification || "منظورة_بالمحكمة";
             caseUpdate.currentStage = "أغلق_طلب_الصلح";
             (caseUpdate as any).isSettlementCase = false;
+            (caseUpdate as any).caseClassification = "قيد_الدراسة";
             await storage.updateCase(effectiveCaseId, caseUpdate);
             await storage.logCaseActivity({
               caseId: effectiveCaseId,
@@ -4212,6 +4246,14 @@ export async function registerRoutes(
               userName: reqUser.name || reqUser.id,
               actionType: "settlement_failed_continued",
               title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
+              previousValue: prevClassification,
+              newValue: "قيد_الدراسة",
+              details: JSON.stringify({
+                stageFrom: "مداولة_الصلح",
+                stageTo: "أغلق_طلب_الصلح",
+                classificationFrom: prevClassification,
+                classificationTo: "قيد_الدراسة",
+              }),
             });
           } else {
             if ((existingCase as any).isSettlementCase) {
