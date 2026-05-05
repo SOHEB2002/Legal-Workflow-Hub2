@@ -463,6 +463,13 @@ export default function CasesPage() {
     const s = params.get("status");
     if (s === "pending_review") setStatusFilter(CaseStage.REVIEW_COMMITTEE);
     else if (s === "ready") setStatusFilter(CaseStage.READY_TO_SUBMIT);
+    // Phase-9.3 — dashboard pending-review deep-link can also scope by
+    // dept (?dept=<id>) or assigned lawyer (?assignedTo=<id>) so the
+    // page contents match the role-filtered count on the dashboard.
+    const dept = params.get("dept");
+    if (dept) setDeptFilter(dept);
+    const assignedTo = params.get("assignedTo");
+    if (assignedTo) setLawyerFilter(assignedTo);
     const openCaseId = params.get("openCase");
     if (openCaseId) {
       setPendingOpenCaseId(openCaseId);

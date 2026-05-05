@@ -334,6 +334,20 @@ export default function MemosPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [advFilters, setAdvFilters] = useState<AdvancedMemosFilters>(EMPTY_MEMOS_ADV_FILTERS);
 
+  // Phase-9.3 — dashboard "بانتظار المراجعة" deep-link. Pre-selects the
+  // COMMITTEE stage on the quick filter and (for non-manager roles)
+  // scopes by dept or assigned lawyer so the page contents match the
+  // role-filtered count on the dashboard. Single-shot on mount.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+    if (status === "pending_review") setFilterStatus(MemoStage.COMMITTEE);
+    const dept = params.get("dept");
+    if (dept) setFilterDept(dept);
+    const assignedTo = params.get("assignedTo");
+    if (assignedTo) setFilterAssignedTo(assignedTo);
+  }, []);
+
   const [reviewNotes, setReviewNotes] = useState("");
   const [reassignMemoDialog, setReassignMemoDialog] = useState<Memo | null>(null);
   const [reassignMemoAssignedTo, setReassignMemoAssignedTo] = useState<string>("");

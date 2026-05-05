@@ -543,6 +543,22 @@ export default function ConsultationsPage() {
       url.searchParams.delete("openConsultation");
       window.history.replaceState({}, "", url);
     }
+    // Phase-9.3 — dashboard "بانتظار المراجعة" deep-link. Pre-selects
+    // the COMMITTEE stage and (for non-manager roles) scopes by dept
+    // or assigned lawyer so the page contents match the dashboard
+    // count. Single-shot on mount; the URL is left intact so a refresh
+    // re-applies the filter.
+    const status = params.get("status");
+    const dept = params.get("dept");
+    const assignedTo = params.get("assignedTo");
+    if (status === "pending_review" || dept || assignedTo) {
+      setAdvFilters((prev) => ({
+        ...prev,
+        stages: status === "pending_review" ? [ConsultationStage.COMMITTEE] : prev.stages,
+        departmentId: dept || prev.departmentId,
+        lawyers: assignedTo ? [assignedTo] : prev.lawyers,
+      }));
+    }
   }, []);
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
 
