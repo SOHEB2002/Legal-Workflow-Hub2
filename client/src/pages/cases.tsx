@@ -100,6 +100,7 @@ import {
   CaseStageLabels,
   CaseStagesOrder,
   CaseStage,
+  CaseStatus,
   Priority,
   Department,
   CaseClassification,
@@ -298,6 +299,20 @@ export default function CasesPage() {
   };
 
   const isCasePaused = (c: LawCase): boolean => !!c.pausedAt;
+
+  // Virtual stage grouping. Lifecycle states (paused / closed /
+  // archived) remap to specific stages so the stage filter stays
+  // purely stage-based:
+  //   paused              → استكمال_البيانات (parked, awaiting data)
+  //   مغلق / isArchived   → مقفلة (canonical terminal)
+  //   otherwise           → currentStage
+  // The details-dialog progress bar still uses the literal currentStage
+  // — virtualization is for filtering and the table badge only.
+  const getCaseDisplayStage = (c: LawCase): CaseStageValue => {
+    if (c.pausedAt) return CaseStage.DATA_COMPLETION;
+    if (c.status === CaseStatus.CLOSED || (c as any).isArchived) return CaseStage.CLOSED;
+    return c.currentStage;
+  };
 
   const openPauseCaseDialog = (c: LawCase) => {
     setPauseCaseTarget(c);
@@ -896,7 +911,11 @@ export default function CasesPage() {
         (clientName && clientName.toLowerCase().includes(q)) ||
         (c.plaintiffName && c.plaintiffName.toLowerCase().includes(q)) ||
         (c.opponentName && c.opponentName.toLowerCase().includes(q));
-      const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
+      // Stage filter operates on displayStage (virtual grouping) so a
+      // closed/archived case appears under مقفلة and a paused one
+      // under استكمال_البيانات.
+      const displayStage = getCaseDisplayStage(c);
+      const matchesStatus = statusFilter === "all" || displayStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
         c.caseClassification === classificationFilter;
@@ -904,7 +923,7 @@ export default function CasesPage() {
       const matchesAdvPriority =
         advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
       const matchesAdvStage =
-        advFilters.stages.length === 0 || advFilters.stages.includes(c.currentStage as string);
+        advFilters.stages.length === 0 || advFilters.stages.includes(displayStage as string);
       const matchesAdvDept =
         advFilters.depts.length === 0 || advFilters.depts.includes(c.departmentId);
       const matchesAdvClassification =
@@ -1263,8 +1282,11 @@ export default function CasesPage() {
                   </TableCell>
                   <TableCell className="text-center">
                     <div className="inline-flex items-center gap-1">
-                      <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
-                        {getStageLabel(c.currentStage)}
+                      {/* displayStage groups paused → استكمال_البيانات
+                          and closed/archived → مقفلة so the badge
+                          matches what the stage filter returns. */}
+                      <Badge className={`${getStageColor(getCaseDisplayStage(c))} inline-flex justify-center`}>
+                        {getStageLabel(getCaseDisplayStage(c))}
                       </Badge>
                       {/* Phase-8 — paused indicator. Distinct amber badge so
                           it reads as orthogonal to the stage. */}

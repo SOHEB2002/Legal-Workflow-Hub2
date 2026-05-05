@@ -297,17 +297,25 @@ function getStageBadgeColor(stage: ConsultationStageValue): string {
   }
 }
 
-// Stage badge — ALWAYS reflects currentStage regardless of status.
-// Mirrors the cases.tsx pattern: stage drives the primary badge,
-// status surfaces as a small orthogonal pill beside it. This way
-// filtering by stage="دراسة" returns ALL consultations at that stage
-// (including paused/closed/converted) and the row clearly shows that
-// the consultation IS at دراسة — its lifecycle status is shown
-// separately via the status pill below.
+// Virtual stage grouping. Lifecycle states (paused / closed / converted)
+// remap to specific stages so the filter axis stays purely stage-based:
+//   paused    → استكمال_المرفقات_والبيانات (parked, awaiting data)
+//   closed    → منجزة (terminal — done)
+//   converted → منجزة (terminal — handed off to a case)
+//   active    → currentStage (the consultation's actual position)
+// The details-dialog stages bar still uses the literal currentStage
+// — virtualization is for filtering and the table badge only.
+function getConsultationDisplayStage(c: Consultation): ConsultationStageValue {
+  if (c.status === "paused") return ConsultationStage.RECEIVED_PENDING_COMPLETION;
+  if (c.status === "closed" || c.status === "converted") return ConsultationStage.COMPLETED;
+  return c.currentStage;
+}
+
 function getConsultationDisplayBadge(c: Consultation): { label: string; className: string } {
+  const stage = getConsultationDisplayStage(c);
   return {
-    label: ConsultationStageLabels[c.currentStage] || c.currentStage,
-    className: getStageBadgeColor(c.currentStage),
+    label: ConsultationStageLabels[stage] || stage,
+    className: getStageBadgeColor(stage),
   };
 }
 
@@ -1319,7 +1327,10 @@ export default function ConsultationsPage() {
     }
     if (advFilters.status !== "all" && consultation.status !== advFilters.status) return false;
     if (advFilters.departmentId && consultation.departmentId !== advFilters.departmentId) return false;
-    if (advFilters.stages.length > 0 && !advFilters.stages.includes(consultation.currentStage)) return false;
+    // Stage filter operates on displayStage (virtual grouping) so a
+    // closed/converted consultation appears under منجزة and a paused
+    // one under استكمال_المرفقات_والبيانات.
+    if (advFilters.stages.length > 0 && !advFilters.stages.includes(getConsultationDisplayStage(consultation))) return false;
     if (advFilters.lawyers.length > 0) {
       const assignedTo = consultation.assignedTo;
       if (!assignedTo || !advFilters.lawyers.includes(assignedTo)) return false;
