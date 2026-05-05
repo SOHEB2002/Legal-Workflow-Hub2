@@ -19,6 +19,10 @@ import {
   HearingResult,
   MemoStatus,
   MemoType,
+  MemoStage,
+  MemoStageLabels,
+  MemoStagesAll,
+  MemoActivityType,
   CaseClassification,
   CaseStage,
   CaseStagesOrder,
@@ -280,6 +284,33 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   { from: ConsultationStage.READY,           to: ConsultationStage.COMPLETED,         allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 ];
 
+// Memos canonical 6+1 stage workflow (Phase-9). Mirrors consultations
+// but with memo-specific terminal labels (جاهزة_للرفع / مرفوعة) and no
+// STUDY / RECEIVED_PENDING_COMPLETION stages — memos go straight from
+// RECEIVED to DRAFTING. The committee-chair role is cases_review_head
+// (memos belong to cases), not consultations_review_head.
+//
+// Forward transitions only — backward transitions are handled via the
+// memo rollback block in validateStageTransition (matches the
+// consultations rollback semantics: dept_head/branch_manager can
+// rollback to any prior stage; assigned_lawyer can rollback one step).
+const ALLOWED_MEMO_TRANSITIONS: StageTransitionRule[] = [
+  // Reception
+  { from: MemoStage.RECEIVED,        to: MemoStage.DRAFTING,        allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  // Drafting → peer review
+  { from: MemoStage.DRAFTING,        to: MemoStage.INTERNAL_REVIEW, allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Internal-review outcomes (the dedicated endpoint enforces decision-vs-actor).
+  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.DRAFTING,        allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.COMMITTEE,       allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Committee decisions (cases_review_head is the committee chair for memos).
+  { from: MemoStage.COMMITTEE,       to: MemoStage.READY,           allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: MemoStage.COMMITTEE,       to: MemoStage.TAKING_NOTES,    allowedRoles: ["cases_review_head", "branch_manager"] },
+  // Take-notes outcome (any of تم | لم_يتم | جزئياً all advance to READY)
+  { from: MemoStage.TAKING_NOTES,    to: MemoStage.READY,           allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Filing
+  { from: MemoStage.READY,           to: MemoStage.FILED,           allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+];
+
 function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   if (entityData.primaryLawyerId === user.id || entityData.responsibleLawyerId === user.id) return true;
   if (entityData.assignedTo === user.id) return true;
@@ -291,7 +322,7 @@ function validateStageTransition(
   currentStage: string,
   targetStage: string,
   userRole: string,
-  entityType: "case" | "consultation",
+  entityType: "case" | "consultation" | "memo",
   user?: { id: string; departmentId?: string | null },
   entityData?: any
 ): { allowed: boolean; reason?: string } {
@@ -407,8 +438,31 @@ function validateStageTransition(
     }
   }
 
-  // Forward transitions: check ALLOWED_CASE_TRANSITIONS or ALLOWED_CONSULTATION_TRANSITIONS
-  const rules = entityType === "case" ? ALLOWED_CASE_TRANSITIONS : ALLOWED_CONSULTATION_TRANSITIONS;
+  // Memo rollback — same semantics as consultations. MemoStagesAll includes
+  // the conditional TAKING_NOTES stage in canonical order.
+  if (entityType === "memo" && entityData) {
+    const stages = MemoStagesAll as readonly string[];
+    const currentIdx = stages.indexOf(currentStage);
+    const targetIdx = stages.indexOf(targetStage);
+    if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
+      const isLawyer = effectiveRoles.includes("assigned_lawyer");
+      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+      if (isHeadOrManager) return { allowed: true };
+      if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
+      if (isLawyer && targetIdx < currentIdx - 1) {
+        return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
+      }
+      return { allowed: false, reason: "ليس لديك صلاحية للرجوع في المراحل" };
+    }
+  }
+
+  // Forward transitions: route to the entity-specific table.
+  const rules =
+    entityType === "case"
+      ? ALLOWED_CASE_TRANSITIONS
+      : entityType === "memo"
+        ? ALLOWED_MEMO_TRANSITIONS
+        : ALLOWED_CONSULTATION_TRANSITIONS;
   const rule = rules.find(r => r.from === currentStage && r.to === targetStage);
 
   if (!rule) {
@@ -3639,6 +3693,289 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error: any) {
       console.error("[memos/resume-from-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // ==================== Memo review workflow (Phase-9) ====================
+  // Mirrors POST /api/consultations/:id/{advance-stage,return-stage,
+  // internal-review,committee-decision,take-notes-outcome}. Memos use
+  // cases_review_head as the committee chair (memos belong to cases).
+
+  // Body: { targetStage }. Generic forward via validateStageTransition.
+  app.post("/api/memos/:id/advance-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion) {
+        return res.status(400).json({ error: "المذكرة بانتظار استكمال المرفقات والبيانات" });
+      }
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة معلّقة" });
+      }
+      if (!memo.currentStage) {
+        return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
+      }
+
+      const check = validateStageTransition(
+        memo.currentStage,
+        targetStage,
+        reqUser.role,
+        "memo",
+        reqUser,
+        memo,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      const fromLabel = (MemoStageLabels as any)[memo.currentStage] || memo.currentStage;
+      const toLabel = (MemoStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateMemoAndLog(
+        memo.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: MemoActivityType.STAGE_ADVANCED,
+          description: `انتقال من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: memo.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل تحديث المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/advance-stage] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { targetStage }. Generic backward — validateStageTransition's
+  // memo rollback block enforces: dept_head/branch_manager → any prior
+  // stage, assigned_lawyer → one step back.
+  app.post("/api/memos/:id/return-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion) {
+        return res.status(400).json({ error: "المذكرة بانتظار استكمال المرفقات والبيانات" });
+      }
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة معلّقة" });
+      }
+      if (!memo.currentStage) {
+        return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
+      }
+
+      const check = validateStageTransition(
+        memo.currentStage,
+        targetStage,
+        reqUser.role,
+        "memo",
+        reqUser,
+        memo,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      const fromLabel = (MemoStageLabels as any)[memo.currentStage] || memo.currentStage;
+      const toLabel = (MemoStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateMemoAndLog(
+        memo.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: MemoActivityType.STAGE_RETURNED,
+          description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: memo.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل تحديث المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/return-stage] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { decision, notes }. Inserts a memo_reviews row, then routes
+  // the stage:
+  //   PASSED      -> COMMITTEE
+  //   NEEDS_NOTES -> DRAFTING
+  // Allowed roles: assigned_lawyer (synthetic) + employee, department_head,
+  // cases_review_head, branch_manager.
+  app.post("/api/memos/:id/internal-review", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بالمراجعة" });
+      }
+      if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة المراجعة الداخلية" });
+      }
+
+      const baseAllowed = ["employee", "department_head", "cases_review_head", "branch_manager"];
+      const isLawyer = !!memo.assignedTo && memo.assignedTo === reqUser.id;
+      if (!baseAllowed.includes(reqUser.role) && !isLawyer) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
+      }
+
+      const nextStage = decision === InternalReviewDecision.PASSED
+        ? MemoStage.COMMITTEE
+        : MemoStage.DRAFTING;
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `مراجعة داخلية: ${decision} — ${truncatedNotes}`
+        : `مراجعة داخلية: ${decision}`;
+
+      const result = await storage.recordMemoInternalReview({
+        memoId: memo.id,
+        reviewerId: reqUser.id,
+        decision,
+        notes,
+        nextStage,
+        activity: {
+          description,
+          metadata: { decision, notes, reviewerId: reqUser.id },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ review: result.review, memo: result.memo });
+    } catch (error: any) {
+      console.error("[memos/internal-review] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { decision, notes }. Inserts a memo_committee_decisions row,
+  // then routes the stage:
+  //   APPROVED    -> READY
+  //   NEEDS_NOTES -> TAKING_NOTES
+  // Allowed roles: cases_review_head, branch_manager (committee chair
+  // for memos is the cases-side review head).
+  app.post("/api/memos/:id/committee-decision", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["cases_review_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار اللجنة غير صحيح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بالقرار" });
+      }
+      if (memo.currentStage !== MemoStage.COMMITTEE) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      const nextStage = decision === CommitteeDecision.APPROVED
+        ? MemoStage.READY
+        : MemoStage.TAKING_NOTES;
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `قرار اللجنة: ${decision} — ${truncatedNotes}`
+        : `قرار اللجنة: ${decision}`;
+
+      const result = await storage.recordMemoCommitteeDecision({
+        memoId: memo.id,
+        decision,
+        notes,
+        decidedBy: reqUser.id,
+        nextStage,
+        activity: {
+          description,
+          metadata: { decision, notes, decidedBy: reqUser.id },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ decision: result.decision, memo: result.memo });
+    } catch (error: any) {
+      console.error("[memos/committee-decision] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { outcome, notes }. Inserts a memo_note_outcomes row. ALL
+  // outcomes (DONE | NOT_DONE | PARTIAL) advance to READY — the outcome
+  // is recorded for audit only, not used for routing. Allowed roles:
+  // assigned_lawyer (synthetic), department_head, branch_manager.
+  app.post("/api/memos/:id/take-notes-outcome", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const outcome = String(req.body?.outcome || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(NoteOutcome) as string[]).includes(outcome);
+      if (!valid) return res.status(400).json({ error: "نتيجة غير صحيحة" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بتسجيل النتيجة" });
+      }
+      if (memo.currentStage !== MemoStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة الأخذ بالملاحظات" });
+      }
+
+      const isLawyer = !!memo.assignedTo && memo.assignedTo === reqUser.id;
+      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      if (!isLawyer && !isHead) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
+      }
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `نتيجة الأخذ بالملاحظات: ${outcome} — ${truncatedNotes}`
+        : `نتيجة الأخذ بالملاحظات: ${outcome}`;
+
+      const result = await storage.recordMemoNoteOutcome({
+        memoId: memo.id,
+        outcome,
+        notes,
+        recordedBy: reqUser.id,
+        nextStage: MemoStage.READY,
+        activity: {
+          description,
+          metadata: { outcome, notes },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ outcome: result.outcome, memo: result.memo });
+    } catch (error: any) {
+      console.error("[memos/take-notes-outcome] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
