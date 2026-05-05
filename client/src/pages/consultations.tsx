@@ -297,30 +297,14 @@ function getStageBadgeColor(stage: ConsultationStageValue): string {
   }
 }
 
-// Combined badge: derives label + colour from currentStage + status.
-//   active     → live stage label + stage colour (drives the row's eye)
-//   paused     → "معلّقة" + amber (Phase-8 — orthogonal to stage)
-//   converted  → "محولة لقضية" + violet
-//   closed     → "مقفلة" + muted
+// Stage badge — ALWAYS reflects currentStage regardless of status.
+// Mirrors the cases.tsx pattern: stage drives the primary badge,
+// status surfaces as a small orthogonal pill beside it. This way
+// filtering by stage="دراسة" returns ALL consultations at that stage
+// (including paused/closed/converted) and the row clearly shows that
+// the consultation IS at دراسة — its lifecycle status is shown
+// separately via the status pill below.
 function getConsultationDisplayBadge(c: Consultation): { label: string; className: string } {
-  if (c.status === "paused") {
-    return {
-      label: ConsultationStatusDisplayLabels.paused,
-      className: "bg-amber-500/20 text-amber-600 border-amber-500/30",
-    };
-  }
-  if (c.status === "converted") {
-    return {
-      label: ConsultationStatusDisplayLabels.converted,
-      className: "bg-violet-500/20 text-violet-600 border-violet-500/30",
-    };
-  }
-  if (c.status === "closed") {
-    return {
-      label: ConsultationStatusDisplayLabels.closed,
-      className: "bg-muted text-muted-foreground border-muted",
-    };
-  }
   return {
     label: ConsultationStageLabels[c.currentStage] || c.currentStage,
     className: getStageBadgeColor(c.currentStage),
@@ -1602,14 +1586,46 @@ export default function ConsultationsPage() {
                     <Badge variant="outline">{consultation.consultationType}</Badge>
                   </TableCell>
                   <TableCell className="text-center">
-                    <div className="inline-flex items-center gap-1">
+                    <div className="inline-flex items-center gap-1 flex-wrap justify-center">
                       {(() => {
                         const b = getConsultationDisplayBadge(consultation);
                         return <Badge className={b.className}>{b.label}</Badge>;
                       })()}
-                      {/* Phase-8 — awaiting-completion indicator. Distinct
-                          amber pill so it reads as orthogonal even though
-                          the stage badge is also showing PENDING_COMPLETION. */}
+                      {/* Status pills — orthogonal to the stage badge so the
+                          stage stays visible no matter the lifecycle state.
+                          Filter by stage="دراسة" still returns these rows. */}
+                      {consultation.status === "paused" && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-paused-${consultation.id}`}
+                          title={consultation.pauseReason || "معلّقة"}
+                        >
+                          <Pause className="w-2.5 h-2.5 ml-1" />
+                          معلّقة
+                        </Badge>
+                      )}
+                      {consultation.status === "converted" && (
+                        <Badge
+                          variant="outline"
+                          className="border-violet-500 bg-violet-500/10 text-violet-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-converted-${consultation.id}`}
+                          title={ConsultationStatusDisplayLabels.converted}
+                        >
+                          {ConsultationStatusDisplayLabels.converted}
+                        </Badge>
+                      )}
+                      {consultation.status === "closed" && (
+                        <Badge
+                          variant="outline"
+                          className="border-muted bg-muted/30 text-muted-foreground text-[10px] px-1 py-0"
+                          data-testid={`badge-closed-${consultation.id}`}
+                          title={ConsultationStatusDisplayLabels.closed}
+                        >
+                          {ConsultationStatusDisplayLabels.closed}
+                        </Badge>
+                      )}
+                      {/* Phase-8 — awaiting-completion indicator. */}
                       {consultation.awaitingCompletion && consultation.status === "active" && (
                         <Badge
                           variant="outline"
