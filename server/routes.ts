@@ -8,6 +8,7 @@ import {
   insertClientSchema,
   insertCaseSchema,
   insertConsultationSchema,
+  extendConsultationDeliverySchema,
   insertHearingSchema,
   insertFieldTaskSchema,
   insertAttachmentSchema,
@@ -18,11 +19,22 @@ import {
   HearingResult,
   MemoStatus,
   MemoType,
+  MemoStage,
+  MemoStageLabels,
+  MemoStagesAll,
+  MemoActivityType,
   CaseClassification,
   CaseStage,
   CaseStagesOrder,
+  ConsultationStage,
+  ConsultationStagesAll,
+  ConsultationStageLabels,
+  InternalReviewDecision,
+  CommitteeDecision,
+  NoteOutcome,
+  ConsultationClosureReason,
+  ConsultationActivityType,
   getStagesForClassification,
-  type CaseTypeValue,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -138,7 +150,7 @@ interface StageTransitionRule {
 
 const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // ==================== COMMON TRANSITIONS ====================
-  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["department_head", "branch_manager"] },
+  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
@@ -238,21 +250,65 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "مشطوبة", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
 ];
 
+// Consultations canonical 7+1 stage workflow per consultations-rebuild-spec.md
+// §3.2.1. Forward transitions only — backward transitions are handled via the
+// rollback block in validateStageTransition (matches case-side semantics:
+// dept_head/branch_manager can rollback to any prior stage; assigned_lawyer
+// can rollback one step). The committee/review/notes-outcome transitions
+// have additional endpoint-level checks (e.g. internal-review enforces
+// "actor must be the active cycle's reviewer") in their dedicated routes.
+//
+// Stage values come from the ConsultationStage enum (no Arabic literals
+// in this file; the enum lives in shared/schema.ts).
 const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
-  // Forward transitions
-  { from: "استلام", to: "دراسة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "دراسة", to: "إعداد_الرد", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "إعداد_الرد", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "لجنة_المراجعة", to: "جاهز", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
-  { from: "لجنة_المراجعة", to: "تعديلات", allowedRoles: ["consultations_review_head", "department_head", "branch_manager"] },
-  { from: "تعديلات", to: "لجنة_المراجعة", allowedRoles: ["employee", "department_head", "branch_manager", "assigned_lawyer"] },
-  { from: "جاهز", to: "مسلّم", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "مسلّم", to: "مغلق", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  // Backward transitions
-  { from: "دراسة", to: "استلام", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "إعداد_الرد", to: "دراسة", allowedRoles: ["branch_manager", "department_head"] },
-  { from: "لجنة_المراجعة", to: "إعداد_الرد", allowedRoles: ["branch_manager", "consultations_review_head", "department_head"] },
-  { from: "جاهز", to: "تعديلات", allowedRoles: ["branch_manager", "department_head"] },
+  // Linear happy-path. Phase-8 — RECEIVED_PENDING_COMPLETION inserted at
+  // position 2 of the linear path. Direct RECEIVED → STUDY is removed;
+  // the canonical flow is RECEIVED → PENDING_COMPLETION → STUDY. The
+  // skip button on PENDING_COMPLETION is a separate /skip-completion
+  // endpoint (logs completion_skipped instead of stage_advanced) but
+  // still lands on STUDY — same target, different log entry.
+  { from: ConsultationStage.RECEIVED,                    to: ConsultationStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: ConsultationStage.RECEIVED_PENDING_COMPLETION, to: ConsultationStage.STUDY,                       allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: ConsultationStage.STUDY,           to: ConsultationStage.DRAFTING,          allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.DRAFTING,        to: ConsultationStage.INTERNAL_REVIEW,   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Internal-review outcomes (enforced finely by the internal-review endpoint;
+  // table stays permissive for assigned_lawyer + dept_head + branch_manager).
+  { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.DRAFTING,          allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.COMMITTEE,         allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Committee decisions
+  { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.READY,             allowedRoles: ["consultations_review_head", "branch_manager"] },
+  { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.TAKING_NOTES,      allowedRoles: ["consultations_review_head", "branch_manager"] },
+  // Take-notes outcome (any of تم | لم_يتم | جزئياً all advance to READY)
+  { from: ConsultationStage.TAKING_NOTES,    to: ConsultationStage.READY,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Delivery
+  { from: ConsultationStage.READY,           to: ConsultationStage.COMPLETED,         allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+];
+
+// Memos canonical 6+1 stage workflow (Phase-9). Mirrors consultations
+// but with memo-specific terminal labels (جاهزة_للرفع / مرفوعة) and no
+// STUDY / RECEIVED_PENDING_COMPLETION stages — memos go straight from
+// RECEIVED to DRAFTING. The committee-chair role is cases_review_head
+// (memos belong to cases), not consultations_review_head.
+//
+// Forward transitions only — backward transitions are handled via the
+// memo rollback block in validateStageTransition (matches the
+// consultations rollback semantics: dept_head/branch_manager can
+// rollback to any prior stage; assigned_lawyer can rollback one step).
+const ALLOWED_MEMO_TRANSITIONS: StageTransitionRule[] = [
+  // Reception
+  { from: MemoStage.RECEIVED,        to: MemoStage.DRAFTING,        allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  // Drafting → peer review
+  { from: MemoStage.DRAFTING,        to: MemoStage.INTERNAL_REVIEW, allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Internal-review outcomes (the dedicated endpoint enforces decision-vs-actor).
+  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.DRAFTING,        allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.COMMITTEE,       allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Committee decisions (cases_review_head is the committee chair for memos).
+  { from: MemoStage.COMMITTEE,       to: MemoStage.READY,           allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: MemoStage.COMMITTEE,       to: MemoStage.TAKING_NOTES,    allowedRoles: ["cases_review_head", "branch_manager"] },
+  // Take-notes outcome (any of تم | لم_يتم | جزئياً all advance to READY)
+  { from: MemoStage.TAKING_NOTES,    to: MemoStage.READY,           allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Filing
+  { from: MemoStage.READY,           to: MemoStage.FILED,           allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 ];
 
 function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
@@ -266,21 +322,42 @@ function validateStageTransition(
   currentStage: string,
   targetStage: string,
   userRole: string,
-  entityType: "case" | "consultation",
-  user?: { id: string },
+  entityType: "case" | "consultation" | "memo",
+  user?: { id: string; departmentId?: string | null },
   entityData?: any
 ): { allowed: boolean; reason?: string } {
   if (currentStage === targetStage) {
     return { allowed: false, reason: "العنصر في نفس المرحلة المطلوبة" };
   }
 
-  // Early closure: admin_support can move any stage to مقفلة
-  if (entityType === "case" && targetStage === "مقفلة" && userRole === "admin_support") {
-    return { allowed: true };
+  // Early closure: branch_manager / admin_support / department_head (own
+  // dept) / assigned lawyer can move a case from any stage to مقفلة.
+  // Mirrors the consultations-side canEarlyClose gate. The closure reason
+  // is required for all four roles (validated separately in the PATCH
+  // handler).
+  if (entityType === "case" && targetStage === "مقفلة") {
+    if (userRole === "branch_manager" || userRole === "admin_support") {
+      return { allowed: true };
+    }
+    if (
+      userRole === "department_head" &&
+      entityData &&
+      !!user?.departmentId &&
+      entityData.departmentId === user.departmentId
+    ) {
+      return { allowed: true };
+    }
+    if (user && entityData && isAssignedLawyer(user, entityData)) {
+      return { allowed: true };
+    }
+    // Fall through to ALLOWED_CASE_TRANSITIONS for stage-specific rules
+    // (e.g. تحصيل/مشطوبة/post-judgment closures don't depend on the
+    // early-close shortcut).
   }
 
   const isInternalReviewer =
-    entityType === "case" && !!user && !!entityData && entityData.internalReviewerId === user.id;
+    (entityType === "case" || entityType === "memo")
+    && !!user && !!entityData && entityData.internalReviewerId === user.id;
 
   // Internal review stages are locked: only the designated internal reviewer,
   // the department head, or the branch manager can transition out of them.
@@ -297,8 +374,23 @@ function validateStageTransition(
     }
   }
 
+  // Memo INTERNAL_REVIEW lock — same semantics as cases. Prevents users
+  // bypassing the dedicated /internal-review endpoint by calling
+  // /advance-stage or /return-stage from المراجعة_داخلية. The dedicated
+  // endpoint already enforces this; this is belt-and-braces for the
+  // generic stage-transition routes.
+  if (entityType === "memo" && currentStage === "مراجعة_داخلية") {
+    const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
+    if (!isInternalReviewer && !isHeadOrManager) {
+      return {
+        allowed: false,
+        reason: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية",
+      };
+    }
+  }
+
   const effectiveRoles = [userRole];
-  if (entityType === "case" && user && entityData && isAssignedLawyer(user, entityData)) {
+  if (user && entityData && isAssignedLawyer(user, entityData)) {
     effectiveRoles.push("assigned_lawyer");
   }
   if (isInternalReviewer) {
@@ -308,11 +400,15 @@ function validateStageTransition(
   // Rollback logic for cases
   if (entityType === "case" && entityData) {
     const classification = entityData.caseClassification as string;
-    const caseType = entityData.caseType as CaseTypeValue;
+    // Stage selection routes on the case's DEPARTMENT, not on caseType
+    // (which is free-text user input). Callers stash the resolved
+    // department name on entityData.departmentName before invoking this
+    // function — see the PATCH /api/cases/:id handler.
+    const departmentName = (entityData.departmentName as string | undefined) ?? undefined;
     const clientRole = entityData.clientRole as string | undefined;
     const memoRequired = !!entityData.memoRequired;
     const isSettlementCase = !!entityData.isSettlementCase;
-    const stages = getStagesForClassification(classification as any, caseType, clientRole, memoRequired, isSettlementCase);
+    const stages = getStagesForClassification(classification as any, departmentName, clientRole, memoRequired, isSettlementCase);
     const currentIdx = stages.indexOf(currentStage as any);
     const targetIdx = stages.indexOf(targetStage as any);
 
@@ -337,8 +433,52 @@ function validateStageTransition(
     }
   }
 
-  // Forward transitions: check ALLOWED_CASE_TRANSITIONS or ALLOWED_CONSULTATION_TRANSITIONS
-  const rules = entityType === "case" ? ALLOWED_CASE_TRANSITIONS : ALLOWED_CONSULTATION_TRANSITIONS;
+  // Consultation rollback (per consultations-rebuild-spec.md §3.2.1):
+  //   department_head / branch_manager can return to any prior stage;
+  //   assigned_lawyer can return one step.
+  // Uses ConsultationStagesAll which includes the conditional TAKING_NOTES
+  // stage in canonical order so rollback works from there too.
+  if (entityType === "consultation" && entityData) {
+    const stages = ConsultationStagesAll as readonly string[];
+    const currentIdx = stages.indexOf(currentStage);
+    const targetIdx = stages.indexOf(targetStage);
+    if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
+      const isLawyer = effectiveRoles.includes("assigned_lawyer");
+      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+      if (isHeadOrManager) return { allowed: true };
+      if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
+      if (isLawyer && targetIdx < currentIdx - 1) {
+        return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
+      }
+      return { allowed: false, reason: "ليس لديك صلاحية للرجوع في المراحل" };
+    }
+  }
+
+  // Memo rollback — same semantics as consultations. MemoStagesAll includes
+  // the conditional TAKING_NOTES stage in canonical order.
+  if (entityType === "memo" && entityData) {
+    const stages = MemoStagesAll as readonly string[];
+    const currentIdx = stages.indexOf(currentStage);
+    const targetIdx = stages.indexOf(targetStage);
+    if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
+      const isLawyer = effectiveRoles.includes("assigned_lawyer");
+      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+      if (isHeadOrManager) return { allowed: true };
+      if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
+      if (isLawyer && targetIdx < currentIdx - 1) {
+        return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
+      }
+      return { allowed: false, reason: "ليس لديك صلاحية للرجوع في المراحل" };
+    }
+  }
+
+  // Forward transitions: route to the entity-specific table.
+  const rules =
+    entityType === "case"
+      ? ALLOWED_CASE_TRANSITIONS
+      : entityType === "memo"
+        ? ALLOWED_MEMO_TRANSITIONS
+        : ALLOWED_CONSULTATION_TRANSITIONS;
   const rule = rules.find(r => r.from === currentStage && r.to === targetStage);
 
   if (!rule) {
@@ -1089,6 +1229,17 @@ export async function registerRoutes(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      // Storage-layer sentinels for case_number unique-constraint failures.
+      // DUPLICATE_CASE_NUMBER means the auto-generated nanoid suffix kept
+      // colliding across all retries — extremely rare. CASE_NUMBER_EXISTS
+      // means the user-supplied courtCaseNumber matches an existing one.
+      const msg = (error as any)?.message || "";
+      if (msg === "DUPLICATE_CASE_NUMBER") {
+        return res.status(400).json({ error: "تعذّر توليد رقم قضية فريد، يرجى المحاولة مرة أخرى" });
+      }
+      if (msg === "CASE_NUMBER_EXISTS") {
+        return res.status(400).json({ error: "رقم القضية المُدخل مستخدم مسبقاً، يرجى استخدام رقم آخر" });
+      }
       // Dump full error to server logs.
       console.error("[POST /api/cases] FAILED. clientRole=", req.body.clientRole, "caseClassification=", req.body.caseClassification);
       console.error("[POST /api/cases] error name:", (error as any)?.name);
@@ -1276,20 +1427,29 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
 
+      // Role gate: assigned_lawyer + admin_support + department_head
+      // (own dept) + branch_manager. cases_review_head retained from
+      // the previous gate to avoid regressing existing workflows.
+      const isOwnDeptHead =
+        user.role === "department_head"
+        && !!user.departmentId
+        && caseItem.departmentId === user.departmentId;
       const authorized =
-        user.role === "branch_manager" ||
-        user.role === "cases_review_head" ||
-        isAssignedLawyer(user, caseItem);
+        user.role === "branch_manager"
+        || user.role === "admin_support"
+        || user.role === "cases_review_head"
+        || isOwnDeptHead
+        || isAssignedLawyer(user, caseItem);
       if (!authorized) {
-        return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال البيانات" });
+        return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال المرفقات والبيانات" });
       }
 
       if (caseItem.currentStage !== "استلام") {
-        return res.status(400).json({ error: "تجاوز مرحلة استكمال البيانات متاح فقط من مرحلة الاستلام" });
+        return res.status(400).json({ error: "تجاوز مرحلة استكمال المرفقات والبيانات متاح فقط من مرحلة الاستلام" });
       }
 
       const { notes } = req.body;
-      const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال البيانات - الدعوى مكتملة";
+      const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال المرفقات والبيانات - الدعوى مكتملة";
       const now = new Date().toISOString();
       const existingHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
 
@@ -1338,7 +1498,7 @@ export async function registerRoutes(
           userId: user.id,
           userName: user.name,
           actionType: "stage_changed",
-          title: `تجاوز مرحلة استكمال البيانات والانتقال مباشرةً إلى ${skipTarget.replace(/_/g, " ")}`,
+          title: `تجاوز مرحلة استكمال المرفقات والبيانات والانتقال مباشرةً إلى ${skipTarget.replace(/_/g, " ")}`,
         });
       } catch (err: any) {
         console.error("[skip-data-completion] logCaseActivity FAILED (non-fatal)", {
@@ -1439,9 +1599,26 @@ export async function registerRoutes(
           existing.currentStage === "قيد_التدقيق_في_معين") &&
         typeof req.body.currentStage === "string" &&
         req.body.currentStage !== existing.currentStage;
-      const effectiveDataFields = isCourtAcceptTransition
-        ? caseDataFields.filter((f) => f !== "courtCaseNumber")
-        : caseDataFields;
+      // Settlement-only cases that pick "استكمال إجراءاتها" on لم يتم الصلح
+      // ride caseClassification + isSettlementCase as part of the same PATCH
+      // that flips currentStage مداولة_الصلح → أغلق_طلب_الصلح. The flip moves
+      // the case from InCourtSettlementStages onto the regular UnderStudy
+      // path so the progress bar resolves correctly. Treat caseClassification
+      // here as a stage-transition payload rather than a free-form data edit
+      // so the assigned lawyer can submit it without canEditCaseData.
+      const isSettlementContinueTransition =
+        existing.currentStage === "مداولة_الصلح" &&
+        (existing as any).isSettlementCase === true &&
+        req.body.currentStage === "أغلق_طلب_الصلح" &&
+        req.body.isSettlementCase === false &&
+        req.body.caseClassification === "قيد_الدراسة";
+      let effectiveDataFields = caseDataFields;
+      if (isCourtAcceptTransition) {
+        effectiveDataFields = effectiveDataFields.filter((f) => f !== "courtCaseNumber");
+      }
+      if (isSettlementContinueTransition) {
+        effectiveDataFields = effectiveDataFields.filter((f) => f !== "caseClassification");
+      }
       const hasDataFields = Object.keys(req.body).some((k) => effectiveDataFields.includes(k));
 
       if (hasDataFields && !canEditCaseData(user)) {
@@ -1502,18 +1679,19 @@ export async function registerRoutes(
         );
 
         // Use merged case data for validation when classification also changes simultaneously.
-        // IMPORTANT: caseType on the row holds the case sub-type (e.g. "بيع وتوريد"),
-        // NOT the department label — but validateStageTransition's rollback logic
-        // calls getStagesForClassification(classification, caseType) to pick the
-        // path array. Override caseType on the merged copy with the resolved
-        // department name so commercial/admin/general paths are selected correctly.
+        // Stash the resolved department name on the merged copy under
+        // `departmentName` so validateStageTransition's rollback path —
+        // which calls getStagesForClassification(classification, departmentName)
+        // — picks the right commercial/labor/admin/general stage array. The
+        // case's own caseType field is free-text user input ("بيع وتوريد"
+        // etc.) and is NOT used for routing.
         const mergedCase: any = { ...existing, ...req.body };
         try {
           const dept = (existing as any).departmentId
             ? await storage.getDepartmentById((existing as any).departmentId)
             : null;
           if (dept?.name) {
-            mergedCase.caseType = dept.name;
+            mergedCase.departmentName = dept.name;
           }
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
@@ -1524,7 +1702,7 @@ export async function registerRoutes(
           from: existing.currentStage,
           to: req.body.currentStage,
           userRole: user?.role,
-          mergedCaseType: mergedCase.caseType,
+          mergedDepartmentName: mergedCase.departmentName,
           allowed: stageCheck.allowed,
           reason: stageCheck.reason,
         });
@@ -1532,7 +1710,19 @@ export async function registerRoutes(
           return res.status(400).json({ error: stageCheck.reason });
         }
         // === EARLY CLOSURE VALIDATION ===
-        if (req.body.currentStage === "مقفلة" && user.role === "admin_support") {
+        // Closing a case from a non-terminal stage now requires a reason
+        // for any role allowed by validateStageTransition's early-close
+        // shortcut (branch_manager / admin_support / dept_head own dept /
+        // assigned lawyer). Closures that flow through the normal stage
+        // rules (e.g. تحصيل/مشطوبة/post-judgment) come from a terminal
+        // stage and don't need a reason.
+        const isEarlyCloseStage =
+          req.body.currentStage === "مقفلة" &&
+          existing.currentStage !== "تحصيل" &&
+          existing.currentStage !== "مشطوبة" &&
+          existing.currentStage !== "محكوم_حكم_ابتدائي" &&
+          existing.currentStage !== "محكوم_حكم_نهائي";
+        if (isEarlyCloseStage) {
           if (!req.body.closureReason) {
             return res.status(400).json({ error: "يجب تحديد سبب الإغلاق" });
           }
@@ -1720,6 +1910,9 @@ export async function registerRoutes(
 
       // When a case is transferred to a new department without a simultaneous
       // lawyer assignment, clear the old lawyer so the new department can re-assign.
+      // Stage restriction was lifted: transfer is now allowed from any stage.
+      // The case's currentStage is reset to "استلام" (the new department's
+      // path starts fresh). Caller may pass `transferReason` for the activity log.
       const isDeptTransfer =
         "departmentId" in req.body &&
         req.body.departmentId &&
@@ -1727,16 +1920,25 @@ export async function registerRoutes(
         !req.body.primaryLawyerId &&
         !req.body.assignedLawyers;
 
-      if (isDeptTransfer) {
-        const currentStageIndex = CaseStagesOrder.indexOf(existing.currentStage as any);
-        const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE as any);
-        if (currentStageIndex >= reviewStageIndex) {
-          return res.status(400).json({ error: "لا يمكن تحويل القضية في هذه المرحلة - القضية في مرحلة متقدمة من المراجعة" });
-        }
+      // Capture pre-transfer values BEFORE we mutate req.body so the activity
+      // log gets the right "from" snapshot.
+      const transferFromStage = existing.currentStage;
+      const transferFromDeptId = existing.departmentId;
+      const transferReason = typeof req.body.transferReason === "string"
+        ? req.body.transferReason.trim()
+        : "";
 
+      if (isDeptTransfer) {
         req.body.primaryLawyerId = null;
         req.body.responsibleLawyerId = null;
         req.body.assignedLawyers = [];
+        // Reset to استلام so the new department starts the case fresh in
+        // its own stage path. The downstream stageHistory update (line ~1982)
+        // picks this up and writes a stage_changed entry alongside the
+        // department_transferred entry.
+        if (req.body.currentStage === undefined) {
+          req.body.currentStage = CaseStage.RECEPTION;
+        }
         // Also unassign the lawyer from pending hearings and active memos
         const caseId = String(req.params.id);
         try {
@@ -1925,10 +2127,16 @@ export async function registerRoutes(
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
-              actionType: "case_updated",
+              actionType: "department_transferred",
               title: `تم تحويل القضية من قسم إلى آخر`,
-              previousValue: existing.departmentId || "",
+              previousValue: transferFromDeptId || "",
               newValue: req.body.departmentId,
+              details: JSON.stringify({
+                fromDeptId: transferFromDeptId || null,
+                toDeptId: req.body.departmentId,
+                reason: transferReason || null,
+                fromStage: transferFromStage,
+              }),
             });
           } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
             await storage.logCaseActivity({
@@ -1940,6 +2148,46 @@ export async function registerRoutes(
               previousValue: existing.currentStage,
               newValue: req.body.currentStage,
             });
+            // Settlement-only cases (isSettlementCase=true on InCourtSettlementStages)
+            // hit a fork at مداولة_الصلح on "لم يتم الصلح": close the case, or
+            // convert to the regular litigation path. Surface the choice as a
+            // dedicated activity so the timeline shows the user's decision and
+            // not just a generic stage_changed entry.
+            if (
+              existing.currentStage === "مداولة_الصلح" &&
+              (existing as any).isSettlementCase
+            ) {
+              if (req.body.currentStage === "مقفلة") {
+                await storage.logCaseActivity({
+                  caseId: String(req.params.id),
+                  userId: user.id,
+                  userName: user.name || user.id,
+                  actionType: "settlement_failed_closed",
+                  title: "لم يتم الصلح — تم إغلاق القضية نهائياً",
+                });
+              } else if (
+                req.body.currentStage === "أغلق_طلب_الصلح" &&
+                req.body.isSettlementCase === false
+              ) {
+                const prevClassification = (existing as any).caseClassification || "منظورة_بالمحكمة";
+                const newClassification = req.body.caseClassification || prevClassification;
+                await storage.logCaseActivity({
+                  caseId: String(req.params.id),
+                  userId: user.id,
+                  userName: user.name || user.id,
+                  actionType: "settlement_failed_continued",
+                  title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
+                  previousValue: prevClassification,
+                  newValue: newClassification,
+                  details: JSON.stringify({
+                    stageFrom: "مداولة_الصلح",
+                    stageTo: "أغلق_طلب_الصلح",
+                    classificationFrom: prevClassification,
+                    classificationTo: newClassification,
+                  }),
+                });
+              }
+            }
           } else {
             await storage.logCaseActivity({
               caseId: String(req.params.id),
@@ -2201,13 +2449,22 @@ export async function registerRoutes(
   app.post("/api/consultations", requireAuth, async (req, res) => {
     try {
       const validatedData = insertConsultationSchema.parse(req.body);
-      const createdBy = req.body.createdBy || "unknown";
+      const reqUser = (req as any).user;
+      // Phase-6: prefer the authenticated user id over the body-provided
+      // createdBy so the activity log's performedBy is always the real
+      // actor. Fall back for legacy clients that still pass it explicitly.
+      const createdBy = reqUser?.id || req.body.createdBy || "unknown";
       const newConsultation = await storage.createConsultation(validatedData, createdBy);
       res.status(201).json(newConsultation);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      const msg = (error as any)?.message || "";
+      if (msg === "DUPLICATE_CONSULTATION_NUMBER") {
+        return res.status(400).json({ error: "تعذّر توليد رقم استشارة فريد، يرجى المحاولة مرة أخرى" });
+      }
+      console.error("[POST /api/consultations] error:", error);
       res.status(500).json({ error: "حدث خطأ في إنشاء الاستشارة" });
     }
   });
@@ -2255,6 +2512,1622 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الاستشارة" });
+    }
+  });
+
+  // ==================== Consultation workflow endpoints (rebuild §3.2.2) ====================
+
+  // POST /api/consultations/:id/assign
+  // Body: { assignedTo, notes? }. Sets assignedTo. If currentStage is RECEIVED,
+  // advances to STUDY in the same write. Allowed roles: admin_support,
+  // department_head, branch_manager.
+  app.post("/api/consultations/:id/assign", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
+      }
+
+      const { assignedTo } = req.body || {};
+      if (!assignedTo || typeof assignedTo !== "string") {
+        return res.status(400).json({ error: "assignedTo مطلوب" });
+      }
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const { valid } = await validateAssignedUsersActive([assignedTo]);
+      if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
+
+      const lawyer = await storage.getUser(assignedTo);
+      const lawyerName = lawyer?.name || assignedTo;
+
+      const updates: any = { assignedTo };
+      const autoAdvancedToStudy = consultation.currentStage === ConsultationStage.RECEIVED;
+      if (autoAdvancedToStudy) {
+        updates.currentStage = ConsultationStage.STUDY;
+      }
+
+      const updated = await storage.updateConsultationAndLog(consultation.id, updates, {
+        activityType: ConsultationActivityType.ASSIGNED,
+        description: `تم إسناد الاستشارة لـ ${lawyerName}`,
+        metadata: { assignedTo, lawyerName, autoAdvancedToStudy },
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/advance-stage
+  // Body: { targetStage }. Generic forward via validateStageTransition.
+  // Used for transitions where no dedicated endpoint applies. The dedicated
+  // endpoints (internal-review, committee-decision, take-notes-outcome) are
+  // preferred where they apply because they also record helper-table rows.
+  app.post("/api/consultations/:id/advance-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const check = validateStageTransition(
+        consultation.currentStage,
+        targetStage,
+        reqUser.role,
+        "consultation",
+        reqUser,
+        consultation,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
+      const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: ConsultationActivityType.STAGE_ADVANCED,
+          description: `انتقال من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: consultation.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/return-stage
+  // Body: { targetStage }. Generic backward — validateStageTransition's
+  // rollback block enforces: dept_head/branch_manager can return to any
+  // prior stage, assigned_lawyer can return one step.
+  app.post("/api/consultations/:id/return-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const check = validateStageTransition(
+        consultation.currentStage,
+        targetStage,
+        reqUser.role,
+        "consultation",
+        reqUser,
+        consultation,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
+      const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: ConsultationActivityType.STAGE_RETURNED,
+          description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: consultation.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/internal-review
+  // Body: { decision, notes }. Inserts a consultation_reviews row, then
+  // routes the stage:
+  //   PASSED      -> COMMITTEE
+  //   NEEDS_NOTES -> DRAFTING
+  //   RESUBMITTED -> DRAFTING
+  // Allowed roles: assigned_lawyer (synthetic) + employee, department_head,
+  // cases_review_head, consultations_review_head, branch_manager. The strict
+  // "actor must be the active review cycle's reviewer" check is deferred —
+  // the codebase has no active-reviewer tracking column yet. TODO: tighten
+  // once that tracking lands (likely a small column add on consultations).
+  app.post("/api/consultations/:id/internal-review", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      if (consultation.currentStage !== ConsultationStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة المراجعة الداخلية" });
+      }
+
+      const baseAllowed = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      if (!baseAllowed.includes(reqUser.role) && !isLawyer) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
+      }
+
+      const nextStage = decision === InternalReviewDecision.PASSED
+        ? ConsultationStage.COMMITTEE
+        : ConsultationStage.DRAFTING;
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `مراجعة داخلية: ${decision} — ${truncatedNotes}`
+        : `مراجعة داخلية: ${decision}`;
+
+      const result = await storage.recordConsultationInternalReview({
+        consultationId: consultation.id,
+        reviewerId: reqUser.id,
+        decision,
+        notes,
+        nextStage,
+        activity: {
+          description,
+          metadata: { decision, notes, reviewerId: reqUser.id },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ review: result.review, consultation: result.consultation });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/committee-decision
+  // Body: { decision, notes }. Inserts a consultation_committee_decisions
+  // row, then routes the stage:
+  //   APPROVED    -> READY
+  //   NEEDS_NOTES -> TAKING_NOTES
+  // Allowed roles: consultations_review_head, branch_manager.
+  app.post("/api/consultations/:id/committee-decision", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار اللجنة غير صحيح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      if (consultation.currentStage !== ConsultationStage.COMMITTEE) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      const nextStage = decision === CommitteeDecision.APPROVED
+        ? ConsultationStage.READY
+        : ConsultationStage.TAKING_NOTES;
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `قرار اللجنة: ${decision} — ${truncatedNotes}`
+        : `قرار اللجنة: ${decision}`;
+
+      const result = await storage.recordConsultationCommitteeDecision({
+        consultationId: consultation.id,
+        decision,
+        notes,
+        decidedBy: reqUser.id,
+        nextStage,
+        activity: {
+          description,
+          metadata: { decision, notes, decidedBy: reqUser.id },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ decision: result.decision, consultation: result.consultation });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/take-notes-outcome
+  // Body: { outcome, notes }. Inserts a consultation_note_outcomes row.
+  // Per spec §3.2.1, ALL outcomes (DONE | NOT_DONE | PARTIAL) advance to
+  // READY — the outcome distinction is for record only, not for routing.
+  // Allowed roles: assigned_lawyer (synthetic), department_head, branch_manager.
+  app.post("/api/consultations/:id/take-notes-outcome", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const outcome = String(req.body?.outcome || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(NoteOutcome) as string[]).includes(outcome);
+      if (!valid) return res.status(400).json({ error: "نتيجة غير صحيحة" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      if (consultation.currentStage !== ConsultationStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة الأخذ بالملاحظات" });
+      }
+
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      if (!isLawyer && !isHead) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
+      }
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `نتيجة الأخذ بالملاحظات: ${outcome} — ${truncatedNotes}`
+        : `نتيجة الأخذ بالملاحظات: ${outcome}`;
+
+      const result = await storage.recordConsultationNoteOutcome({
+        consultationId: consultation.id,
+        outcome,
+        notes,
+        recordedBy: reqUser.id,
+        nextStage: ConsultationStage.READY,
+        activity: {
+          description,
+          metadata: { outcome, notes },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ outcome: result.outcome, consultation: result.consultation });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/early-close
+  // Body: { reason, otherText? }. Sets status='closed', closedAt=now(),
+  // persists closure_reason (and closure_reason_other when reason='other').
+  // Validation matches the cases early-close pattern: reason required, and
+  // otherText required iff reason === 'other'.
+  // Allowed roles: assigned_lawyer (synthetic), admin_support, department_head,
+  // branch_manager (per spec §3.2.4).
+  app.post("/api/consultations/:id/early-close", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      const adminLike = ["admin_support", "department_head", "branch_manager"];
+      if (!adminLike.includes(reqUser.role) && !isLawyer) {
+        return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
+      }
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const reason = String(req.body?.reason || "");
+      const otherText = String(req.body?.otherText || "");
+      if (!reason) return res.status(400).json({ error: "سبب الإغلاق مطلوب" });
+      const validReasons = Object.values(ConsultationClosureReason) as string[];
+      if (!validReasons.includes(reason)) {
+        return res.status(400).json({ error: "سبب الإغلاق غير صحيح" });
+      }
+      if (reason === ConsultationClosureReason.OTHER && !otherText.trim()) {
+        return res.status(400).json({ error: "يجب توضيح سبب الإغلاق عند اختيار 'أخرى'" });
+      }
+
+      const reasonLabel = reason;
+      const description = otherText.trim()
+        ? `إغلاق مبكر: ${reasonLabel} — ${otherText.trim().slice(0, 120)}`
+        : `إغلاق مبكر: ${reasonLabel}`;
+
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        {
+          status: "closed",
+          closureReason: reason,
+          closureReasonOther: otherText.trim() || null,
+          closedAt: new Date(),
+        } as any,
+        {
+          activityType: ConsultationActivityType.EARLY_CLOSED,
+          description,
+          metadata: { reason, closureReasonOther: otherText.trim() || null, notes: otherText.trim() || "" },
+          performedBy: reqUser.id,
+        },
+      );
+
+      if (!updated) return res.status(500).json({ error: "فشل إغلاق الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/convert-to-case
+  // Body: { targetCaseStage, caseDepartmentId, ...any other case fields }.
+  // Per spec §3.2.3: single DB transaction. Steps 3-5 (helper-table copies)
+  // are skipped per option (ii) of the Phase 2 plan — the new case carries
+  // convertedFromConsultationId and the consultation row is preserved with
+  // status='converted' so the UI can navigate back for history.
+  // Allowed roles: admin_support, department_head, branch_manager.
+  app.post("/api/consultations/:id/convert-to-case", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتحويل الاستشارة لقضية" });
+      }
+
+      // Pre-validate (storage re-checks inside the transaction for race-safety).
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      if (consultation.currentStage === ConsultationStage.COMPLETED) {
+        return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
+      }
+
+      const { targetCaseStage, caseDepartmentId, ...rest } = req.body || {};
+      if (!targetCaseStage || typeof targetCaseStage !== "string") {
+        return res.status(400).json({ error: "targetCaseStage مطلوب" });
+      }
+      if (!caseDepartmentId || typeof caseDepartmentId !== "string") {
+        return res.status(400).json({ error: "caseDepartmentId مطلوب" });
+      }
+
+      // If a primaryLawyerId / responsibleLawyerId / assigned lawyer is being
+      // copied through, validate it's an active user — same check the case
+      // PATCH endpoint applies.
+      const lawyerIds = [rest.primaryLawyerId, rest.responsibleLawyerId].filter(
+        (v: any): v is string => typeof v === "string" && v.length > 0,
+      );
+      if (lawyerIds.length > 0) {
+        const { valid } = await validateAssignedUsersActive(lawyerIds);
+        if (!valid) return res.status(400).json({ error: "أحد المحامين المختارين غير نشط أو غير موجود" });
+      }
+
+      const caseFields = {
+        ...rest,
+        currentStage: targetCaseStage,
+        departmentId: caseDepartmentId,
+      };
+
+      try {
+        // The case number is generated inside the storage transaction;
+        // the activity row is written there with the canonical description
+        // using that number.
+        const result = await storage.convertConsultationToCase(
+          consultation.id,
+          caseFields,
+          reqUser.id,
+          { targetCaseStage },
+        );
+        res.status(201).json(result);
+      } catch (e: any) {
+        const msg = e?.message || "";
+        if (msg === "CONSULTATION_NOT_FOUND") return res.status(404).json({ error: "الاستشارة غير موجودة" });
+        if (msg === "CONSULTATION_NOT_ACTIVE") return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+        if (msg === "CONSULTATION_COMPLETED") return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
+        if (msg === "DUPLICATE_CASE_NUMBER") {
+          return res.status(400).json({ error: "تعذّر توليد رقم قضية فريد، يرجى المحاولة مرة أخرى" });
+        }
+        if (msg === "CASE_NUMBER_EXISTS") {
+          return res.status(400).json({ error: "رقم القضية المُدخل مستخدم مسبقاً، يرجى استخدام رقم آخر" });
+        }
+        if (msg === "CASE_INSERT_FAILED" || msg === "CONSULTATION_UPDATE_FAILED") {
+          // Transaction rolled back — neither row persisted.
+          return res.status(500).json({ error: "فشل التحويل، تم التراجع عن جميع التغييرات" });
+        }
+        throw e;
+      }
+    } catch (error: any) {
+      console.error("[convert-to-case] error:", error);
+      res.status(500).json({ error: error.message || "فشل تحويل الاستشارة" });
+    }
+  });
+
+  // POST /api/consultations/:id/extend-delivery
+  // Body: { newExpectedDeliveryDate: ISO string, reason: string }.
+  // Inserts an audit row in consultation_delivery_extensions and updates
+  // consultations.expectedDeliveryDate in a single DB transaction.
+  // Allowed roles (Phase-5): department_head (own dept), branch_manager.
+  app.post("/api/consultations/:id/extend-delivery", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      // Role gate. branch_manager is global; department_head is scoped to
+      // their own department, mirroring assign / early-close.
+      if (reqUser.role === "branch_manager") {
+        // ok
+      } else if (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) {
+        // ok
+      } else {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتمديد التسليم" });
+      }
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+
+      const parsed = extendConsultationDeliverySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
+      }
+
+      const newDate = new Date(parsed.data.newExpectedDeliveryDate);
+      if (Number.isNaN(newDate.getTime())) {
+        return res.status(400).json({ error: "تاريخ التسليم الجديد غير صحيح" });
+      }
+
+      try {
+        const reasonTrimmed = parsed.data.reason.trim();
+        const oldDateIso = consultation.expectedDeliveryDate || null;
+        const newDateIso = newDate.toISOString();
+        const fmtDate = (iso: string | null) => iso ? iso.slice(0, 10) : "—";
+        const description = `تم تمديد تاريخ التسليم من ${fmtDate(oldDateIso)} إلى ${fmtDate(newDateIso)} — ${reasonTrimmed}`;
+
+        const result = await storage.extendConsultationDelivery(
+          consultation.id,
+          { newExpectedDeliveryDate: newDate, reason: reasonTrimmed },
+          reqUser.id,
+          {
+            description,
+            metadata: { oldDate: oldDateIso, newDate: newDateIso, reason: reasonTrimmed },
+          },
+        );
+        res.status(201).json(result);
+      } catch (e: any) {
+        const msg = e?.message || "";
+        if (msg === "CONSULTATION_NOT_FOUND") return res.status(404).json({ error: "الاستشارة غير موجودة" });
+        if (msg === "CONSULTATION_NOT_ACTIVE") return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+        if (msg === "EXTENSION_NOT_FORWARD") {
+          return res.status(400).json({ error: "تاريخ التسليم الجديد يجب أن يكون بعد التاريخ الحالي" });
+        }
+        if (msg === "CONSULTATION_UPDATE_FAILED") {
+          return res.status(500).json({ error: "فشل تمديد التسليم، تم التراجع عن جميع التغييرات" });
+        }
+        throw e;
+      }
+    } catch (error: any) {
+      console.error("[extend-delivery] error:", error);
+      res.status(500).json({ error: error.message || "فشل تمديد التسليم" });
+    }
+  });
+
+  // GET /api/consultations/:id/delivery-extensions
+  // Returns the chronological list of expectedDeliveryDate extensions
+  // for a consultation. Auth/visibility piggybacks off canModifyConsultation
+  // — anyone allowed to view the consultation can see its history.
+  app.get("/api/consultations/:id/delivery-extensions", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (!canModifyConsultation(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
+      }
+
+      const rows = await storage.getConsultationDeliveryExtensions(consultation.id);
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // GET /api/consultations/:id/activities (Phase-6)
+  // Returns the chronological activity log for a consultation, newest
+  // first. Visibility piggybacks on canModifyConsultation — anyone
+  // allowed to view the consultation can read its log. Inserts happen
+  // server-side only inside the workflow handlers, so this endpoint is
+  // read-only.
+  app.get("/api/consultations/:id/activities", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (!canModifyConsultation(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
+      }
+
+      const rows = await storage.getConsultationActivities(consultation.id);
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // ==================== Phase-8: Pause / Unpause (consultations + cases + memos) ====================
+  // Allowed roles for pause + unpause across all 3 entities:
+  //   - branch_manager       (always)
+  //   - admin_support        (always)
+  //   - department_head      (only when entity is in own department)
+  //   - assigned lawyer      (only when entity.assignedTo / primary /
+  //                           responsible / assignedLawyers === user.id)
+
+  // POST /api/consultations/:id/pause
+  // Body: { reason }. Sets status="paused", fills pause_* columns,
+  // inserts a "paused" activity-log row in the same DB transaction.
+  app.post("/api/consultations/:id/pause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      // Permission gate (narrower than canModifyConsultation — no
+      // cases_review_head / consultations_review_head per spec).
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        consultation.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه الاستشارة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "لا يمكن تعليق استشارة ليست نشطة" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+
+      const updated = await storage.pauseConsultation(consultation.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تعليق الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/pause] error:", error);
+      res.status(500).json({ error: error.message || "فشل تعليق الاستشارة" });
+    }
+  });
+
+  // POST /api/consultations/:id/unpause
+  // Body: { notes? }. Clears pause_* columns and flips status back to
+  // "active". Stage stays where it was. Notes are optional and recorded
+  // on the activity-log entry when present.
+  app.post("/api/consultations/:id/unpause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        consultation.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه الاستشارة" });
+
+      if (consultation.status !== "paused") {
+        return res.status(400).json({ error: "هذه الاستشارة ليست معلّقة" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.unpauseConsultation(consultation.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/unpause] error:", error);
+      res.status(500).json({ error: error.message || "فشل إلغاء التعليق" });
+    }
+  });
+
+  // POST /api/cases/:id/pause
+  // Body: { reason }. Sets pause_* columns; status (workflow stage) is
+  // intentionally left alone — pause is detected via paused_at IS NOT
+  // NULL on cases. Inserts a "paused" case_activity_log row.
+  app.post("/api/cases/:id/pause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      // Cases "assigned lawyer" = primary OR responsible OR member of
+      // assignedLawyers array.
+      const isAssignedLawyer =
+        lawCase.primaryLawyerId === reqUser.id ||
+        lawCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        isAssignedLawyer;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه القضية" });
+
+      if (lawCase.pausedAt) {
+        return res.status(400).json({ error: "هذه القضية معلّقة بالفعل" });
+      }
+      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+        return res.status(400).json({ error: "لا يمكن تعليق قضية مغلقة أو مؤرشفة" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = performer?.name || reqUser.id;
+      const updated = await storage.pauseCase(lawCase.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تعليق القضية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/pause] error:", error);
+      res.status(500).json({ error: error.message || "فشل تعليق القضية" });
+    }
+  });
+
+  // POST /api/cases/:id/unpause
+  // Body: { notes? }. Clears pause_* columns. Stage untouched.
+  app.post("/api/cases/:id/unpause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const isAssignedLawyer =
+        lawCase.primaryLawyerId === reqUser.id ||
+        lawCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        isAssignedLawyer;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه القضية" });
+
+      if (!lawCase.pausedAt) {
+        return res.status(400).json({ error: "هذه القضية ليست معلّقة" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = performer?.name || reqUser.id;
+      const updated = await storage.unpauseCase(lawCase.id, {
+        notes,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/unpause] error:", error);
+      res.status(500).json({ error: error.message || "فشل إلغاء التعليق" });
+    }
+  });
+
+  // POST /api/memos/:id/pause
+  // Body: { reason }. Sets pause_* columns on the memo. Memo status
+  // (workflow state) is left alone; pause is detected via paused_at IS
+  // NOT NULL. department_head check uses the parent case's departmentId
+  // because memos don't carry departmentId directly.
+  app.post("/api/memos/:id/pause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      // Department-scope check needs the parent case for dept_head.
+      const parentCase = reqUser.role === "department_head"
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
+        memo.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه المذكرة" });
+
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "هذه المذكرة معلّقة بالفعل" });
+      }
+      // Pausing a memo in a terminal status doesn't make sense — once
+      // approved/submitted/cancelled there's nothing to halt.
+      const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
+      if (TERMINAL_MEMO_STATUSES.has(memo.status)) {
+        return res.status(400).json({ error: "لا يمكن تعليق مذكرة في حالة نهائية" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+
+      const updated = await storage.pauseMemo(memo.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تعليق المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/pause] error:", error);
+      res.status(500).json({ error: error.message || "فشل تعليق المذكرة" });
+    }
+  });
+
+  // POST /api/memos/:id/unpause
+  // Body: { notes? }. Clears pause_* columns.
+  app.post("/api/memos/:id/unpause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      const parentCase = reqUser.role === "department_head"
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
+        memo.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه المذكرة" });
+
+      if (!memo.pausedAt) {
+        return res.status(400).json({ error: "هذه المذكرة ليست معلّقة" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.unpauseMemo(memo.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/unpause] error:", error);
+      res.status(500).json({ error: error.message || "فشل إلغاء التعليق" });
+    }
+  });
+
+  // GET /api/memos/:id/activities
+  // Returns the chronological activity log for a memo. Visibility gate
+  // mirrors the memo edit gate (assignee / case primary / dept head /
+  // any role with canChangeMemoStatus or canReviewMemos).
+  app.get("/api/memos/:id/activities", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      // Visibility — anyone who can act on the memo can read its log.
+      const parentCase = await storage.getCaseById(memo.caseId);
+      const isAssigned = memo.assignedTo === reqUser.id;
+      const isCaseLawyer = !!parentCase && (
+        parentCase.primaryLawyerId === reqUser.id ||
+        parentCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(reqUser.id))
+      );
+      const isDeptHead = reqUser.role === "department_head"
+        && !!parentCase && parentCase.departmentId === reqUser.departmentId;
+      const isAdmin = ["branch_manager", "admin_support", "cases_review_head"].includes(reqUser.role);
+      if (!(isAssigned || isCaseLawyer || isDeptHead || isAdmin)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه المذكرة" });
+      }
+
+      const rows = await storage.getMemoActivities(memo.id);
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // ==================== Phase-8: Await-completion / Resume / Skip ====================
+  // Same permission gate as pause/unpause (branch_manager, admin_support,
+  // department_head own dept, assigned lawyer). The await endpoint parks
+  // the entity on a "missing data" detour: saves current_stage, sets
+  // current_stage to the entity's pending-completion stage value, flips
+  // awaiting_completion=true. Resume restores saved_stage. Skip is the
+  // explicit "no upload needed, jump to STUDY" action available ONLY
+  // from PENDING_COMPLETION when NOT in awaiting mode (consultations
+  // only — cases use the existing /skip-data-completion route).
+
+  // POST /api/consultations/:id/await-completion
+  // Body: { reason }. Sets saved_stage = current_stage, current_stage =
+  // RECEIVED_PENDING_COMPLETION, awaiting_completion = true.
+  app.post("/api/consultations/:id/await-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        consultation.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      if (consultation.awaitingCompletion) {
+        return res.status(400).json({ error: "الاستشارة بالفعل بانتظار استكمال المرفقات والبيانات" });
+      }
+      // Tautology guard: parking on the same stage you're already in is
+      // a no-op and would corrupt saved_stage on resume.
+      if (consultation.currentStage === ConsultationStage.RECEIVED_PENDING_COMPLETION) {
+        return res.status(400).json({ error: "الاستشارة بالفعل في مرحلة الاستكمال" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
+
+      const updated = await storage.awaitConsultationCompletion(consultation.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/await-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/consultations/:id/resume-from-completion
+  // Body: { notes? }. Restores current_stage = saved_stage, clears
+  // saved_stage, awaiting_completion = false.
+  app.post("/api/consultations/:id/resume-from-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        consultation.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
+
+      if (!consultation.awaitingCompletion) {
+        return res.status(400).json({ error: "الاستشارة ليست بانتظار استكمال المرفقات والبيانات" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.resumeConsultationFromCompletion(consultation.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/resume-from-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/consultations/:id/skip-completion
+  // The "تجاوز" button on the RECEIVED_PENDING_COMPLETION stage. Same
+  // target as the normal advance to STUDY but logged as
+  // completion_skipped. Available only when NOT in await-completion
+  // mode — awaiting=true rows must use /resume-from-completion instead.
+  app.post("/api/consultations/:id/skip-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        consultation.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز هذه المرحلة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      if (consultation.currentStage !== ConsultationStage.RECEIVED_PENDING_COMPLETION) {
+        return res.status(400).json({ error: "تجاوز الاستكمال متاح فقط من مرحلة الاستكمال" });
+      }
+      if (consultation.awaitingCompletion) {
+        return res.status(400).json({ error: "استخدم العودة من الاستكمال بدلاً من التجاوز" });
+      }
+
+      const updated = await storage.skipConsultationCompletion(consultation.id, {
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/skip-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/cases/:id/await-completion
+  // Body: { reason }. Routes the case INTO "استكمال_البيانات" from any
+  // other stage, recording the leaving stage in saved_stage for resume.
+  app.post("/api/cases/:id/await-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const isAssigned =
+        lawCase.primaryLawyerId === reqUser.id ||
+        lawCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        isAssigned;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
+
+      if (lawCase.pausedAt) {
+        return res.status(400).json({ error: "القضية معلّقة — أزل التعليق أولاً" });
+      }
+      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+        return res.status(400).json({ error: "لا يمكن تغيير حالة قضية مغلقة أو مؤرشفة" });
+      }
+      if (lawCase.awaitingCompletion) {
+        return res.status(400).json({ error: "القضية بالفعل بانتظار استكمال المرفقات والبيانات" });
+      }
+      if (lawCase.currentStage === "استكمال_البيانات") {
+        return res.status(400).json({ error: "القضية بالفعل في مرحلة الاستكمال" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = performer?.name || reqUser.id;
+      const updated = await storage.awaitCaseCompletion(lawCase.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/await-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/cases/:id/resume-from-completion
+  // Body: { notes? }. Restores saved_stage. Validates that saved_stage
+  // is still in the case's classification-specific stage list (cases
+  // have 5 paths depending on caseType + classification — the path can
+  // change if an admin edits caseType/classification/clientRole/memoRequired
+  // mid-await; we reject the resume in that case so the user explicitly
+  // picks a target via the normal stage-edit UI).
+  app.post("/api/cases/:id/resume-from-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const isAssigned =
+        lawCase.primaryLawyerId === reqUser.id ||
+        lawCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        isAssigned;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
+
+      if (!lawCase.awaitingCompletion) {
+        return res.status(400).json({ error: "القضية ليست بانتظار استكمال المرفقات والبيانات" });
+      }
+
+      // Resolve the department name from departmentId — caseType is
+      // free-text and must not drive workflow routing.
+      const dept = (lawCase as any).departmentId
+        ? await storage.getDepartmentById((lawCase as any).departmentId)
+        : null;
+      const validStages = new Set(getStagesForClassification(
+        (lawCase as any).caseClassification,
+        dept?.name,
+        (lawCase as any).clientRole,
+        !!(lawCase as any).memoRequired,
+        !!(lawCase as any).isSettlementCase,
+      ) as string[]);
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = performer?.name || reqUser.id;
+      const result = await storage.resumeCaseFromCompletion(lawCase.id, {
+        notes,
+        performedBy: reqUser.id,
+        performerName,
+        isValidStage: (s) => validStages.has(s),
+      });
+      if (!result.ok) {
+        if (result.reason === "INVALID_SAVED_STAGE") {
+          return res.status(400).json({
+            error: "المرحلة المحفوظة لا تتوافق مع نوع/تصنيف القضية الحالي. اختر المرحلة يدوياً عبر تعديل المرحلة.",
+          });
+        }
+        return res.status(404).json({ error: "القضية غير موجودة" });
+      }
+      res.json(result.lawCase);
+    } catch (error: any) {
+      console.error("[cases/resume-from-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/memos/:id/await-completion
+  // Body: { reason }. Memos don't have a dedicated pending-completion
+  // status; we just flag awaiting_completion=true (saved_stage stores
+  // the memo status as a snapshot). Memo workflow status is unchanged.
+  app.post("/api/memos/:id/await-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      const parentCase = reqUser.role === "department_head"
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
+        memo.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
+
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة معلّقة — أزل التعليق أولاً" });
+      }
+      if (memo.awaitingCompletion) {
+        return res.status(400).json({ error: "المذكرة بالفعل بانتظار استكمال المرفقات والبيانات" });
+      }
+      const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
+      if (TERMINAL_MEMO_STATUSES.has(memo.status)) {
+        return res.status(400).json({ error: "لا يمكن تغيير حالة مذكرة منتهية" });
+      }
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
+
+      const updated = await storage.awaitMemoCompletion(memo.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/await-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/memos/:id/resume-from-completion
+  // Body: { notes? }. Clears awaiting_completion + saved_stage. Memo
+  // status is untouched (it was untouched on entry too).
+  app.post("/api/memos/:id/resume-from-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      const parentCase = reqUser.role === "department_head"
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
+        memo.assignedTo === reqUser.id;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
+
+      if (!memo.awaitingCompletion) {
+        return res.status(400).json({ error: "المذكرة ليست بانتظار استكمال المرفقات والبيانات" });
+      }
+
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.resumeMemoFromCompletion(memo.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/resume-from-completion] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // ==================== Memo review workflow (Phase-9) ====================
+  // Mirrors POST /api/consultations/:id/{advance-stage,return-stage,
+  // internal-review,committee-decision,take-notes-outcome}. Memos use
+  // cases_review_head as the committee chair (memos belong to cases).
+
+  // Body: { targetStage }. Generic forward via validateStageTransition.
+  app.post("/api/memos/:id/advance-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion) {
+        return res.status(400).json({ error: "المذكرة بانتظار استكمال المرفقات والبيانات" });
+      }
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة معلّقة" });
+      }
+      if (!memo.currentStage) {
+        return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
+      }
+
+      const check = validateStageTransition(
+        memo.currentStage,
+        targetStage,
+        reqUser.role,
+        "memo",
+        reqUser,
+        memo,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      // Phase-9.1 — DRAFTING → INTERNAL_REVIEW requires a designated
+      // peer reviewer. Same rules as the cases-side (server/routes.ts
+      // ~1925): take from body, fall back to existing on the memo for
+      // loop-back rounds, validate active + not admin_support + same
+      // dept as the parent case.
+      const updateFields: any = { currentStage: targetStage };
+      const activityMetadata: Record<string, any> = { fromStage: memo.currentStage, toStage: targetStage };
+      if (
+        memo.currentStage === MemoStage.DRAFTING
+        && targetStage === MemoStage.INTERNAL_REVIEW
+      ) {
+        const reviewerId: string | undefined =
+          (typeof req.body?.internalReviewerId === "string" && req.body.internalReviewerId)
+          || (memo.internalReviewerId ?? undefined);
+        if (!reviewerId) {
+          return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
+        }
+        const reviewer = await storage.getUser(reviewerId);
+        if (!reviewer || !reviewer.isActive) {
+          return res.status(400).json({ error: "المراجع الداخلي المختار غير صالح" });
+        }
+        if (reviewer.role === "admin_support" || reviewer.role === "branch_manager") {
+          return res.status(400).json({ error: "لا يمكن اختيار هذا الدور كمراجع داخلي" });
+        }
+        const parentCase = await storage.getCaseById(memo.caseId);
+        if (parentCase && parentCase.departmentId && reviewer.departmentId !== parentCase.departmentId) {
+          return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم القضية" });
+        }
+        if (reviewer.id === reqUser.id) {
+          return res.status(400).json({ error: "لا يمكن اختيار نفسك كمراجع داخلي" });
+        }
+        updateFields.internalReviewerId = reviewerId;
+        activityMetadata.reviewerId = reviewerId;
+        activityMetadata.reviewerName = reviewer.name;
+      }
+
+      const fromLabel = (MemoStageLabels as any)[memo.currentStage] || memo.currentStage;
+      const toLabel = (MemoStageLabels as any)[targetStage] || targetStage;
+      const description = activityMetadata.reviewerName
+        ? `انتقال من ${fromLabel} إلى ${toLabel} — المراجع: ${activityMetadata.reviewerName}`
+        : `انتقال من ${fromLabel} إلى ${toLabel}`;
+      const updated = await storage.updateMemoAndLog(
+        memo.id,
+        updateFields,
+        {
+          activityType: MemoActivityType.STAGE_ADVANCED,
+          description,
+          metadata: activityMetadata,
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل تحديث المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/advance-stage] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { targetStage }. Generic backward — validateStageTransition's
+  // memo rollback block enforces: dept_head/branch_manager → any prior
+  // stage, assigned_lawyer → one step back.
+  app.post("/api/memos/:id/return-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion) {
+        return res.status(400).json({ error: "المذكرة بانتظار استكمال المرفقات والبيانات" });
+      }
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة معلّقة" });
+      }
+      if (!memo.currentStage) {
+        return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
+      }
+
+      const check = validateStageTransition(
+        memo.currentStage,
+        targetStage,
+        reqUser.role,
+        "memo",
+        reqUser,
+        memo,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+
+      const fromLabel = (MemoStageLabels as any)[memo.currentStage] || memo.currentStage;
+      const toLabel = (MemoStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateMemoAndLog(
+        memo.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: MemoActivityType.STAGE_RETURNED,
+          description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: memo.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل تحديث المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/return-stage] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { decision, notes }. Inserts a memo_reviews row, then routes
+  // the stage:
+  //   PASSED      -> COMMITTEE
+  //   NEEDS_NOTES -> DRAFTING
+  // Allowed roles: assigned_lawyer (synthetic) + employee, department_head,
+  // cases_review_head, branch_manager.
+  app.post("/api/memos/:id/internal-review", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بالمراجعة" });
+      }
+      if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة المراجعة الداخلية" });
+      }
+
+      // Phase-9.1 — actor lock. Only the designated peer reviewer or
+      // the branch_manager can record the decision. This is stricter
+      // than the consultations-side internal-review (which is permissive
+      // pending the active_reviewer_id TODO).
+      const isAssignedReviewer =
+        !!memo.internalReviewerId && memo.internalReviewerId === reqUser.id;
+      const isBranchManager = reqUser.role === "branch_manager";
+      if (!isAssignedReviewer && !isBranchManager) {
+        return res.status(403).json({
+          error: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم تسجيل قرار المراجعة الداخلية",
+        });
+      }
+
+      const nextStage = decision === InternalReviewDecision.PASSED
+        ? MemoStage.COMMITTEE
+        : MemoStage.DRAFTING;
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `مراجعة داخلية: ${decision} — ${truncatedNotes}`
+        : `مراجعة داخلية: ${decision}`;
+
+      const result = await storage.recordMemoInternalReview({
+        memoId: memo.id,
+        reviewerId: reqUser.id,
+        decision,
+        notes,
+        nextStage,
+        activity: {
+          description,
+          metadata: {
+            decision,
+            notes,
+            reviewerId: reqUser.id,
+            reviewerName: reqUser.name,
+          },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ review: result.review, memo: result.memo });
+    } catch (error: any) {
+      console.error("[memos/internal-review] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { decision, notes }. Inserts a memo_committee_decisions row,
+  // then routes the stage:
+  //   APPROVED    -> READY
+  //   NEEDS_NOTES -> TAKING_NOTES
+  // Allowed roles: cases_review_head, branch_manager (committee chair
+  // for memos is the cases-side review head).
+  app.post("/api/memos/:id/committee-decision", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      if (!["cases_review_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار اللجنة غير صحيح" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بالقرار" });
+      }
+      if (memo.currentStage !== MemoStage.COMMITTEE) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      const nextStage = decision === CommitteeDecision.APPROVED
+        ? MemoStage.READY
+        : MemoStage.TAKING_NOTES;
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `قرار اللجنة: ${decision} — ${truncatedNotes}`
+        : `قرار اللجنة: ${decision}`;
+
+      const result = await storage.recordMemoCommitteeDecision({
+        memoId: memo.id,
+        decision,
+        notes,
+        decidedBy: reqUser.id,
+        nextStage,
+        activity: {
+          description,
+          metadata: { decision, notes, decidedBy: reqUser.id },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ decision: result.decision, memo: result.memo });
+    } catch (error: any) {
+      console.error("[memos/committee-decision] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // Body: { outcome, notes }. Inserts a memo_note_outcomes row. ALL
+  // outcomes (DONE | NOT_DONE | PARTIAL) advance to READY — the outcome
+  // is recorded for audit only, not used for routing. Allowed roles:
+  // assigned_lawyer (synthetic), department_head, branch_manager.
+  app.post("/api/memos/:id/take-notes-outcome", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const outcome = String(req.body?.outcome || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(NoteOutcome) as string[]).includes(outcome);
+      if (!valid) return res.status(400).json({ error: "نتيجة غير صحيحة" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بتسجيل النتيجة" });
+      }
+      if (memo.currentStage !== MemoStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة الأخذ بالملاحظات" });
+      }
+
+      const isLawyer = !!memo.assignedTo && memo.assignedTo === reqUser.id;
+      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      if (!isLawyer && !isHead) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
+      }
+
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `نتيجة الأخذ بالملاحظات: ${outcome} — ${truncatedNotes}`
+        : `نتيجة الأخذ بالملاحظات: ${outcome}`;
+
+      const result = await storage.recordMemoNoteOutcome({
+        memoId: memo.id,
+        outcome,
+        notes,
+        recordedBy: reqUser.id,
+        nextStage: MemoStage.READY,
+        activity: {
+          description,
+          metadata: { outcome, notes },
+          performedBy: reqUser.id,
+        },
+      });
+      res.json({ outcome: result.outcome, memo: result.memo });
+    } catch (error: any) {
+      console.error("[memos/take-notes-outcome] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/memos/:id/cancel
+  // Body: { reason }. Cancels the memo (sets status='ملغاة') with a
+  // required reason. Mirrors the pause/await dialog pattern: reason is
+  // captured on the row AND in memo_activity_log so the timeline
+  // surfaces who/when. Used by the FE "لا يحتاج مذكرة" flow on the
+  // memos page; the legacy PATCH-based cancel still works for direct
+  // edits but doesn't populate cancellationReason.
+  // Allowed roles: assigned_lawyer + admin_support + department_head
+  // (own dept via parent case) + branch_manager + cases_review_head.
+  app.post("/api/memos/:id/cancel", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.status === "ملغاة") {
+        return res.status(400).json({ error: "المذكرة ملغاة بالفعل" });
+      }
+      if (memo.status === "معتمدة" || memo.status === "مرفوعة") {
+        return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
+      }
+
+      const parentCase = reqUser.role === "department_head" && memo.caseId
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && !!parentCase
+        && parentCase.departmentId === reqUser.departmentId;
+      const isAssigned = !!memo.assignedTo && memo.assignedTo === reqUser.id;
+      const allowed =
+        reqUser.role === "branch_manager"
+        || reqUser.role === "cases_review_head"
+        || reqUser.role === "admin_support"
+        || isOwnDeptHead
+        || isAssigned;
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء المذكرة" });
+      }
+
+      const updated = await storage.cancelMemo(memo.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/cancel] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
 
@@ -2555,6 +4428,14 @@ export async function registerRoutes(
 
       const data = hearingResultSchema.parse(req.body);
 
+      // Jurisdiction-declined: court ruling that this case belongs to a
+      // different department. Requires the FE to pass the target dept.
+      if (data.result === HearingResult.JURISDICTION_DECLINED) {
+        if (!data.transferToDepartmentId) {
+          return res.status(400).json({ error: "يجب اختيار القسم المحوّل إليه عند تسجيل عدم الاختصاص" });
+        }
+      }
+
       const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
 
       if (!hearing.caseId && effectiveCaseId) {
@@ -2616,6 +4497,50 @@ export async function registerRoutes(
           lastHearingResult: data.result,
           lastHearingDate: hearing.hearingDate,
         };
+
+        // ==================== PATH H: JURISDICTION DECLINED (عدم_الاختصاص) ====================
+        // Court ruled it lacks jurisdiction → case moves to the target
+        // department. Reset stage to استلام, clear lawyers, keep
+        // classification (still IN_COURT). Log a dedicated
+        // jurisdiction_transferred activity with the source/target dept
+        // ids and the hearing id, then short-circuit — no other PATH
+        // applies.
+        if (data.result === HearingResult.JURISDICTION_DECLINED) {
+          const fromDeptId = existingCase.departmentId || null;
+          const toDeptId = data.transferToDepartmentId!;
+          await storage.updateCase(effectiveCaseId, {
+            ...caseUpdate,
+            departmentId: toDeptId,
+            currentStage: CaseStage.RECEPTION,
+            primaryLawyerId: null,
+            responsibleLawyerId: null,
+            assignedLawyers: [],
+          } as any);
+          if (reqUser) {
+            try {
+              await storage.logCaseActivity({
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "jurisdiction_transferred",
+                title: "تحويل بسبب عدم الاختصاص",
+                previousValue: fromDeptId || "",
+                newValue: toDeptId,
+                details: JSON.stringify({
+                  fromDeptId,
+                  toDeptId,
+                  hearingId,
+                  reason: data.transferReason || null,
+                }),
+                relatedEntityType: "hearing",
+                relatedEntityId: hearingId,
+              });
+            } catch (e) {
+              console.error("[hearing-result/jurisdiction] logCaseActivity failed", e);
+            }
+          }
+          return res.json({ hearing: updatedHearing, createdTasks: [], createdMemos: [] });
+        }
 
         // ==================== PATH A: NEW SESSION (موعد_جديد) ====================
         // Unified handler for what used to be two outcomes (تأجيل + موعد_جديد).
@@ -2878,8 +4803,73 @@ export async function registerRoutes(
 
         // ==================== CONCILIATION: SETTLEMENT FAILED (لم_يتم_الصلح) ====================
         else if (data.result === HearingResult.SETTLEMENT_FAILED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "لم_يتم_الصلح")) {
-          caseUpdate.currentStage = "أغلق_طلب_الصلح";
-          await storage.updateCase(effectiveCaseId, caseUpdate);
+          // Settlement-only cases (started directly at مداولة_الصلح with
+          // isSettlementCase=true) sit on InCourtSettlementStages, which
+          // doesn't include أغلق_طلب_الصلح. The frontend must surface a
+          // choice — close the case or convert it to the regular litigation
+          // path — and forward the answer in afterFailedSettlementChoice.
+          // Non-settlement cases ignore the param and follow the normal
+          // path back to أغلق_طلب_الصلح.
+          const choice = String(data.afterFailedSettlementChoice || "").toLowerCase();
+          if ((existingCase as any).isSettlementCase && choice === "close") {
+            caseUpdate.currentStage = "مقفلة";
+            (caseUpdate as any).status = "مغلق";
+            (caseUpdate as any).closedAt = new Date().toISOString();
+            await storage.updateCase(effectiveCaseId, caseUpdate);
+            await storage.logCaseActivity({
+              caseId: effectiveCaseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: "settlement_failed_closed",
+              title: "لم يتم الصلح — تم إغلاق القضية نهائياً",
+            });
+          } else if ((existingCase as any).isSettlementCase && choice === "continue") {
+            // Move the case off InCourtSettlementStages onto the regular
+            // UnderStudy path so the progress bar resolves correctly. The
+            // current stage أغلق_طلب_الصلح exists in the UnderStudy general
+            // / commercial / labor arrays, and the resolver will pick the
+            // right one from the case's department.
+            const prevClassification = (existingCase as any).caseClassification || "منظورة_بالمحكمة";
+            caseUpdate.currentStage = "أغلق_طلب_الصلح";
+            (caseUpdate as any).isSettlementCase = false;
+            (caseUpdate as any).caseClassification = "قيد_الدراسة";
+            await storage.updateCase(effectiveCaseId, caseUpdate);
+            await storage.logCaseActivity({
+              caseId: effectiveCaseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: "settlement_failed_continued",
+              title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
+              previousValue: prevClassification,
+              newValue: "قيد_الدراسة",
+              details: JSON.stringify({
+                stageFrom: "مداولة_الصلح",
+                stageTo: "أغلق_طلب_الصلح",
+                classificationFrom: prevClassification,
+                classificationTo: "قيد_الدراسة",
+              }),
+            });
+          } else {
+            if ((existingCase as any).isSettlementCase) {
+              console.warn("[hearing-result] settlement-only case at لم_يتم_الصلح missing afterFailedSettlementChoice; defaulting to close", {
+                caseId: effectiveCaseId,
+              });
+              caseUpdate.currentStage = "مقفلة";
+              (caseUpdate as any).status = "مغلق";
+              (caseUpdate as any).closedAt = new Date().toISOString();
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+              await storage.logCaseActivity({
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "settlement_failed_closed",
+                title: "لم يتم الصلح — تم إغلاق القضية نهائياً (تلقائي)",
+              });
+            } else {
+              caseUpdate.currentStage = "أغلق_طلب_الصلح";
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+            }
+          }
         }
 
         // ==================== OTHER / DEFAULT ====================

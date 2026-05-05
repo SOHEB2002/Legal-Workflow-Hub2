@@ -33,6 +33,8 @@ import {
   X,
   MessageSquare,
   UserCog,
+  Pause,
+  Play,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -71,6 +73,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -97,13 +100,14 @@ import {
   CaseStageLabels,
   CaseStagesOrder,
   CaseStage,
+  CaseStatus,
   Priority,
   Department,
   CaseClassification,
   CaseClassificationLabels,
   getStageLabel,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
+import type { LawCase, CaseStageValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
@@ -257,6 +261,186 @@ export default function CasesPage() {
     return msg || "حدث خطأ غير متوقع";
   };
 
+  // Phase-8 — pause permission gate. Mirrors the server check on
+  // /api/cases/:id/pause and /unpause: branch_manager / admin_support /
+  // dept_head (own dept) / assigned lawyer (primary | responsible | in
+  // assignedLawyers array).
+  const canPauseCase = (c: LawCase): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
+    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+  };
+
+  // Early-close permission gate. Mirrors the cases-side equivalent of the
+  // consultations canEarlyClose helper: branch_manager / admin_support
+  // (global), department_head (own dept), assigned lawyer (primary |
+  // responsible | in assignedLawyers). The case must still be active —
+  // currentStage !== "مقفلة" is the cases-side equivalent of the
+  // consultation status === "active" check. The dept-scope check requires
+  // BOTH sides to have a non-empty departmentId — otherwise a dept_head
+  // with a null department would falsely match a case that also has a null
+  // departmentId (legacy rows or "أخرى" assignments).
+  const canEarlyCloseCase = (c: LawCase): boolean => {
+    if (!user) return false;
+    if (c.currentStage === "مقفلة") return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (
+      user.role === "department_head" &&
+      !!user.departmentId &&
+      !!c.departmentId &&
+      c.departmentId === user.departmentId
+    ) {
+      return true;
+    }
+    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
+    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+  };
+
+  const isCasePaused = (c: LawCase): boolean => !!c.pausedAt;
+
+  // Virtual stage grouping. Lifecycle states (paused / closed /
+  // archived) remap to specific stages so the stage filter stays
+  // purely stage-based:
+  //   paused              → استكمال_البيانات (parked, awaiting data)
+  //   مغلق / isArchived   → مقفلة (canonical terminal)
+  //   otherwise           → currentStage
+  // The details-dialog progress bar still uses the literal currentStage
+  // — virtualization is for filtering and the table badge only.
+  const getCaseDisplayStage = (c: LawCase): CaseStageValue => {
+    if (c.pausedAt) return CaseStage.DATA_COMPLETION;
+    if (c.status === CaseStatus.CLOSED || (c as any).isArchived) return CaseStage.CLOSED;
+    return c.currentStage;
+  };
+
+  const openPauseCaseDialog = (c: LawCase) => {
+    setPauseCaseTarget(c);
+    setPauseCaseReason("");
+    setShowPauseCaseDialog(true);
+  };
+  const closePauseCaseDialog = () => {
+    setShowPauseCaseDialog(false);
+    setPauseCaseTarget(null);
+    setPauseCaseReason("");
+  };
+  const openUnpauseCaseDialog = (c: LawCase) => {
+    setUnpauseCaseTarget(c);
+    setUnpauseCaseNotes("");
+    setShowUnpauseCaseDialog(true);
+  };
+  const closeUnpauseCaseDialog = () => {
+    setShowUnpauseCaseDialog(false);
+    setUnpauseCaseTarget(null);
+    setUnpauseCaseNotes("");
+  };
+
+  const handlePauseCase = async () => {
+    if (!pauseCaseTarget) return;
+    const reason = pauseCaseReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
+      return;
+    }
+    setPauseActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/cases/${pauseCaseTarget.id}/pause`, { reason });
+      await refreshCases();
+      toast({ title: "تم تعليق القضية" });
+      closePauseCaseDialog();
+    } catch (err) {
+      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseActionInProgress(false);
+    }
+  };
+
+  const handleUnpauseCase = async () => {
+    if (!unpauseCaseTarget) return;
+    setPauseActionInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = unpauseCaseNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/cases/${unpauseCaseTarget.id}/unpause`, body);
+      await refreshCases();
+      toast({ title: "تم إلغاء تعليق القضية" });
+      closeUnpauseCaseDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseActionInProgress(false);
+    }
+  };
+
+  // Phase-8 — await-completion / resume-from-completion dialog state.
+  // Same permission gate as pause (canPauseCase).
+  const [showAwaitCaseDialog, setShowAwaitCaseDialog] = useState(false);
+  const [awaitCaseTarget, setAwaitCaseTarget] = useState<LawCase | null>(null);
+  const [awaitCaseReason, setAwaitCaseReason] = useState("");
+  const [showResumeCaseDialog, setShowResumeCaseDialog] = useState(false);
+  const [resumeCaseTarget, setResumeCaseTarget] = useState<LawCase | null>(null);
+  const [resumeCaseNotes, setResumeCaseNotes] = useState("");
+
+  const openAwaitCaseDialog = (c: LawCase) => {
+    setAwaitCaseTarget(c);
+    setAwaitCaseReason("");
+    setShowAwaitCaseDialog(true);
+  };
+  const closeAwaitCaseDialog = () => {
+    setShowAwaitCaseDialog(false);
+    setAwaitCaseTarget(null);
+    setAwaitCaseReason("");
+  };
+  const openResumeCaseDialog = (c: LawCase) => {
+    setResumeCaseTarget(c);
+    setResumeCaseNotes("");
+    setShowResumeCaseDialog(true);
+  };
+  const closeResumeCaseDialog = () => {
+    setShowResumeCaseDialog(false);
+    setResumeCaseTarget(null);
+    setResumeCaseNotes("");
+  };
+
+  const handleAwaitCase = async () => {
+    if (!awaitCaseTarget) return;
+    const reason = awaitCaseReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل السبب", variant: "destructive" });
+      return;
+    }
+    setPauseActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/cases/${awaitCaseTarget.id}/await-completion`, { reason });
+      await refreshCases();
+      toast({ title: "تم الانتقال إلى مرحلة الاستكمال" });
+      closeAwaitCaseDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseActionInProgress(false);
+    }
+  };
+
+  const handleResumeCase = async () => {
+    if (!resumeCaseTarget) return;
+    setPauseActionInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = resumeCaseNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/cases/${resumeCaseTarget.id}/resume-from-completion`, body);
+      await refreshCases();
+      toast({ title: "تم العودة من الاستكمال" });
+      closeResumeCaseDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseActionInProgress(false);
+    }
+  };
+
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
@@ -268,11 +452,31 @@ export default function CasesPage() {
     refreshCases();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Cross-module deep-link: /cases?openCase=<id> opens the detail dialog
+  // for that case. Used by the "اذهب للقضية" link on the consultations
+  // detail dialog after a convert-to-case. Read once on mount; the
+  // pending id is resolved by the second effect below once cases load.
+  // Param is stripped from the URL so a refresh doesn't re-open the dialog.
+  const [pendingOpenCaseId, setPendingOpenCaseId] = useState<string | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const s = params.get("status");
     if (s === "pending_review") setStatusFilter(CaseStage.REVIEW_COMMITTEE);
     else if (s === "ready") setStatusFilter(CaseStage.READY_TO_SUBMIT);
+    // Phase-9.3 — dashboard pending-review deep-link can also scope by
+    // dept (?dept=<id>) or assigned lawyer (?assignedTo=<id>) so the
+    // page contents match the role-filtered count on the dashboard.
+    const dept = params.get("dept");
+    if (dept) setDeptFilter(dept);
+    const assignedTo = params.get("assignedTo");
+    if (assignedTo) setLawyerFilter(assignedTo);
+    const openCaseId = params.get("openCase");
+    if (openCaseId) {
+      setPendingOpenCaseId(openCaseId);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("openCase");
+      window.history.replaceState({}, "", url);
+    }
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -282,7 +486,51 @@ export default function CasesPage() {
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  // Phase-8 — pause / unpause dialog state. Mirrors the consultations
+  // page; same pattern (required reason / optional notes).
+  const [showPauseCaseDialog, setShowPauseCaseDialog] = useState(false);
+  const [pauseCaseTarget, setPauseCaseTarget] = useState<LawCase | null>(null);
+  const [pauseCaseReason, setPauseCaseReason] = useState("");
+  const [showUnpauseCaseDialog, setShowUnpauseCaseDialog] = useState(false);
+  const [unpauseCaseTarget, setUnpauseCaseTarget] = useState<LawCase | null>(null);
+  const [unpauseCaseNotes, setUnpauseCaseNotes] = useState("");
+  const [pauseActionInProgress, setPauseActionInProgress] = useState(false);
   const selectedCase = selectedCaseId ? getCaseById(selectedCaseId) || null : null;
+  // Phase-8 — surface the await reason / who / when in the awaiting
+  // banner. The data lives only in case_activity_log (not on the case
+  // row itself, unlike pauseReason), so we fetch the log when the
+  // dialog opens for an awaiting case and pick the latest
+  // await_completion entry.
+  const [awaitInfo, setAwaitInfo] = useState<{ reason: string; userName: string; createdAt: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!showDetailsDialog || !selectedCase?.id || !selectedCase.awaitingCompletion) {
+      setAwaitInfo(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/cases/${selectedCase.id}/activity`);
+        const json = await res.json();
+        const rows: any[] = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+        const latest = rows
+          .filter((r) => r.actionType === "await_completion")
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+        if (!cancelled && latest) {
+          setAwaitInfo({
+            reason: latest.details || "",
+            userName: latest.userName || "",
+            createdAt: latest.createdAt || "",
+          });
+        } else if (!cancelled) {
+          setAwaitInfo(null);
+        }
+      } catch {
+        if (!cancelled) setAwaitInfo(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showDetailsDialog, selectedCase?.id, selectedCase?.awaitingCompletion]);
   const [rejectNotes, setRejectNotes] = useState("");
   const [newComment, setNewComment] = useState("");
   const [activeTab, setActiveTab] = useState("info");
@@ -573,34 +821,39 @@ export default function CasesPage() {
       computedSentToContext: computedClientRole,
       isDefendantSelection: formData.clientRole === "مدعى_عليه",
     });
-    await addCase({
-      clientId: formData.clientId || "",
-      plaintiffName: formData.plaintiffName || "",
-      caseType: formData.caseType,
-      caseTypeOther: formData.caseTypeOther,
-      departmentId: formData.departmentId,
-      departmentOther: formData.departmentOther,
-      priority: formData.priority,
-      courtName: isPlaintiffNew ? "" : formData.courtName,
-      courtCaseNumber: formData.courtCaseNumber,
-      opponentName: formData.opponentName,
-      caseClassification: formData.caseClassification as CaseClassificationValue,
-      clientRole: formData.caseClassification === CaseClassification.IN_COURT
-        ? (formData.clientRole || "مدعي")
-        : null,
-      previousHearingsCount: formData.previousHearingsCount,
-      currentSituation: formData.currentSituation,
-      responseDeadline: formData.responseDeadline || null,
-      nextHearingDate: isPlaintiffNew ? null : (formData.nextHearingDate || null),
-      nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
-      adminCaseSubType: formData.adminCaseSubType || null,
-      prescriptionDate: formData.prescriptionDate || null,
-      memoRequired: formData.memoRequired,
-      startingStage: formData.caseClassification === CaseClassification.IN_COURT
-        ? formData.startingStage
-        : undefined,
-    } as any, user.id, user.name);
-    
+    try {
+      await addCase({
+        clientId: formData.clientId || "",
+        plaintiffName: formData.plaintiffName || "",
+        caseType: formData.caseType,
+        caseTypeOther: formData.caseTypeOther,
+        departmentId: formData.departmentId,
+        departmentOther: formData.departmentOther,
+        priority: formData.priority,
+        courtName: isPlaintiffNew ? "" : formData.courtName,
+        courtCaseNumber: formData.courtCaseNumber,
+        opponentName: formData.opponentName,
+        caseClassification: formData.caseClassification as CaseClassificationValue,
+        clientRole: formData.caseClassification === CaseClassification.IN_COURT
+          ? (formData.clientRole || "مدعي")
+          : null,
+        previousHearingsCount: formData.previousHearingsCount,
+        currentSituation: formData.currentSituation,
+        responseDeadline: formData.responseDeadline || null,
+        nextHearingDate: isPlaintiffNew ? null : (formData.nextHearingDate || null),
+        nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
+        adminCaseSubType: formData.adminCaseSubType || null,
+        prescriptionDate: formData.prescriptionDate || null,
+        memoRequired: formData.memoRequired,
+        startingStage: formData.caseClassification === CaseClassification.IN_COURT
+          ? formData.startingStage
+          : undefined,
+      } as any, user.id, user.name);
+    } catch (err) {
+      toast({ title: "فشل إنشاء القضية", description: extractApiError(err), variant: "destructive" });
+      return;
+    }
+
     const classLabel = CaseClassificationLabels[formData.caseClassification as CaseClassificationValue] || "";
     toast({ title: `تم إضافة القضية بنجاح (${classLabel})` });
     setShowAddDialog(false);
@@ -665,7 +918,11 @@ export default function CasesPage() {
         (clientName && clientName.toLowerCase().includes(q)) ||
         (c.plaintiffName && c.plaintiffName.toLowerCase().includes(q)) ||
         (c.opponentName && c.opponentName.toLowerCase().includes(q));
-      const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
+      // Stage filter operates on displayStage (virtual grouping) so a
+      // closed/archived case appears under مقفلة and a paused one
+      // under استكمال_البيانات.
+      const displayStage = getCaseDisplayStage(c);
+      const matchesStatus = statusFilter === "all" || displayStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
         c.caseClassification === classificationFilter;
@@ -673,7 +930,7 @@ export default function CasesPage() {
       const matchesAdvPriority =
         advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
       const matchesAdvStage =
-        advFilters.stages.length === 0 || advFilters.stages.includes(c.currentStage as string);
+        advFilters.stages.length === 0 || advFilters.stages.includes(displayStage as string);
       const matchesAdvDept =
         advFilters.depts.length === 0 || advFilters.depts.includes(c.departmentId);
       const matchesAdvClassification =
@@ -745,17 +1002,18 @@ export default function CasesPage() {
   const handleTransferRequest = async () => {
     const caseItem = transferCaseId ? getCaseById(transferCaseId) : null;
     if (!caseItem || !transferData.toDepartmentId || !transferData.reason.trim()) return;
-    const fromDeptName = getDepartmentName(caseItem.departmentId || user?.departmentId || "");
-    const toDeptName = getDepartmentName(transferData.toDepartmentId);
     try {
-      await requestCaseTransfer(
-        caseItem.id, caseItem.caseNumber,
-        fromDeptName, transferData.toDepartmentId, toDeptName,
-        transferData.reason,
-      );
-      toast({ title: "تم إرسال طلب التحويل بنجاح", description: "سيتم إشعارك عند الموافقة أو الرفض" });
-    } catch {
-      toast({ title: "فشل إرسال طلب التحويل", variant: "destructive" });
+      // Direct PATCH triggers the server's isDeptTransfer flow:
+      // resets currentStage to استلام, clears lawyers, emits a
+      // department_transferred activity log entry with the reason.
+      await apiRequest("PATCH", `/api/cases/${caseItem.id}`, {
+        departmentId: transferData.toDepartmentId,
+        transferReason: transferData.reason,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+      toast({ title: "تم تحويل القضية", description: "أُعيدت لمرحلة الاستلام في القسم الجديد" });
+    } catch (e: any) {
+      toast({ title: "فشل تحويل القضية", description: e?.message || "حدث خطأ", variant: "destructive" });
     }
     setShowTransferDialog(false);
     setTransferCaseId(null);
@@ -774,6 +1032,45 @@ export default function CasesPage() {
     fetchComments(caseItem.id);
     addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
   };
+
+  // Resolve a pending /cases?openCase=<id> deep-link once the case
+  // arrives in the loaded list. Runs after refreshCases() resolves on
+  // a cold tab and after subsequent updates that might add the case.
+  useEffect(() => {
+    if (!pendingOpenCaseId) return;
+    const c = cases.find((x) => x.id === pendingOpenCaseId);
+    if (c) {
+      openDetailsDialog(c);
+      setPendingOpenCaseId(null);
+    }
+  }, [pendingOpenCaseId, cases]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Source-consultation lookup for the "أُنشئت من استشارة #X" back-link
+  // on the case detail dialog. Fetched on demand by ID via the existing
+  // GET /api/consultations/:id endpoint — a small per-open round-trip,
+  // chosen over JOINing into /api/cases (would require a server change
+  // and would pay the cost on every list response, not just on open).
+  const [sourceConsultation, setSourceConsultation] = useState<{ id: string; consultationNumber: string } | null>(null);
+  useEffect(() => {
+    const sourceId = selectedCase ? ((selectedCase as any).convertedFromConsultationId as string | null) : null;
+    if (!sourceId) {
+      setSourceConsultation(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/consultations/${sourceId}`);
+        const data = await res.json();
+        if (!cancelled) {
+          setSourceConsultation({ id: data.id, consultationNumber: data.consultationNumber });
+        }
+      } catch {
+        if (!cancelled) setSourceConsultation(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedCase?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openReviewDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
@@ -993,9 +1290,37 @@ export default function CasesPage() {
                   </TableCell>
                   <TableCell className="text-center">
                     <div className="inline-flex items-center gap-1">
-                      <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
-                        {getStageLabel(c.currentStage)}
+                      {/* displayStage groups paused → استكمال_البيانات
+                          and closed/archived → مقفلة so the badge
+                          matches what the stage filter returns. */}
+                      <Badge className={`${getStageColor(getCaseDisplayStage(c))} inline-flex justify-center`}>
+                        {getStageLabel(getCaseDisplayStage(c))}
                       </Badge>
+                      {/* Phase-8 — paused indicator. Distinct amber badge so
+                          it reads as orthogonal to the stage. */}
+                      {isCasePaused(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-paused-${c.id}`}
+                          title={c.pauseReason || "معلّقة"}
+                        >
+                          <Pause className="w-2.5 h-2.5 ml-1" />
+                          معلّقة
+                        </Badge>
+                      )}
+                      {/* Phase-8 — awaiting-completion indicator. */}
+                      {c.awaitingCompletion && !isCasePaused(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-awaiting-case-${c.id}`}
+                          title="بانتظار استكمال البيانات"
+                        >
+                          <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                          بانتظار
+                        </Badge>
+                      )}
                       {(c.currentStage === "قيد_التدقيق_في_تراضي" ||
                         c.currentStage === "قيد_التدقيق_في_ناجز" ||
                         c.currentStage === "قيد_التدقيق_في_معين") &&
@@ -1034,6 +1359,89 @@ export default function CasesPage() {
                       {user?.role === "department_head" && c.currentStage !== "مقفلة" && !(c as any).isArchived && (
                         <Button size="icon" variant="ghost" title="إسناد لمحامي" data-testid={`button-reassign-case-${c.id}`} onClick={() => openReassignCaseDialog(c)}>
                           <UserCog className="w-4 h-4" />
+                        </Button>
+                      )}
+                      {/* Phase-8 — await-completion / resume actions. Mirror
+                          the pause/unpause pair: same permission gate, same
+                          inline icon style. Hidden when paused (user must
+                          unpause first per server gate) and when already in
+                          استكمال_البيانات stage and not awaiting (tautology
+                          guard mirroring the server). */}
+                      {!isCasePaused(c) && c.awaitingCompletion
+                        ? canPauseCase(c) && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="text-green-600 hover:text-green-700"
+                              title="تم الاستكمال"
+                              data-testid={`button-resume-case-${c.id}`}
+                              onClick={() => openResumeCaseDialog(c)}
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                            </Button>
+                          )
+                        : !isCasePaused(c)
+                          && c.status !== "مغلق"
+                          && !(c as any).isArchived
+                          && c.currentStage !== "استكمال_البيانات"
+                          && canPauseCase(c) && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="text-amber-600 hover:text-amber-700"
+                              title="بانتظار استكمال البيانات"
+                              data-testid={`button-await-case-${c.id}`}
+                              onClick={() => openAwaitCaseDialog(c)}
+                            >
+                              <AlertTriangle className="w-4 h-4" />
+                            </Button>
+                          )}
+                      {/* Phase-8 — pause / unpause action. Pause shows when
+                          not paused, status not closed, not archived, and the
+                          user has permission. Unpause replaces it when paused.
+                          Workflow actions on the case are accessed via the
+                          details dialog, not this row, so we don't need to
+                          gate other inline buttons here. */}
+                      {isCasePaused(c)
+                        ? canPauseCase(c) && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              title="إلغاء التعليق"
+                              data-testid={`button-unpause-case-${c.id}`}
+                              onClick={() => openUnpauseCaseDialog(c)}
+                            >
+                              <Play className="w-4 h-4" />
+                            </Button>
+                          )
+                        : c.status !== "مغلق" && !(c as any).isArchived && canPauseCase(c) && (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="text-amber-600 hover:text-amber-700"
+                              title="تعليق القضية"
+                              data-testid={`button-pause-case-${c.id}`}
+                              onClick={() => openPauseCaseDialog(c)}
+                            >
+                              <Pause className="w-4 h-4" />
+                            </Button>
+                          )}
+                      {/* Early-close inline action — mirrors the consultations
+                          table dropdown's إغلاق مبكر item. Visible to all
+                          spec-allowed roles (canEarlyCloseCase). The dialog
+                          actions tab also has the same button; this row
+                          shortcut means dept_head / lawyer don't need to open
+                          the case dialog and click "الإجراءات" first. */}
+                      {canEarlyCloseCase(c) && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-red-600 hover:text-red-700"
+                          title="إغلاق مبكر"
+                          data-testid={`button-early-close-row-${c.id}`}
+                          onClick={() => { setEarlyCloseCase(c); setShowEarlyCloseDialog(true); }}
+                        >
+                          <XCircle className="w-4 h-4" />
                         </Button>
                       )}
                       {user?.role === "branch_manager" && (
@@ -1487,6 +1895,83 @@ export default function CasesPage() {
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
+              {/* Phase-8 — awaiting-completion banner. Surfaces savedStage
+                  so the user knows where they'll return on resume. */}
+              {selectedCase.awaitingCompletion && !isCasePaused(selectedCase) && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                  data-testid="banner-case-awaiting"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <AlertTriangle className="w-4 h-4" />
+                    هذه القضية بانتظار استكمال البيانات
+                  </div>
+                  {/* Phase-8 — reason / who / when from case_activity_log
+                      (loaded into awaitInfo by the useEffect above). */}
+                  {awaitInfo?.reason && (
+                    <div className="mt-1">
+                      السبب: <BidiText>{awaitInfo.reason}</BidiText>
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-amber-700/80">
+                    {awaitInfo?.userName && (
+                      <>بواسطة <BidiText>{awaitInfo.userName}</BidiText></>
+                    )}
+                    {awaitInfo?.createdAt && (
+                      <>
+                        {awaitInfo.userName ? " — " : ""}
+                        في <LtrInline>{new Date(awaitInfo.createdAt).toISOString().slice(0, 10)}</LtrInline>
+                      </>
+                    )}
+                  </div>
+                  {selectedCase.savedStage && (
+                    <div className="mt-1 text-xs">
+                      ستعود إلى: <BidiText>{getStageLabel(selectedCase.savedStage as any)}</BidiText>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Phase-8 — paused banner. Renders at the top of the details
+                  dialog when the case is paused so reason / who / when is
+                  visible without scrolling. */}
+              {isCasePaused(selectedCase) && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                  data-testid="banner-case-paused"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <Pause className="w-4 h-4" />
+                    هذه القضية معلّقة
+                  </div>
+                  {selectedCase.pauseReason && (
+                    <div className="mt-1">
+                      السبب: <BidiText>{selectedCase.pauseReason}</BidiText>
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-amber-700/80">
+                    {selectedCase.pausedBy && (
+                      <>بواسطة <BidiText>{getLawyerName(selectedCase.pausedBy)}</BidiText></>
+                    )}
+                    {selectedCase.pausedAt && (
+                      <>
+                        {selectedCase.pausedBy ? " — " : ""}
+                        في <LtrInline>{new Date(selectedCase.pausedAt).toISOString().slice(0, 10)}</LtrInline>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+              {sourceConsultation && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary hover-elevate rounded px-2 py-1 -mx-2"
+                  onClick={() => setLocation(`/consultations?openConsultation=${sourceConsultation.id}`)}
+                  data-testid="link-go-to-source-consultation"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  أُنشئت من استشارة <LtrInline>#{sourceConsultation.consultationNumber}</LtrInline>
+                </button>
+              )}
               {selectedCase.caseClassification === CaseClassification.IN_COURT &&
                selectedCase.nextHearingDate &&
                new Date(selectedCase.nextHearingDate) > new Date() && (
@@ -1557,27 +2042,21 @@ export default function CasesPage() {
                   clientRole={(selectedCase as any).clientRole || undefined}
                   memoRequired={!!(selectedCase as any).memoRequired}
                   isSettlementCase={!!(selectedCase as any).isSettlementCase}
-                  caseType={(() => {
-                    // Resolve the department label used to pick the stage
-                    // path. Prefer the case's caseType field when it already
-                    // holds one of the four canonical values, otherwise fall
-                    // back to looking up the department by id. This handles
-                    // legacy rows where caseType stored a sub-type like
-                    // "بيع وتوريد" instead of the department label, which
-                    // was the recurring source of "commercial case shows the
-                    // general path" bugs.
-                    const CANONICAL = ["عام", "تجاري", "عمالي", "إداري"] as const;
-                    const raw = (selectedCase.caseType || "") as string;
-                    if ((CANONICAL as readonly string[]).includes(raw)) {
-                      return raw as CaseTypeValue;
-                    }
-                    const byId = getDepartmentName(selectedCase.departmentId || "");
-                    if ((CANONICAL as readonly string[]).includes(byId)) {
-                      return byId as CaseTypeValue;
-                    }
-                    return "عام" as CaseTypeValue;
-                  })()}
-                  disabled={stageTransitioning}
+                  // Stage selection routes on the case's DEPARTMENT (a stable
+                  // FK to the departments table), not on caseType. caseType
+                  // is free-text user input that often holds a sub-type label
+                  // ("بيع وتوريد" / "نزاع تجاري" / etc.) and must not drive
+                  // workflow routing. The bar has its own defensive fallback
+                  // for cases where this resolves to "غير محدد" or "أخرى".
+                  departmentName={getDepartmentName(selectedCase.departmentId || "")}
+                  // Phase-8 — block all workflow actions while awaiting
+                  // completion or paused. Resume / unpause live in the row
+                  // icon area; the banner above explains the frozen state.
+                  disabled={
+                    stageTransitioning
+                    || selectedCase.awaitingCompletion
+                    || isCasePaused(selectedCase)
+                  }
                   currentUserId={user?.id}
                   caseInternalReviewerId={(selectedCase as any).internalReviewerId || null}
                   isAssignedLawyer={
@@ -1723,7 +2202,7 @@ export default function CasesPage() {
                       try {
                         const success = await skipDataCompletion(selectedCase.id, user.id, user.name, notes);
                         if (success) {
-                          toast({ title: "تم تجاوز استكمال البيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
+                          toast({ title: "تم تجاوز استكمال المرفقات والبيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
                         } else {
                           toast({ title: "تعذّر التجاوز", variant: "destructive" });
                         }
@@ -2670,37 +3149,132 @@ export default function CasesPage() {
                               <CheckCircle className="w-4 h-4 ml-1" />
                               تم الصلح — تحصيل
                             </Button>
-                            <Button
-                              size="sm"
-                              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
-                              disabled={stageTransitioning}
-                              data-testid={`button-settlement-failed-actions-${selectedCase.id}`}
-                              onClick={async () => {
-                                if (!user) return;
-                                setStageTransitioning(true);
-                                try {
-                                  const success = await moveToNextStage(
-                                    selectedCase.id,
-                                    user.id,
-                                    user.name,
-                                    "لم يتم الصلح",
-                                    user.role,
-                                    undefined,
-                                    undefined,
-                                    undefined,
-                                    "أغلق_طلب_الصلح",
-                                  );
-                                  if (success) {
-                                    toast({ title: "تم إغلاق طلب الصلح" });
-                                  }
-                                } finally {
-                                  setStageTransitioning(false);
-                                }
-                              }}
-                            >
-                              <AlertTriangle className="w-4 h-4 ml-1" />
-                              لم يتم الصلح — إغلاق طلب الصلح
-                            </Button>
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  className="flex-1 bg-orange-500 hover:bg-orange-600 text-white"
+                                  disabled={stageTransitioning}
+                                  data-testid={`button-settlement-failed-actions-${selectedCase.id}`}
+                                >
+                                  <AlertTriangle className="w-4 h-4 ml-1" />
+                                  لم يتم الصلح — إغلاق طلب الصلح
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                {(selectedCase as any).isSettlementCase ? (
+                                  <>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>لم يتم الصلح — اختر الإجراء</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        هذه القضية بدأت من مرحلة مداولة الصلح. اختر:
+                                        <br />
+                                        <strong>إغلاق القضية نهائياً</strong> — تُغلق القضية ولا تستكمل في المحكمة.
+                                        <br />
+                                        <strong>استكمال إجراءاتها</strong> — تُحوَّل إلى مسار التقاضي العادي وتنتقل إلى مرحلة "أغلق طلب الصلح".
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter className="gap-2 flex-wrap">
+                                      <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        data-testid={`button-settlement-failed-continue-${selectedCase.id}`}
+                                        className="bg-blue-600 hover:bg-blue-700"
+                                        onClick={async () => {
+                                          if (!user) return;
+                                          setStageTransitioning(true);
+                                          try {
+                                            const success = await moveToNextStage(
+                                              selectedCase.id,
+                                              user.id,
+                                              user.name,
+                                              "لم يتم الصلح — استكمال الإجراءات",
+                                              user.role,
+                                              undefined,
+                                              undefined,
+                                              { isSettlementCase: false },
+                                              "أغلق_طلب_الصلح",
+                                            );
+                                            if (success) {
+                                              toast({ title: "تم تحويل القضية لمسار التقاضي العادي" });
+                                            }
+                                          } finally {
+                                            setStageTransitioning(false);
+                                          }
+                                        }}
+                                      >
+                                        استكمال إجراءاتها
+                                      </AlertDialogAction>
+                                      <AlertDialogAction
+                                        data-testid={`button-settlement-failed-close-${selectedCase.id}`}
+                                        className="bg-red-600 hover:bg-red-700"
+                                        onClick={async () => {
+                                          if (!user) return;
+                                          setStageTransitioning(true);
+                                          try {
+                                            const success = await moveToNextStage(
+                                              selectedCase.id,
+                                              user.id,
+                                              user.name,
+                                              "لم يتم الصلح — إغلاق نهائي",
+                                              user.role,
+                                              undefined,
+                                              undefined,
+                                              undefined,
+                                              "مقفلة",
+                                            );
+                                            if (success) {
+                                              toast({ title: "تم إغلاق القضية" });
+                                            }
+                                          } finally {
+                                            setStageTransitioning(false);
+                                          }
+                                        }}
+                                      >
+                                        إغلاق القضية نهائياً
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </>
+                                ) : (
+                                  <>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف مسار التقاضي في المحكمة.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter className="gap-2">
+                                      <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        onClick={async () => {
+                                          if (!user) return;
+                                          setStageTransitioning(true);
+                                          try {
+                                            const success = await moveToNextStage(
+                                              selectedCase.id,
+                                              user.id,
+                                              user.name,
+                                              "لم يتم الصلح",
+                                              user.role,
+                                              undefined,
+                                              undefined,
+                                              undefined,
+                                              "أغلق_طلب_الصلح",
+                                            );
+                                            if (success) {
+                                              toast({ title: "تم إغلاق طلب الصلح" });
+                                            }
+                                          } finally {
+                                            setStageTransitioning(false);
+                                          }
+                                        }}
+                                      >
+                                        تأكيد
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </>
+                                )}
+                              </AlertDialogContent>
+                            </AlertDialog>
                           </div>
                         </div>
                       )}
@@ -2767,22 +3341,35 @@ export default function CasesPage() {
                         </div>
                       </>
                     )}
-                    {user?.role === "admin_support" && selectedCase.currentStage !== "مقفلة" && (
+                    {canEarlyCloseCase(selectedCase) && (
                       <div className="flex items-center justify-between p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20">
                         <div>
                           <p className="font-medium text-sm text-red-700 dark:text-red-400">إغلاق مبكر</p>
-                          <p className="text-xs text-muted-foreground">إغلاق القضية من أي مرحلة (الدعم الإداري فقط)</p>
+                          <p className="text-xs text-muted-foreground">إغلاق القضية من أي مرحلة مع تحديد السبب</p>
                         </div>
                         <Button size="sm" variant="outline" className="border-red-500 text-red-600 hover:bg-red-50" data-testid={`button-early-close-${selectedCase.id}`} onClick={() => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); }}>
                           <Archive className="w-4 h-4 ml-1" />إغلاق القضية
                         </Button>
                       </div>
                     )}
-                    {isDeptHead && selectedCase.departmentId === user?.departmentId && (
+                    {(() => {
+                      // Transfer is allowed for: assigned_lawyer +
+                      // admin_support + department_head (own dept) +
+                      // branch_manager. Stage no longer matters — the
+                      // server lifted that restriction.
+                      if (!user) return false;
+                      if (user.role === "branch_manager" || user.role === "admin_support") return true;
+                      if (user.role === "department_head" && selectedCase.departmentId === user.departmentId) return true;
+                      const isAssigned =
+                        selectedCase.primaryLawyerId === user.id ||
+                        selectedCase.responsibleLawyerId === user.id ||
+                        (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id));
+                      return isAssigned;
+                    })() && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
                         <div>
-                          <p className="font-medium text-sm">طلب تحويل لقسم آخر</p>
-                          <p className="text-xs text-muted-foreground">تقديم طلب تحويل القضية لقسم مختلف</p>
+                          <p className="font-medium text-sm">تحويل لقسم آخر</p>
+                          <p className="text-xs text-muted-foreground">تحويل القضية لقسم مختلف — تُعاد للاستلام في القسم الجديد</p>
                         </div>
                         <Button size="sm" variant="outline" data-testid={`button-transfer-details-${selectedCase.id}`} onClick={() => { openTransferDialog(selectedCase); }}>
                           <ArrowLeftRight className="w-4 h-4 ml-1" />تحويل
@@ -2800,7 +3387,14 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !(isDeptHead && selectedCase.departmentId === user?.departmentId) && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
+                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(() => {
+                      if (!user) return false;
+                      if (user.role === "branch_manager" || user.role === "admin_support") return true;
+                      if (user.role === "department_head" && selectedCase.departmentId === user.departmentId) return true;
+                      return selectedCase.primaryLawyerId === user.id
+                        || selectedCase.responsibleLawyerId === user.id
+                        || (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id));
+                    })() && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>
@@ -3303,6 +3897,160 @@ export default function CasesPage() {
               data-testid="button-hearing-prompt-add"
             >
               نعم، إضافة جلسة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — await-completion case dialog. Reason required. */}
+      <AlertDialog open={showAwaitCaseDialog} onOpenChange={(open) => { if (!open) closeAwaitCaseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              بانتظار استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستُحفظ المرحلة الحالية وتُنقل القضية مؤقتاً إلى مرحلة "استكمال المرفقات والبيانات".
+              عند اكتمال البيانات استخدم زر "تم الاستكمال" للعودة إلى المرحلة المحفوظة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>السبب <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-case-await-reason"
+              value={awaitCaseReason}
+              onChange={(e) => setAwaitCaseReason(e.target.value)}
+              placeholder="ما هي البيانات أو المرفقات الناقصة؟"
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeAwaitCaseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-await-case"
+              onClick={handleAwaitCase}
+              disabled={pauseActionInProgress || !awaitCaseReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <AlertTriangle className="w-4 h-4 ml-2" />
+              تأكيد
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — resume from completion case dialog. Notes optional.
+          Server validates that saved_stage is still in the case's
+          classification stage list and rejects if path changed. */}
+      <AlertDialog open={showResumeCaseDialog} onOpenChange={(open) => { if (!open) closeResumeCaseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              تم الاستكمال
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود القضية إلى المرحلة المحفوظة قبل دخول مرحلة الاستكمال
+              {resumeCaseTarget?.savedStage && (
+                <>: <strong>{getStageLabel(resumeCaseTarget.savedStage as any)}</strong></>
+              )}
+              .
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-case-resume-notes"
+              value={resumeCaseNotes}
+              onChange={(e) => setResumeCaseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول ما تم استكماله..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeResumeCaseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-resume-case"
+              onClick={handleResumeCase}
+              disabled={pauseActionInProgress}
+            >
+              <CheckCircle className="w-4 h-4 ml-2" />
+              تأكيد العودة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — pause case dialog */}
+      <AlertDialog open={showPauseCaseDialog} onOpenChange={(open) => { if (!open) closePauseCaseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Pause className="w-5 h-5 text-amber-600" />
+              تعليق القضية
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إيقاف العمل على هذه القضية مؤقتاً مع الاحتفاظ بمرحلتها الحالية.
+              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-case-pause-reason"
+              value={pauseCaseReason}
+              onChange={(e) => setPauseCaseReason(e.target.value)}
+              placeholder="اكتب سبب التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closePauseCaseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-pause-case"
+              onClick={handlePauseCase}
+              disabled={pauseActionInProgress || !pauseCaseReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <Pause className="w-4 h-4 ml-2" />
+              تأكيد التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — unpause case dialog */}
+      <AlertDialog open={showUnpauseCaseDialog} onOpenChange={(open) => { if (!open) closeUnpauseCaseDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Play className="w-5 h-5" />
+              إلغاء تعليق القضية
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود القضية للعمل عند نفس مرحلتها قبل التعليق.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-case-unpause-notes"
+              value={unpauseCaseNotes}
+              onChange={(e) => setUnpauseCaseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeUnpauseCaseDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-unpause-case"
+              onClick={handleUnpauseCase}
+              disabled={pauseActionInProgress}
+            >
+              <Play className="w-4 h-4 ml-2" />
+              تأكيد إلغاء التعليق
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

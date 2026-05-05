@@ -55,9 +55,21 @@ import {
   Check,
   ChevronsUpDown,
   UserCog,
+  Pause,
+  Play,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useMemos } from "@/lib/memos-context";
-import { queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -69,13 +81,24 @@ import {
   MemoTypeLabels,
   MemoStatus,
   MemoStatusLabels,
+  MemoStage,
+  MemoStageLabels,
+  MemoActivityType,
+  InternalReviewDecision,
+  CommitteeDecision,
+  NoteOutcome,
   Priority,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
   canDeleteMemos,
 } from "@shared/schema";
-import type { Memo, MemoTypeValue, MemoStatusValue } from "@shared/schema";
+import type {
+  Memo, MemoTypeValue, MemoStatusValue, MemoStageValue,
+  InternalReviewDecisionValue, CommitteeDecisionValue, NoteOutcomeValue,
+} from "@shared/schema";
+import { MemoStagesBar } from "@/components/memo-stages-bar";
+import { ClipboardCheck, FileText } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -84,7 +107,7 @@ import {
   MemosAdvancedFilters,
   EMPTY_MEMOS_ADV_FILTERS,
   countActiveMemosAdvFilters,
-  NON_FINAL_MEMO_STATUSES,
+  isMemoNonFinal,
   type AdvancedMemosFilters,
 } from "@/components/memos-advanced-filters";
 
@@ -124,11 +147,107 @@ function getPriorityBadgeClass(priority: string): string {
   }
 }
 
+// Phase-9 — badge palette for the new MemoStage axis. Mirrors the
+// getStatusBadgeClass color choices but mapped per stage:
+//   استلام            → muted (neutral / new)
+//   تحرير             → blue (active work)
+//   مراجعة_داخلية     → amber (under review)
+//   لجنة_مراجعة       → orange (committee)
+//   الأخذ_بالملاحظات  → red-amber (action needed)
+//   جاهزة_للرفع       → green (ready)
+//   مرفوعة            → emerald (terminal success)
+function getStageBadgeClass(stage: MemoStageValue): string {
+  switch (stage) {
+    case MemoStage.RECEIVED:
+      return "bg-muted text-muted-foreground";
+    case MemoStage.DRAFTING:
+      return "bg-blue-500/20 text-blue-600 border-blue-500/30 dark:text-blue-400";
+    case MemoStage.INTERNAL_REVIEW:
+      return "bg-amber-500/20 text-amber-600 border-amber-500/30 dark:text-amber-400";
+    case MemoStage.COMMITTEE:
+      return "bg-orange-500/20 text-orange-600 border-orange-500/30 dark:text-orange-400";
+    case MemoStage.TAKING_NOTES:
+      return "bg-red-500/20 text-red-600 border-red-500/30 dark:text-red-400";
+    case MemoStage.READY:
+      return "bg-green-500/20 text-green-600 border-green-500/30 dark:text-green-400";
+    case MemoStage.FILED:
+      return "bg-emerald-500/20 text-emerald-600 border-emerald-500/30 dark:text-emerald-400";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+// Virtual stage grouping. Lifecycle states (cancelled / paused) remap
+// to specific stages so the stage filter axis stays purely stage-based:
+//   status='ملغاة' → مرفوعة (terminal — done)
+//   pausedAt set   → تحرير (parked drafting; memos have no "awaiting"
+//                            stage like consultations/cases do)
+//   otherwise      → currentStage (may be null on legacy pre-backfill rows)
+// The details-dialog stages bar still uses the literal currentStage.
+function getMemoDisplayStage(m: Memo): MemoStageValue | null {
+  if (m.status === MemoStatus.CANCELLED) return MemoStage.FILED;
+  if (m.pausedAt) return MemoStage.DRAFTING;
+  return (m.currentStage as MemoStageValue | null) ?? null;
+}
+
 function getDeadlineColor(deadline: string): string {
   const days = differenceInDays(new Date(deadline), new Date());
   if (days < 0) return "text-destructive font-bold";
   if (days < 3) return "text-orange-500 dark:text-orange-400 font-medium";
   return "text-muted-foreground";
+}
+
+// Phase-9 — review-workflow role gates. Mirror the consultations-side
+// canDoInternalReview / canDoCommitteeDecision / canDoTakeNotesOutcome
+// helpers, narrowed for memos: cases_review_head is the committee chair
+// (memos belong to cases). Department head is dept-scoped via the
+// case's departmentId; we compute that from the current cases list.
+function memoIsActionable(memo: Memo): boolean {
+  return !memo.awaitingCompletion && !memo.pausedAt;
+}
+
+function canDoMemoInternalReview(
+  memo: Memo,
+  userRole: string,
+  userId: string,
+): boolean {
+  if (!memoIsActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) return false;
+  // Phase-9.1 — actor lock matches the server gate on
+  // POST /api/memos/:id/internal-review: only the designated peer
+  // reviewer (memo.internalReviewerId) or the branch_manager can
+  // record the decision.
+  if (userRole === "branch_manager") return true;
+  return !!memo.internalReviewerId && memo.internalReviewerId === userId;
+}
+
+function canDoMemoCommitteeDecision(
+  memo: Memo,
+  userRole: string,
+): boolean {
+  if (!memoIsActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.COMMITTEE) return false;
+  return userRole === "cases_review_head" || userRole === "branch_manager";
+}
+
+function canDoMemoTakeNotesOutcome(
+  memo: Memo,
+  userRole: string,
+  userId: string,
+  memoCase: { departmentId?: string | null } | null,
+  userDeptId: string | null,
+): boolean {
+  if (!memoIsActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.TAKING_NOTES) return false;
+  if (
+    userRole === "department_head" &&
+    memoCase &&
+    memoCase.departmentId !== userDeptId
+  ) {
+    return false;
+  }
+  if (userRole === "department_head" || userRole === "branch_manager") return true;
+  return !!memo.assignedTo && memo.assignedTo === userId;
 }
 
 export default function MemosPage() {
@@ -159,13 +278,75 @@ export default function MemosPage() {
   const [caseComboOpen, setCaseComboOpen] = useState(false);
   const [detailMemoId, setDetailMemoId] = useState<string | null>(null);
   const detailMemo = detailMemoId ? memos.find(m => m.id === detailMemoId) || null : null;
+
+  // Phase-9.2 — surface the cancellation reason / who / when in the
+  // detail dialog. The reason lives on memos.cancellation_reason but
+  // the actor + timestamp live in memo_activity_log; we fetch the log
+  // when the dialog opens for a cancelled memo and pick the latest
+  // "cancelled" entry for who/when. User-id is resolved to a name in
+  // the JSX (getUserName isn't in scope here).
+  const [cancelInfo, setCancelInfo] = useState<{ performedBy: string | null; performedAt: string } | null>(null);
+  useEffect(() => {
+    let aborted = false;
+    if (!detailMemo || detailMemo.status !== MemoStatus.CANCELLED) {
+      setCancelInfo(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/memos/${detailMemo.id}/activities`);
+        const json = await res.json();
+        const rows: any[] = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+        const latest = rows
+          .filter((r) => r.activityType === MemoActivityType.CANCELLED)
+          .sort((a, b) => new Date(b.performedAt).getTime() - new Date(a.performedAt).getTime())[0];
+        if (!aborted && latest) {
+          setCancelInfo({
+            performedBy: latest.performedBy ?? null,
+            performedAt: latest.performedAt || "",
+          });
+        } else if (!aborted) {
+          setCancelInfo(null);
+        }
+      } catch {
+        if (!aborted) setCancelInfo(null);
+      }
+    })();
+    return () => { aborted = true; };
+  }, [detailMemo?.id, detailMemo?.status]);
   const [submitting, setSubmitting] = useState(false);
+
+  // Phase-8 — pause / unpause dialog state. Mirrors the consultations
+  // and cases pages.
+  const [showPauseMemoDialog, setShowPauseMemoDialog] = useState(false);
+  const [pauseMemoTarget, setPauseMemoTarget] = useState<Memo | null>(null);
+  const [pauseMemoReason, setPauseMemoReason] = useState("");
+  const [showUnpauseMemoDialog, setShowUnpauseMemoDialog] = useState(false);
+  const [unpauseMemoTarget, setUnpauseMemoTarget] = useState<Memo | null>(null);
+  const [unpauseMemoNotes, setUnpauseMemoNotes] = useState("");
+  const [pauseMemoInProgress, setPauseMemoInProgress] = useState(false);
 
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDept, setFilterDept] = useState<string>("all");
-  const [filterPriority, setFilterPriority] = useState<string>("all");
+  // Phase-9 — quick filter axis switched: was priority, now assigned
+  // lawyer. Priority lives on in advFilters for power users.
+  const [filterAssignedTo, setFilterAssignedTo] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [advFilters, setAdvFilters] = useState<AdvancedMemosFilters>(EMPTY_MEMOS_ADV_FILTERS);
+
+  // Phase-9.3 — dashboard "بانتظار المراجعة" deep-link. Pre-selects the
+  // COMMITTEE stage on the quick filter and (for non-manager roles)
+  // scopes by dept or assigned lawyer so the page contents match the
+  // role-filtered count on the dashboard. Single-shot on mount.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+    if (status === "pending_review") setFilterStatus(MemoStage.COMMITTEE);
+    const dept = params.get("dept");
+    if (dept) setFilterDept(dept);
+    const assignedTo = params.get("assignedTo");
+    if (assignedTo) setFilterAssignedTo(assignedTo);
+  }, []);
 
   const [reviewNotes, setReviewNotes] = useState("");
   const [reassignMemoDialog, setReassignMemoDialog] = useState<Memo | null>(null);
@@ -283,13 +464,40 @@ export default function MemosPage() {
     }
   };
 
-  const handleNoMemoNeeded = async (memo: Memo) => {
-    setSubmitting(true);
+  // Phase-9.2 — "لا يحتاج مذكرة" cancellation dialog state. The button
+  // opens this dialog (instead of cancelling immediately) so the user
+  // captures a required reason, which is persisted on the memo row
+  // (cancellationReason) AND in memo_activity_log via the dedicated
+  // /api/memos/:id/cancel endpoint.
+  const [cancelMemoTarget, setCancelMemoTarget] = useState<Memo | null>(null);
+  const [cancelMemoReason, setCancelMemoReason] = useState("");
+  const [cancelMemoInProgress, setCancelMemoInProgress] = useState(false);
+
+  const openCancelMemoDialog = (memo: Memo) => {
+    setCancelMemoTarget(memo);
+    setCancelMemoReason("");
+  };
+  const closeCancelMemoDialog = () => {
+    setCancelMemoTarget(null);
+    setCancelMemoReason("");
+  };
+
+  const handleConfirmCancelMemo = async () => {
+    if (!cancelMemoTarget) return;
+    const reason = cancelMemoReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب عدم الحاجة للمذكرة", variant: "destructive" });
+      return;
+    }
+    setCancelMemoInProgress(true);
     try {
-      await changeStatus(memo.id, MemoStatus.CANCELLED, {
-        reviewNotes: "لا يحتاج مذكرة",
-      });
-      const relatedCase = cases.find(c => c.id === memo.caseId);
+      await apiRequest("POST", `/api/memos/${cancelMemoTarget.id}/cancel`, { reason });
+      // Mirror the legacy fast-forward of the parent case: if it's a
+      // منظورة_بالمحكمة case still at an early drafting stage, flip
+      // memoRequired off and jump to منظورة. Server doesn't do this on
+      // /cancel since it's a memo-only endpoint; keep it FE-side for
+      // parity with the previous behavior.
+      const relatedCase = cases.find(c => c.id === cancelMemoTarget.caseId);
       if (relatedCase) {
         const update: any = { memoRequired: false };
         const earlyDraftingStages = new Set([
@@ -305,11 +513,13 @@ export default function MemosPage() {
         }
         try { await updateCase(relatedCase.id, update); } catch {}
       }
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
       toast({ title: "تم إنهاء المذكرة - لا يحتاج مذكرة" });
-    } catch (e: any) {
-      toast({ title: "خطأ", description: e.message, variant: "destructive" });
+      closeCancelMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء المذكرة", description: extractApiError(err), variant: "destructive" });
     } finally {
-      setSubmitting(false);
+      setCancelMemoInProgress(false);
     }
   };
 
@@ -339,6 +549,364 @@ export default function MemosPage() {
     if (relatedCase && (relatedCase.primaryLawyerId === user.id || relatedCase.responsibleLawyerId === user.id)) return true;
     if (memo.assignedTo === user.id) return true;
     return false;
+  };
+
+  // Phase-8 — pause permission gate. Mirrors the server check on
+  // /api/memos/:id/pause and /unpause: branch_manager / admin_support /
+  // dept_head (own dept, resolved via parent case) / assigned lawyer.
+  // Memos don't carry departmentId directly, so dept_head needs the
+  // parent case lookup.
+  const canPauseMemo = (memo: Memo): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head") {
+      const parent = cases.find(c => c.id === memo.caseId);
+      return !!parent && parent.departmentId === user.departmentId;
+    }
+    return memo.assignedTo === user.id;
+  };
+
+  const isMemoPaused = (memo: Memo): boolean => !!memo.pausedAt;
+
+  const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
+
+  const extractApiError = (err: unknown): string => {
+    const msg = (err as any)?.message || "";
+    // format from throwIfResNotOk: "400: {"error":"..."}"
+    // No /s flag: target lib doesn't support it; the body is single-line.
+    const match = /^(\d+):\s*([\s\S]+)$/.exec(msg);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[2]);
+        if (parsed?.error) return parsed.error;
+      } catch {}
+    }
+    return msg || "حدث خطأ غير متوقع";
+  };
+
+  const openPauseMemoDialog = (memo: Memo) => {
+    setPauseMemoTarget(memo);
+    setPauseMemoReason("");
+    setShowPauseMemoDialog(true);
+  };
+  const closePauseMemoDialog = () => {
+    setShowPauseMemoDialog(false);
+    setPauseMemoTarget(null);
+    setPauseMemoReason("");
+  };
+  const openUnpauseMemoDialog = (memo: Memo) => {
+    setUnpauseMemoTarget(memo);
+    setUnpauseMemoNotes("");
+    setShowUnpauseMemoDialog(true);
+  };
+  const closeUnpauseMemoDialog = () => {
+    setShowUnpauseMemoDialog(false);
+    setUnpauseMemoTarget(null);
+    setUnpauseMemoNotes("");
+  };
+
+  const handlePauseMemo = async () => {
+    if (!pauseMemoTarget) return;
+    const reason = pauseMemoReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
+      return;
+    }
+    setPauseMemoInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${pauseMemoTarget.id}/pause`, { reason });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تعليق المذكرة" });
+      closePauseMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
+  };
+
+  const handleUnpauseMemo = async () => {
+    if (!unpauseMemoTarget) return;
+    setPauseMemoInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = unpauseMemoNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/memos/${unpauseMemoTarget.id}/unpause`, body);
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم إلغاء تعليق المذكرة" });
+      closeUnpauseMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
+  };
+
+  // Phase-8 — await-completion / resume on memos. Same permission gate
+  // as pause. Memos don't have a stage flow so saved_stage holds the
+  // memo status as a snapshot; resume just clears the flag.
+  const [showAwaitMemoDialog, setShowAwaitMemoDialog] = useState(false);
+  const [awaitMemoTarget, setAwaitMemoTarget] = useState<Memo | null>(null);
+  const [awaitMemoReason, setAwaitMemoReason] = useState("");
+  const [showResumeMemoDialog, setShowResumeMemoDialog] = useState(false);
+  const [resumeMemoTarget, setResumeMemoTarget] = useState<Memo | null>(null);
+  const [resumeMemoNotes, setResumeMemoNotes] = useState("");
+
+  const openAwaitMemoDialog = (memo: Memo) => {
+    setAwaitMemoTarget(memo);
+    setAwaitMemoReason("");
+    setShowAwaitMemoDialog(true);
+  };
+  const closeAwaitMemoDialog = () => {
+    setShowAwaitMemoDialog(false);
+    setAwaitMemoTarget(null);
+    setAwaitMemoReason("");
+  };
+  const openResumeMemoDialog = (memo: Memo) => {
+    setResumeMemoTarget(memo);
+    setResumeMemoNotes("");
+    setShowResumeMemoDialog(true);
+  };
+  const closeResumeMemoDialog = () => {
+    setShowResumeMemoDialog(false);
+    setResumeMemoTarget(null);
+    setResumeMemoNotes("");
+  };
+
+  const handleAwaitMemo = async () => {
+    if (!awaitMemoTarget) return;
+    const reason = awaitMemoReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل السبب", variant: "destructive" });
+      return;
+    }
+    setPauseMemoInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${awaitMemoTarget.id}/await-completion`, { reason });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تعيين المذكرة بانتظار الاستكمال" });
+      closeAwaitMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
+  };
+
+  const handleResumeMemo = async () => {
+    if (!resumeMemoTarget) return;
+    setPauseMemoInProgress(true);
+    try {
+      const body: Record<string, string> = {};
+      const notes = resumeMemoNotes.trim();
+      if (notes) body.notes = notes;
+      await apiRequest("POST", `/api/memos/${resumeMemoTarget.id}/resume-from-completion`, body);
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم العودة من الاستكمال" });
+      closeResumeMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setPauseMemoInProgress(false);
+    }
+  };
+
+  // Phase-9 — review-workflow dialog state. Three dialogs mirror the
+  // consultations side; each has a notes textarea and 2-3 action buttons.
+  const [showInternalReviewDialog, setShowInternalReviewDialog] = useState(false);
+  const [internalReviewMemo, setInternalReviewMemo] = useState<Memo | null>(null);
+  const [internalReviewNotes, setInternalReviewNotes] = useState("");
+
+  const [showCommitteeDialog, setShowCommitteeDialog] = useState(false);
+  const [committeeMemo, setCommitteeMemo] = useState<Memo | null>(null);
+  const [committeeNotes, setCommitteeNotes] = useState("");
+
+  const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
+  const [takeNotesMemo, setTakeNotesMemo] = useState<Memo | null>(null);
+  const [takeNotesNotes, setTakeNotesNotes] = useState("");
+
+  const [reviewActionInProgress, setReviewActionInProgress] = useState(false);
+
+  const openInternalReviewDialog = (m: Memo) => {
+    setInternalReviewMemo(m);
+    setInternalReviewNotes("");
+    setShowInternalReviewDialog(true);
+  };
+  const closeInternalReviewDialog = () => {
+    setShowInternalReviewDialog(false);
+    setInternalReviewMemo(null);
+    setInternalReviewNotes("");
+  };
+  const openCommitteeDialog = (m: Memo) => {
+    setCommitteeMemo(m);
+    setCommitteeNotes("");
+    setShowCommitteeDialog(true);
+  };
+  const closeCommitteeDialog = () => {
+    setShowCommitteeDialog(false);
+    setCommitteeMemo(null);
+    setCommitteeNotes("");
+  };
+  const openTakeNotesDialog = (m: Memo) => {
+    setTakeNotesMemo(m);
+    setTakeNotesNotes("");
+    setShowTakeNotesDialog(true);
+  };
+  const closeTakeNotesDialog = () => {
+    setShowTakeNotesDialog(false);
+    setTakeNotesMemo(null);
+    setTakeNotesNotes("");
+  };
+
+  const handleInternalReview = async (decision: InternalReviewDecisionValue) => {
+    if (!internalReviewMemo) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${internalReviewMemo.id}/internal-review`, {
+        decision,
+        notes: internalReviewNotes,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      const msg = decision === InternalReviewDecision.PASSED
+        ? "تمت المراجعة الداخلية — أُحيلت للجنة"
+        : "تم تسجيل ملاحظات المراجعة الداخلية";
+      toast({ title: msg });
+      closeInternalReviewDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل المراجعة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
+  const handleCommitteeDecision = async (decision: CommitteeDecisionValue) => {
+    if (!committeeMemo) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${committeeMemo.id}/committee-decision`, {
+        decision,
+        notes: committeeNotes,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      const msg = decision === CommitteeDecision.APPROVED
+        ? "تم اعتماد المذكرة — جاهزة للرفع"
+        : "تم إرسال المذكرة للأخذ بالملاحظات";
+      toast({ title: msg });
+      closeCommitteeDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل قرار اللجنة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
+  // Phase-9 — generic stage advance for the linear-path transitions
+  // (RECEIVED → DRAFTING, READY → FILED). DRAFTING → INTERNAL_REVIEW
+  // goes through the dedicated dialog below since it requires a
+  // reviewer selection.
+  const handleAdvanceMemoStage = async (
+    memo: Memo,
+    targetStage: MemoStageValue,
+    extraBody: Record<string, unknown> = {},
+  ) => {
+    setSubmitting(true);
+    try {
+      await apiRequest("POST", `/api/memos/${memo.id}/advance-stage`, { targetStage, ...extraBody });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تحديث المرحلة" });
+    } catch (err) {
+      toast({ title: "فشل تحديث المرحلة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Phase-9.1 — DRAFTING → INTERNAL_REVIEW dialog state. Mirrors the
+  // cases-side internal-reviewer picker (case-progress-bar.tsx). The
+  // dropdown is sourced from users in the same department as the
+  // memo's parent case (computed at render time in the dialog).
+  const [showSendToReviewDialog, setShowSendToReviewDialog] = useState(false);
+  const [sendToReviewMemo, setSendToReviewMemo] = useState<Memo | null>(null);
+  const [sendToReviewReviewerId, setSendToReviewReviewerId] = useState("");
+  const openSendToReviewDialog = (memo: Memo) => {
+    setSendToReviewMemo(memo);
+    // Pre-select the previous reviewer on loop-back rounds so the
+    // user doesn't have to re-pick after يوجد ملاحظات.
+    setSendToReviewReviewerId(memo.internalReviewerId || "");
+    setShowSendToReviewDialog(true);
+  };
+  const closeSendToReviewDialog = () => {
+    setShowSendToReviewDialog(false);
+    setSendToReviewMemo(null);
+    setSendToReviewReviewerId("");
+  };
+  const handleSendToReview = async () => {
+    if (!sendToReviewMemo) return;
+    if (!sendToReviewReviewerId) {
+      toast({ title: "اختر المراجع الداخلي", variant: "destructive" });
+      return;
+    }
+    await handleAdvanceMemoStage(
+      sendToReviewMemo,
+      MemoStage.INTERNAL_REVIEW,
+      { internalReviewerId: sendToReviewReviewerId },
+    );
+    closeSendToReviewDialog();
+  };
+
+  // FE-side gate for the 3 linear-path stage advances. Server still
+  // re-enforces via validateStageTransition; this just decides whether
+  // to render the button. Mirrors the per-stage role lists in
+  // ALLOWED_MEMO_TRANSITIONS (server/routes.ts).
+  const canAdvanceMemoStage = (memo: Memo, targetStage: MemoStageValue): boolean => {
+    if (!user) return false;
+    if (memo.awaitingCompletion || memo.pausedAt) return false;
+    const memoCase = getMemoCase(memo);
+    if (
+      user.role === "department_head" &&
+      memoCase &&
+      memoCase.departmentId !== user.departmentId
+    ) return false;
+    const isLawyer = !!memo.assignedTo && memo.assignedTo === user.id;
+    const isHeadOrManager = user.role === "department_head" || user.role === "branch_manager";
+    const isAdminSupport = user.role === "admin_support";
+    if (memo.currentStage === MemoStage.RECEIVED && targetStage === MemoStage.DRAFTING) {
+      return isLawyer || isHeadOrManager || isAdminSupport;
+    }
+    if (memo.currentStage === MemoStage.DRAFTING && targetStage === MemoStage.INTERNAL_REVIEW) {
+      return isLawyer || isHeadOrManager;
+    }
+    if (memo.currentStage === MemoStage.READY && targetStage === MemoStage.FILED) {
+      return isLawyer || isHeadOrManager || isAdminSupport;
+    }
+    return false;
+  };
+
+  const handleTakeNotesOutcome = async (outcome: NoteOutcomeValue) => {
+    if (!takeNotesMemo) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${takeNotesMemo.id}/take-notes-outcome`, {
+        outcome,
+        notes: takeNotesNotes,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      // All outcomes advance to READY per spec — outcome distinction
+      // is recorded but not reflected in routing.
+      toast({ title: "تم تسجيل النتيجة — المذكرة جاهزة للرفع" });
+      closeTakeNotesDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل النتيجة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
+  // Resolve a memo's parent case so the role-gate helpers can scope
+  // department_head correctly.
+  const getMemoCase = (memo: Memo): { departmentId?: string | null } | null => {
+    return cases.find(c => c.id === memo.caseId) ?? null;
   };
 
   const getUserName = (id: string | null): string => {
@@ -388,11 +956,20 @@ export default function MemosPage() {
     const q = searchQuery.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
     return memos.filter((m) => {
-      // Existing single-select filters (unchanged)
-      if (filterStatus !== "all" && m.status !== filterStatus) return false;
+      // Quick filter operates on displayStage (virtual grouping):
+      // cancelled memos appear under مرفوعة, paused memos under تحرير.
+      // The "ملغاة" option remains as a special status-only filter
+      // (so users who want ONLY cancelled rows can still narrow down).
+      if (filterStatus !== "all") {
+        if (filterStatus === MemoStatus.CANCELLED) {
+          if (m.status !== MemoStatus.CANCELLED) return false;
+        } else {
+          if (getMemoDisplayStage(m) !== filterStatus) return false;
+        }
+      }
       const relatedCase = cases.find(c => c.id === m.caseId);
       if (filterDept !== "all" && !(relatedCase && relatedCase.departmentId === filterDept)) return false;
-      if (filterPriority !== "all" && m.priority !== filterPriority) return false;
+      if (filterAssignedTo !== "all" && m.assignedTo !== filterAssignedTo) return false;
       if (q) {
         const clientName = relatedCase ? getClientName(relatedCase.clientId) : "";
         const hay = [
@@ -411,7 +988,18 @@ export default function MemosPage() {
 
       // Advanced filters (empty = no constraint, all AND'd)
       if (advFilters.memoTypes.length && !advFilters.memoTypes.includes(m.memoType)) return false;
-      if (advFilters.statuses.length && !advFilters.statuses.includes(m.status)) return false;
+      // Same virtual-grouping logic as the quick filter: "ملغاة"
+      // matches strictly by status; other values match against
+      // displayStage (cancelled→مرفوعة, paused→تحرير, else currentStage).
+      if (advFilters.statuses.length) {
+        const ds = getMemoDisplayStage(m);
+        const matched = advFilters.statuses.some((s) =>
+          s === MemoStatus.CANCELLED
+            ? m.status === MemoStatus.CANCELLED
+            : ds === s,
+        );
+        if (!matched) return false;
+      }
       if (advFilters.priorities.length && !advFilters.priorities.includes(m.priority)) return false;
       if (advFilters.depts.length) {
         if (!relatedCase || !advFilters.depts.includes(relatedCase.departmentId)) return false;
@@ -424,16 +1012,18 @@ export default function MemosPage() {
       if (advFilters.deadlineTo && (!m.deadline || m.deadline > advFilters.deadlineTo)) return false;
       if (advFilters.overdueOnly) {
         if (!m.deadline || m.deadline >= today) return false;
-        if (!NON_FINAL_MEMO_STATUSES.has(m.status)) return false;
+        // Phase-9 — three-way "still in motion" check on the new
+        // currentStage axis (cancelled / filed → not overdue).
+        if (!isMemoNonFinal(m)) return false;
       }
       if (advFilters.autoGeneratedOnly && !m.isAutoGenerated) return false;
       return true;
     });
-  }, [memos, cases, filterStatus, filterDept, filterPriority, searchQuery, advFilters]);
+  }, [memos, cases, filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters]);
 
   const MEMO_PAGE_SIZE = 15;
   const [memoPage, setMemoPage] = useState(1);
-  useEffect(() => { setMemoPage(1); }, [filterStatus, filterDept, filterPriority, searchQuery, advFilters]);
+  useEffect(() => { setMemoPage(1); }, [filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters]);
   const memoTotalPages = Math.max(1, Math.ceil(filteredMemos.length / MEMO_PAGE_SIZE));
   const pagedMemos = filteredMemos.slice((memoPage - 1) * MEMO_PAGE_SIZE, memoPage * MEMO_PAGE_SIZE);
 
@@ -492,10 +1082,14 @@ export default function MemosPage() {
                 <SelectValue placeholder="الحالة" />
               </SelectTrigger>
               <SelectContent>
+                {/* Phase-9 — quick filter on the new currentStage axis.
+                    "ملغاة" stays here as a special option that filters
+                    by legacy status (orthogonal lifecycle, not a stage). */}
                 <SelectItem value="all">جميع الحالات</SelectItem>
-                {Object.entries(MemoStatusLabels).map(([value, label]) => (
+                {Object.entries(MemoStageLabels).map(([value, label]) => (
                   <SelectItem key={value} value={value}>{label}</SelectItem>
                 ))}
+                <SelectItem value={MemoStatus.CANCELLED}>{MemoStatusLabels[MemoStatus.CANCELLED]}</SelectItem>
               </SelectContent>
             </Select>
             <Select value={filterDept} onValueChange={setFilterDept}>
@@ -509,16 +1103,26 @@ export default function MemosPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={filterPriority} onValueChange={setFilterPriority}>
-              <SelectTrigger className="w-[140px]" data-testid="select-filter-priority">
-                <SelectValue placeholder="الأولوية" />
+            {/* Phase-9 — replaces the priority quick filter. Same role
+                exclusion as the cases / consultations lawyer pickers.
+                Priority is still available in advanced filters. */}
+            <Select value={filterAssignedTo} onValueChange={setFilterAssignedTo}>
+              <SelectTrigger className="w-[180px]" data-testid="select-filter-assigned-to">
+                <SelectValue placeholder="المحامي المكلف" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">الكل</SelectItem>
-                <SelectItem value="عاجل">عاجل</SelectItem>
-                <SelectItem value="عالي">عالي</SelectItem>
-                <SelectItem value="متوسط">متوسط</SelectItem>
-                <SelectItem value="منخفض">منخفض</SelectItem>
+                <SelectItem value="all">كل المحامين</SelectItem>
+                {users
+                  .filter(u =>
+                    u.isActive
+                    && u.role !== "branch_manager"
+                    && u.role !== "admin_support"
+                    && u.role !== "hr"
+                    && u.role !== "technical_support"
+                  )
+                  .map(u => (
+                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                  ))}
               </SelectContent>
             </Select>
             <MemosAdvancedFilters
@@ -613,9 +1217,64 @@ export default function MemosPage() {
                         </TableCell>
                         <TableCell className="text-center">
                           <div className="flex flex-col items-center gap-1">
-                            <Badge className={getStatusBadgeClass(memo.status)}>
-                              {MemoStatusLabels[memo.status]}
-                            </Badge>
+                            {/* Stage badge uses displayStage (virtual
+                                grouping): cancelled memos show under
+                                مرفوعة + ملغاة pill; paused memos show
+                                under تحرير + معلّقة pill; legacy memos
+                                with currentStage=null still fall back
+                                to the legacy status badge. */}
+                            {(() => {
+                              const ds = getMemoDisplayStage(memo);
+                              if (ds) {
+                                return (
+                                  <Badge className={getStageBadgeClass(ds)}>
+                                    {MemoStageLabels[ds] || ds}
+                                  </Badge>
+                                );
+                              }
+                              return (
+                                <Badge className={getStatusBadgeClass(memo.status)}>
+                                  {MemoStatusLabels[memo.status]}
+                                </Badge>
+                              );
+                            })()}
+                            {/* "ملغاة" lifecycle pill — surfaces the
+                                cancellation while the stage badge
+                                shows the displayStage (مرفوعة). */}
+                            {memo.status === MemoStatus.CANCELLED && (
+                              <Badge
+                                variant="outline"
+                                className="border-destructive/40 bg-destructive/10 text-destructive text-[10px] px-1 py-0"
+                                data-testid={`badge-memo-cancelled-${memo.id}`}
+                              >
+                                {MemoStatusLabels[MemoStatus.CANCELLED]}
+                              </Badge>
+                            )}
+                            {/* Phase-8 — paused indicator. Distinct amber badge
+                                so it reads as orthogonal to memo status. */}
+                            {isMemoPaused(memo) && (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                                data-testid={`badge-memo-paused-${memo.id}`}
+                                title={memo.pauseReason || "معلّق"}
+                              >
+                                <Pause className="w-2.5 h-2.5 ml-1" />
+                                معلّق
+                              </Badge>
+                            )}
+                            {/* Phase-8 — awaiting-completion indicator. */}
+                            {memo.awaitingCompletion && !isMemoPaused(memo) && (
+                              <Badge
+                                variant="outline"
+                                className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                                data-testid={`badge-memo-awaiting-${memo.id}`}
+                                title="بانتظار استكمال البيانات"
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                                بانتظار
+                              </Badge>
+                            )}
                             {memo.hearingId && getHearingById(memo.hearingId)?.opponentResponseRequired && (
                               <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600 dark:text-orange-400 px-1 py-0">
                                 رد خصم
@@ -657,13 +1316,72 @@ export default function MemosPage() {
                                 size="icon"
                                 variant="ghost"
                                 data-testid={`button-no-memo-needed-${memo.id}`}
-                                onClick={() => handleNoMemoNeeded(memo)}
+                                onClick={() => openCancelMemoDialog(memo)}
                                 title="لا يحتاج مذكرة"
                                 className="text-muted-foreground hover:text-destructive"
                               >
                                 <Ban className="w-4 h-4" />
                               </Button>
                             )}
+                            {/* Phase-8 — await-completion / resume action.
+                                Mirrors the pause/unpause pair. Hidden when
+                                paused (server requires unpause first) and
+                                when in a terminal status. */}
+                            {!isMemoPaused(memo) && memo.awaitingCompletion
+                              ? canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-green-600 hover:text-green-700"
+                                    title="تم الاستكمال"
+                                    data-testid={`button-resume-memo-${memo.id}`}
+                                    onClick={() => openResumeMemoDialog(memo)}
+                                  >
+                                    <CheckCircle className="w-4 h-4" />
+                                  </Button>
+                                )
+                              : !isMemoPaused(memo)
+                                && !TERMINAL_MEMO_STATUSES.has(memo.status)
+                                && canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-amber-600 hover:text-amber-700"
+                                    title="بانتظار استكمال البيانات"
+                                    data-testid={`button-await-memo-${memo.id}`}
+                                    onClick={() => openAwaitMemoDialog(memo)}
+                                  >
+                                    <AlertTriangle className="w-4 h-4" />
+                                  </Button>
+                                )}
+                            {/* Phase-8 — pause / unpause action. Pause shown
+                                when not paused, not in a terminal status, and
+                                user has permission. Unpause replaces it
+                                (Play icon) when paused. */}
+                            {isMemoPaused(memo)
+                              ? canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    title="إلغاء التعليق"
+                                    data-testid={`button-unpause-memo-${memo.id}`}
+                                    onClick={() => openUnpauseMemoDialog(memo)}
+                                  >
+                                    <Play className="w-4 h-4" />
+                                  </Button>
+                                )
+                              : !TERMINAL_MEMO_STATUSES.has(memo.status) && canPauseMemo(memo) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-amber-600 hover:text-amber-700"
+                                    title="تعليق المذكرة"
+                                    data-testid={`button-pause-memo-${memo.id}`}
+                                    onClick={() => openPauseMemoDialog(memo)}
+                                  >
+                                    <Pause className="w-4 h-4" />
+                                  </Button>
+                                )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -925,6 +1643,89 @@ export default function MemosPage() {
                 </DialogTitle>
               </DialogHeader>
               <div className="space-y-6">
+                {/* Phase-8 — awaiting-completion banner. Memos don't have a
+                    stage flow; saved_stage holds the memo status as a
+                    snapshot. Surfaces the snapshot so the user knows what
+                    state will be restored on resume. */}
+                {detailMemo.awaitingCompletion && !isMemoPaused(detailMemo) && (
+                  <div
+                    className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                    data-testid="banner-memo-awaiting"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <AlertTriangle className="w-4 h-4" />
+                      هذه المذكرة بانتظار استكمال البيانات
+                    </div>
+                    {detailMemo.savedStage && (
+                      <div className="mt-1 text-xs">
+                        الحالة المحفوظة: <BidiText>{MemoStatusLabels[detailMemo.savedStage as MemoStatusValue] || detailMemo.savedStage}</BidiText>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Phase-8 — paused banner. Renders at the top of the
+                    details dialog so the reason / who / when is visible
+                    without scrolling to the activity log. */}
+                {isMemoPaused(detailMemo) && (
+                  <div
+                    className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700"
+                    data-testid="banner-memo-paused"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Pause className="w-4 h-4" />
+                      هذه المذكرة معلّقة
+                    </div>
+                    {detailMemo.pauseReason && (
+                      <div className="mt-1">
+                        السبب: <BidiText>{detailMemo.pauseReason}</BidiText>
+                      </div>
+                    )}
+                    <div className="mt-1 text-xs text-amber-700/80">
+                      {detailMemo.pausedBy && (
+                        <>بواسطة <BidiText>{getUserName(detailMemo.pausedBy)}</BidiText></>
+                      )}
+                      {detailMemo.pausedAt && (
+                        <>
+                          {detailMemo.pausedBy ? " — " : ""}
+                          في <LtrInline>{new Date(detailMemo.pausedAt).toISOString().slice(0, 10)}</LtrInline>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {/* Phase-9.2 — cancellation banner. Reason is on the
+                    memo row (cancellationReason); actor + timestamp
+                    come from cancelInfo, populated from the latest
+                    "cancelled" memo_activity_log entry. */}
+                {detailMemo.status === MemoStatus.CANCELLED && (
+                  <div
+                    className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                    data-testid="banner-memo-cancelled"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Ban className="w-4 h-4" />
+                      هذه المذكرة ملغاة
+                    </div>
+                    {detailMemo.cancellationReason && (
+                      <div className="mt-1">
+                        سبب الإلغاء: <BidiText>{detailMemo.cancellationReason}</BidiText>
+                      </div>
+                    )}
+                    {(cancelInfo?.performedBy || cancelInfo?.performedAt) && (
+                      <div className="mt-1 text-xs text-destructive/80">
+                        {cancelInfo.performedBy && (
+                          <>بواسطة <BidiText>{getUserName(cancelInfo.performedBy)}</BidiText></>
+                        )}
+                        {cancelInfo.performedAt && (
+                          <>
+                            {cancelInfo.performedBy ? " — " : ""}
+                            في <LtrInline>{new Date(cancelInfo.performedAt).toISOString().slice(0, 10)}</LtrInline>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">النوع</p>
@@ -952,12 +1753,19 @@ export default function MemosPage() {
                       {detailMemo.priority}
                     </Badge>
                   </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">الحالة</p>
-                    <Badge className={`mt-1 ${getStatusBadgeClass(detailMemo.status)}`}>
-                      {MemoStatusLabels[detailMemo.status]}
-                    </Badge>
-                  </div>
+                  {/* Phase-9 — legacy status badge. Hidden once the memo
+                      is on the new currentStage axis; the stages bar
+                      below is the canonical state display. Cancellation
+                      ("ملغاة") still surfaces here for cancelled memos
+                      because cancellation leaves currentStage unchanged. */}
+                  {(!detailMemo.currentStage || detailMemo.status === MemoStatus.CANCELLED) && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">الحالة</p>
+                      <Badge className={`mt-1 ${getStatusBadgeClass(detailMemo.status)}`}>
+                        {MemoStatusLabels[detailMemo.status]}
+                      </Badge>
+                    </div>
+                  )}
                   {detailMemo.returnCount > 0 && (
                     <div>
                       <p className="text-sm text-muted-foreground">عدد الإرجاع</p>
@@ -977,6 +1785,15 @@ export default function MemosPage() {
                     <p className="font-medium">{getUserName(detailMemo.createdBy)}</p>
                   </div>
                 </div>
+
+                {/* Phase-9 — review-workflow stages bar. Hidden for legacy
+                    memos that haven't been migrated yet (currentStage is
+                    null until the backfill runs). */}
+                {detailMemo.currentStage && (
+                  <MemoStagesBar
+                    currentStage={detailMemo.currentStage as MemoStageValue}
+                  />
+                )}
 
                 {detailMemo.description && (
                   <div>
@@ -1001,7 +1818,11 @@ export default function MemosPage() {
                   </div>
                 )}
 
-                {(detailMemo.status === MemoStatus.IN_REVIEW ||
+                {/* Phase-9 — legacy review panel. Driven by the old
+                    MemoStatus enum; the new flow uses the inline
+                    internal-review / committee-decision dialogs below.
+                    Hidden once the memo is on the new currentStage axis. */}
+                {!detailMemo.currentStage && (detailMemo.status === MemoStatus.IN_REVIEW ||
                   detailMemo.status === MemoStatus.APPROVED ||
                   detailMemo.status === MemoStatus.REVISION_REQUIRED ||
                   detailMemo.status === MemoStatus.SUBMITTED) && (
@@ -1058,7 +1879,84 @@ export default function MemosPage() {
                 )}
 
                 <div className="flex flex-wrap gap-2">
-                  {detailMemo.status === MemoStatus.NOT_STARTED && canUserChangeStatus(detailMemo) && (
+                  {/* Phase-9 — review-workflow action buttons. Each opens
+                      a dedicated dialog. Visibility is gated on the
+                      memo's currentStage and the user's role. */}
+                  {user && canDoMemoInternalReview(detailMemo, user.role, user.id) && (
+                    <Button
+                      data-testid={`button-internal-review-${detailMemo.id}`}
+                      onClick={() => openInternalReviewDialog(detailMemo)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      <ClipboardCheck className="w-4 h-4 ml-2" />
+                      المراجعة الداخلية
+                    </Button>
+                  )}
+                  {user && canDoMemoCommitteeDecision(detailMemo, user.role) && (
+                    <Button
+                      data-testid={`button-committee-decision-${detailMemo.id}`}
+                      onClick={() => openCommitteeDialog(detailMemo)}
+                      className="bg-purple-600 hover:bg-purple-700 text-white"
+                    >
+                      <CheckCircle className="w-4 h-4 ml-2" />
+                      قرار اللجنة
+                    </Button>
+                  )}
+                  {user && canDoMemoTakeNotesOutcome(
+                    detailMemo,
+                    user.role,
+                    user.id,
+                    getMemoCase(detailMemo),
+                    user.departmentId,
+                  ) && (
+                    <Button
+                      data-testid={`button-take-notes-outcome-${detailMemo.id}`}
+                      onClick={() => openTakeNotesDialog(detailMemo)}
+                      className="bg-amber-600 hover:bg-amber-700 text-white"
+                    >
+                      <FileText className="w-4 h-4 ml-2" />
+                      نتيجة الأخذ بالملاحظات
+                    </Button>
+                  )}
+                  {/* Phase-9 — stage-driven linear-path advances. Each
+                      button is gated on the memo's currentStage; the
+                      branching transitions (internal-review / committee
+                      / take-notes) live in the dialog buttons above. */}
+                  {detailMemo.currentStage === MemoStage.RECEIVED && canAdvanceMemoStage(detailMemo, MemoStage.DRAFTING) && (
+                    <Button
+                      data-testid="button-memo-advance-to-drafting"
+                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.DRAFTING)}
+                      disabled={submitting}
+                    >
+                      <Clock className="w-4 h-4 ml-2" />
+                      بدء التحرير
+                    </Button>
+                  )}
+                  {detailMemo.currentStage === MemoStage.DRAFTING && canAdvanceMemoStage(detailMemo, MemoStage.INTERNAL_REVIEW) && (
+                    <Button
+                      data-testid="button-memo-advance-to-internal-review"
+                      onClick={() => openSendToReviewDialog(detailMemo)}
+                      disabled={submitting}
+                    >
+                      <AlertTriangle className="w-4 h-4 ml-2" />
+                      إرسال للمراجعة الداخلية
+                    </Button>
+                  )}
+                  {detailMemo.currentStage === MemoStage.READY && canAdvanceMemoStage(detailMemo, MemoStage.FILED) && (
+                    <Button
+                      data-testid="button-memo-advance-to-filed"
+                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.FILED)}
+                      disabled={submitting}
+                      className="bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-700"
+                    >
+                      <CheckCircle className="w-4 h-4 ml-2" />
+                      تم الرفع
+                    </Button>
+                  )}
+
+                  {/* Legacy MemoStatus stage-flow buttons. Hidden once
+                      the memo is on the new currentStage axis. */}
+                  {!detailMemo.currentStage && detailMemo.status === MemoStatus.NOT_STARTED && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-start-drafting"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.DRAFTING, { startedAt: new Date().toISOString() })}
@@ -1068,7 +1966,7 @@ export default function MemosPage() {
                       بدء التحرير
                     </Button>
                   )}
-                  {(detailMemo.status === MemoStatus.DRAFTING || detailMemo.status === MemoStatus.REVISION_REQUIRED) && canUserChangeStatus(detailMemo) && (
+                  {!detailMemo.currentStage && (detailMemo.status === MemoStatus.DRAFTING || detailMemo.status === MemoStatus.REVISION_REQUIRED) && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-send-review"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.IN_REVIEW, { completedAt: new Date().toISOString() })}
@@ -1078,7 +1976,7 @@ export default function MemosPage() {
                       إرسال للمراجعة
                     </Button>
                   )}
-                  {detailMemo.status === MemoStatus.APPROVED && canUserChangeStatus(detailMemo) && (
+                  {!detailMemo.currentStage && detailMemo.status === MemoStatus.APPROVED && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-submit-final"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.SUBMITTED, { submittedAt: new Date().toISOString() })}
@@ -1089,11 +1987,18 @@ export default function MemosPage() {
                       رفع المذكرة
                     </Button>
                   )}
-                  {!["معتمدة", "مرفوعة", "ملغاة"].includes(detailMemo.status) && canUserChangeStatus(detailMemo) && (
+
+                  {/* "لا يحتاج مذكرة" — cancellation is orthogonal and
+                      lives on legacy `status`. Available in both flows
+                      EXCEPT when the new workflow has reached FILED
+                      (terminal) — you can't cancel a filed memo. */}
+                  {!["معتمدة", "مرفوعة", "ملغاة"].includes(detailMemo.status)
+                    && detailMemo.currentStage !== MemoStage.FILED
+                    && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-no-memo-needed-detail"
                       variant="outline"
-                      onClick={() => handleNoMemoNeeded(detailMemo)}
+                      onClick={() => openCancelMemoDialog(detailMemo)}
                       disabled={submitting}
                       className="text-muted-foreground hover:text-destructive hover:border-destructive"
                     >
@@ -1155,6 +2060,460 @@ export default function MemosPage() {
               </div>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Phase-8 — await-completion memo dialog. Reason required. */}
+      <AlertDialog open={showAwaitMemoDialog} onOpenChange={(open) => { if (!open) closeAwaitMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              بانتظار استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستُحفظ حالة المذكرة الحالية كلقطة، وتُوضع المذكرة بانتظار استكمال البيانات.
+              عند اكتمال البيانات استخدم زر "تم الاستكمال" للعودة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>السبب <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-memo-await-reason"
+              value={awaitMemoReason}
+              onChange={(e) => setAwaitMemoReason(e.target.value)}
+              placeholder="ما هي البيانات أو المرفقات الناقصة؟"
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeAwaitMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-await-memo"
+              onClick={handleAwaitMemo}
+              disabled={pauseMemoInProgress || !awaitMemoReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <AlertTriangle className="w-4 h-4 ml-2" />
+              تأكيد
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — resume memo dialog. Notes optional. */}
+      <AlertDialog open={showResumeMemoDialog} onOpenChange={(open) => { if (!open) closeResumeMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              تم الاستكمال
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود المذكرة من حالة الانتظار. الحالة الحالية للمذكرة لن تتغير.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-memo-resume-notes"
+              value={resumeMemoNotes}
+              onChange={(e) => setResumeMemoNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول ما تم استكماله..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeResumeMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-resume-memo"
+              onClick={handleResumeMemo}
+              disabled={pauseMemoInProgress}
+            >
+              <CheckCircle className="w-4 h-4 ml-2" />
+              تأكيد العودة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-9.2 — "لا يحتاج مذكرة" cancellation dialog. Required
+          reason; persisted on memos.cancellation_reason and emitted to
+          memo_activity_log via POST /api/memos/:id/cancel. */}
+      <AlertDialog open={!!cancelMemoTarget} onOpenChange={(open) => { if (!open) closeCancelMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Ban className="w-5 h-5 text-destructive" />
+              لا يحتاج مذكرة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستُلغى المذكرة (status=ملغاة) ولا يمكن التراجع عبر هذه الواجهة.
+              السبب يُسجّل في سجل النشاط وفي بيانات المذكرة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب عدم الحاجة للمذكرة <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-memo-cancel-reason"
+              value={cancelMemoReason}
+              onChange={(e) => setCancelMemoReason(e.target.value)}
+              placeholder="اكتب سبب الإلغاء..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeCancelMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-cancel-memo"
+              onClick={handleConfirmCancelMemo}
+              disabled={cancelMemoInProgress || !cancelMemoReason.trim()}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              <Ban className="w-4 h-4 ml-2" />
+              تأكيد الإلغاء
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — pause memo dialog */}
+      <AlertDialog open={showPauseMemoDialog} onOpenChange={(open) => { if (!open) closePauseMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Pause className="w-5 h-5 text-amber-600" />
+              تعليق المذكرة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إيقاف العمل على هذه المذكرة مؤقتاً. حالة المذكرة الحالية تبقى كما هي.
+              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-memo-pause-reason"
+              value={pauseMemoReason}
+              onChange={(e) => setPauseMemoReason(e.target.value)}
+              placeholder="اكتب سبب التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closePauseMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-pause-memo"
+              onClick={handlePauseMemo}
+              disabled={pauseMemoInProgress || !pauseMemoReason.trim()}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              <Pause className="w-4 h-4 ml-2" />
+              تأكيد التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-8 — unpause memo dialog */}
+      <AlertDialog open={showUnpauseMemoDialog} onOpenChange={(open) => { if (!open) closeUnpauseMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Play className="w-5 h-5" />
+              إلغاء تعليق المذكرة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود المذكرة للعمل عند نفس حالتها قبل التعليق.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-memo-unpause-notes"
+              value={unpauseMemoNotes}
+              onChange={(e) => setUnpauseMemoNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeUnpauseMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-unpause-memo"
+              onClick={handleUnpauseMemo}
+              disabled={pauseMemoInProgress}
+            >
+              <Play className="w-4 h-4 ml-2" />
+              تأكيد إلغاء التعليق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-9.1 — send-to-internal-review dialog. Mirrors the cases
+          internal-reviewer picker. The dropdown is sourced from users
+          in the same department as the memo's parent case, excluding
+          admin_support / branch_manager (universal access) / hr /
+          technical_support / the current user. */}
+      <Dialog
+        open={showSendToReviewDialog}
+        onOpenChange={(open) => { if (!open) closeSendToReviewDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5" />
+              إرسال للمراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              اختر المراجع الداخلي. ستُحال المذكرة إليه ليُسجل قراره
+              (اعتماد / يوجد ملاحظات).
+            </p>
+            <div className="space-y-2">
+              <Label>المراجع الداخلي <span className="text-red-500">*</span></Label>
+              {(() => {
+                const memoCase = sendToReviewMemo ? cases.find(c => c.id === sendToReviewMemo.caseId) : null;
+                const eligibleReviewers = users.filter(u =>
+                  u.isActive
+                  && u.role !== "admin_support"
+                  && u.role !== "branch_manager"
+                  && u.role !== "hr"
+                  && u.role !== "technical_support"
+                  && u.id !== user?.id
+                  && (!memoCase?.departmentId || u.departmentId === memoCase.departmentId)
+                );
+                return (
+                  <>
+                    <select
+                      value={sendToReviewReviewerId}
+                      onChange={(e) => setSendToReviewReviewerId(e.target.value)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      data-testid="select-memo-internal-reviewer"
+                    >
+                      <option value="">-- اختر مراجعاً --</option>
+                      {eligibleReviewers.map(u => (
+                        <option key={u.id} value={u.id}>{u.name}</option>
+                      ))}
+                    </select>
+                    {eligibleReviewers.length === 0 && (
+                      <p className="text-xs text-red-600">لا يوجد مراجعون مؤهلون في قسم القضية</p>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeSendToReviewDialog}
+              data-testid="button-cancel-memo-send-to-review"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-confirm-memo-send-to-review"
+              onClick={handleSendToReview}
+              disabled={submitting || !sendToReviewReviewerId}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              <ClipboardCheck className="w-4 h-4 ml-2" />
+              تأكيد الإرسال
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Phase-9 — internal-review dialog. 2 outcomes: PASSED → COMMITTEE,
+          NEEDS_NOTES → DRAFTING. */}
+      <Dialog
+        open={showInternalReviewDialog}
+        onOpenChange={(open) => { if (!open) closeInternalReviewDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5" />
+              المراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Phase-9.1 — show the designated reviewer so the current
+                user can see whether they're the right person to act
+                (the action buttons below are server-locked to that
+                reviewer or branch_manager). */}
+            {internalReviewMemo?.internalReviewerId && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm" data-testid="memo-internal-reviewer-name">
+                <span className="text-muted-foreground">المراجع الداخلي المعين: </span>
+                <strong>{getUserName(internalReviewMemo.internalReviewerId)}</strong>
+              </div>
+            )}
+            <p className="text-sm text-muted-foreground">
+              اختر نتيجة المراجعة. <strong>اعتماد</strong> ينقل المذكرة إلى لجنة المراجعة،
+              و<strong>يوجد ملاحظات</strong> يعيدها إلى مرحلة التحرير.
+            </p>
+            <div>
+              <Label>الملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-memo-internal-review-notes"
+                value={internalReviewNotes}
+                onChange={(e) => setInternalReviewNotes(e.target.value)}
+                placeholder="ملاحظات المراجع الداخلي..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeInternalReviewDialog}
+              data-testid="button-cancel-memo-internal-review"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-memo-internal-review-needs-notes"
+              onClick={() => handleInternalReview(InternalReviewDecision.NEEDS_NOTES)}
+              disabled={reviewActionInProgress}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              يوجد ملاحظات
+            </Button>
+            <Button
+              data-testid="button-memo-internal-review-passed"
+              onClick={() => handleInternalReview(InternalReviewDecision.PASSED)}
+              disabled={reviewActionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Phase-9 — committee-decision dialog. 2 outcomes: APPROVED → READY,
+          NEEDS_NOTES → TAKING_NOTES. */}
+      <Dialog
+        open={showCommitteeDialog}
+        onOpenChange={(open) => { if (!open) closeCommitteeDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5" />
+              قرار لجنة المراجعة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              <strong>اعتماد</strong> ينقل المذكرة إلى مرحلة "جاهزة للرفع"،
+              و<strong>يوجد ملاحظات</strong> ينقلها إلى "الأخذ بالملاحظات".
+            </p>
+            <div>
+              <Label>ملاحظات اللجنة (اختياري)</Label>
+              <Textarea
+                data-testid="input-memo-committee-notes"
+                value={committeeNotes}
+                onChange={(e) => setCommitteeNotes(e.target.value)}
+                placeholder="ملاحظات اللجنة للمحامي المسؤول..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeCommitteeDialog}
+              data-testid="button-cancel-memo-committee"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-memo-committee-needs-notes"
+              onClick={() => handleCommitteeDecision(CommitteeDecision.NEEDS_NOTES)}
+              disabled={reviewActionInProgress}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              يوجد ملاحظات
+            </Button>
+            <Button
+              data-testid="button-memo-committee-approved"
+              onClick={() => handleCommitteeDecision(CommitteeDecision.APPROVED)}
+              disabled={reviewActionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Phase-9 — take-notes-outcome dialog. 3 outcomes (DONE / NOT_DONE
+          / PARTIAL); all advance to READY per spec. The outcome is
+          recorded for audit only, not used for routing. */}
+      <Dialog
+        open={showTakeNotesDialog}
+        onOpenChange={(open) => { if (!open) closeTakeNotesDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              نتيجة الأخذ بالملاحظات
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              اختر نتيجة معالجة ملاحظات اللجنة. جميع النتائج تنقل المذكرة إلى
+              "جاهزة للرفع"؛ النتيجة تُسجَّل للأرشيف فقط.
+            </p>
+            <div>
+              <Label>الملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-memo-take-notes-notes"
+                value={takeNotesNotes}
+                onChange={(e) => setTakeNotesNotes(e.target.value)}
+                placeholder="ملاحظات حول معالجة ملاحظات اللجنة..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeTakeNotesDialog}
+              data-testid="button-cancel-memo-take-notes"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-memo-take-notes-not-done"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.NOT_DONE)}
+              disabled={reviewActionInProgress}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              لم يتم
+            </Button>
+            <Button
+              data-testid="button-memo-take-notes-partial"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.PARTIAL)}
+              disabled={reviewActionInProgress}
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              جزئياً
+            </Button>
+            <Button
+              data-testid="button-memo-take-notes-done"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.DONE)}
+              disabled={reviewActionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              تم
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

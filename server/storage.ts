@@ -8,15 +8,47 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
-  CaseStatus, CaseStage, CaseClassification,
+  type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
+  type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
+  type ConsultationDeliveryExtension, type ConsultationActivity,
+  type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
+  CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
+  ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
+  ConsultationActivityType, MemoActivityType, type MemoActivity,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
-  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters
+  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
+  consultationStudies, consultationDrafts, consultationReviews,
+  consultationCommitteeDecisions, consultationNoteOutcomes,
+  consultationDeliveryExtensions, consultationActivityLog,
+  memoActivityLog,
+  memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
+
+// Detect a Postgres unique-constraint violation (SQLSTATE 23505) on a
+// specific column. node-postgres surfaces these on the error object as
+// `code === "23505"` plus a `constraint` name (e.g. "law_cases_case_number_unique")
+// and a `detail` line ("Key (case_number)=(...) already exists."). Either
+// signal is enough to confirm the column.
+function isUniqueViolationOn(err: unknown, columnName: string): boolean {
+  const e = err as any;
+  if (!e || e.code !== "23505") return false;
+  const constraint = String(e.constraint || "");
+  const detail = String(e.detail || "");
+  return constraint.includes(columnName) || detail.includes(`(${columnName})`);
+}
+
+function generateCaseNumber(): string {
+  return `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+}
+
+function generateConsultationNumber(): string {
+  return `CON-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+}
 
 export interface IStorage {
   // Users
@@ -146,6 +178,146 @@ export interface IStorage {
   updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined>;
   deleteSavedFilter(id: string): Promise<boolean>;
 
+  // Convert consultation to case (rebuild §3.2.3) — single DB transaction.
+  convertConsultationToCase(
+    consultationId: string,
+    caseFields: Partial<LawCase>,
+    actorId: string,
+    activityCtx?: { targetCaseStage?: string },
+  ): Promise<{ case: LawCase; consultation: Consultation }>;
+
+  // Consultation helper tables (rebuild §3.1.3)
+  createConsultationStudy(data: { consultationId: string; notes: string; createdBy: string }): Promise<ConsultationStudy>;
+  getConsultationStudies(consultationId: string): Promise<ConsultationStudy[]>;
+  createConsultationDraft(data: { consultationId: string; content: string; createdBy: string }): Promise<ConsultationDraft>;
+  getConsultationDrafts(consultationId: string): Promise<ConsultationDraft[]>;
+  createConsultationReview(data: { consultationId: string; reviewerId: string; decision: string; notes: string }): Promise<ConsultationReview>;
+  getConsultationReviews(consultationId: string): Promise<ConsultationReview[]>;
+  getLatestConsultationReview(consultationId: string): Promise<ConsultationReview | undefined>;
+  createConsultationCommitteeDecision(data: { consultationId: string; decision: string; notes: string; decidedBy: string }): Promise<ConsultationCommitteeDecision>;
+  getConsultationCommitteeDecisions(consultationId: string): Promise<ConsultationCommitteeDecision[]>;
+  createConsultationNoteOutcome(data: { consultationId: string; outcome: string; notes: string; recordedBy: string }): Promise<ConsultationNoteOutcome>;
+  getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]>;
+  // Phase-5: extend the consultation's expectedDeliveryDate. Insert + update
+  // run inside one transaction so the audit row and the consultation row
+  // can never get out of sync.
+  extendConsultationDelivery(
+    consultationId: string,
+    data: { newExpectedDeliveryDate: Date; reason: string },
+    extendedBy: string,
+    activity?: { description: string; metadata?: Record<string, any> },
+  ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }>;
+  getConsultationDeliveryExtensions(consultationId: string): Promise<ConsultationDeliveryExtension[]>;
+
+  // Phase-6 — consultation activity log. Inserts always run inside the
+  // SAME DB transaction as the underlying state change (see workflow
+  // handlers in routes.ts) so the log can never get out of sync with
+  // the consultation row. The bare insert helper exists for ad-hoc
+  // logging where transactional bundling isn't required.
+  createConsultationActivity(input: {
+    consultationId: string;
+    activityType: string;
+    description: string;
+    metadata?: Record<string, any>;
+    performedBy: string | null;
+  }): Promise<ConsultationActivity>;
+  getConsultationActivities(consultationId: string): Promise<ConsultationActivity[]>;
+  // Atomic update + log. Used by assign / advance-stage / return-stage /
+  // early-close so the activity row and the consultation update commit
+  // together.
+  updateConsultationAndLog(
+    id: string,
+    data: Partial<Consultation>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Consultation | undefined>;
+  // Phase-8 — pause / unpause + activity log writers across the 3 entities.
+  pauseConsultation(id: string, input: { reason: string; performedBy: string }): Promise<Consultation | undefined>;
+  unpauseConsultation(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
+  pauseCase(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
+  unpauseCase(id: string, input: { notes?: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
+  pauseMemo(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
+  unpauseMemo(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
+  getMemoActivities(memoId: string): Promise<MemoActivity[]>;
+  // Phase-8 — await-completion / resume / skip across the 3 entities.
+  awaitConsultationCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Consultation | undefined>;
+  resumeConsultationFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
+  skipConsultationCompletion(id: string, input: { performedBy: string }): Promise<Consultation | undefined>;
+  awaitCaseCompletion(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
+  resumeCaseFromCompletion(id: string, input: { notes?: string; performedBy: string; performerName: string; isValidStage: (stage: string) => boolean }): Promise<{ ok: true; lawCase: LawCase } | { ok: false; reason: "INVALID_SAVED_STAGE" | "NOT_FOUND" }>;
+  awaitMemoCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
+  resumeMemoFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
+  // Atomic helper-row + stage update + log for the three workflow
+  // endpoints whose route used to issue two separate storage calls.
+  recordConsultationInternalReview(input: {
+    consultationId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: ConsultationReview; consultation: Consultation }>;
+  recordConsultationCommitteeDecision(input: {
+    consultationId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: ConsultationCommitteeDecision; consultation: Consultation }>;
+  recordConsultationNoteOutcome(input: {
+    consultationId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: ConsultationNoteOutcome; consultation: Consultation }>;
+
+  // Phase-9 — memo workflow helpers. Mirror the consultation versions:
+  // updateMemoAndLog is the atomic update + activity log path used by
+  // advance-stage / return-stage; the three record* helpers each insert
+  // a helper-table row, update memos.current_stage, and write an
+  // activity log entry inside one DB transaction.
+  updateMemoAndLog(
+    id: string,
+    data: Partial<Memo>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Memo | undefined>;
+  recordMemoInternalReview(input: {
+    memoId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: MemoReview; memo: Memo }>;
+  recordMemoCommitteeDecision(input: {
+    memoId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: MemoCommitteeDecision; memo: Memo }>;
+  recordMemoNoteOutcome(input: {
+    memoId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: MemoNoteOutcome; memo: Memo }>;
+  getMemoReviews(memoId: string): Promise<MemoReview[]>;
+  getMemoCommitteeDecisions(memoId: string): Promise<MemoCommitteeDecision[]>;
+  getMemoNoteOutcomes(memoId: string): Promise<MemoNoteOutcome[]>;
+  // Phase-9.2 — atomic cancellation. Sets status='ملغاة', writes the
+  // reason to memos.cancellation_reason, and inserts a memo_activity_log
+  // entry in the same transaction.
+  cancelMemo(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined>;
+
   // Initialization
   initializeDefaultData(): Promise<void>;
 }
@@ -249,10 +421,18 @@ function mapDbCase(dbCase: any): LawCase {
     archiveReason: dbCase.archiveReason || null,
     autoArchiveDate: dbCase.autoArchiveDate || null,
     isSettlementCase: dbCase.isSettlementCase ?? false,
+    convertedFromConsultationId: dbCase.convertedFromConsultationId || null,
     createdBy: dbCase.createdBy,
     createdAt: toISOString(dbCase.createdAt),
     updatedAt: toISOString(dbCase.updatedAt),
     closedAt: toISOStringOrNull(dbCase.closedAt),
+    // Phase-8 — pause + await-completion. All nullable / boolean-default
+    // so legacy rows surface as "not paused, not awaiting".
+    pauseReason: dbCase.pauseReason ?? null,
+    pausedBy: dbCase.pausedBy ?? null,
+    pausedAt: toISOStringOrNull(dbCase.pausedAt),
+    awaitingCompletion: dbCase.awaitingCompletion ?? false,
+    savedStage: dbCase.savedStage ?? null,
   };
 }
 
@@ -278,7 +458,21 @@ function mapDbClient(dbClient: any): Client {
   };
 }
 
-// Map DB consultation to interface Consultation
+// Map DB consultation to interface Consultation.
+//
+// Every key in the Consultation interface MUST be present in the returned
+// object — JSON.stringify drops keys whose value is undefined, so a row
+// where Drizzle hands us undefined for a column (e.g. because the running
+// server's compiled schema lacks the column declaration) would silently
+// vanish from the API response and the client would render "—" for
+// stage/status badges with no error to point at.
+//
+// To make that failure mode loud rather than silent: every nullable
+// field below uses `?? null` (NOT `|| null` — we want to preserve "" for
+// text fields that legitimately store empty strings) so the key is
+// always emitted. The two not-null columns (currentStage, status) get
+// explicit fallbacks too as defense in depth even though the table
+// declares them NOT NULL with defaults.
 function mapDbConsultation(dbCon: any): Consultation {
   return {
     id: dbCon.id,
@@ -286,20 +480,49 @@ function mapDbConsultation(dbCon: any): Consultation {
     clientId: dbCon.clientId,
     consultationType: dbCon.consultationType,
     deliveryType: dbCon.deliveryType,
-    status: dbCon.status,
+    currentStage: dbCon.currentStage ?? "استلام",
+    status: dbCon.status ?? "active",
+    closureReason: dbCon.closureReason ?? null,
+    closureReasonOther: dbCon.closureReasonOther ?? null,
     departmentId: dbCon.departmentId,
-    assignedTo: dbCon.assignedTo,
+    assignedTo: dbCon.assignedTo ?? null,
     questionSummary: dbCon.questionSummary,
-    response: dbCon.response || "",
-    convertedToCaseId: dbCon.convertedToCaseId,
-    whatsappGroupLink: dbCon.whatsappGroupLink || "",
-    googleDriveFolderId: dbCon.googleDriveFolderId || "",
-    reviewNotes: dbCon.reviewNotes || "",
-    reviewDecision: dbCon.reviewDecision,
+    response: dbCon.response ?? "",
+    convertedToCaseId: dbCon.convertedToCaseId ?? null,
+    whatsappGroupLink: dbCon.whatsappGroupLink ?? "",
+    googleDriveFolderId: dbCon.googleDriveFolderId ?? "",
+    reviewNotes: dbCon.reviewNotes ?? "",
+    reviewDecision: dbCon.reviewDecision ?? null,
+    // Phase-4 SLA columns. Category falls back to "عادية" so consultations
+    // created before the column existed (and never backfilled) still
+    // present a valid value to the UI; expectedDeliveryDate stays null
+    // when the row predates the migration.
+    category: dbCon.category ?? "عادية",
+    expectedDeliveryDate: toISOStringOrNull(dbCon.expectedDeliveryDate),
     createdBy: dbCon.createdBy,
     createdAt: toISOString(dbCon.createdAt),
     updatedAt: toISOString(dbCon.updatedAt),
     closedAt: toISOStringOrNull(dbCon.closedAt),
+    // Phase-8 — pause + await-completion. All nullable / boolean-default
+    // so legacy rows surface as "not paused, not awaiting".
+    pauseReason: dbCon.pauseReason ?? null,
+    pausedBy: dbCon.pausedBy ?? null,
+    pausedAt: toISOStringOrNull(dbCon.pausedAt),
+    awaitingCompletion: dbCon.awaitingCompletion ?? false,
+    savedStage: dbCon.savedStage ?? null,
+  };
+}
+
+// Map DB consultation_activity_log row to ConsultationActivity (Phase-6).
+function mapDbConsultationActivity(row: any): ConsultationActivity {
+  return {
+    id: row.id,
+    consultationId: row.consultationId,
+    activityType: row.activityType,
+    description: row.description ?? "",
+    metadata: (row.metadata && typeof row.metadata === "object") ? row.metadata : {},
+    performedBy: row.performedBy ?? null,
+    performedAt: toISOString(row.performedAt),
   };
 }
 
@@ -450,6 +673,20 @@ function mapDbMemo(dbMemo: any): Memo {
     reminderSentOverdue: dbMemo.reminderSentOverdue ?? false,
     createdAt: toISOString(dbMemo.createdAt),
     updatedAt: toISOString(dbMemo.updatedAt),
+    // Phase-8 — pause + await-completion. All nullable / boolean-default
+    // so legacy rows surface as "not paused, not awaiting".
+    pauseReason: dbMemo.pauseReason ?? null,
+    pausedBy: dbMemo.pausedBy ?? null,
+    pausedAt: toISOStringOrNull(dbMemo.pausedAt),
+    awaitingCompletion: dbMemo.awaitingCompletion ?? false,
+    savedStage: dbMemo.savedStage ?? null,
+    // Phase-9 — review-workflow stage. Legacy rows pre-backfill surface
+    // as null; the FE treats null as "no stage yet" (legacy status flow).
+    currentStage: dbMemo.currentStage ?? null,
+    // Phase-9.1 — designated peer reviewer (set on DRAFTING→INTERNAL_REVIEW).
+    internalReviewerId: dbMemo.internalReviewerId ?? null,
+    // Phase-9.2 — reason captured on cancellation.
+    cancellationReason: dbMemo.cancellationReason ?? null,
   };
 }
 
@@ -573,12 +810,14 @@ export class DatabaseStorage implements IStorage {
 
   async createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase> {
     const id = randomUUID();
-    const caseNumber = data.courtCaseNumber ? data.courtCaseNumber : `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     const now = new Date();
-    
-    const newCase = {
+    // When the user supplies a court case number we use it verbatim — no
+    // retry, because regenerating the user's input would silently change
+    // it. Auto-generated numbers (nanoid suffix) collide rarely; retry up
+    // to 3 times before surfacing a clear error.
+    const userSupplied = !!data.courtCaseNumber;
+    const baseCase = {
       id,
-      caseNumber,
       clientId: data.clientId || "",
       caseType: data.caseType || "",
       caseTypeOther: data.caseTypeOther || "",
@@ -616,15 +855,37 @@ export class DatabaseStorage implements IStorage {
       closedAt: null,
     };
 
-    console.log("[clientRole][storage:createCase] inserting case with clientRole:", {
-      incoming: (data as any).clientRole,
-      incomingType: typeof (data as any).clientRole,
-      incomingLength: typeof (data as any).clientRole === "string" ? (data as any).clientRole.length : null,
-      finalValue: newCase.clientRole,
-      caseClassification: newCase.caseClassification,
-    });
-    await db.insert(lawCases).values(newCase);
-    return mapDbCase(newCase);
+    const maxAttempts = userSupplied ? 1 : 3;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const caseNumber = userSupplied ? data.courtCaseNumber! : generateCaseNumber();
+      const newCase = { ...baseCase, caseNumber };
+      try {
+        if (attempt === 0) {
+          console.log("[clientRole][storage:createCase] inserting case with clientRole:", {
+            incoming: (data as any).clientRole,
+            incomingType: typeof (data as any).clientRole,
+            incomingLength: typeof (data as any).clientRole === "string" ? (data as any).clientRole.length : null,
+            finalValue: newCase.clientRole,
+            caseClassification: newCase.caseClassification,
+          });
+        }
+        await db.insert(lawCases).values(newCase);
+        return mapDbCase(newCase);
+      } catch (err) {
+        lastErr = err;
+        if (isUniqueViolationOn(err, "case_number")) {
+          if (userSupplied) {
+            throw new Error("CASE_NUMBER_EXISTS");
+          }
+          console.warn("[storage:createCase] case_number collision on attempt", attempt + 1, "of", maxAttempts);
+          continue;
+        }
+        throw err;
+      }
+    }
+    console.error("[storage:createCase] exhausted retries — auto-generated case_number kept colliding", lastErr);
+    throw new Error("DUPLICATE_CASE_NUMBER");
   }
 
   async updateCase(id: string, data: Partial<LawCase>): Promise<LawCase | undefined> {
@@ -770,16 +1031,31 @@ export class DatabaseStorage implements IStorage {
 
   async createConsultation(data: Partial<Consultation>, createdBy: string): Promise<Consultation> {
     const id = randomUUID();
-    const consultationNumber = `CON-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     const now = new Date();
-    
-    const newConsultation = {
+
+    // Phase-4: category drives the SLA. Default to STANDARD (3 days) when
+    // not supplied so older clients keep working. expectedDeliveryDate is
+    // computed once at creation — there's no manual override (per spec).
+    const incomingCategory = (data as any).category as ConsultationCategoryValue | undefined;
+    const category: ConsultationCategoryValue =
+      incomingCategory && (Object.values(ConsultationCategory) as string[]).includes(incomingCategory)
+        ? incomingCategory
+        : ConsultationCategory.STANDARD;
+    const slaDays = ConsultationCategorySLADays[category];
+    const expectedDeliveryDate = new Date(now.getTime() + slaDays * 24 * 60 * 60 * 1000);
+
+    // Pre-rebuild this method conflated the two: it wrote the stage value
+    // ("استلام") into the status column. Status now is a separate
+    // lifecycle enum (active | converted | closed) per spec §3.1.2;
+    // currentStage carries the workflow position. Keep them apart at the
+    // insert site so the column defaults aren't the only line of defence.
+    const baseConsultation = {
       id,
-      consultationNumber,
       clientId: data.clientId || "",
       consultationType: data.consultationType || "عام",
       deliveryType: data.deliveryType || "مكتوبة",
-      status: "استلام",
+      currentStage: ConsultationStage.RECEIVED,
+      status: ConsultationStatus.ACTIVE,
       departmentId: data.departmentId || "",
       assignedTo: data.assignedTo || null,
       questionSummary: data.questionSummary || "",
@@ -789,34 +1065,271 @@ export class DatabaseStorage implements IStorage {
       googleDriveFolderId: data.googleDriveFolderId || "",
       reviewNotes: "",
       reviewDecision: null,
+      category,
+      expectedDeliveryDate,
       createdBy,
       createdAt: now,
       updatedAt: now,
       closedAt: null,
     };
-    
-    await db.insert(consultations).values(newConsultation);
-    return mapDbConsultation(newConsultation);
+
+    // Phase-6: insert the consultation row and the "created" activity row
+    // in a single transaction so the activity log can never get out of
+    // sync with the actual state. consultationNumber is auto-generated and
+    // can collide on its 6-char nanoid suffix — retry up to 3 times before
+    // surfacing a clear error to the caller.
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const consultationNumber = generateConsultationNumber();
+      const newConsultation = { ...baseConsultation, consultationNumber };
+      try {
+        await db.transaction(async (tx) => {
+          await tx.insert(consultations).values(newConsultation);
+          await tx.insert(consultationActivityLog).values({
+            id: randomUUID(),
+            consultationId: id,
+            activityType: ConsultationActivityType.CREATED,
+            description: "تم إنشاء الاستشارة",
+            metadata: {},
+            performedBy: createdBy,
+            performedAt: now,
+          } as any);
+        });
+        return mapDbConsultation(newConsultation);
+      } catch (err) {
+        lastErr = err;
+        if (isUniqueViolationOn(err, "consultation_number")) {
+          console.warn("[storage:createConsultation] consultation_number collision on attempt", attempt + 1, "of 3");
+          continue;
+        }
+        throw err;
+      }
+    }
+    console.error("[storage:createConsultation] exhausted retries — consultation_number kept colliding", lastErr);
+    throw new Error("DUPLICATE_CONSULTATION_NUMBER");
   }
 
   async updateConsultation(id: string, data: Partial<Consultation>): Promise<Consultation | undefined> {
     const existing = await this.getConsultationById(id);
     if (!existing) return undefined;
-    
+
     const { createdAt, updatedAt, closedAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
     }
     await db.update(consultations).set(updateData).where(eq(consultations.id, id));
-    
+
     return this.getConsultationById(id);
+  }
+
+  // Phase-6 — atomic update + activity log. Used by workflow handlers
+  // (assign, advance-stage, return-stage, early-close) where the spec
+  // requires the activity row to be inserted in the same DB transaction
+  // as the consultation update. Returns undefined when the row is gone.
+  async updateConsultationAndLog(
+    id: string,
+    data: Partial<Consultation>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+
+      const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+      const now = new Date();
+      const updateData: any = { ...updateFields, updatedAt: now };
+      if (closedAt !== undefined) {
+        updateData.closedAt = closedAt ? new Date(closedAt) : null;
+      }
+      await tx.update(consultations).set(updateData).where(eq(consultations.id, id));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: activity.activityType,
+        description: activity.description,
+        metadata: activity.metadata ?? {},
+        performedBy: activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — pause / unpause. Atomic update + activity log insert in a
+  // single transaction so the consultation row and its log entry can never
+  // drift. Uses the dedicated path (not updateConsultationAndLog) because
+  // pausedAt is a Date column that needs explicit conversion. The route
+  // layer enforces the active/paused gate before calling — these helpers
+  // assume the caller already checked.
+  async pauseConsultation(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(consultations).set({
+        status: ConsultationStatus.PAUSED,
+        pauseReason: input.reason,
+        pausedBy: input.performedBy,
+        pausedAt: now,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.PAUSED,
+        description: `تم تعليق الاستشارة — السبب: ${input.reason}`,
+        metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — await-completion / resume-from-completion / skip-completion.
+  // Awaiting-completion is an orthogonal "park here, missing data" detour:
+  // saves the current stage, switches to RECEIVED_PENDING_COMPLETION, and
+  // sets awaiting_completion=true. Resume restores the saved stage. Skip
+  // is the explicit "no upload needed, jump to STUDY" action available
+  // only from RECEIVED_PENDING_COMPLETION when NOT in awaiting mode (the
+  // two paths don't conflict because awaiting=true rows are never
+  // advanced via the normal mechanism).
+  async awaitConsultationCompletion(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      await tx.update(consultations).set({
+        currentStage: ConsultationStage.RECEIVED_PENDING_COMPLETION,
+        savedStage: fromStage,
+        awaitingCompletion: true,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.AWAIT_COMPLETION,
+        description: `بانتظار استكمال المرفقات والبيانات — السبب: ${input.reason}`,
+        metadata: { reason: input.reason, savedStage: fromStage },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  async resumeConsultationFromCompletion(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      // Fall back to STUDY if saved_stage was never recorded (legacy /
+      // hand-edited rows). The route layer already enforces awaiting=true
+      // before calling, so saved_stage really should be set, but defending
+      // here keeps the transaction from corrupting state on edge data.
+      const targetStage = existing.savedStage || ConsultationStage.STUDY;
+      await tx.update(consultations).set({
+        currentStage: targetStage,
+        savedStage: null,
+        awaitingCompletion: false,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.RESUME_FROM_COMPLETION,
+        description: notes
+          ? `العودة من الاستكمال إلى ${targetStage} — ${notes}`
+          : `العودة من الاستكمال إلى ${targetStage}`,
+        metadata: { notes: notes || undefined, returnedToStage: targetStage },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  async skipConsultationCompletion(
+    id: string,
+    input: { performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(consultations).set({
+        currentStage: ConsultationStage.STUDY,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.COMPLETION_SKIPPED,
+        description: "تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى دراسة",
+        metadata: {},
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  async unpauseConsultation(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(consultations).set({
+        status: ConsultationStatus.ACTIVE,
+        pauseReason: null,
+        pausedBy: null,
+        pausedAt: null,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.UNPAUSED,
+        description: notes ? `تم إلغاء التعليق — ${notes}` : "تم إلغاء التعليق",
+        metadata: notes ? { notes } : {},
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
   }
 
   async deleteConsultation(id: string): Promise<boolean> {
     await db.delete(attachments).where(and(eq(attachments.entityType, "consultation"), eq(attachments.entityId, id)));
     await db.delete(fieldTasks).where(eq(fieldTasks.consultationId, id));
     await db.delete(notifications).where(and(eq(notifications.relatedType, "consultation"), eq(notifications.relatedId, id)));
+    // Phase-6: activity-log rows. The SQL FK is ON DELETE CASCADE so this
+    // is belt-and-braces — keeps behavior consistent if the FK is dropped.
+    await db.delete(consultationActivityLog).where(eq(consultationActivityLog.consultationId, id));
     const result = await db.delete(consultations).where(eq(consultations.id, id)).returning();
     return result.length > 0;
   }
@@ -1181,6 +1694,10 @@ export class DatabaseStorage implements IStorage {
       reminderSentOverdue: false,
       createdAt: now,
       updatedAt: now,
+      // Phase-9 — new memos enter the review workflow at RECEIVED.
+      // Legacy (status-only) callers are unaffected; the column is
+      // nullable in the DB so this default just means "use the new flow".
+      currentStage: data.currentStage || "استلام",
     };
 
     await db.insert(memos).values(newMemo);
@@ -1203,8 +1720,412 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteMemo(id: string): Promise<boolean> {
+    // Phase-8 — clear activity log rows first. The SQL FK is ON DELETE
+    // CASCADE so this is belt-and-braces; keeps behavior consistent if
+    // the FK is dropped.
+    await db.delete(memoActivityLog).where(eq(memoActivityLog.memoId, id));
     const result = await db.delete(memos).where(eq(memos.id, id)).returning();
     return result.length > 0;
+  }
+
+  // Phase-8 — pause / unpause on memos. Atomic update + memo_activity_log
+  // insert in one transaction. Memo status is left alone (it's workflow
+  // state, not lifecycle); pause is detected via paused_at IS NOT NULL.
+  async pauseMemo(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        pauseReason: input.reason,
+        pausedBy: input.performedBy,
+        pausedAt: now,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.PAUSED,
+        description: `تم تعليق المذكرة — السبب: ${input.reason}`,
+        metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — await-completion / resume on memos. Memos don't have a
+  // dedicated "pending completion" status (they have no stage flow);
+  // instead awaiting_completion=true is purely a flag and saved_stage
+  // captures the memo's status as a snapshot for symmetry. The memo's
+  // workflow status is intentionally NOT changed by these endpoints.
+  async awaitMemoCompletion(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        awaitingCompletion: true,
+        savedStage: existing.status,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.AWAIT_COMPLETION,
+        description: `بانتظار استكمال المرفقات والبيانات — السبب: ${input.reason}`,
+        metadata: { reason: input.reason, savedStage: existing.status },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  async resumeMemoFromCompletion(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        awaitingCompletion: false,
+        savedStage: null,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.RESUME_FROM_COMPLETION,
+        description: notes ? `العودة من الاستكمال — ${notes}` : "العودة من الاستكمال",
+        metadata: notes ? { notes } : {},
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  async unpauseMemo(
+    id: string,
+    input: { notes?: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        pauseReason: null,
+        pausedBy: null,
+        pausedAt: null,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.UNPAUSED,
+        description: notes ? `تم إلغاء تعليق المذكرة — ${notes}` : "تم إلغاء تعليق المذكرة",
+        metadata: notes ? { notes } : {},
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — memo activity log readers. Mirrors getConsultationActivities.
+  async getMemoActivities(memoId: string): Promise<MemoActivity[]> {
+    const rows = await db.select().from(memoActivityLog)
+      .where(eq(memoActivityLog.memoId, memoId))
+      .orderBy(asc(memoActivityLog.performedAt));
+    return rows.map((row) => ({
+      id: row.id,
+      memoId: row.memoId,
+      activityType: row.activityType,
+      description: row.description,
+      metadata: (row.metadata as Record<string, any>) ?? {},
+      performedBy: row.performedBy ?? null,
+      performedAt: toISOString(row.performedAt),
+    }));
+  }
+
+  // ==================== Memo workflow helpers (Phase-9) ====================
+  // Mirror the consultation versions. Each helper that mutates a memo
+  // also writes a memo_activity_log row inside the same transaction so
+  // the log can never drift from the row.
+
+  async updateMemoAndLog(
+    id: string,
+    data: Partial<Memo>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+
+      // Strip server-managed timestamp fields; date fields are coerced
+      // explicitly for the columns that are real timestamp types.
+      const { createdAt, updatedAt, startedAt, completedAt, submittedAt, reviewedAt, pausedAt, ...updateFields } = data;
+      const now = new Date();
+      const updateData: any = { ...updateFields, updatedAt: now };
+      if (startedAt) updateData.startedAt = new Date(startedAt);
+      if (completedAt) updateData.completedAt = new Date(completedAt);
+      if (submittedAt) updateData.submittedAt = new Date(submittedAt);
+      if (reviewedAt) updateData.reviewedAt = new Date(reviewedAt);
+      if (pausedAt !== undefined) updateData.pausedAt = pausedAt ? new Date(pausedAt) : null;
+
+      await tx.update(memos).set(updateData).where(eq(memos.id, id));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: activity.activityType,
+        description: activity.description,
+        metadata: activity.metadata ?? {},
+        performedBy: activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  async recordMemoInternalReview(input: {
+    memoId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: MemoReview; memo: Memo }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [reviewRow] = await tx.insert(memoReviews).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        reviewerId: input.reviewerId,
+        decision: input.decision,
+        notes: input.notes,
+        createdAt: now,
+      } as any).returning();
+
+      await tx.update(memos)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(memos.id, input.memoId));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        activityType: MemoActivityType.INTERNAL_REVIEW,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
+      if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
+
+      return {
+        review: {
+          id: reviewRow.id,
+          memoId: reviewRow.memoId,
+          reviewerId: reviewRow.reviewerId,
+          decision: reviewRow.decision,
+          notes: reviewRow.notes ?? "",
+          createdAt: toISOString(reviewRow.createdAt),
+        },
+        memo: mapDbMemo(updatedMemo),
+      };
+    });
+  }
+
+  async recordMemoCommitteeDecision(input: {
+    memoId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: MemoCommitteeDecision; memo: Memo }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [decisionRow] = await tx.insert(memoCommitteeDecisions).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        decision: input.decision,
+        notes: input.notes,
+        decidedBy: input.decidedBy,
+        decidedAt: now,
+      } as any).returning();
+
+      await tx.update(memos)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(memos.id, input.memoId));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        activityType: MemoActivityType.COMMITTEE_DECISION,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
+      if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
+
+      return {
+        decision: {
+          id: decisionRow.id,
+          memoId: decisionRow.memoId,
+          decision: decisionRow.decision,
+          notes: decisionRow.notes ?? "",
+          decidedBy: decisionRow.decidedBy,
+          decidedAt: toISOString(decisionRow.decidedAt),
+        },
+        memo: mapDbMemo(updatedMemo),
+      };
+    });
+  }
+
+  async recordMemoNoteOutcome(input: {
+    memoId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: MemoNoteOutcome; memo: Memo }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [outcomeRow] = await tx.insert(memoNoteOutcomes).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        outcome: input.outcome,
+        notes: input.notes,
+        recordedBy: input.recordedBy,
+        recordedAt: now,
+      } as any).returning();
+
+      await tx.update(memos)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(memos.id, input.memoId));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        activityType: MemoActivityType.TAKE_NOTES_OUTCOME,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
+      if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
+
+      return {
+        outcome: {
+          id: outcomeRow.id,
+          memoId: outcomeRow.memoId,
+          outcome: outcomeRow.outcome,
+          notes: outcomeRow.notes ?? "",
+          recordedBy: outcomeRow.recordedBy,
+          recordedAt: toISOString(outcomeRow.recordedAt),
+        },
+        memo: mapDbMemo(updatedMemo),
+      };
+    });
+  }
+
+  async getMemoReviews(memoId: string): Promise<MemoReview[]> {
+    const rows = await db.select().from(memoReviews)
+      .where(eq(memoReviews.memoId, memoId))
+      .orderBy(asc(memoReviews.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      memoId: r.memoId,
+      reviewerId: r.reviewerId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async getMemoCommitteeDecisions(memoId: string): Promise<MemoCommitteeDecision[]> {
+    const rows = await db.select().from(memoCommitteeDecisions)
+      .where(eq(memoCommitteeDecisions.memoId, memoId))
+      .orderBy(asc(memoCommitteeDecisions.decidedAt));
+    return rows.map(r => ({
+      id: r.id,
+      memoId: r.memoId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      decidedBy: r.decidedBy,
+      decidedAt: toISOString(r.decidedAt),
+    }));
+  }
+
+  async getMemoNoteOutcomes(memoId: string): Promise<MemoNoteOutcome[]> {
+    const rows = await db.select().from(memoNoteOutcomes)
+      .where(eq(memoNoteOutcomes.memoId, memoId))
+      .orderBy(asc(memoNoteOutcomes.recordedAt));
+    return rows.map(r => ({
+      id: r.id,
+      memoId: r.memoId,
+      outcome: r.outcome,
+      notes: r.notes ?? "",
+      recordedBy: r.recordedBy,
+      recordedAt: toISOString(r.recordedAt),
+    }));
+  }
+
+  // Phase-9.2 — atomic cancel. Mirrors pauseMemo's shape: update the
+  // memo row, then insert the memo_activity_log entry in the same
+  // transaction so the timeline can never drift from the row.
+  async cancelMemo(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        status: "ملغاة",
+        cancellationReason: input.reason,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.CANCELLED,
+        description: `تم إلغاء المذكرة — السبب: ${input.reason}`,
+        metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
   }
 
   // ==================== Attachments ====================
@@ -1349,6 +2270,613 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
+  // ==================== Consultation Studies / Drafts / Reviews / Committee / Notes ====================
+
+  async createConsultationStudy(data: { consultationId: string; notes: string; createdBy: string }): Promise<ConsultationStudy> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationStudies).values({
+      id,
+      consultationId: data.consultationId,
+      notes: data.notes,
+      createdBy: data.createdBy,
+      createdAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      notes: row.notes ?? "",
+      createdBy: row.createdBy,
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  async getConsultationStudies(consultationId: string): Promise<ConsultationStudy[]> {
+    const rows = await db.select().from(consultationStudies)
+      .where(eq(consultationStudies.consultationId, consultationId))
+      .orderBy(asc(consultationStudies.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      notes: r.notes ?? "",
+      createdBy: r.createdBy,
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async createConsultationDraft(data: { consultationId: string; content: string; createdBy: string }): Promise<ConsultationDraft> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationDrafts).values({
+      id,
+      consultationId: data.consultationId,
+      content: data.content,
+      createdBy: data.createdBy,
+      createdAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      content: row.content ?? "",
+      createdBy: row.createdBy,
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  async getConsultationDrafts(consultationId: string): Promise<ConsultationDraft[]> {
+    const rows = await db.select().from(consultationDrafts)
+      .where(eq(consultationDrafts.consultationId, consultationId))
+      .orderBy(asc(consultationDrafts.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      content: r.content ?? "",
+      createdBy: r.createdBy,
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async createConsultationReview(data: { consultationId: string; reviewerId: string; decision: string; notes: string }): Promise<ConsultationReview> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationReviews).values({
+      id,
+      consultationId: data.consultationId,
+      reviewerId: data.reviewerId,
+      decision: data.decision,
+      notes: data.notes,
+      createdAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      reviewerId: row.reviewerId,
+      decision: row.decision,
+      notes: row.notes ?? "",
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  // Phase-6 — atomic internal-review record. Replaces the previously
+  // sequential pair (createConsultationReview + updateConsultation) so the
+  // review row, the consultation stage update, and the activity log are
+  // all part of one transaction. Used by POST /internal-review.
+  async recordConsultationInternalReview(input: {
+    consultationId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: ConsultationReview; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const reviewId = randomUUID();
+      const [reviewRow] = await tx.insert(consultationReviews).values({
+        id: reviewId,
+        consultationId: input.consultationId,
+        reviewerId: input.reviewerId,
+        decision: input.decision,
+        notes: input.notes,
+        createdAt: now,
+      } as any).returning();
+
+      await tx.update(consultations)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(consultations.id, input.consultationId));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        activityType: ConsultationActivityType.INTERNAL_REVIEW,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
+      if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
+
+      return {
+        review: {
+          id: reviewRow.id,
+          consultationId: reviewRow.consultationId,
+          reviewerId: reviewRow.reviewerId,
+          decision: reviewRow.decision,
+          notes: reviewRow.notes ?? "",
+          createdAt: toISOString(reviewRow.createdAt),
+        },
+        consultation: mapDbConsultation(updatedCon),
+      };
+    });
+  }
+
+  async getConsultationReviews(consultationId: string): Promise<ConsultationReview[]> {
+    const rows = await db.select().from(consultationReviews)
+      .where(eq(consultationReviews.consultationId, consultationId))
+      .orderBy(asc(consultationReviews.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      reviewerId: r.reviewerId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async getLatestConsultationReview(consultationId: string): Promise<ConsultationReview | undefined> {
+    const [row] = await db.select().from(consultationReviews)
+      .where(eq(consultationReviews.consultationId, consultationId))
+      .orderBy(desc(consultationReviews.createdAt))
+      .limit(1);
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      reviewerId: row.reviewerId,
+      decision: row.decision,
+      notes: row.notes ?? "",
+      createdAt: toISOString(row.createdAt),
+    };
+  }
+
+  async createConsultationCommitteeDecision(data: { consultationId: string; decision: string; notes: string; decidedBy: string }): Promise<ConsultationCommitteeDecision> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationCommitteeDecisions).values({
+      id,
+      consultationId: data.consultationId,
+      decision: data.decision,
+      notes: data.notes,
+      decidedBy: data.decidedBy,
+      decidedAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      decision: row.decision,
+      notes: row.notes ?? "",
+      decidedBy: row.decidedBy,
+      decidedAt: toISOString(row.decidedAt),
+    };
+  }
+
+  // Phase-6 — atomic committee-decision record. Replaces the previously
+  // sequential pair so the decision row, the consultation stage update,
+  // and the activity log are all part of one transaction.
+  async recordConsultationCommitteeDecision(input: {
+    consultationId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: ConsultationCommitteeDecision; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [decisionRow] = await tx.insert(consultationCommitteeDecisions).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        decision: input.decision,
+        notes: input.notes,
+        decidedBy: input.decidedBy,
+        decidedAt: now,
+      } as any).returning();
+
+      await tx.update(consultations)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(consultations.id, input.consultationId));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        activityType: ConsultationActivityType.COMMITTEE_DECISION,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
+      if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
+
+      return {
+        decision: {
+          id: decisionRow.id,
+          consultationId: decisionRow.consultationId,
+          decision: decisionRow.decision,
+          notes: decisionRow.notes ?? "",
+          decidedBy: decisionRow.decidedBy,
+          decidedAt: toISOString(decisionRow.decidedAt),
+        },
+        consultation: mapDbConsultation(updatedCon),
+      };
+    });
+  }
+
+  async getConsultationCommitteeDecisions(consultationId: string): Promise<ConsultationCommitteeDecision[]> {
+    const rows = await db.select().from(consultationCommitteeDecisions)
+      .where(eq(consultationCommitteeDecisions.consultationId, consultationId))
+      .orderBy(asc(consultationCommitteeDecisions.decidedAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      decidedBy: r.decidedBy,
+      decidedAt: toISOString(r.decidedAt),
+    }));
+  }
+
+  async createConsultationNoteOutcome(data: { consultationId: string; outcome: string; notes: string; recordedBy: string }): Promise<ConsultationNoteOutcome> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationNoteOutcomes).values({
+      id,
+      consultationId: data.consultationId,
+      outcome: data.outcome,
+      notes: data.notes,
+      recordedBy: data.recordedBy,
+      recordedAt: new Date(),
+    } as any).returning();
+    return {
+      id: row.id,
+      consultationId: row.consultationId,
+      outcome: row.outcome,
+      notes: row.notes ?? "",
+      recordedBy: row.recordedBy,
+      recordedAt: toISOString(row.recordedAt),
+    };
+  }
+
+  // Phase-6 — atomic take-notes-outcome record. Per spec §3.2.1 ALL
+  // outcomes (DONE | NOT_DONE | PARTIAL) advance to READY, so the next
+  // stage is always READY. Outcome row, consultation stage update, and
+  // activity log are all part of one transaction.
+  async recordConsultationNoteOutcome(input: {
+    consultationId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: ConsultationNoteOutcome; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [outcomeRow] = await tx.insert(consultationNoteOutcomes).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        outcome: input.outcome,
+        notes: input.notes,
+        recordedBy: input.recordedBy,
+        recordedAt: now,
+      } as any).returning();
+
+      await tx.update(consultations)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(consultations.id, input.consultationId));
+
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: input.consultationId,
+        activityType: ConsultationActivityType.TAKE_NOTES_OUTCOME,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
+      if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
+
+      return {
+        outcome: {
+          id: outcomeRow.id,
+          consultationId: outcomeRow.consultationId,
+          outcome: outcomeRow.outcome,
+          notes: outcomeRow.notes ?? "",
+          recordedBy: outcomeRow.recordedBy,
+          recordedAt: toISOString(outcomeRow.recordedAt),
+        },
+        consultation: mapDbConsultation(updatedCon),
+      };
+    });
+  }
+
+  async getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]> {
+    const rows = await db.select().from(consultationNoteOutcomes)
+      .where(eq(consultationNoteOutcomes.consultationId, consultationId))
+      .orderBy(asc(consultationNoteOutcomes.recordedAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      outcome: r.outcome,
+      notes: r.notes ?? "",
+      recordedBy: r.recordedBy,
+      recordedAt: toISOString(r.recordedAt),
+    }));
+  }
+
+  // ==================== Delivery-date extension (Phase-5) ====================
+
+  // Inserts the audit row and updates consultations.expectedDeliveryDate
+  // in one transaction. Sentinel errors mirror the convert-to-case method
+  // so the route handler can map them to specific 4xx codes:
+  //   CONSULTATION_NOT_FOUND, CONSULTATION_NOT_ACTIVE,
+  //   EXTENSION_NOT_FORWARD (new date is not strictly after the old one).
+  async extendConsultationDelivery(
+    consultationId: string,
+    data: { newExpectedDeliveryDate: Date; reason: string },
+    extendedBy: string,
+    activity?: { description: string; metadata?: Record<string, any> },
+  ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, consultationId));
+      if (!existing) throw new Error("CONSULTATION_NOT_FOUND");
+      if (existing.status !== "active") throw new Error("CONSULTATION_NOT_ACTIVE");
+
+      const oldDate = existing.expectedDeliveryDate ?? null;
+      // "Extension" means moving the date forward. Reject same/earlier
+      // values so the audit log carries meaningful events; the route
+      // surfaces this as a 400.
+      if (oldDate && data.newExpectedDeliveryDate.getTime() <= new Date(oldDate).getTime()) {
+        throw new Error("EXTENSION_NOT_FORWARD");
+      }
+
+      const now = new Date();
+      const extensionId = randomUUID();
+      const extensionRow = {
+        id: extensionId,
+        consultationId,
+        oldExpectedDeliveryDate: oldDate,
+        newExpectedDeliveryDate: data.newExpectedDeliveryDate,
+        reason: data.reason,
+        extendedBy,
+        extendedAt: now,
+      };
+      await tx.insert(consultationDeliveryExtensions).values(extensionRow as any);
+
+      const updated = await tx.update(consultations)
+        .set({
+          expectedDeliveryDate: data.newExpectedDeliveryDate,
+          updatedAt: now,
+        } as any)
+        .where(eq(consultations.id, consultationId))
+        .returning();
+      if (!updated.length) throw new Error("CONSULTATION_UPDATE_FAILED");
+
+      // Phase-6 — log the extension as part of the same transaction.
+      if (activity) {
+        await tx.insert(consultationActivityLog).values({
+          id: randomUUID(),
+          consultationId,
+          activityType: ConsultationActivityType.DELIVERY_EXTENDED,
+          description: activity.description,
+          metadata: activity.metadata ?? {},
+          performedBy: extendedBy,
+          performedAt: now,
+        } as any);
+      }
+
+      return {
+        extension: {
+          id: extensionRow.id,
+          consultationId: extensionRow.consultationId,
+          oldExpectedDeliveryDate: oldDate ? toISOString(oldDate) : null,
+          newExpectedDeliveryDate: toISOString(extensionRow.newExpectedDeliveryDate),
+          reason: extensionRow.reason,
+          extendedBy: extensionRow.extendedBy,
+          extendedAt: toISOString(extensionRow.extendedAt),
+        },
+        consultation: mapDbConsultation(updated[0]),
+      };
+    });
+  }
+
+  async getConsultationDeliveryExtensions(consultationId: string): Promise<ConsultationDeliveryExtension[]> {
+    const rows = await db.select().from(consultationDeliveryExtensions)
+      .where(eq(consultationDeliveryExtensions.consultationId, consultationId))
+      .orderBy(asc(consultationDeliveryExtensions.extendedAt));
+    return rows.map(r => ({
+      id: r.id,
+      consultationId: r.consultationId,
+      oldExpectedDeliveryDate: r.oldExpectedDeliveryDate ? toISOString(r.oldExpectedDeliveryDate) : null,
+      newExpectedDeliveryDate: toISOString(r.newExpectedDeliveryDate),
+      reason: r.reason ?? "",
+      extendedBy: r.extendedBy,
+      extendedAt: toISOString(r.extendedAt),
+    }));
+  }
+
+  // ==================== Consultation Activity Log (Phase-6) ====================
+
+  async createConsultationActivity(input: {
+    consultationId: string;
+    activityType: string;
+    description: string;
+    metadata?: Record<string, any>;
+    performedBy: string | null;
+  }): Promise<ConsultationActivity> {
+    const id = randomUUID();
+    const [row] = await db.insert(consultationActivityLog).values({
+      id,
+      consultationId: input.consultationId,
+      activityType: input.activityType,
+      description: input.description,
+      metadata: input.metadata ?? {},
+      performedBy: input.performedBy,
+      performedAt: new Date(),
+    } as any).returning();
+    return mapDbConsultationActivity(row);
+  }
+
+  async getConsultationActivities(consultationId: string): Promise<ConsultationActivity[]> {
+    const rows = await db.select().from(consultationActivityLog)
+      .where(eq(consultationActivityLog.consultationId, consultationId))
+      .orderBy(desc(consultationActivityLog.performedAt));
+    return rows.map(mapDbConsultationActivity);
+  }
+
+  // ==================== Convert consultation to case (rebuild §3.2.3) ====================
+
+  // Single DB transaction. Helper-table copies (§3.2.3 steps 3-5) are
+  // intentionally skipped per option (ii) of the Phase 2 plan: cases-side
+  // study/draft/review tables don't exist and won't be created. The case
+  // gets a back-pointer via convertedFromConsultationId; the UI reaches
+  // the consultation's history through that link.
+  //
+  // Throws sentinel Error names on validation failure inside the txn so
+  // the route handler can map them to specific 4xx codes:
+  //   CONSULTATION_NOT_FOUND, CONSULTATION_NOT_ACTIVE, CONSULTATION_COMPLETED,
+  //   CASE_NUMBER_EXISTS (user-supplied courtCaseNumber collides),
+  //   DUPLICATE_CASE_NUMBER (auto-generated suffix collided 3× in a row).
+  async convertConsultationToCase(
+    consultationId: string,
+    caseFields: Partial<LawCase>,
+    actorId: string,
+    activityCtx?: { targetCaseStage?: string },
+  ): Promise<{ case: LawCase; consultation: Consultation }> {
+    const userSupplied = !!caseFields.courtCaseNumber;
+    const maxAttempts = userSupplied ? 1 : 3;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await this.convertConsultationToCaseOnce(consultationId, caseFields, actorId, activityCtx);
+      } catch (err) {
+        lastErr = err;
+        if (isUniqueViolationOn(err, "case_number")) {
+          if (userSupplied) {
+            throw new Error("CASE_NUMBER_EXISTS");
+          }
+          console.warn("[storage:convertConsultationToCase] case_number collision on attempt", attempt + 1, "of", maxAttempts);
+          continue;
+        }
+        throw err;
+      }
+    }
+    console.error("[storage:convertConsultationToCase] exhausted retries — auto-generated case_number kept colliding", lastErr);
+    throw new Error("DUPLICATE_CASE_NUMBER");
+  }
+
+  private async convertConsultationToCaseOnce(
+    consultationId: string,
+    caseFields: Partial<LawCase>,
+    actorId: string,
+    activityCtx?: { targetCaseStage?: string },
+  ): Promise<{ case: LawCase; consultation: Consultation }> {
+    return await db.transaction(async (tx) => {
+      // 1. Read consultation inside the transaction (re-validate for race-safety)
+      const [existingCon] = await tx.select().from(consultations).where(eq(consultations.id, consultationId));
+      if (!existingCon) throw new Error("CONSULTATION_NOT_FOUND");
+      if (existingCon.status !== "active") throw new Error("CONSULTATION_NOT_ACTIVE");
+      if (existingCon.currentStage === ConsultationStage.COMPLETED) throw new Error("CONSULTATION_COMPLETED");
+
+      // 2. Build and insert the new case row
+      const newCaseId = randomUUID();
+      const caseNumber = caseFields.courtCaseNumber
+        ? caseFields.courtCaseNumber
+        : generateCaseNumber();
+      const now = new Date();
+
+      const newCaseRow = {
+        id: newCaseId,
+        caseNumber,
+        clientId: caseFields.clientId || existingCon.clientId,
+        caseType: caseFields.caseType || existingCon.consultationType,
+        caseTypeOther: caseFields.caseTypeOther || "",
+        departmentOther: caseFields.departmentOther || "",
+        status: CaseStatus.RECEIVED,
+        currentStage: caseFields.currentStage || CaseStage.RECEPTION,
+        stageHistory: [],
+        departmentId: caseFields.departmentId || existingCon.departmentId,
+        assignedLawyers: [],
+        primaryLawyerId: caseFields.primaryLawyerId || null,
+        responsibleLawyerId: caseFields.responsibleLawyerId || null,
+        courtName: caseFields.courtName || "",
+        courtCaseNumber: caseFields.courtCaseNumber || "",
+        judgeName: caseFields.judgeName || "",
+        circuitNumber: caseFields.circuitNumber || "",
+        plaintiffName: caseFields.plaintiffName || "",
+        opponentName: caseFields.opponentName || "",
+        opponentLawyer: caseFields.opponentLawyer || "",
+        opponentPhone: caseFields.opponentPhone || "",
+        opponentNotes: caseFields.opponentNotes || "",
+        whatsappGroupLink: caseFields.whatsappGroupLink || existingCon.whatsappGroupLink || "",
+        googleDriveFolderId: caseFields.googleDriveFolderId || existingCon.googleDriveFolderId || "",
+        reviewNotes: "",
+        reviewDecision: null,
+        reviewActionTaken: null,
+        priority: caseFields.priority || "متوسط",
+        caseClassification: caseFields.caseClassification || CaseClassification.UNDER_STUDY,
+        clientRole: (caseFields as any).clientRole ?? null,
+        previousHearingsCount: caseFields.previousHearingsCount || 0,
+        currentSituation: caseFields.currentSituation || existingCon.questionSummary || "",
+        responseDeadline: caseFields.responseDeadline || null,
+        convertedFromConsultationId: existingCon.id,
+        createdBy: actorId,
+        createdAt: now,
+        updatedAt: now,
+        closedAt: null,
+      };
+
+      const inserted = await tx.insert(lawCases).values(newCaseRow as any).returning();
+      if (!inserted.length) throw new Error("CASE_INSERT_FAILED");
+
+      // 3. Update consultation to mark conversion (helper-table copies skipped per option ii)
+      const updatedConRows = await tx.update(consultations)
+        .set({
+          status: "converted",
+          convertedToCaseId: newCaseId,
+          closedAt: now,
+          updatedAt: now,
+        } as any)
+        .where(eq(consultations.id, consultationId))
+        .returning();
+      if (!updatedConRows.length) throw new Error("CONSULTATION_UPDATE_FAILED");
+
+      // Phase-6 — log the conversion as part of the same transaction.
+      // Description uses the case number computed above so the timeline
+      // can render it without an extra lookup.
+      if (activityCtx) {
+        await tx.insert(consultationActivityLog).values({
+          id: randomUUID(),
+          consultationId,
+          activityType: ConsultationActivityType.CONVERTED_TO_CASE,
+          description: `تم تحويل الاستشارة إلى قضية رقم ${caseNumber}`,
+          metadata: {
+            newCaseId,
+            newCaseNumber: caseNumber,
+            targetCaseStage: activityCtx.targetCaseStage ?? null,
+          },
+          performedBy: actorId,
+          performedAt: now,
+        } as any);
+      }
+
+      return {
+        case: mapDbCase(newCaseRow),
+        consultation: mapDbConsultation(updatedConRows[0]),
+      };
+    });
+  }
+
   // ==================== Case Activity Log ====================
 
   async logCaseActivity(data: InsertCaseActivity): Promise<CaseActivity> {
@@ -1365,6 +2893,181 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(caseActivityLog)
       .where(eq(caseActivityLog.caseId, caseId))
       .orderBy(desc(caseActivityLog.createdAt));
+  }
+
+  // Phase-8 — pause / unpause on cases. Atomic update + case_activity_log
+  // insert in one transaction. Cases status (workflow stage) is left
+  // alone; pause is detected via paused_at IS NOT NULL.
+  async pauseCase(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(lawCases).set({
+        pauseReason: input.reason,
+        pausedBy: input.performedBy,
+        pausedAt: now,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "paused",
+        title: "تعليق القضية",
+        details: input.reason,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  // Phase-8 — await-completion / resume on cases. Mirrors the
+  // consultations pattern but writes case_activity_log + appends to
+  // stageHistory (the case-side audit trail). Cases already have
+  // "استكمال_البيانات" as a regular forward stage; await-completion
+  // routes the case INTO that stage from any other stage, with
+  // saved_stage holding the value to restore on resume.
+  async awaitCaseCompletion(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const targetStage = "استكمال_البيانات";
+      const existingHistory = Array.isArray((existing as any).stageHistory)
+        ? (existing as any).stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: `بانتظار استكمال المرفقات والبيانات — ${input.reason}`,
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: targetStage,
+        savedStage: fromStage,
+        awaitingCompletion: true,
+        stageHistory,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "await_completion",
+        title: "بانتظار استكمال المرفقات والبيانات",
+        details: input.reason,
+        previousValue: fromStage,
+        newValue: targetStage,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  async resumeCaseFromCompletion(
+    id: string,
+    input: {
+      notes?: string;
+      performedBy: string;
+      performerName: string;
+      // Stage-list validator the route hands in. Cases have 5 stage
+      // paths depending on caseType + classification, so the caller
+      // resolves the right list and we just check membership.
+      isValidStage: (stage: string) => boolean;
+    },
+  ): Promise<{ ok: true; lawCase: LawCase } | { ok: false; reason: "INVALID_SAVED_STAGE" | "NOT_FOUND" }> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return { ok: false, reason: "NOT_FOUND" } as const;
+      const targetStage = existing.savedStage;
+      if (!targetStage || !input.isValidStage(targetStage)) {
+        return { ok: false, reason: "INVALID_SAVED_STAGE" } as const;
+      }
+      const now = new Date();
+      const existingHistory = Array.isArray((existing as any).stageHistory)
+        ? (existing as any).stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: input.notes?.trim() || "العودة من الاستكمال",
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: targetStage,
+        savedStage: null,
+        awaitingCompletion: false,
+        stageHistory,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "resume_from_completion",
+        title: `العودة من الاستكمال إلى ${targetStage}`,
+        details: notes || null,
+        previousValue: "استكمال_البيانات",
+        newValue: targetStage,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated
+        ? { ok: true as const, lawCase: mapDbCase(updated) }
+        : { ok: false, reason: "NOT_FOUND" } as const;
+    });
+  }
+
+  async unpauseCase(
+    id: string,
+    input: { notes?: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(lawCases).set({
+        pauseReason: null,
+        pausedBy: null,
+        pausedAt: null,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "unpaused",
+        title: "إلغاء تعليق القضية",
+        details: notes || null,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
   }
 
   // ==================== Case Notes ====================

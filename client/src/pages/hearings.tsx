@@ -55,6 +55,7 @@ import {
   Clock,
   MapPin,
   AlertCircle,
+  AlertTriangle,
   CheckCircle,
   XCircle,
   FileText,
@@ -232,6 +233,16 @@ export default function HearingsPage() {
     responseRequired: false,
     opponentResponseRequired: false,
     caseId: "",
+    // Settlement-only cases (started directly at مداولة_الصلح with
+    // isSettlementCase=true) need an explicit choice on "لم يتم الصلح":
+    // "close" → close the case, "continue" → flip the flag and route the
+    // case onto the regular litigation path. Empty string for non-settlement
+    // cases or any other result.
+    afterFailedSettlementChoice: "" as "" | "close" | "continue",
+    // Jurisdiction-declined: target department for the transfer.
+    // Required iff result === "عدم_الاختصاص".
+    transferToDepartmentId: "",
+    transferReason: "",
   });
 
   const [reportForm, setReportForm] = useState({
@@ -270,6 +281,9 @@ export default function HearingsPage() {
       responseRequired: false,
       opponentResponseRequired: false,
       caseId: "",
+      afterFailedSettlementChoice: "",
+      transferToDepartmentId: "",
+      transferReason: "",
     });
   };
 
@@ -313,6 +327,21 @@ export default function HearingsPage() {
       toast({ title: "يجب اختيار القضية المرتبطة لإنشاء المذكرة", variant: "destructive" });
       return;
     }
+    // Settlement-only cases must commit to a choice before the result can
+    // be submitted — otherwise the server falls back to closing the case.
+    const linkedCaseForSubmit = effectiveCaseId ? getCaseById(effectiveCaseId) : null;
+    const isSettlementOnlyFailed =
+      resultForm.result === HearingResult.SETTLEMENT_FAILED &&
+      !!(linkedCaseForSubmit as any)?.isSettlementCase;
+    if (isSettlementOnlyFailed && !resultForm.afterFailedSettlementChoice) {
+      toast({ title: "اختر إجراء الصلح: إغلاق نهائي أو استكمال الإجراءات", variant: "destructive" });
+      return;
+    }
+    // Jurisdiction-declined: target department is required.
+    if (resultForm.result === HearingResult.JURISDICTION_DECLINED && !resultForm.transferToDepartmentId) {
+      toast({ title: "اختر القسم المحوّل إليه عند تسجيل عدم الاختصاص", variant: "destructive" });
+      return;
+    }
     setSubmitting(true);
     try {
       const data: any = {
@@ -332,6 +361,13 @@ export default function HearingsPage() {
         data.nextHearingTime = resultForm.nextHearingTime;
         data.responseRequired = resultForm.responseRequired;
         data.opponentResponseRequired = resultForm.opponentResponseRequired;
+      }
+      if (resultForm.result === HearingResult.JURISDICTION_DECLINED) {
+        data.transferToDepartmentId = resultForm.transferToDepartmentId;
+        data.transferReason = resultForm.transferReason || undefined;
+      }
+      if (isSettlementOnlyFailed) {
+        data.afterFailedSettlementChoice = resultForm.afterFailedSettlementChoice;
       }
       const res = await submitResult(resultDialogHearing.id, data);
       const hasNewHearing = res.createdTasks?.some((t: any) => t.type === "new_hearing");
@@ -1251,6 +1287,7 @@ export default function HearingsPage() {
                           <SelectItem value="موعد_جديد">جلسة (موعد جديد)</SelectItem>
                           <SelectItem value="حكم">حكم</SelectItem>
                           <SelectItem value="شطب">شطب</SelectItem>
+                          <SelectItem value="عدم_الاختصاص">عدم الاختصاص</SelectItem>
                         </>
                       );
                     }
@@ -1261,6 +1298,7 @@ export default function HearingsPage() {
                         <SelectItem value="حكم">حكم</SelectItem>
                         <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
                         <SelectItem value="شطب">شطب</SelectItem>
+                        <SelectItem value="عدم_الاختصاص">عدم الاختصاص</SelectItem>
                       </>
                     );
                   })()}
@@ -1429,6 +1467,109 @@ export default function HearingsPage() {
                 )}
               </Card>
             )}
+
+            {/* Jurisdiction-declined: picker for the destination
+                department. The case will be reset to استلام in that
+                department, classification stays as IN_COURT, lawyers
+                cleared. Server enforces transferToDepartmentId. */}
+            {resultForm.result === HearingResult.JURISDICTION_DECLINED && (
+              <Card className="p-4 space-y-3 border-amber-300">
+                <p className="text-sm font-medium text-amber-700 flex items-center gap-1">
+                  <ArrowLeftRight className="w-4 h-4" />
+                  تحويل القضية لقسم مختص
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  ستُعاد القضية إلى مرحلة "استلام" في القسم المختار، ويُلغى تعيين المحامين الحاليين.
+                </p>
+                <div>
+                  <Label>القسم المحوّل إليه <span className="text-destructive">*</span></Label>
+                  <Select
+                    value={resultForm.transferToDepartmentId}
+                    onValueChange={(v) => setResultForm({ ...resultForm, transferToDepartmentId: v })}
+                  >
+                    <SelectTrigger data-testid="select-jurisdiction-target-dept">
+                      <SelectValue placeholder="اختر القسم" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {departments
+                        .filter((d) => {
+                          const effId = resultDialogHearing?.caseId || resultForm.caseId;
+                          const linked = effId ? getCaseById(effId) : null;
+                          return !linked || String(d.id) !== linked.departmentId;
+                        })
+                        .map((d) => (
+                          <SelectItem key={String(d.id)} value={String(d.id)}>
+                            {d.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>سبب التحويل (اختياري)</Label>
+                  <Textarea
+                    data-testid="input-jurisdiction-reason"
+                    value={resultForm.transferReason}
+                    onChange={(e) => setResultForm({ ...resultForm, transferReason: e.target.value })}
+                    placeholder="ملاحظات حول قرار المحكمة بعدم الاختصاص..."
+                    rows={2}
+                  />
+                </div>
+              </Card>
+            )}
+
+            {(() => {
+              const effId = resultDialogHearing?.caseId || resultForm.caseId;
+              const linked = effId ? getCaseById(effId) : null;
+              const showFailedSettlementChoice =
+                resultForm.result === HearingResult.SETTLEMENT_FAILED &&
+                !!(linked as any)?.isSettlementCase;
+              if (!showFailedSettlementChoice) return null;
+              return (
+                <Card className="p-4 space-y-3 border-orange-300">
+                  <p className="text-sm font-medium text-orange-700 flex items-center gap-1">
+                    <AlertTriangle className="w-4 h-4" />
+                    قضية بدأت من مداولة الصلح — اختر الإجراء
+                  </p>
+                  <div className="space-y-2">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="afterFailedSettlementChoice"
+                        value="close"
+                        checked={resultForm.afterFailedSettlementChoice === "close"}
+                        onChange={() => setResultForm({ ...resultForm, afterFailedSettlementChoice: "close" })}
+                        data-testid="radio-failed-settlement-close"
+                        className="mt-1"
+                      />
+                      <span className="text-sm">
+                        <strong>إغلاق القضية نهائياً</strong>
+                        <span className="block text-xs text-muted-foreground">
+                          تُغلق القضية ولا تستكمل في المحكمة.
+                        </span>
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="afterFailedSettlementChoice"
+                        value="continue"
+                        checked={resultForm.afterFailedSettlementChoice === "continue"}
+                        onChange={() => setResultForm({ ...resultForm, afterFailedSettlementChoice: "continue" })}
+                        data-testid="radio-failed-settlement-continue"
+                        className="mt-1"
+                      />
+                      <span className="text-sm">
+                        <strong>استكمال إجراءاتها</strong>
+                        <span className="block text-xs text-muted-foreground">
+                          تُحوَّل إلى مسار التقاضي العادي وتنتقل إلى مرحلة "أغلق طلب الصلح".
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                </Card>
+              );
+            })()}
           </div>
           <DialogFooter>
             <Button

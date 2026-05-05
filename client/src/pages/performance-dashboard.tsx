@@ -24,6 +24,7 @@ import {
   ConsultationStageLabels,
   CaseStage,
   ConsultationStatus,
+  ConsultationStage,
 } from "@shared/schema";
 
 export default function PerformanceDashboard() {
@@ -43,12 +44,20 @@ export default function PerformanceDashboard() {
   const workloads = getWorkloadOverview();
   const bottlenecks = getBottleneckReport();
 
+  // Post-rebuild: "delivered" is no longer a status — delivery is the
+  // workflow's terminal stage (ConsultationStage.COMPLETED). A consultation
+  // counts as completed for reporting if either status='closed' (early-
+  // closed) OR currentStage='منجزة' (delivered through the normal flow).
   const completedCases = cases.filter(c => c.currentStage === CaseStage.CLOSED).length;
-  const completedConsultations = consultations.filter(c => c.status === ConsultationStatus.CLOSED || c.status === ConsultationStatus.DELIVERED).length;
+  const completedConsultations = consultations.filter(
+    c => c.status === ConsultationStatus.CLOSED || c.currentStage === ConsultationStage.COMPLETED,
+  ).length;
   const totalCompleted = completedCases + completedConsultations;
 
   const activeCases = cases.filter(c => c.currentStage !== CaseStage.CLOSED).length;
-  const activeConsultations = consultations.filter(c => c.status !== ConsultationStatus.CLOSED && c.status !== ConsultationStatus.DELIVERED).length;
+  const activeConsultations = consultations.filter(
+    c => c.status !== ConsultationStatus.CLOSED && c.currentStage !== ConsultationStage.COMPLETED,
+  ).length;
 
   const avgCompletionTime = workloads.length > 0
     ? Math.round(workloads.reduce((sum, w) => sum + w.avgCompletionDays, 0) / workloads.length)

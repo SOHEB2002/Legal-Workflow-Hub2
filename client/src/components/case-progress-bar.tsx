@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, type CaseTypeValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
+import { CaseStageLabels, type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +27,11 @@ interface CaseProgressBarProps {
   userRole: UserRoleType;
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
-  caseType?: CaseTypeValue;
+  // Resolved canonical department name ("عام" / "تجاري" / "عمالي" / "إداري")
+  // used to pick the UnderStudy stage path. Callers should resolve this from
+  // the case's departmentId via useDepartments().getDepartmentName — DO NOT
+  // pass the case's caseType field, which is free-text user input.
+  departmentName?: string;
   clientRole?: string;
   memoRequired?: boolean;
   isSettlementCase?: boolean;
@@ -51,7 +55,7 @@ export function CaseProgressBar({
   userRole,
   disabled = false,
   caseClassification,
-  caseType,
+  departmentName,
   clientRole,
   memoRequired,
   isSettlementCase,
@@ -73,11 +77,44 @@ export function CaseProgressBar({
   const effectiveClassification = caseClassification || "قيد_الدراسة";
   let stagesOrder = getStagesForClassification(
     effectiveClassification as CaseClassificationValue,
-    caseType,
+    departmentName,
     clientRole,
     memoRequired,
     isSettlementCase,
   );
+  // Defensive safety net for cases where departmentName is missing or
+  // doesn't match one of the four canonical labels (legacy rows with no
+  // departmentId, the special "أخرى" department, or transient mismatches
+  // while the departments list is still loading from the server). After
+  // the schema switched to departmentName-driven routing this rarely
+  // triggers — but when it does, scan every variant for the classification
+  // and pick the first one that contains the case's current stage rather
+  // than collapsing the bar onto the wrong path with currentIndex=0.
+  if (stagesOrder.indexOf(normalizedStage) < 0) {
+    if (effectiveClassification === "قيد_الدراسة") {
+      const names: string[] = ["تجاري", "عمالي", "إداري", "عام"];
+      for (const n of names) {
+        const v = getStagesForClassification(effectiveClassification, n);
+        if (v.indexOf(normalizedStage) >= 0) {
+          stagesOrder = v;
+          break;
+        }
+      }
+    } else if (effectiveClassification === "منظورة_بالمحكمة") {
+      const variants = [
+        getStagesForClassification(effectiveClassification, undefined, undefined, false, true),
+        getStagesForClassification(effectiveClassification, undefined, "مدعى_عليه", true),
+        getStagesForClassification(effectiveClassification, undefined, "مدعي", true),
+        getStagesForClassification(effectiveClassification, undefined, undefined, false),
+      ];
+      for (const v of variants) {
+        if (v.indexOf(normalizedStage) >= 0) {
+          stagesOrder = v;
+          break;
+        }
+      }
+    }
+  }
   // Dynamic bridge for IN_COURT cases: if a memo was added after the case
   // already reached دراسة on the no-memo path, the memo variant returned
   // above doesn't include دراسة. Splice دراسة in just before the drafting
@@ -218,11 +255,17 @@ export function CaseProgressBar({
     setCourtCaseNumber("");
   };
 
-  const handleSettlementDecision = (target: "تحصيل" | "أغلق_طلب_الصلح" | "مقفلة") => {
+  const handleSettlementDecision = (
+    target: "تحصيل" | "أغلق_طلب_الصلح" | "مقفلة",
+    extraFields?: Record<string, unknown>,
+  ) => {
     // Pass the target explicitly so the cases-context doesn't have to guess
     // the next stage from a linear stages array — same approach used for
-    // the platform-review accept buttons.
-    onMoveToNext("", undefined, undefined, undefined, target);
+    // the platform-review accept buttons. extraFields lets the caller flip
+    // additional columns in the same PATCH (e.g. clearing isSettlementCase
+    // when a settlement-only case chooses to continue litigation after a
+    // failed conciliation).
+    onMoveToNext("", undefined, undefined, extraFields, target);
   };
 
   const handlePlatformReviewAddNotes = () => {
@@ -492,20 +535,52 @@ export function CaseProgressBar({
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {isSettlementCase
-                    ? <>سيتم إغلاق القضية حيث إن القضية بدأت من مرحلة مداولة الصلح.</>
-                    : <>سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف مسار التقاضي في المحكمة.</>}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter className="gap-2">
-                <AlertDialogCancel>إلغاء</AlertDialogCancel>
-                <AlertDialogAction onClick={() => handleSettlementDecision(isSettlementCase ? "مقفلة" : "أغلق_طلب_الصلح")}>
-                  تأكيد
-                </AlertDialogAction>
-              </AlertDialogFooter>
+              {isSettlementCase ? (
+                <>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>لم يتم الصلح — اختر الإجراء</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      هذه القضية بدأت من مرحلة مداولة الصلح. اختر:
+                      <br />
+                      <strong>إغلاق القضية نهائياً</strong> — تُغلق القضية ولا تستكمل في المحكمة.
+                      <br />
+                      <strong>استكمال إجراءاتها</strong> — تُحوَّل إلى مسار التقاضي العادي وتنتقل إلى مرحلة "أغلق طلب الصلح".
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter className="gap-2 flex-wrap">
+                    <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => handleSettlementDecision("أغلق_طلب_الصلح", { isSettlementCase: false, caseClassification: "قيد_الدراسة" })}
+                      data-testid="button-settlement-failed-continue"
+                      className="bg-blue-600 hover:bg-blue-700"
+                    >
+                      استكمال إجراءاتها
+                    </AlertDialogAction>
+                    <AlertDialogAction
+                      onClick={() => handleSettlementDecision("مقفلة")}
+                      data-testid="button-settlement-failed-close"
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      إغلاق القضية نهائياً
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </>
+              ) : (
+                <>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>تأكيد: لم يتم الصلح</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      سيتم نقل القضية إلى مرحلة <strong>أغلق طلب الصلح</strong> لاستئناف مسار التقاضي في المحكمة.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter className="gap-2">
+                    <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => handleSettlementDecision("أغلق_طلب_الصلح")}>
+                      تأكيد
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </>
+              )}
             </AlertDialogContent>
           </AlertDialog>
         </div>
@@ -750,14 +825,14 @@ export function CaseProgressBar({
                 data-testid="button-skip-data-completion"
               >
                 <SkipForward className="w-4 h-4 ml-1" />
-                الدعوى مكتملة - تجاوز استكمال البيانات
+                الدعوى مكتملة - تجاوز استكمال المرفقات والبيانات
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>تجاوز مرحلة استكمال البيانات</AlertDialogTitle>
+                <AlertDialogTitle>تجاوز مرحلة استكمال المرفقات والبيانات</AlertDialogTitle>
                 <AlertDialogDescription>
-                  سيتم تجاوز مرحلة "استكمال البيانات" والانتقال مباشرةً إلى مرحلة{" "}
+                  سيتم تجاوز مرحلة "استكمال المرفقات والبيانات" والانتقال مباشرةً إلى مرحلة{" "}
                   <strong>
                     {stagesOrder[currentIndex + 2]
                       ? getStageLabel(stagesOrder[currentIndex + 2])

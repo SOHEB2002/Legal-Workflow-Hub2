@@ -109,6 +109,18 @@ export const lawCases = pgTable("law_cases", {
   archiveReason: varchar("archive_reason", { length: 50 }),
   autoArchiveDate: varchar("auto_archive_date", { length: 50 }),
   isSettlementCase: boolean("is_settlement_case").default(false),
+  convertedFromConsultationId: varchar("converted_from_consultation_id", { length: 255 }),
+  // Phase-8 — orthogonal pause + await-completion state. paused_at
+  // non-null means the case is paused; awaiting_completion=true means
+  // it's parked on a "missing data" detour with saved_stage holding
+  // the stage value to restore on resume. status (workflow stage) is
+  // intentionally NOT touched on pause — pause is detected via
+  // paused_at IS NOT NULL. See script/add-workflow-pause-and-await-completion.sql.
+  pauseReason:        text("pause_reason"),
+  pausedBy:           varchar("paused_by", { length: 255 }),
+  pausedAt:           timestamp("paused_at"),
+  awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
+  savedStage:         varchar("saved_stage", { length: 50 }),
 });
 
 export const consultations = pgTable("consultations", {
@@ -116,8 +128,15 @@ export const consultations = pgTable("consultations", {
   consultationNumber: varchar("consultation_number", { length: 50 }).notNull().unique(),
   clientId: varchar("client_id", { length: 255 }).notNull(),
   consultationType: varchar("consultation_type", { length: 255 }).notNull(),
-  deliveryType: varchar("delivery_type", { length: 50 }).notNull(),
-  status: varchar("status", { length: 50 }).notNull(),
+  // @deprecated Phase-5 — the delivery-type concept (مكتوبة / شفهية) was
+  // dropped from the UI. Existing rows retain their value and the column
+  // stays for backwards compat with downstream readers; new inserts fall
+  // back to the default "مكتوبة" the storage layer supplies. Don't surface
+  // it in new UI; the early-close reason "answered_verbally" already
+  // covers the verbal-delivery case.
+  deliveryType: varchar("delivery_type", { length: 50 }).notNull().default("مكتوبة"),
+  currentStage: varchar("current_stage", { length: 50 }).notNull().default("استلام"),
+  status: varchar("status", { length: 20 }).notNull().default("active"),
   departmentId: varchar("department_id", { length: 255 }).notNull(),
   assignedTo: varchar("assigned_to", { length: 255 }),
   questionSummary: text("question_summary").notNull(),
@@ -127,10 +146,104 @@ export const consultations = pgTable("consultations", {
   googleDriveFolderId: varchar("google_drive_folder_id", { length: 255 }).default(""),
   reviewNotes: text("review_notes").default(""),
   reviewDecision: varchar("review_decision", { length: 50 }),
+  closureReason: varchar("closure_reason", { length: 50 }),
+  closureReasonOther: varchar("closure_reason_other", { length: 500 }),
+  // Phase-4 SLA columns. Category is set once at creation and drives the
+  // expectedDeliveryDate (createdAt + SLA days). The DB default mirrors the
+  // server fallback so manual inserts still get a valid category.
+  // Migration: script/add-consultation-category-and-due-date.sql.
+  category: varchar("category", { length: 50 }).notNull().default("عادية"),
+  expectedDeliveryDate: timestamp("expected_delivery_date"),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
   closedAt: timestamp("closed_at"),
+  // Phase-8 — orthogonal pause + await-completion state. For
+  // consultations the route layer also flips status="paused" / "active"
+  // (ConsultationStatus has the new value); pause_at IS NOT NULL is
+  // still the canonical paused indicator for the FE. saved_stage holds
+  // the stage value to restore on resume from await_completion.
+  // See script/add-workflow-pause-and-await-completion.sql.
+  pauseReason:        text("pause_reason"),
+  pausedBy:           varchar("paused_by", { length: 255 }),
+  pausedAt:           timestamp("paused_at"),
+  awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
+  savedStage:         varchar("saved_stage", { length: 50 }),
+});
+
+export const consultationStudies = pgTable("consultation_studies", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const consultationDrafts = pgTable("consultation_drafts", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  content: text("content").notNull().default(""),
+  createdBy: varchar("created_by", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const consultationReviews = pgTable("consultation_reviews", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  reviewerId: varchar("reviewer_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const consultationCommitteeDecisions = pgTable("consultation_committee_decisions", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  decidedBy: varchar("decided_by", { length: 255 }).notNull(),
+  decidedAt: timestamp("decided_at").defaultNow(),
+});
+
+export const consultationNoteOutcomes = pgTable("consultation_note_outcomes", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  outcome: varchar("outcome", { length: 20 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
+  recordedAt: timestamp("recorded_at").defaultNow(),
+});
+
+// Phase-5 — audit log for expectedDeliveryDate extensions. Each row
+// captures one extension (old → new) so the dialog can show a history
+// list. The corresponding consultations.expectedDeliveryDate is updated
+// in the same transaction as the insert (see storage.extendConsultationDelivery).
+// Migration: script/add-consultation-delivery-extensions.sql.
+export const consultationDeliveryExtensions = pgTable("consultation_delivery_extensions", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  oldExpectedDeliveryDate: timestamp("old_expected_delivery_date"),
+  newExpectedDeliveryDate: timestamp("new_expected_delivery_date").notNull(),
+  reason: text("reason").notNull().default(""),
+  extendedBy: varchar("extended_by", { length: 255 }).notNull(),
+  extendedAt: timestamp("extended_at").defaultNow(),
+});
+
+// Phase-6 — chronological activity log for consultations. One row per
+// meaningful workflow event (created, assigned, stage transitions,
+// reviews, committee decisions, take-notes outcomes, delivery
+// extensions, conversion to case, early close, general notes). Inserts
+// happen server-side only, in the SAME DB transaction as the underlying
+// state change — see consultation handlers in routes.ts. Migration:
+// script/add-consultation-activity-log.sql.
+export const consultationActivityLog = pgTable("consultation_activity_log", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  consultationId: varchar("consultation_id", { length: 255 }).notNull(),
+  activityType: varchar("activity_type", { length: 50 }).notNull(),
+  description: text("description").notNull(),
+  metadata: jsonb("metadata").default({}),
+  performedBy: varchar("performed_by", { length: 255 }),
+  performedAt: timestamp("performed_at").defaultNow(),
 });
 
 export const hearings = pgTable("hearings", {
@@ -285,6 +398,37 @@ export const memos = pgTable("memos", {
   reminderSentOverdue: boolean("reminder_sent_overdue").default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  // Phase-8 — orthogonal pause + await-completion state. status (memo
+  // workflow state) is intentionally NOT touched on pause — pause is
+  // detected via paused_at IS NOT NULL. saved_stage on memos stores
+  // the memo status to restore on resume from await_completion.
+  // See script/add-workflow-pause-and-await-completion.sql.
+  pauseReason:        text("pause_reason"),
+  pausedBy:           varchar("paused_by", { length: 255 }),
+  pausedAt:           timestamp("paused_at"),
+  awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
+  savedStage:         varchar("saved_stage", { length: 50 }),
+  // Phase-9 — review-workflow stage column. Mirrors the consultations
+  // currentStage axis but with memo-specific labels (جاهزة_للرفع /
+  // مرفوعة instead of جاهزة_للتسليم / منجزة). Nullable because legacy
+  // rows pre-Phase-9 don't have a stage; the backfill in
+  // script/backfill-memo-stages.sql maps the old `status` enum to a
+  // stage. The legacy `status` column above stays as-is — cancellation
+  // ("ملغاة") lives there, not on currentStage.
+  currentStage:       varchar("current_stage", { length: 50 }),
+  // Phase-9.1 — designated peer reviewer for the مراجعة_داخلية stage.
+  // Mirrors lawCases.internalReviewerId. Set when the assigned lawyer
+  // advances DRAFTING → INTERNAL_REVIEW; cleared/overwritten on the
+  // next round if the memo loops back via "يوجد ملاحظات". The
+  // /internal-review endpoint locks the decision to (this user) OR
+  // branch_manager. Migration: script/add-memo-internal-reviewer.sql.
+  internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
+  // Phase-9.2 — reason captured when a memo is cancelled via the
+  // "لا يحتاج مذكرة" flow. Required at the FE; nullable here because
+  // legacy cancellations didn't capture one. The actor + timestamp are
+  // recorded in memo_activity_log alongside the reason.
+  // Migration: script/add-memo-cancellation-reason.sql.
+  cancellationReason: text("cancellation_reason"),
 });
 
 export const caseActivityLog = pgTable("case_activity_log", {
@@ -300,6 +444,55 @@ export const caseActivityLog = pgTable("case_activity_log", {
   relatedEntityType: varchar("related_entity_type", { length: 50 }),
   relatedEntityId: varchar("related_entity_id", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Phase-8 — memo activity log (mirrors consultation_activity_log).
+// One row per meaningful event on a memo. Inserts happen server-side in
+// the same DB transaction as the underlying state change.
+// Migration: script/add-memo-activity-log.sql.
+export const memoActivityLog = pgTable("memo_activity_log", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  activityType: varchar("activity_type", { length: 50 }).notNull(),
+  description: text("description").notNull(),
+  metadata: jsonb("metadata").default({}),
+  performedBy: varchar("performed_by", { length: 255 }),
+  performedAt: timestamp("performed_at").defaultNow(),
+});
+
+// Phase-9 — review-workflow helper tables. One row per peer-review
+// decision, committee decision, and take-notes outcome on a memo.
+// Mirrors the three consultation_* helper tables; values come from the
+// shared InternalReviewDecision / CommitteeDecision / NoteOutcome enums
+// (the Arabic tokens are identical across entities). Inserts happen
+// server-side in the same DB transaction as the memo stage update and
+// the activity log row — see storage.recordMemo*.
+// Migration: script/add-memo-helper-tables.sql.
+export const memoReviews = pgTable("memo_reviews", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  reviewerId: varchar("reviewer_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const memoCommitteeDecisions = pgTable("memo_committee_decisions", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  decidedBy: varchar("decided_by", { length: 255 }).notNull(),
+  decidedAt: timestamp("decided_at").defaultNow(),
+});
+
+export const memoNoteOutcomes = pgTable("memo_note_outcomes", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  outcome: varchar("outcome", { length: 20 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
+  recordedAt: timestamp("recorded_at").defaultNow(),
 });
 
 export const caseNotes = pgTable("case_notes", {
@@ -405,6 +598,17 @@ export const insertCaseNoteDbSchema = createInsertSchema(caseNotes).omit({ creat
 export const insertCaseCommentDbSchema = createInsertSchema(caseComments).omit({ createdAt: true });
 export const insertLegalDeadlineDbSchema = createInsertSchema(legalDeadlines).omit({ createdAt: true });
 export const insertDelegationDbSchema = createInsertSchema(delegationsTable).omit({ createdAt: true });
+export const insertConsultationStudyDbSchema = createInsertSchema(consultationStudies).omit({ createdAt: true });
+export const insertConsultationDraftDbSchema = createInsertSchema(consultationDrafts).omit({ createdAt: true });
+export const insertConsultationReviewDbSchema = createInsertSchema(consultationReviews).omit({ createdAt: true });
+export const insertConsultationCommitteeDecisionDbSchema = createInsertSchema(consultationCommitteeDecisions).omit({ decidedAt: true });
+export const insertConsultationNoteOutcomeDbSchema = createInsertSchema(consultationNoteOutcomes).omit({ recordedAt: true });
+export const insertConsultationDeliveryExtensionDbSchema = createInsertSchema(consultationDeliveryExtensions).omit({ extendedAt: true });
+export const insertConsultationActivityLogDbSchema = createInsertSchema(consultationActivityLog).omit({ performedAt: true });
+// Phase-9 — memo review-workflow helper tables.
+export const insertMemoReviewDbSchema = createInsertSchema(memoReviews).omit({ createdAt: true });
+export const insertMemoCommitteeDecisionDbSchema = createInsertSchema(memoCommitteeDecisions).omit({ decidedAt: true });
+export const insertMemoNoteOutcomeDbSchema = createInsertSchema(memoNoteOutcomes).omit({ recordedAt: true });
 export const insertSavedFilterDbSchema = createInsertSchema(savedFilters).omit({ createdAt: true });
 
 // ==================== Select Types ====================
@@ -425,6 +629,15 @@ export type DbCaseNote = typeof caseNotes.$inferSelect;
 export type DbCaseComment = typeof caseComments.$inferSelect;
 export type DbLegalDeadline = typeof legalDeadlines.$inferSelect;
 export type DbDelegation = typeof delegationsTable.$inferSelect;
+export type DbConsultationStudy = typeof consultationStudies.$inferSelect;
+export type DbConsultationDraft = typeof consultationDrafts.$inferSelect;
+export type DbConsultationReview = typeof consultationReviews.$inferSelect;
+export type DbConsultationCommitteeDecision = typeof consultationCommitteeDecisions.$inferSelect;
+export type DbConsultationNoteOutcome = typeof consultationNoteOutcomes.$inferSelect;
+export type DbConsultationActivityLog = typeof consultationActivityLog.$inferSelect;
+export type DbMemoReview = typeof memoReviews.$inferSelect;
+export type DbMemoCommitteeDecision = typeof memoCommitteeDecisions.$inferSelect;
+export type DbMemoNoteOutcome = typeof memoNoteOutcomes.$inferSelect;
 export type DbSavedFilter = typeof savedFilters.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
@@ -541,7 +754,10 @@ export type CaseStatusValue = typeof CaseStatus[keyof typeof CaseStatus];
 
 export const CaseStatusLabels: Record<CaseStatusValue, string> = {
   "استلام": "استلام",
-  "استكمال_البيانات": "استكمال البيانات",
+  // Phase-8 — label-only rename (DB value "استكمال_البيانات" unchanged).
+  // Same Arabic display label as the consultations-side new stage value
+  // ConsultationStage.RECEIVED_PENDING_COMPLETION ("استكمال_المرفقات_والبيانات").
+  "استكمال_البيانات": "استكمال المرفقات والبيانات",
   "دراسة": "دراسة",
   "تحرير_المذكرة": "تحرير المذكرة",
   "لجنة_المراجعة": "لجنة المراجعة",
@@ -592,7 +808,9 @@ export type CaseStageValue = typeof CaseStage[keyof typeof CaseStage];
 export const CaseStageLabels: Record<CaseStageValue, string> = {
   "استلام": "استلام",
   "تحديد_تاريخ_التقادم": "تحديد تاريخ التقادم",
-  "استكمال_البيانات": "استكمال البيانات",
+  // Phase-8 — label-only rename (DB value unchanged); shared label with
+  // the consultations-side equivalent stage.
+  "استكمال_البيانات": "استكمال المرفقات والبيانات",
   "دراسة": "دراسة",
   "توجيه_العميل_بالتسوية": "توجيه العميل بالتسوية",
   "بانتظار_رفع_العميل_للتسوية": "بانتظار رفع العميل للتسوية",
@@ -773,9 +991,17 @@ export const PostTrialStages: CaseStageValue[] = [
   "مقفلة",
 ];
 
+// Stage selection is keyed on the case's DEPARTMENT (a stable FK to the
+// departments table), not on caseType. caseType is a free-text user input
+// that often holds a sub-type label like "بيع وتوريد" / "نزاع تجاري" and
+// must not be used to route workflows. The four canonical department
+// names ("عام" / "تجاري" / "عمالي" / "إداري") map 1:1 to the four
+// UnderStudy stage arrays — callers should pass the resolved department
+// name (e.g. via getDepartmentName(departmentId) on the client, or
+// storage.getDepartmentById(departmentId)?.name on the server).
 export function getStagesForClassification(
   classification: CaseClassificationValue,
-  caseType?: CaseTypeValue,
+  departmentName?: string,
   clientRole?: string,
   memoRequired?: boolean,
   isSettlementCase?: boolean,
@@ -793,7 +1019,7 @@ export function getStagesForClassification(
   }
 
   if (classification === "قيد_الدراسة") {
-    switch (caseType) {
+    switch (departmentName) {
       case "عام": return UnderStudyGeneralStages;
       case "تجاري": return UnderStudyCommercialStages;
       case "عمالي": return UnderStudyLaborStages;
@@ -887,30 +1113,150 @@ export const ClientType = {
 
 export type ClientTypeValue = typeof ClientType[keyof typeof ClientType];
 
-// ==================== حالات الاستشارات ====================
+// ==================== Consultation Stage (rebuild per consultations-rebuild-spec.md §3.1.1) ====================
+// Phase-8 — RECEIVED_PENDING_COMPLETION inserted at position 2 of the
+// linear path (between RECEIVED and STUDY). Distinct value from the
+// cases-side "استكمال_البيانات" (which is unchanged); both render with
+// the same Arabic label "استكمال المرفقات والبيانات" — the value is an
+// internal token, the label is what users see.
+export const ConsultationStage = {
+  RECEIVED:                    "استلام",
+  RECEIVED_PENDING_COMPLETION: "استكمال_المرفقات_والبيانات",
+  STUDY:                       "دراسة",
+  DRAFTING:                    "تحرير",
+  INTERNAL_REVIEW:             "مراجعة_داخلية",
+  COMMITTEE:                   "لجنة_مراجعة",
+  TAKING_NOTES:                "الأخذ_بالملاحظات",
+  READY:                       "جاهزة_للتسليم",
+  COMPLETED:                   "منجزة",
+} as const;
+
+export type ConsultationStageValue = typeof ConsultationStage[keyof typeof ConsultationStage];
+
+export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
+  "استلام": "استلام",
+  "استكمال_المرفقات_والبيانات": "استكمال المرفقات والبيانات",
+  "دراسة": "دراسة",
+  "تحرير": "تحرير",
+  "مراجعة_داخلية": "مراجعة داخلية",
+  "لجنة_مراجعة": "لجنة مراجعة",
+  "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
+  "جاهزة_للتسليم": "جاهزة للتسليم",
+  "منجزة": "منجزة",
+};
+
+// Linear happy-path order (excludes TAKING_NOTES, which is conditional).
+// Phase-8 — RECEIVED_PENDING_COMPLETION sits between RECEIVED and STUDY.
+// On entering this stage the FE shows a "تجاوز" button alongside the
+// normal advance, which jumps directly to STUDY without requiring any
+// document upload (handled in the await-completion route layer).
+export const ConsultationStagesOrder: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.STUDY,
+  ConsultationStage.DRAFTING,
+  ConsultationStage.INTERNAL_REVIEW,
+  ConsultationStage.COMMITTEE,
+  ConsultationStage.READY,
+  ConsultationStage.COMPLETED,
+];
+
+// All consultation stages in canonical order, including the conditional
+// TAKING_NOTES branch (entered only when committee returns يوجد_ملاحظات).
+// Used for rollback validation; the linear-path Order excludes TAKING_NOTES.
+// TAKING_NOTES branches off ONLY from COMMITTEE and always returns to
+// READY after the outcome — it's not in the linear path on purpose.
+export const ConsultationStagesAll: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.STUDY,
+  ConsultationStage.DRAFTING,
+  ConsultationStage.INTERNAL_REVIEW,
+  ConsultationStage.COMMITTEE,
+  ConsultationStage.TAKING_NOTES,
+  ConsultationStage.READY,
+  ConsultationStage.COMPLETED,
+];
+
+// ==================== Consultation Category (Phase 4 — SLA categories) ====================
+// Category is set once at consultation creation (no manual override) and
+// drives the expectedDeliveryDate via SLA_DAYS. Stored as plain varchar in
+// the DB so a future category addition is a value change with no DDL.
+export const ConsultationCategory = {
+  QUICK:    "سريعة",
+  STANDARD: "عادية",
+  LONG:     "طويلة",
+} as const;
+
+export type ConsultationCategoryValue = typeof ConsultationCategory[keyof typeof ConsultationCategory];
+
+// SLA days per category — used server-side on insert to compute
+// expectedDeliveryDate = createdAt + SLA_DAYS[category].
+export const ConsultationCategorySLADays: Record<ConsultationCategoryValue, number> = {
+  "سريعة": 1,
+  "عادية": 3,
+  "طويلة": 14,
+};
+
+export const ConsultationCategoryLabels: Record<ConsultationCategoryValue, string> = {
+  "سريعة": "سريعة (يوم)",
+  "عادية": "عادية (3 أيام)",
+  "طويلة": "طويلة (14 يوم)",
+};
+
+// ==================== Consultation Status (per consultations-rebuild-spec.md §3.1.2) ====================
+// Phase-8 — PAUSED added as an orthogonal lifecycle value. The pause
+// route flips status to "paused" and clears it back to "active" on
+// unpause; pause_at IS NOT NULL is still the canonical paused indicator
+// for the FE (consistent with cases / memos which don't carry a status
+// value for pause).
 export const ConsultationStatus = {
-  RECEIVED: "استلام",
-  STUDY: "دراسة",
-  PREPARING_RESPONSE: "إعداد_الرد",
-  REVIEW_COMMITTEE: "لجنة_المراجعة",
-  AMENDMENTS: "تعديلات",
-  READY: "جاهز",
-  DELIVERED: "مسلّم",
-  CLOSED: "مغلق",
+  ACTIVE:    "active",
+  PAUSED:    "paused",
+  CONVERTED: "converted",
+  CLOSED:    "closed",
 } as const;
 
 export type ConsultationStatusValue = typeof ConsultationStatus[keyof typeof ConsultationStatus];
 
 export const ConsultationStatusLabels: Record<ConsultationStatusValue, string> = {
-  "استلام": "استلام",
-  "دراسة": "دراسة",
-  "إعداد_الرد": "إعداد الرد",
-  "لجنة_المراجعة": "لجنة المراجعة",
-  "تعديلات": "تعديلات",
-  "جاهز": "جاهز",
-  "مسلّم": "مسلّم",
-  "مغلق": "مغلق",
+  active:    "active",
+  paused:    "معلّقة",
+  converted: "converted",
+  closed:    "closed",
 };
+// ==================== Consultation review/committee/outcome decision values ====================
+// Per consultations-rebuild-spec.md §3.1.3 / §3.2.1. Used by the dedicated
+// /internal-review, /committee-decision, /take-notes-outcome endpoints.
+
+// Aligned with CommitteeDecision.APPROVED on the Arabic value "اعتماد"
+// per the dev-feedback rename (Phase 4). The "تم_إعادة_التقديم"
+// resubmitted decision was retired in the same pass — the dialog now
+// has only two outcomes (اعتماد / يوجد_ملاحظات). Existing review rows
+// stored with the old "تم" or "تم_إعادة_التقديم" string remain in the
+// DB; the column is plain varchar so no migration is required.
+export const InternalReviewDecision = {
+  PASSED:      "اعتماد",
+  NEEDS_NOTES: "يوجد_ملاحظات",
+} as const;
+
+export type InternalReviewDecisionValue = typeof InternalReviewDecision[keyof typeof InternalReviewDecision];
+
+export const CommitteeDecision = {
+  APPROVED:    "اعتماد",
+  NEEDS_NOTES: "يوجد_ملاحظات",
+} as const;
+
+export type CommitteeDecisionValue = typeof CommitteeDecision[keyof typeof CommitteeDecision];
+
+export const NoteOutcome = {
+  DONE:     "تم",
+  NOT_DONE: "لم_يتم",
+  PARTIAL:  "جزئياً",
+} as const;
+
+export type NoteOutcomeValue = typeof NoteOutcome[keyof typeof NoteOutcome];
+
 
 // ==================== نوع تسليم الاستشارة ====================
 export const DeliveryType = {
@@ -942,6 +1288,12 @@ export const HearingResult = {
   SETTLEMENT_REACHED: "تم_الصلح",
   SETTLEMENT_FAILED: "لم_يتم_الصلح",
   DISMISSAL: "شطب",
+  // Court ruling: lack of jurisdiction. Triggers a department transfer
+  // on the linked case (same flow as the manual transfer button on
+  // cases.tsx). The FE shows a department picker when this result is
+  // chosen; the server applies the transfer and emits a
+  // jurisdiction_transferred activity log entry.
+  JURISDICTION_DECLINED: "عدم_الاختصاص",
   OTHER: "أخرى",
 } as const;
 
@@ -961,6 +1313,7 @@ export const HearingResultLabels: Record<HearingResultValue, string> = {
   "تم_الصلح": "تم الصلح",
   "لم_يتم_الصلح": "لم يتم الصلح",
   "شطب": "شطب",
+  "عدم_الاختصاص": "عدم الاختصاص",
   "أخرى": "أخرى",
 };
 
@@ -1103,6 +1456,61 @@ export const MemoStatusLabels: Record<MemoStatusValue, string> = {
   "ملغاة": "ملغاة",
 };
 
+// ==================== Memo Stage (Phase-9 review workflow) ====================
+// Mirrors the consultations 7+1-stage workflow but with memo-specific
+// terminal labels: جاهزة_للرفع / مرفوعة (filing) instead of
+// جاهزة_للتسليم / منجزة (delivery). TAKING_NOTES is conditional, only
+// reached when committee returns "يوجد_ملاحظات".
+//
+// Stored on memos.current_stage (added in Phase-9). The legacy `status`
+// column is retained for cancellation ("ملغاة") and back-compat reads;
+// the new workflow operates on currentStage.
+export const MemoStage = {
+  RECEIVED:        "استلام",
+  DRAFTING:        "تحرير",
+  INTERNAL_REVIEW: "مراجعة_داخلية",
+  COMMITTEE:       "لجنة_مراجعة",
+  TAKING_NOTES:    "الأخذ_بالملاحظات",
+  READY:           "جاهزة_للرفع",
+  FILED:           "مرفوعة",
+} as const;
+
+export type MemoStageValue = typeof MemoStage[keyof typeof MemoStage];
+
+export const MemoStageLabels: Record<MemoStageValue, string> = {
+  "استلام":           "استلام",
+  "تحرير":            "تحرير",
+  "مراجعة_داخلية":    "مراجعة داخلية",
+  "لجنة_مراجعة":      "لجنة مراجعة",
+  "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
+  "جاهزة_للرفع":      "جاهزة للرفع",
+  "مرفوعة":           "مرفوعة",
+};
+
+// Linear happy-path order (excludes TAKING_NOTES, which is conditional).
+export const MemoStagesOrder: MemoStageValue[] = [
+  MemoStage.RECEIVED,
+  MemoStage.DRAFTING,
+  MemoStage.INTERNAL_REVIEW,
+  MemoStage.COMMITTEE,
+  MemoStage.READY,
+  MemoStage.FILED,
+];
+
+// All stages in canonical order, including the conditional TAKING_NOTES
+// branch (entered only when committee returns يوجد_ملاحظات). Used for
+// rollback validation and for the stages bar when the memo has been
+// through TAKING_NOTES at least once.
+export const MemoStagesAll: MemoStageValue[] = [
+  MemoStage.RECEIVED,
+  MemoStage.DRAFTING,
+  MemoStage.INTERNAL_REVIEW,
+  MemoStage.COMMITTEE,
+  MemoStage.TAKING_NOTES,
+  MemoStage.READY,
+  MemoStage.FILED,
+];
+
 // ==================== أنواع المستندات ====================
 export const DocumentType = {
   ID: "هوية",
@@ -1217,12 +1625,21 @@ export interface LawCase {
   archiveReason: string | null;
   autoArchiveDate: string | null;
   isSettlementCase: boolean;
+  convertedFromConsultationId: string | null;
   closureReason: string | null;
   closureReasonOther: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  // Phase-8 — orthogonal pause + await-completion state. paused_at
+  // non-null is the canonical "this case is paused" indicator; status
+  // (workflow stage) is intentionally not touched.
+  pauseReason: string | null;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  awaitingCompletion: boolean;
+  savedStage: string | null;
 }
 
 export interface CaseComment {
@@ -1240,6 +1657,7 @@ export interface Consultation {
   clientId: string;
   consultationType: CaseTypeValue;
   deliveryType: DeliveryTypeValue;
+  currentStage: ConsultationStageValue;
   status: ConsultationStatusValue;
   departmentId: string;
   assignedTo: string | null;
@@ -1250,10 +1668,240 @@ export interface Consultation {
   googleDriveFolderId: string;
   reviewNotes: string;
   reviewDecision: ReviewDecisionType | null;
+  closureReason: string | null;
+  closureReasonOther: string | null;
+  category: ConsultationCategoryValue;
+  expectedDeliveryDate: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
   closedAt: string | null;
+  // Phase-8 — orthogonal pause + await-completion state. status also
+  // flips to "paused" / back to "active" on the consultations side
+  // (ConsultationStatus has the value); paused_at IS NOT NULL stays
+  // the canonical FE indicator across all 3 entities.
+  pauseReason: string | null;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  awaitingCompletion: boolean;
+  savedStage: string | null;
+}
+
+// Per consultations-rebuild-spec.md §3.2.2 (early-close): "match the cases
+// early-close pattern (4 reasons + 'other' with custom text)". The spec
+// doesn't enumerate the 4 reasons so we pick four reasonable consultation-
+// domain values; English keys/values keep this commit free of typed Arabic.
+// Frontend can map keys to Arabic display labels in a later commit.
+export const ConsultationClosureReason = {
+  CLIENT_CANCELLED:    "client_cancelled",
+  ANSWERED_VERBALLY:   "answered_verbally",
+  DUPLICATE:           "duplicate",
+  NO_LONGER_NEEDED:    "no_longer_needed",
+  OTHER:               "other",
+} as const;
+
+export type ConsultationClosureReasonValue = typeof ConsultationClosureReason[keyof typeof ConsultationClosureReason];
+
+// ==================== Consultation helper-row interfaces (rebuild §3.1.3) ====================
+export interface ConsultationStudy {
+  id: string;
+  consultationId: string;
+  notes: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ConsultationDraft {
+  id: string;
+  consultationId: string;
+  content: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ConsultationReview {
+  id: string;
+  consultationId: string;
+  reviewerId: string;
+  // values: اعتماد | يوجد_ملاحظات (Phase 4 trim — the resubmitted decision
+  // was retired and the positive decision was renamed from "تم" to "اعتماد"
+  // to match the committee outcome label).
+  decision: string;
+  notes: string;
+  createdAt: string;
+}
+
+export interface ConsultationCommitteeDecision {
+  id: string;
+  consultationId: string;
+  // values: اعتماد | يوجد_ملاحظات (per spec §3.1.3 / §3.2.1)
+  decision: string;
+  notes: string;
+  decidedBy: string;
+  decidedAt: string;
+}
+
+export interface ConsultationNoteOutcome {
+  id: string;
+  consultationId: string;
+  // values: تم | لم_يتم | جزئياً (per spec §3.1.3 / §3.2.1)
+  outcome: string;
+  notes: string;
+  recordedBy: string;
+  recordedAt: string;
+}
+
+// Phase-5 — one row per expectedDeliveryDate extension. The dialog
+// renders these as a collapsible history list. oldExpectedDeliveryDate
+// is nullable so the very first extension on a row that never had a
+// computed due date (legacy data) still records cleanly.
+export interface ConsultationDeliveryExtension {
+  id: string;
+  consultationId: string;
+  oldExpectedDeliveryDate: string | null;
+  newExpectedDeliveryDate: string;
+  reason: string;
+  extendedBy: string;
+  extendedAt: string;
+}
+
+// Phase-6 — activity-log entry mirroring the case_activity_log pattern.
+// One row per meaningful event on a consultation. metadata carries the
+// structured details specific to each activityType so the timeline
+// can render rich descriptions without extra joins.
+// Phase-8 additions: paused / unpaused / await_completion /
+// resume_from_completion / completion_skipped. completion_skipped is
+// consultations-only (the "تجاوز" button on the new
+// RECEIVED_PENDING_COMPLETION stage); the other 4 also exist on cases
+// and memos.
+export const ConsultationActivityType = {
+  CREATED:                "created",
+  ASSIGNED:               "assigned",
+  STAGE_ADVANCED:         "stage_advanced",
+  STAGE_RETURNED:         "stage_returned",
+  INTERNAL_REVIEW:        "internal_review",
+  COMMITTEE_DECISION:     "committee_decision",
+  TAKE_NOTES_OUTCOME:     "take_notes_outcome",
+  DELIVERY_EXTENDED:      "delivery_extended",
+  CONVERTED_TO_CASE:      "converted_to_case",
+  EARLY_CLOSED:           "early_closed",
+  GENERAL_NOTE:           "general_note",
+  PAUSED:                 "paused",
+  UNPAUSED:               "unpaused",
+  AWAIT_COMPLETION:       "await_completion",
+  RESUME_FROM_COMPLETION: "resume_from_completion",
+  COMPLETION_SKIPPED:     "completion_skipped",
+} as const;
+
+export type ConsultationActivityTypeValue =
+  typeof ConsultationActivityType[keyof typeof ConsultationActivityType];
+
+export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValue, string> = {
+  created:                "إنشاء",
+  assigned:               "إسناد",
+  stage_advanced:         "تقدم في المرحلة",
+  stage_returned:         "إرجاع للمرحلة السابقة",
+  internal_review:        "مراجعة داخلية",
+  committee_decision:     "قرار اللجنة",
+  take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
+  delivery_extended:      "تمديد تاريخ التسليم",
+  converted_to_case:      "تحويل إلى قضية",
+  early_closed:           "إغلاق مبكر",
+  general_note:           "ملاحظة عامة",
+  paused:                 "تعليق",
+  unpaused:               "إلغاء التعليق",
+  await_completion:       "بانتظار استكمال المرفقات والبيانات",
+  resume_from_completion: "العودة من الاستكمال",
+  completion_skipped:     "تجاوز مرحلة الاستكمال",
+};
+
+export interface ConsultationActivity {
+  id: string;
+  consultationId: string;
+  activityType: string;
+  description: string;
+  metadata: Record<string, any>;
+  performedBy: string | null;
+  performedAt: string;
+}
+
+// Phase-8 — memo activity log mirroring ConsultationActivityType.
+// Phase-9 — extended with the review-workflow events (assigned, stage
+// transitions, internal-review, committee-decision, take-notes-outcome)
+// to match the consultations side. Stored as plain varchar so adding a
+// new event kind is a value change, not a DDL change.
+export const MemoActivityType = {
+  CREATED:                "created",
+  ASSIGNED:               "assigned",
+  STAGE_ADVANCED:         "stage_advanced",
+  STAGE_RETURNED:         "stage_returned",
+  INTERNAL_REVIEW:        "internal_review",
+  COMMITTEE_DECISION:     "committee_decision",
+  TAKE_NOTES_OUTCOME:     "take_notes_outcome",
+  PAUSED:                 "paused",
+  UNPAUSED:               "unpaused",
+  AWAIT_COMPLETION:       "await_completion",
+  RESUME_FROM_COMPLETION: "resume_from_completion",
+  CANCELLED:              "cancelled",
+} as const;
+
+export type MemoActivityTypeValue =
+  typeof MemoActivityType[keyof typeof MemoActivityType];
+
+export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
+  created:                "إنشاء",
+  assigned:               "إسناد",
+  stage_advanced:         "تقدم في المرحلة",
+  stage_returned:         "إرجاع للمرحلة السابقة",
+  internal_review:        "مراجعة داخلية",
+  committee_decision:     "قرار اللجنة",
+  take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
+  paused:                 "تعليق",
+  unpaused:               "إلغاء التعليق",
+  await_completion:       "بانتظار استكمال المرفقات والبيانات",
+  resume_from_completion: "العودة من الاستكمال",
+  cancelled:              "إلغاء المذكرة",
+};
+
+export interface MemoActivity {
+  id: string;
+  memoId: string;
+  activityType: string;
+  description: string;
+  metadata: Record<string, any>;
+  performedBy: string | null;
+  performedAt: string;
+}
+
+// Phase-9 — review-workflow helper-row interfaces. Mirror the
+// consultation_* counterparts. The decision/outcome columns hold the
+// shared Arabic enum values (InternalReviewDecision / CommitteeDecision
+// / NoteOutcome) — same tokens as on the consultations side.
+export interface MemoReview {
+  id: string;
+  memoId: string;
+  reviewerId: string;
+  decision: string;
+  notes: string;
+  createdAt: string;
+}
+
+export interface MemoCommitteeDecision {
+  id: string;
+  memoId: string;
+  decision: string;
+  notes: string;
+  decidedBy: string;
+  decidedAt: string;
+}
+
+export interface MemoNoteOutcome {
+  id: string;
+  memoId: string;
+  outcome: string;
+  notes: string;
+  recordedBy: string;
+  recordedAt: string;
 }
 
 export interface Hearing {
@@ -1391,6 +2039,25 @@ export interface Memo {
   reminderSentOverdue: boolean;
   createdAt: string;
   updatedAt: string;
+  // Phase-8 — orthogonal pause + await-completion state. paused_at
+  // non-null is the canonical "this memo is paused" indicator; status
+  // (memo workflow state) is intentionally not touched. saved_stage
+  // stores the memo status to restore on resume from await_completion.
+  pauseReason: string | null;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  awaitingCompletion: boolean;
+  savedStage: string | null;
+  // Phase-9 — review-workflow stage. Null on legacy memos until the
+  // backfill in script/backfill-memo-stages.sql runs. New memos start
+  // at MemoStage.RECEIVED ("استلام").
+  currentStage: MemoStageValue | null;
+  // Phase-9.1 — designated peer reviewer for the مراجعة_داخلية stage.
+  // Mirrors LawCase.internalReviewerId.
+  internalReviewerId: string | null;
+  // Phase-9.2 — reason captured at cancellation time. Null for legacy
+  // pre-feature memos that were cancelled without a reason.
+  cancellationReason: string | null;
 }
 
 // ==================== أنواع التواصل مع العملاء ====================
@@ -1552,14 +2219,32 @@ export type InsertCase = z.infer<typeof insertCaseSchema>;
 export const insertConsultationSchema = z.object({
   clientId: z.string().min(1, "العميل مطلوب"),
   consultationType: z.string().min(1, "نوع الاستشارة مطلوب"),
-  deliveryType: z.enum(["مكتوبة", "شفهية"]),
+  // @deprecated Phase-5 — deliveryType was retired from the UI. Kept
+  // optional in the API schema so older clients still validate; the
+  // server falls back to "مكتوبة" via the column default.
+  deliveryType: z.enum(["مكتوبة", "شفهية"]).optional(),
   departmentId: z.string().optional(),
   questionSummary: z.string().min(1, "ملخص السؤال مطلوب"),
   whatsappGroupLink: z.string().optional().default(""),
   googleDriveFolderId: z.string().optional().default(""),
+  // Phase-4 SLA category. Defaults to "عادية" (3-day SLA) so older clients
+  // that don't send the field get the standard SLA. The server uses this
+  // to compute expectedDeliveryDate at insert time.
+  category: z.enum(["سريعة", "عادية", "طويلة"]).optional().default("عادية"),
 });
 
 export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
+
+// Phase-5 — body for POST /api/consultations/:id/extend-delivery.
+// newExpectedDeliveryDate must parse as a date; we keep it as a string in
+// the wire format and let the route turn it into a Date. reason is
+// required (free text) so the audit log carries enough context.
+export const extendConsultationDeliverySchema = z.object({
+  newExpectedDeliveryDate: z.string().min(1, "تاريخ التسليم الجديد مطلوب"),
+  reason: z.string().min(1, "سبب التمديد مطلوب"),
+});
+
+export type ExtendConsultationDeliveryInput = z.infer<typeof extendConsultationDeliverySchema>;
 
 export const insertHearingSchema = z.object({
   caseId: z.string().min(1, "القضية مطلوبة"),
@@ -1577,8 +2262,12 @@ export const insertHearingSchema = z.object({
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
 
 export const hearingResultSchema = z.object({
-  result: z.enum(["موعد_جديد", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "أخرى"]),
+  result: z.enum(["موعد_جديد", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "عدم_الاختصاص", "أخرى"]),
   resultDetails: z.string().optional().default(""),
+  // Jurisdiction-declined transfer payload. Required iff result===عدم_الاختصاص.
+  // Applied server-side to the linked case (departmentId, stage reset, lawyers cleared).
+  transferToDepartmentId: z.string().nullable().optional(),
+  transferReason: z.string().optional(),
   // Judgment fields
   judgmentType: z.enum(["لصالحنا", "ضدنا", "جزئي"]).nullable().optional(),
   judgmentFinal: z.boolean().nullable().optional(),
@@ -1596,6 +2285,11 @@ export const hearingResultSchema = z.object({
   opponentResponseRequired: z.boolean().optional().default(false),
   // Conciliation result
   conciliationResult: z.enum(["تم_الصلح", "لم_يتم_الصلح"]).nullable().optional(),
+  // Settlement-only cases (isSettlementCase=true) need an explicit choice on
+  // "لم يتم الصلح": "close" finalizes and closes the case, "continue" flips
+  // isSettlementCase=false and routes the case onto the regular litigation
+  // path. Non-settlement cases ignore this field.
+  afterFailedSettlementChoice: z.enum(["close", "continue"]).nullable().optional(),
   userId: z.string().optional(),
   caseId: z.string().nullable().optional(),
 });
@@ -2294,6 +2988,15 @@ export const CaseActivityActionLabels: Record<string, string> = {
   sent_to_review: "إحالة للمراجعة",
   returned_from_review: "إرجاع من المراجعة",
   approved_by_review: "اعتماد من المراجعة",
+  // Phase-8 — pause + await-completion activity entries on cases.
+  paused: "تعليق",
+  unpaused: "إلغاء التعليق",
+  await_completion: "بانتظار استكمال المرفقات والبيانات",
+  resume_from_completion: "العودة من الاستكمال",
+  // Department transfer. The manual button on cases.tsx and the
+  // automatic عدم_الاختصاص hearing-result flow both emit one of these.
+  department_transferred: "تحويل لقسم آخر",
+  jurisdiction_transferred: "تحويل بسبب عدم الاختصاص",
 };
 
 export const CaseNoteCategoryLabels: Record<string, string> = {
@@ -2422,43 +3125,6 @@ export const WorkflowCaseStagesOrder: WorkflowCaseStageValue[] = [
   "submitted_to_court",
 ];
 
-export const ConsultationStage = {
-  RECEIVED: "received",
-  ASSIGNED_TO_DEPARTMENT: "assigned_to_department",
-  DRAFTING: "drafting",
-  IN_REVIEW: "in_review",
-  REVIEW_NOTES_RECEIVED: "review_notes_received",
-  PROCESSING_NOTES: "processing_notes",
-  RETURNED_FOR_REVISION: "returned_for_revision",
-  READY_TO_SEND: "ready_to_send",
-  SENT_TO_CLIENT: "sent_to_client",
-} as const;
-
-export type ConsultationStageValue = typeof ConsultationStage[keyof typeof ConsultationStage];
-
-export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
-  received: "استلام من العميل",
-  assigned_to_department: "محالة للقسم",
-  drafting: "تحرير الاستشارة",
-  in_review: "لدى لجنة المراجعة",
-  review_notes_received: "استلام ملاحظات المراجعة",
-  processing_notes: "معالجة الملاحظات",
-  returned_for_revision: "مُرجعة للتعديل",
-  ready_to_send: "جاهزة للإرسال",
-  sent_to_client: "مرسلة للعميل",
-};
-
-export const ConsultationStagesOrder: ConsultationStageValue[] = [
-  "received",
-  "assigned_to_department",
-  "drafting",
-  "in_review",
-  "review_notes_received",
-  "processing_notes",
-  "returned_for_revision",
-  "ready_to_send",
-  "sent_to_client",
-];
 
 export const ReviewNoteAction = {
   FULLY_ACCEPTED: "fully_accepted",
@@ -2479,7 +3145,7 @@ export const ReviewNoteActionLabels: Record<ReviewNoteActionValue, string> = {
 // ==================== Workflow Interfaces ====================
 
 export interface StageSLA {
-  stage: WorkflowCaseStageValue | ConsultationStageValue;
+  stage: WorkflowCaseStageValue;
   maxDurationHours: number;
   warningBeforeHours: number;
 }
@@ -2488,8 +3154,8 @@ export interface StageTransition {
   id: string;
   entityType: "case" | "consultation";
   entityId: string;
-  fromStage: WorkflowCaseStageValue | ConsultationStageValue | null;
-  toStage: WorkflowCaseStageValue | ConsultationStageValue;
+  fromStage: WorkflowCaseStageValue | null;
+  toStage: WorkflowCaseStageValue;
   performedBy: string;
   performedByRole: string;
   notes: string;
@@ -2535,13 +3201,11 @@ export const DefaultSLASettings: StageSLA[] = [
   { stage: "under_study", maxDurationHours: 72, warningBeforeHours: 12 },
   { stage: "drafting_lawsuit", maxDurationHours: 48, warningBeforeHours: 8 },
   { stage: "drafting_response", maxDurationHours: 48, warningBeforeHours: 8 },
-  { stage: "drafting", maxDurationHours: 48, warningBeforeHours: 8 },
   { stage: "in_review", maxDurationHours: 24, warningBeforeHours: 4 },
   { stage: "review_notes_received", maxDurationHours: 4, warningBeforeHours: 1 },
   { stage: "processing_notes", maxDurationHours: 24, warningBeforeHours: 4 },
   { stage: "returned_for_revision", maxDurationHours: 24, warningBeforeHours: 4 },
   { stage: "ready_to_submit", maxDurationHours: 4, warningBeforeHours: 1 },
-  { stage: "ready_to_send", maxDurationHours: 4, warningBeforeHours: 1 },
 ];
 
 // ==================== User Management System ====================

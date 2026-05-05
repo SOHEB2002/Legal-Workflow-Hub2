@@ -241,4 +241,18 @@ app.use((req, res, next) => {
       startScheduler();
     },
   );
+
+  const gracefulShutdown = (signal: string) => {
+    log(`Received ${signal}, shutting down gracefully...`);
+    httpServer.close(() => {
+      log("HTTP server closed");
+      process.exit(0);
+    });
+    setTimeout(() => {
+      log("Forced shutdown after timeout");
+      process.exit(1);
+    }, 5000).unref();
+  };
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 })();
