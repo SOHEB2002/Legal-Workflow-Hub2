@@ -272,6 +272,21 @@ export default function CasesPage() {
     return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
 
+  // Early-close permission gate. Mirrors the cases-side equivalent of the
+  // consultations canEarlyClose helper: branch_manager / admin_support
+  // (global), department_head (own dept), assigned lawyer (primary |
+  // responsible | in assignedLawyers). The case must still be active —
+  // currentStage !== "مقفلة" is the cases-side equivalent of the
+  // consultation status === "active" check.
+  const canEarlyCloseCase = (c: LawCase): boolean => {
+    if (!user) return false;
+    if (c.currentStage === "مقفلة") return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
+    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+  };
+
   const isCasePaused = (c: LawCase): boolean => !!c.pausedAt;
 
   const openPauseCaseDialog = (c: LawCase) => {
@@ -3215,11 +3230,11 @@ export default function CasesPage() {
                         </div>
                       </>
                     )}
-                    {user?.role === "admin_support" && selectedCase.currentStage !== "مقفلة" && (
+                    {canEarlyCloseCase(selectedCase) && (
                       <div className="flex items-center justify-between p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20">
                         <div>
                           <p className="font-medium text-sm text-red-700 dark:text-red-400">إغلاق مبكر</p>
-                          <p className="text-xs text-muted-foreground">إغلاق القضية من أي مرحلة (الدعم الإداري فقط)</p>
+                          <p className="text-xs text-muted-foreground">إغلاق القضية من أي مرحلة مع تحديد السبب</p>
                         </div>
                         <Button size="sm" variant="outline" className="border-red-500 text-red-600 hover:bg-red-50" data-testid={`button-early-close-${selectedCase.id}`} onClick={() => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); }}>
                           <Archive className="w-4 h-4 ml-1" />إغلاق القضية

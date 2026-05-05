@@ -292,16 +292,36 @@ function validateStageTransition(
   targetStage: string,
   userRole: string,
   entityType: "case" | "consultation",
-  user?: { id: string },
+  user?: { id: string; departmentId?: string | null },
   entityData?: any
 ): { allowed: boolean; reason?: string } {
   if (currentStage === targetStage) {
     return { allowed: false, reason: "العنصر في نفس المرحلة المطلوبة" };
   }
 
-  // Early closure: admin_support can move any stage to مقفلة
-  if (entityType === "case" && targetStage === "مقفلة" && userRole === "admin_support") {
-    return { allowed: true };
+  // Early closure: branch_manager / admin_support / department_head (own
+  // dept) / assigned lawyer can move a case from any stage to مقفلة.
+  // Mirrors the consultations-side canEarlyClose gate. The closure reason
+  // is required for all four roles (validated separately in the PATCH
+  // handler).
+  if (entityType === "case" && targetStage === "مقفلة") {
+    if (userRole === "branch_manager" || userRole === "admin_support") {
+      return { allowed: true };
+    }
+    if (
+      userRole === "department_head" &&
+      entityData &&
+      !!user?.departmentId &&
+      entityData.departmentId === user.departmentId
+    ) {
+      return { allowed: true };
+    }
+    if (user && entityData && isAssignedLawyer(user, entityData)) {
+      return { allowed: true };
+    }
+    // Fall through to ALLOWED_CASE_TRANSITIONS for stage-specific rules
+    // (e.g. تحصيل/مشطوبة/post-judgment closures don't depend on the
+    // early-close shortcut).
   }
 
   const isInternalReviewer =
@@ -1611,7 +1631,19 @@ export async function registerRoutes(
           return res.status(400).json({ error: stageCheck.reason });
         }
         // === EARLY CLOSURE VALIDATION ===
-        if (req.body.currentStage === "مقفلة" && user.role === "admin_support") {
+        // Closing a case from a non-terminal stage now requires a reason
+        // for any role allowed by validateStageTransition's early-close
+        // shortcut (branch_manager / admin_support / dept_head own dept /
+        // assigned lawyer). Closures that flow through the normal stage
+        // rules (e.g. تحصيل/مشطوبة/post-judgment) come from a terminal
+        // stage and don't need a reason.
+        const isEarlyCloseStage =
+          req.body.currentStage === "مقفلة" &&
+          existing.currentStage !== "تحصيل" &&
+          existing.currentStage !== "مشطوبة" &&
+          existing.currentStage !== "محكوم_حكم_ابتدائي" &&
+          existing.currentStage !== "محكوم_حكم_نهائي";
+        if (isEarlyCloseStage) {
           if (!req.body.closureReason) {
             return res.status(400).json({ error: "يجب تحديد سبب الإغلاق" });
           }
