@@ -11,6 +11,7 @@ import {
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
+  type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, type MemoActivity,
@@ -19,7 +20,8 @@ import {
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationDeliveryExtensions, consultationActivityLog,
-  memoActivityLog
+  memoActivityLog,
+  memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
@@ -268,6 +270,44 @@ export interface IStorage {
     nextStage: string;
     activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
   }): Promise<{ outcome: ConsultationNoteOutcome; consultation: Consultation }>;
+
+  // Phase-9 — memo workflow helpers. Mirror the consultation versions:
+  // updateMemoAndLog is the atomic update + activity log path used by
+  // advance-stage / return-stage; the three record* helpers each insert
+  // a helper-table row, update memos.current_stage, and write an
+  // activity log entry inside one DB transaction.
+  updateMemoAndLog(
+    id: string,
+    data: Partial<Memo>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Memo | undefined>;
+  recordMemoInternalReview(input: {
+    memoId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: MemoReview; memo: Memo }>;
+  recordMemoCommitteeDecision(input: {
+    memoId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: MemoCommitteeDecision; memo: Memo }>;
+  recordMemoNoteOutcome(input: {
+    memoId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: MemoNoteOutcome; memo: Memo }>;
+  getMemoReviews(memoId: string): Promise<MemoReview[]>;
+  getMemoCommitteeDecisions(memoId: string): Promise<MemoCommitteeDecision[]>;
+  getMemoNoteOutcomes(memoId: string): Promise<MemoNoteOutcome[]>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -1768,6 +1808,240 @@ export class DatabaseStorage implements IStorage {
       metadata: (row.metadata as Record<string, any>) ?? {},
       performedBy: row.performedBy ?? null,
       performedAt: toISOString(row.performedAt),
+    }));
+  }
+
+  // ==================== Memo workflow helpers (Phase-9) ====================
+  // Mirror the consultation versions. Each helper that mutates a memo
+  // also writes a memo_activity_log row inside the same transaction so
+  // the log can never drift from the row.
+
+  async updateMemoAndLog(
+    id: string,
+    data: Partial<Memo>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+
+      // Strip server-managed timestamp fields; date fields are coerced
+      // explicitly for the columns that are real timestamp types.
+      const { createdAt, updatedAt, startedAt, completedAt, submittedAt, reviewedAt, pausedAt, ...updateFields } = data;
+      const now = new Date();
+      const updateData: any = { ...updateFields, updatedAt: now };
+      if (startedAt) updateData.startedAt = new Date(startedAt);
+      if (completedAt) updateData.completedAt = new Date(completedAt);
+      if (submittedAt) updateData.submittedAt = new Date(submittedAt);
+      if (reviewedAt) updateData.reviewedAt = new Date(reviewedAt);
+      if (pausedAt !== undefined) updateData.pausedAt = pausedAt ? new Date(pausedAt) : null;
+
+      await tx.update(memos).set(updateData).where(eq(memos.id, id));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: activity.activityType,
+        description: activity.description,
+        metadata: activity.metadata ?? {},
+        performedBy: activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  async recordMemoInternalReview(input: {
+    memoId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ review: MemoReview; memo: Memo }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [reviewRow] = await tx.insert(memoReviews).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        reviewerId: input.reviewerId,
+        decision: input.decision,
+        notes: input.notes,
+        createdAt: now,
+      } as any).returning();
+
+      await tx.update(memos)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(memos.id, input.memoId));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        activityType: MemoActivityType.INTERNAL_REVIEW,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
+      if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
+
+      return {
+        review: {
+          id: reviewRow.id,
+          memoId: reviewRow.memoId,
+          reviewerId: reviewRow.reviewerId,
+          decision: reviewRow.decision,
+          notes: reviewRow.notes ?? "",
+          createdAt: toISOString(reviewRow.createdAt),
+        },
+        memo: mapDbMemo(updatedMemo),
+      };
+    });
+  }
+
+  async recordMemoCommitteeDecision(input: {
+    memoId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ decision: MemoCommitteeDecision; memo: Memo }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [decisionRow] = await tx.insert(memoCommitteeDecisions).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        decision: input.decision,
+        notes: input.notes,
+        decidedBy: input.decidedBy,
+        decidedAt: now,
+      } as any).returning();
+
+      await tx.update(memos)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(memos.id, input.memoId));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        activityType: MemoActivityType.COMMITTEE_DECISION,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
+      if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
+
+      return {
+        decision: {
+          id: decisionRow.id,
+          memoId: decisionRow.memoId,
+          decision: decisionRow.decision,
+          notes: decisionRow.notes ?? "",
+          decidedBy: decisionRow.decidedBy,
+          decidedAt: toISOString(decisionRow.decidedAt),
+        },
+        memo: mapDbMemo(updatedMemo),
+      };
+    });
+  }
+
+  async recordMemoNoteOutcome(input: {
+    memoId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<{ outcome: MemoNoteOutcome; memo: Memo }> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [outcomeRow] = await tx.insert(memoNoteOutcomes).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        outcome: input.outcome,
+        notes: input.notes,
+        recordedBy: input.recordedBy,
+        recordedAt: now,
+      } as any).returning();
+
+      await tx.update(memos)
+        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .where(eq(memos.id, input.memoId));
+
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: input.memoId,
+        activityType: MemoActivityType.TAKE_NOTES_OUTCOME,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+
+      const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
+      if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
+
+      return {
+        outcome: {
+          id: outcomeRow.id,
+          memoId: outcomeRow.memoId,
+          outcome: outcomeRow.outcome,
+          notes: outcomeRow.notes ?? "",
+          recordedBy: outcomeRow.recordedBy,
+          recordedAt: toISOString(outcomeRow.recordedAt),
+        },
+        memo: mapDbMemo(updatedMemo),
+      };
+    });
+  }
+
+  async getMemoReviews(memoId: string): Promise<MemoReview[]> {
+    const rows = await db.select().from(memoReviews)
+      .where(eq(memoReviews.memoId, memoId))
+      .orderBy(asc(memoReviews.createdAt));
+    return rows.map(r => ({
+      id: r.id,
+      memoId: r.memoId,
+      reviewerId: r.reviewerId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      createdAt: toISOString(r.createdAt),
+    }));
+  }
+
+  async getMemoCommitteeDecisions(memoId: string): Promise<MemoCommitteeDecision[]> {
+    const rows = await db.select().from(memoCommitteeDecisions)
+      .where(eq(memoCommitteeDecisions.memoId, memoId))
+      .orderBy(asc(memoCommitteeDecisions.decidedAt));
+    return rows.map(r => ({
+      id: r.id,
+      memoId: r.memoId,
+      decision: r.decision,
+      notes: r.notes ?? "",
+      decidedBy: r.decidedBy,
+      decidedAt: toISOString(r.decidedAt),
+    }));
+  }
+
+  async getMemoNoteOutcomes(memoId: string): Promise<MemoNoteOutcome[]> {
+    const rows = await db.select().from(memoNoteOutcomes)
+      .where(eq(memoNoteOutcomes.memoId, memoId))
+      .orderBy(asc(memoNoteOutcomes.recordedAt));
+    return rows.map(r => ({
+      id: r.id,
+      memoId: r.memoId,
+      outcome: r.outcome,
+      notes: r.notes ?? "",
+      recordedBy: r.recordedBy,
+      recordedAt: toISOString(r.recordedAt),
     }));
   }
 
