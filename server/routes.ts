@@ -4074,6 +4074,63 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/memos/:id/cancel
+  // Body: { reason }. Cancels the memo (sets status='ملغاة') with a
+  // required reason. Mirrors the pause/await dialog pattern: reason is
+  // captured on the row AND in memo_activity_log so the timeline
+  // surfaces who/when. Used by the FE "لا يحتاج مذكرة" flow on the
+  // memos page; the legacy PATCH-based cancel still works for direct
+  // edits but doesn't populate cancellationReason.
+  // Allowed roles: assigned_lawyer + admin_support + department_head
+  // (own dept via parent case) + branch_manager + cases_review_head.
+  app.post("/api/memos/:id/cancel", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.status === "ملغاة") {
+        return res.status(400).json({ error: "المذكرة ملغاة بالفعل" });
+      }
+      if (memo.status === "معتمدة" || memo.status === "مرفوعة") {
+        return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
+      }
+
+      const parentCase = reqUser.role === "department_head" && memo.caseId
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && !!parentCase
+        && parentCase.departmentId === reqUser.departmentId;
+      const isAssigned = !!memo.assignedTo && memo.assignedTo === reqUser.id;
+      const allowed =
+        reqUser.role === "branch_manager"
+        || reqUser.role === "cases_review_head"
+        || reqUser.role === "admin_support"
+        || isOwnDeptHead
+        || isAssigned;
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء المذكرة" });
+      }
+
+      const updated = await storage.cancelMemo(memo.id, {
+        reason,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/cancel] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // ==================== Hearings ====================
 
   app.get("/api/hearings", requireAuth, async (req, res) => {

@@ -83,6 +83,7 @@ import {
   MemoStatusLabels,
   MemoStage,
   MemoStageLabels,
+  MemoActivityType,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
@@ -277,6 +278,42 @@ export default function MemosPage() {
   const [caseComboOpen, setCaseComboOpen] = useState(false);
   const [detailMemoId, setDetailMemoId] = useState<string | null>(null);
   const detailMemo = detailMemoId ? memos.find(m => m.id === detailMemoId) || null : null;
+
+  // Phase-9.2 — surface the cancellation reason / who / when in the
+  // detail dialog. The reason lives on memos.cancellation_reason but
+  // the actor + timestamp live in memo_activity_log; we fetch the log
+  // when the dialog opens for a cancelled memo and pick the latest
+  // "cancelled" entry for who/when. User-id is resolved to a name in
+  // the JSX (getUserName isn't in scope here).
+  const [cancelInfo, setCancelInfo] = useState<{ performedBy: string | null; performedAt: string } | null>(null);
+  useEffect(() => {
+    let aborted = false;
+    if (!detailMemo || detailMemo.status !== MemoStatus.CANCELLED) {
+      setCancelInfo(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/memos/${detailMemo.id}/activities`);
+        const json = await res.json();
+        const rows: any[] = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+        const latest = rows
+          .filter((r) => r.activityType === MemoActivityType.CANCELLED)
+          .sort((a, b) => new Date(b.performedAt).getTime() - new Date(a.performedAt).getTime())[0];
+        if (!aborted && latest) {
+          setCancelInfo({
+            performedBy: latest.performedBy ?? null,
+            performedAt: latest.performedAt || "",
+          });
+        } else if (!aborted) {
+          setCancelInfo(null);
+        }
+      } catch {
+        if (!aborted) setCancelInfo(null);
+      }
+    })();
+    return () => { aborted = true; };
+  }, [detailMemo?.id, detailMemo?.status]);
   const [submitting, setSubmitting] = useState(false);
 
   // Phase-8 — pause / unpause dialog state. Mirrors the consultations
@@ -413,13 +450,40 @@ export default function MemosPage() {
     }
   };
 
-  const handleNoMemoNeeded = async (memo: Memo) => {
-    setSubmitting(true);
+  // Phase-9.2 — "لا يحتاج مذكرة" cancellation dialog state. The button
+  // opens this dialog (instead of cancelling immediately) so the user
+  // captures a required reason, which is persisted on the memo row
+  // (cancellationReason) AND in memo_activity_log via the dedicated
+  // /api/memos/:id/cancel endpoint.
+  const [cancelMemoTarget, setCancelMemoTarget] = useState<Memo | null>(null);
+  const [cancelMemoReason, setCancelMemoReason] = useState("");
+  const [cancelMemoInProgress, setCancelMemoInProgress] = useState(false);
+
+  const openCancelMemoDialog = (memo: Memo) => {
+    setCancelMemoTarget(memo);
+    setCancelMemoReason("");
+  };
+  const closeCancelMemoDialog = () => {
+    setCancelMemoTarget(null);
+    setCancelMemoReason("");
+  };
+
+  const handleConfirmCancelMemo = async () => {
+    if (!cancelMemoTarget) return;
+    const reason = cancelMemoReason.trim();
+    if (!reason) {
+      toast({ title: "أدخل سبب عدم الحاجة للمذكرة", variant: "destructive" });
+      return;
+    }
+    setCancelMemoInProgress(true);
     try {
-      await changeStatus(memo.id, MemoStatus.CANCELLED, {
-        reviewNotes: "لا يحتاج مذكرة",
-      });
-      const relatedCase = cases.find(c => c.id === memo.caseId);
+      await apiRequest("POST", `/api/memos/${cancelMemoTarget.id}/cancel`, { reason });
+      // Mirror the legacy fast-forward of the parent case: if it's a
+      // منظورة_بالمحكمة case still at an early drafting stage, flip
+      // memoRequired off and jump to منظورة. Server doesn't do this on
+      // /cancel since it's a memo-only endpoint; keep it FE-side for
+      // parity with the previous behavior.
+      const relatedCase = cases.find(c => c.id === cancelMemoTarget.caseId);
       if (relatedCase) {
         const update: any = { memoRequired: false };
         const earlyDraftingStages = new Set([
@@ -435,11 +499,13 @@ export default function MemosPage() {
         }
         try { await updateCase(relatedCase.id, update); } catch {}
       }
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
       toast({ title: "تم إنهاء المذكرة - لا يحتاج مذكرة" });
-    } catch (e: any) {
-      toast({ title: "خطأ", description: e.message, variant: "destructive" });
+      closeCancelMemoDialog();
+    } catch (err) {
+      toast({ title: "فشل إلغاء المذكرة", description: extractApiError(err), variant: "destructive" });
     } finally {
-      setSubmitting(false);
+      setCancelMemoInProgress(false);
     }
   };
 
@@ -1236,7 +1302,7 @@ export default function MemosPage() {
                                 size="icon"
                                 variant="ghost"
                                 data-testid={`button-no-memo-needed-${memo.id}`}
-                                onClick={() => handleNoMemoNeeded(memo)}
+                                onClick={() => openCancelMemoDialog(memo)}
                                 title="لا يحتاج مذكرة"
                                 className="text-muted-foreground hover:text-destructive"
                               >
@@ -1613,6 +1679,39 @@ export default function MemosPage() {
                     </div>
                   </div>
                 )}
+                {/* Phase-9.2 — cancellation banner. Reason is on the
+                    memo row (cancellationReason); actor + timestamp
+                    come from cancelInfo, populated from the latest
+                    "cancelled" memo_activity_log entry. */}
+                {detailMemo.status === MemoStatus.CANCELLED && (
+                  <div
+                    className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                    data-testid="banner-memo-cancelled"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Ban className="w-4 h-4" />
+                      هذه المذكرة ملغاة
+                    </div>
+                    {detailMemo.cancellationReason && (
+                      <div className="mt-1">
+                        سبب الإلغاء: <BidiText>{detailMemo.cancellationReason}</BidiText>
+                      </div>
+                    )}
+                    {(cancelInfo?.performedBy || cancelInfo?.performedAt) && (
+                      <div className="mt-1 text-xs text-destructive/80">
+                        {cancelInfo.performedBy && (
+                          <>بواسطة <BidiText>{getUserName(cancelInfo.performedBy)}</BidiText></>
+                        )}
+                        {cancelInfo.performedAt && (
+                          <>
+                            {cancelInfo.performedBy ? " — " : ""}
+                            في <LtrInline>{new Date(cancelInfo.performedAt).toISOString().slice(0, 10)}</LtrInline>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">النوع</p>
@@ -1885,7 +1984,7 @@ export default function MemosPage() {
                     <Button
                       data-testid="button-no-memo-needed-detail"
                       variant="outline"
-                      onClick={() => handleNoMemoNeeded(detailMemo)}
+                      onClick={() => openCancelMemoDialog(detailMemo)}
                       disabled={submitting}
                       className="text-muted-foreground hover:text-destructive hover:border-destructive"
                     >
@@ -2019,6 +2118,46 @@ export default function MemosPage() {
             >
               <CheckCircle className="w-4 h-4 ml-2" />
               تأكيد العودة
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Phase-9.2 — "لا يحتاج مذكرة" cancellation dialog. Required
+          reason; persisted on memos.cancellation_reason and emitted to
+          memo_activity_log via POST /api/memos/:id/cancel. */}
+      <AlertDialog open={!!cancelMemoTarget} onOpenChange={(open) => { if (!open) closeCancelMemoDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Ban className="w-5 h-5 text-destructive" />
+              لا يحتاج مذكرة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستُلغى المذكرة (status=ملغاة) ولا يمكن التراجع عبر هذه الواجهة.
+              السبب يُسجّل في سجل النشاط وفي بيانات المذكرة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>سبب عدم الحاجة للمذكرة <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-memo-cancel-reason"
+              value={cancelMemoReason}
+              onChange={(e) => setCancelMemoReason(e.target.value)}
+              placeholder="اكتب سبب الإلغاء..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeCancelMemoDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-cancel-memo"
+              onClick={handleConfirmCancelMemo}
+              disabled={cancelMemoInProgress || !cancelMemoReason.trim()}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              <Ban className="w-4 h-4 ml-2" />
+              تأكيد الإلغاء
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

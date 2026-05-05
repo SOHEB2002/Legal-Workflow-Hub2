@@ -423,6 +423,12 @@ export const memos = pgTable("memos", {
   // /internal-review endpoint locks the decision to (this user) OR
   // branch_manager. Migration: script/add-memo-internal-reviewer.sql.
   internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
+  // Phase-9.2 — reason captured when a memo is cancelled via the
+  // "لا يحتاج مذكرة" flow. Required at the FE; nullable here because
+  // legacy cancellations didn't capture one. The actor + timestamp are
+  // recorded in memo_activity_log alongside the reason.
+  // Migration: script/add-memo-cancellation-reason.sql.
+  cancellationReason: text("cancellation_reason"),
 });
 
 export const caseActivityLog = pgTable("case_activity_log", {
@@ -1836,6 +1842,7 @@ export const MemoActivityType = {
   UNPAUSED:               "unpaused",
   AWAIT_COMPLETION:       "await_completion",
   RESUME_FROM_COMPLETION: "resume_from_completion",
+  CANCELLED:              "cancelled",
 } as const;
 
 export type MemoActivityTypeValue =
@@ -1853,6 +1860,7 @@ export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
   unpaused:               "إلغاء التعليق",
   await_completion:       "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
+  cancelled:              "إلغاء المذكرة",
 };
 
 export interface MemoActivity {
@@ -2047,6 +2055,9 @@ export interface Memo {
   // Phase-9.1 — designated peer reviewer for the مراجعة_داخلية stage.
   // Mirrors LawCase.internalReviewerId.
   internalReviewerId: string | null;
+  // Phase-9.2 — reason captured at cancellation time. Null for legacy
+  // pre-feature memos that were cancelled without a reason.
+  cancellationReason: string | null;
 }
 
 // ==================== أنواع التواصل مع العملاء ====================

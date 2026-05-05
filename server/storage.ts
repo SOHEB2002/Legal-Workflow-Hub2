@@ -308,6 +308,13 @@ export interface IStorage {
   getMemoReviews(memoId: string): Promise<MemoReview[]>;
   getMemoCommitteeDecisions(memoId: string): Promise<MemoCommitteeDecision[]>;
   getMemoNoteOutcomes(memoId: string): Promise<MemoNoteOutcome[]>;
+  // Phase-9.2 — atomic cancellation. Sets status='ملغاة', writes the
+  // reason to memos.cancellation_reason, and inserts a memo_activity_log
+  // entry in the same transaction.
+  cancelMemo(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -676,6 +683,8 @@ function mapDbMemo(dbMemo: any): Memo {
     currentStage: dbMemo.currentStage ?? null,
     // Phase-9.1 — designated peer reviewer (set on DRAFTING→INTERNAL_REVIEW).
     internalReviewerId: dbMemo.internalReviewerId ?? null,
+    // Phase-9.2 — reason captured on cancellation.
+    cancellationReason: dbMemo.cancellationReason ?? null,
   };
 }
 
@@ -2045,6 +2054,36 @@ export class DatabaseStorage implements IStorage {
       recordedBy: r.recordedBy,
       recordedAt: toISOString(r.recordedAt),
     }));
+  }
+
+  // Phase-9.2 — atomic cancel. Mirrors pauseMemo's shape: update the
+  // memo row, then insert the memo_activity_log entry in the same
+  // transaction so the timeline can never drift from the row.
+  async cancelMemo(
+    id: string,
+    input: { reason: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos).set({
+        status: "ملغاة",
+        cancellationReason: input.reason,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.CANCELLED,
+        description: `تم إلغاء المذكرة — السبب: ${input.reason}`,
+        metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
   }
 
   // ==================== Attachments ====================
