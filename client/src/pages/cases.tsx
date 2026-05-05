@@ -474,6 +474,41 @@ export default function CasesPage() {
   const [unpauseCaseNotes, setUnpauseCaseNotes] = useState("");
   const [pauseActionInProgress, setPauseActionInProgress] = useState(false);
   const selectedCase = selectedCaseId ? getCaseById(selectedCaseId) || null : null;
+  // Phase-8 — surface the await reason / who / when in the awaiting
+  // banner. The data lives only in case_activity_log (not on the case
+  // row itself, unlike pauseReason), so we fetch the log when the
+  // dialog opens for an awaiting case and pick the latest
+  // await_completion entry.
+  const [awaitInfo, setAwaitInfo] = useState<{ reason: string; userName: string; createdAt: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!showDetailsDialog || !selectedCase?.id || !selectedCase.awaitingCompletion) {
+      setAwaitInfo(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/cases/${selectedCase.id}/activity`);
+        const json = await res.json();
+        const rows: any[] = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+        const latest = rows
+          .filter((r) => r.actionType === "await_completion")
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+        if (!cancelled && latest) {
+          setAwaitInfo({
+            reason: latest.details || "",
+            userName: latest.userName || "",
+            createdAt: latest.createdAt || "",
+          });
+        } else if (!cancelled) {
+          setAwaitInfo(null);
+        }
+      } catch {
+        if (!cancelled) setAwaitInfo(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showDetailsDialog, selectedCase?.id, selectedCase?.awaitingCompletion]);
   const [rejectNotes, setRejectNotes] = useState("");
   const [newComment, setNewComment] = useState("");
   const [activeTab, setActiveTab] = useState("info");
@@ -1840,6 +1875,24 @@ export default function CasesPage() {
                   <div className="flex items-center gap-2 font-medium">
                     <AlertTriangle className="w-4 h-4" />
                     هذه القضية بانتظار استكمال البيانات
+                  </div>
+                  {/* Phase-8 — reason / who / when from case_activity_log
+                      (loaded into awaitInfo by the useEffect above). */}
+                  {awaitInfo?.reason && (
+                    <div className="mt-1">
+                      السبب: <BidiText>{awaitInfo.reason}</BidiText>
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-amber-700/80">
+                    {awaitInfo?.userName && (
+                      <>بواسطة <BidiText>{awaitInfo.userName}</BidiText></>
+                    )}
+                    {awaitInfo?.createdAt && (
+                      <>
+                        {awaitInfo.userName ? " — " : ""}
+                        في <LtrInline>{new Date(awaitInfo.createdAt).toISOString().slice(0, 10)}</LtrInline>
+                      </>
+                    )}
                   </div>
                   {selectedCase.savedStage && (
                     <div className="mt-1 text-xs">
