@@ -1060,20 +1060,32 @@ export default function HearingsPage() {
                         <tr
                           key={hearing.id}
                           data-testid={`row-hearing-${hearing.id}`}
-                          className={`${isDayBoundary ? "border-b-2" : "border-b"} transition-colors hover:bg-muted/50`}
+                          className={
+                            // Day-boundary separator: thicker AND coloured
+                            // so the change is clearly visible at a glance.
+                            // Plain border-b-2 wasn't reading distinct from
+                            // border-b in some themes — use border-b-4 with
+                            // an amber accent so day-grouping pops without
+                            // being garish. Same-day rows keep the default.
+                            isDayBoundary
+                              ? "border-b-4 border-amber-500/60 transition-colors hover:bg-muted/50"
+                              : "border-b transition-colors hover:bg-muted/50"
+                          }
                         >
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
-                              {/* Top: full Hijri date — e.g. "18 ذو القعدة 1447 هـ" */}
-                              <Badge className={getUrgencyColor(hearing.hearingDate)}>
+                              {/* Top: full Hijri date — e.g. "18 ذو القعدة 1447 هـ".
+                                  Both lines use text-sm font-semibold for a
+                                  single consistent size across the cell. */}
+                              <Badge className={`${getUrgencyColor(hearing.hearingDate)} text-sm font-semibold`}>
                                 {formatHijriDateFull(hearing.hearingDate)}
                               </Badge>
-                              {/* Bottom: weekday + time on one line; time
-                                  larger and bold for at-a-glance scanning. */}
-                              <div className="flex items-center gap-1 text-muted-foreground">
-                                <span className="text-xs">{arabicWeekday(hearing.hearingDate)}</span>
-                                <span className="text-xs">-</span>
-                                <LtrInline className="text-lg font-semibold text-foreground">
+                              {/* Bottom: weekday + time on one line, same
+                                  size and weight as the Hijri Badge above. */}
+                              <div className="flex items-center gap-1 text-foreground">
+                                <span className="text-sm font-semibold">{arabicWeekday(hearing.hearingDate)}</span>
+                                <span className="text-sm font-semibold">-</span>
+                                <LtrInline className="text-sm font-semibold">
                                   {formatTimeAmPm(hearing.hearingTime)}
                                 </LtrInline>
                               </div>
