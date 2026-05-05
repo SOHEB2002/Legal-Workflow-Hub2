@@ -1246,9 +1246,14 @@ export default function ConsultationsPage() {
     });
   };
 
-  const handleAddConsultation = () => {
+  const handleAddConsultation = async () => {
     if (!user || !formData.clientId || !formData.questionSummary) return;
-    addConsultation(formData, user.id);
+    try {
+      await addConsultation(formData, user.id);
+    } catch (err) {
+      toast({ title: "فشل إنشاء الاستشارة", description: extractApiError(err), variant: "destructive" });
+      return;
+    }
     setIsAddDialogOpen(false);
     resetForm();
   };

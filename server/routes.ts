@@ -1139,6 +1139,17 @@ export async function registerRoutes(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      // Storage-layer sentinels for case_number unique-constraint failures.
+      // DUPLICATE_CASE_NUMBER means the auto-generated nanoid suffix kept
+      // colliding across all retries — extremely rare. CASE_NUMBER_EXISTS
+      // means the user-supplied courtCaseNumber matches an existing one.
+      const msg = (error as any)?.message || "";
+      if (msg === "DUPLICATE_CASE_NUMBER") {
+        return res.status(400).json({ error: "تعذّر توليد رقم قضية فريد، يرجى المحاولة مرة أخرى" });
+      }
+      if (msg === "CASE_NUMBER_EXISTS") {
+        return res.status(400).json({ error: "رقم القضية المُدخل مستخدم مسبقاً، يرجى استخدام رقم آخر" });
+      }
       // Dump full error to server logs.
       console.error("[POST /api/cases] FAILED. clientRole=", req.body.clientRole, "caseClassification=", req.body.caseClassification);
       console.error("[POST /api/cases] error name:", (error as any)?.name);
@@ -2320,6 +2331,11 @@ export async function registerRoutes(
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      const msg = (error as any)?.message || "";
+      if (msg === "DUPLICATE_CONSULTATION_NUMBER") {
+        return res.status(400).json({ error: "تعذّر توليد رقم استشارة فريد، يرجى المحاولة مرة أخرى" });
+      }
+      console.error("[POST /api/consultations] error:", error);
       res.status(500).json({ error: "حدث خطأ في إنشاء الاستشارة" });
     }
   });
@@ -2828,6 +2844,12 @@ export async function registerRoutes(
         if (msg === "CONSULTATION_NOT_FOUND") return res.status(404).json({ error: "الاستشارة غير موجودة" });
         if (msg === "CONSULTATION_NOT_ACTIVE") return res.status(400).json({ error: "الاستشارة ليست نشطة" });
         if (msg === "CONSULTATION_COMPLETED") return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
+        if (msg === "DUPLICATE_CASE_NUMBER") {
+          return res.status(400).json({ error: "تعذّر توليد رقم قضية فريد، يرجى المحاولة مرة أخرى" });
+        }
+        if (msg === "CASE_NUMBER_EXISTS") {
+          return res.status(400).json({ error: "رقم القضية المُدخل مستخدم مسبقاً، يرجى استخدام رقم آخر" });
+        }
         if (msg === "CASE_INSERT_FAILED" || msg === "CONSULTATION_UPDATE_FAILED") {
           // Transaction rolled back — neither row persisted.
           return res.status(500).json({ error: "فشل التحويل، تم التراجع عن جميع التغييرات" });
