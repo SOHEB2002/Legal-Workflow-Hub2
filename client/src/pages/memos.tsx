@@ -682,6 +682,51 @@ export default function MemosPage() {
     }
   };
 
+  // Phase-9 — generic stage advance for the linear-path transitions
+  // (RECEIVED → DRAFTING, DRAFTING → INTERNAL_REVIEW, READY → FILED).
+  // The dedicated review/committee/take-notes endpoints handle the
+  // branching transitions; this helper just POSTs /advance-stage.
+  const handleAdvanceMemoStage = async (memo: Memo, targetStage: MemoStageValue) => {
+    setSubmitting(true);
+    try {
+      await apiRequest("POST", `/api/memos/${memo.id}/advance-stage`, { targetStage });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تحديث المرحلة" });
+    } catch (err) {
+      toast({ title: "فشل تحديث المرحلة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // FE-side gate for the 3 linear-path stage advances. Server still
+  // re-enforces via validateStageTransition; this just decides whether
+  // to render the button. Mirrors the per-stage role lists in
+  // ALLOWED_MEMO_TRANSITIONS (server/routes.ts).
+  const canAdvanceMemoStage = (memo: Memo, targetStage: MemoStageValue): boolean => {
+    if (!user) return false;
+    if (memo.awaitingCompletion || memo.pausedAt) return false;
+    const memoCase = getMemoCase(memo);
+    if (
+      user.role === "department_head" &&
+      memoCase &&
+      memoCase.departmentId !== user.departmentId
+    ) return false;
+    const isLawyer = !!memo.assignedTo && memo.assignedTo === user.id;
+    const isHeadOrManager = user.role === "department_head" || user.role === "branch_manager";
+    const isAdminSupport = user.role === "admin_support";
+    if (memo.currentStage === MemoStage.RECEIVED && targetStage === MemoStage.DRAFTING) {
+      return isLawyer || isHeadOrManager || isAdminSupport;
+    }
+    if (memo.currentStage === MemoStage.DRAFTING && targetStage === MemoStage.INTERNAL_REVIEW) {
+      return isLawyer || isHeadOrManager;
+    }
+    if (memo.currentStage === MemoStage.READY && targetStage === MemoStage.FILED) {
+      return isLawyer || isHeadOrManager || isAdminSupport;
+    }
+    return false;
+  };
+
   const handleTakeNotesOutcome = async (outcome: NoteOutcomeValue) => {
     if (!takeNotesMemo) return;
     setReviewActionInProgress(true);
@@ -1453,12 +1498,19 @@ export default function MemosPage() {
                       {detailMemo.priority}
                     </Badge>
                   </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">الحالة</p>
-                    <Badge className={`mt-1 ${getStatusBadgeClass(detailMemo.status)}`}>
-                      {MemoStatusLabels[detailMemo.status]}
-                    </Badge>
-                  </div>
+                  {/* Phase-9 — legacy status badge. Hidden once the memo
+                      is on the new currentStage axis; the stages bar
+                      below is the canonical state display. Cancellation
+                      ("ملغاة") still surfaces here for cancelled memos
+                      because cancellation leaves currentStage unchanged. */}
+                  {(!detailMemo.currentStage || detailMemo.status === MemoStatus.CANCELLED) && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">الحالة</p>
+                      <Badge className={`mt-1 ${getStatusBadgeClass(detailMemo.status)}`}>
+                        {MemoStatusLabels[detailMemo.status]}
+                      </Badge>
+                    </div>
+                  )}
                   {detailMemo.returnCount > 0 && (
                     <div>
                       <p className="text-sm text-muted-foreground">عدد الإرجاع</p>
@@ -1511,7 +1563,11 @@ export default function MemosPage() {
                   </div>
                 )}
 
-                {(detailMemo.status === MemoStatus.IN_REVIEW ||
+                {/* Phase-9 — legacy review panel. Driven by the old
+                    MemoStatus enum; the new flow uses the inline
+                    internal-review / committee-decision dialogs below.
+                    Hidden once the memo is on the new currentStage axis. */}
+                {!detailMemo.currentStage && (detailMemo.status === MemoStatus.IN_REVIEW ||
                   detailMemo.status === MemoStatus.APPROVED ||
                   detailMemo.status === MemoStatus.REVISION_REQUIRED ||
                   detailMemo.status === MemoStatus.SUBMITTED) && (
@@ -1613,7 +1669,45 @@ export default function MemosPage() {
                       نتيجة الأخذ بالملاحظات
                     </Button>
                   )}
-                  {detailMemo.status === MemoStatus.NOT_STARTED && canUserChangeStatus(detailMemo) && (
+                  {/* Phase-9 — stage-driven linear-path advances. Each
+                      button is gated on the memo's currentStage; the
+                      branching transitions (internal-review / committee
+                      / take-notes) live in the dialog buttons above. */}
+                  {detailMemo.currentStage === MemoStage.RECEIVED && canAdvanceMemoStage(detailMemo, MemoStage.DRAFTING) && (
+                    <Button
+                      data-testid="button-memo-advance-to-drafting"
+                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.DRAFTING)}
+                      disabled={submitting}
+                    >
+                      <Clock className="w-4 h-4 ml-2" />
+                      بدء التحرير
+                    </Button>
+                  )}
+                  {detailMemo.currentStage === MemoStage.DRAFTING && canAdvanceMemoStage(detailMemo, MemoStage.INTERNAL_REVIEW) && (
+                    <Button
+                      data-testid="button-memo-advance-to-internal-review"
+                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.INTERNAL_REVIEW)}
+                      disabled={submitting}
+                    >
+                      <AlertTriangle className="w-4 h-4 ml-2" />
+                      إرسال للمراجعة الداخلية
+                    </Button>
+                  )}
+                  {detailMemo.currentStage === MemoStage.READY && canAdvanceMemoStage(detailMemo, MemoStage.FILED) && (
+                    <Button
+                      data-testid="button-memo-advance-to-filed"
+                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.FILED)}
+                      disabled={submitting}
+                      className="bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-700"
+                    >
+                      <CheckCircle className="w-4 h-4 ml-2" />
+                      تم الرفع
+                    </Button>
+                  )}
+
+                  {/* Legacy MemoStatus stage-flow buttons. Hidden once
+                      the memo is on the new currentStage axis. */}
+                  {!detailMemo.currentStage && detailMemo.status === MemoStatus.NOT_STARTED && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-start-drafting"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.DRAFTING, { startedAt: new Date().toISOString() })}
@@ -1623,7 +1717,7 @@ export default function MemosPage() {
                       بدء التحرير
                     </Button>
                   )}
-                  {(detailMemo.status === MemoStatus.DRAFTING || detailMemo.status === MemoStatus.REVISION_REQUIRED) && canUserChangeStatus(detailMemo) && (
+                  {!detailMemo.currentStage && (detailMemo.status === MemoStatus.DRAFTING || detailMemo.status === MemoStatus.REVISION_REQUIRED) && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-send-review"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.IN_REVIEW, { completedAt: new Date().toISOString() })}
@@ -1633,7 +1727,7 @@ export default function MemosPage() {
                       إرسال للمراجعة
                     </Button>
                   )}
-                  {detailMemo.status === MemoStatus.APPROVED && canUserChangeStatus(detailMemo) && (
+                  {!detailMemo.currentStage && detailMemo.status === MemoStatus.APPROVED && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-submit-final"
                       onClick={() => handleStatusChange(detailMemo, MemoStatus.SUBMITTED, { submittedAt: new Date().toISOString() })}
@@ -1644,7 +1738,14 @@ export default function MemosPage() {
                       رفع المذكرة
                     </Button>
                   )}
-                  {!["معتمدة", "مرفوعة", "ملغاة"].includes(detailMemo.status) && canUserChangeStatus(detailMemo) && (
+
+                  {/* "لا يحتاج مذكرة" — cancellation is orthogonal and
+                      lives on legacy `status`. Available in both flows
+                      EXCEPT when the new workflow has reached FILED
+                      (terminal) — you can't cancel a filed memo. */}
+                  {!["معتمدة", "مرفوعة", "ملغاة"].includes(detailMemo.status)
+                    && detailMemo.currentStage !== MemoStage.FILED
+                    && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-no-memo-needed-detail"
                       variant="outline"
