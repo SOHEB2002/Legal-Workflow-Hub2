@@ -81,13 +81,23 @@ import {
   MemoTypeLabels,
   MemoStatus,
   MemoStatusLabels,
+  MemoStage,
+  MemoStageLabels,
+  InternalReviewDecision,
+  CommitteeDecision,
+  NoteOutcome,
   Priority,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
   canDeleteMemos,
 } from "@shared/schema";
-import type { Memo, MemoTypeValue, MemoStatusValue } from "@shared/schema";
+import type {
+  Memo, MemoTypeValue, MemoStatusValue, MemoStageValue,
+  InternalReviewDecisionValue, CommitteeDecisionValue, NoteOutcomeValue,
+} from "@shared/schema";
+import { MemoStagesBar } from "@/components/memo-stages-bar";
+import { ClipboardCheck, FileText } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -141,6 +151,65 @@ function getDeadlineColor(deadline: string): string {
   if (days < 0) return "text-destructive font-bold";
   if (days < 3) return "text-orange-500 dark:text-orange-400 font-medium";
   return "text-muted-foreground";
+}
+
+// Phase-9 — review-workflow role gates. Mirror the consultations-side
+// canDoInternalReview / canDoCommitteeDecision / canDoTakeNotesOutcome
+// helpers, narrowed for memos: cases_review_head is the committee chair
+// (memos belong to cases). Department head is dept-scoped via the
+// case's departmentId; we compute that from the current cases list.
+function memoIsActionable(memo: Memo): boolean {
+  return !memo.awaitingCompletion && !memo.pausedAt;
+}
+
+function canDoMemoInternalReview(
+  memo: Memo,
+  userRole: string,
+  userId: string,
+  memoCase: { departmentId?: string | null } | null,
+  userDeptId: string | null,
+): boolean {
+  if (!memoIsActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) return false;
+  if (
+    userRole === "department_head" &&
+    memoCase &&
+    memoCase.departmentId !== userDeptId
+  ) {
+    return false;
+  }
+  const baseRoles = ["employee", "department_head", "cases_review_head", "branch_manager"];
+  if (baseRoles.includes(userRole)) return true;
+  return !!memo.assignedTo && memo.assignedTo === userId;
+}
+
+function canDoMemoCommitteeDecision(
+  memo: Memo,
+  userRole: string,
+): boolean {
+  if (!memoIsActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.COMMITTEE) return false;
+  return userRole === "cases_review_head" || userRole === "branch_manager";
+}
+
+function canDoMemoTakeNotesOutcome(
+  memo: Memo,
+  userRole: string,
+  userId: string,
+  memoCase: { departmentId?: string | null } | null,
+  userDeptId: string | null,
+): boolean {
+  if (!memoIsActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.TAKING_NOTES) return false;
+  if (
+    userRole === "department_head" &&
+    memoCase &&
+    memoCase.departmentId !== userDeptId
+  ) {
+    return false;
+  }
+  if (userRole === "department_head" || userRole === "branch_manager") return true;
+  return !!memo.assignedTo && memo.assignedTo === userId;
 }
 
 export default function MemosPage() {
@@ -522,6 +591,121 @@ export default function MemosPage() {
     } finally {
       setPauseMemoInProgress(false);
     }
+  };
+
+  // Phase-9 — review-workflow dialog state. Three dialogs mirror the
+  // consultations side; each has a notes textarea and 2-3 action buttons.
+  const [showInternalReviewDialog, setShowInternalReviewDialog] = useState(false);
+  const [internalReviewMemo, setInternalReviewMemo] = useState<Memo | null>(null);
+  const [internalReviewNotes, setInternalReviewNotes] = useState("");
+
+  const [showCommitteeDialog, setShowCommitteeDialog] = useState(false);
+  const [committeeMemo, setCommitteeMemo] = useState<Memo | null>(null);
+  const [committeeNotes, setCommitteeNotes] = useState("");
+
+  const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
+  const [takeNotesMemo, setTakeNotesMemo] = useState<Memo | null>(null);
+  const [takeNotesNotes, setTakeNotesNotes] = useState("");
+
+  const [reviewActionInProgress, setReviewActionInProgress] = useState(false);
+
+  const openInternalReviewDialog = (m: Memo) => {
+    setInternalReviewMemo(m);
+    setInternalReviewNotes("");
+    setShowInternalReviewDialog(true);
+  };
+  const closeInternalReviewDialog = () => {
+    setShowInternalReviewDialog(false);
+    setInternalReviewMemo(null);
+    setInternalReviewNotes("");
+  };
+  const openCommitteeDialog = (m: Memo) => {
+    setCommitteeMemo(m);
+    setCommitteeNotes("");
+    setShowCommitteeDialog(true);
+  };
+  const closeCommitteeDialog = () => {
+    setShowCommitteeDialog(false);
+    setCommitteeMemo(null);
+    setCommitteeNotes("");
+  };
+  const openTakeNotesDialog = (m: Memo) => {
+    setTakeNotesMemo(m);
+    setTakeNotesNotes("");
+    setShowTakeNotesDialog(true);
+  };
+  const closeTakeNotesDialog = () => {
+    setShowTakeNotesDialog(false);
+    setTakeNotesMemo(null);
+    setTakeNotesNotes("");
+  };
+
+  const handleInternalReview = async (decision: InternalReviewDecisionValue) => {
+    if (!internalReviewMemo) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${internalReviewMemo.id}/internal-review`, {
+        decision,
+        notes: internalReviewNotes,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      const msg = decision === InternalReviewDecision.PASSED
+        ? "تمت المراجعة الداخلية — أُحيلت للجنة"
+        : "تم تسجيل ملاحظات المراجعة الداخلية";
+      toast({ title: msg });
+      closeInternalReviewDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل المراجعة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
+  const handleCommitteeDecision = async (decision: CommitteeDecisionValue) => {
+    if (!committeeMemo) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${committeeMemo.id}/committee-decision`, {
+        decision,
+        notes: committeeNotes,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      const msg = decision === CommitteeDecision.APPROVED
+        ? "تم اعتماد المذكرة — جاهزة للرفع"
+        : "تم إرسال المذكرة للأخذ بالملاحظات";
+      toast({ title: msg });
+      closeCommitteeDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل قرار اللجنة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
+  const handleTakeNotesOutcome = async (outcome: NoteOutcomeValue) => {
+    if (!takeNotesMemo) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${takeNotesMemo.id}/take-notes-outcome`, {
+        outcome,
+        notes: takeNotesNotes,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      // All outcomes advance to READY per spec — outcome distinction
+      // is recorded but not reflected in routing.
+      toast({ title: "تم تسجيل النتيجة — المذكرة جاهزة للرفع" });
+      closeTakeNotesDialog();
+    } catch (err) {
+      toast({ title: "فشل تسجيل النتيجة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
+  // Resolve a memo's parent case so the role-gate helpers can scope
+  // department_head correctly.
+  const getMemoCase = (memo: Memo): { departmentId?: string | null } | null => {
+    return cases.find(c => c.id === memo.caseId) ?? null;
   };
 
   const getUserName = (id: string | null): string => {
@@ -1295,6 +1479,15 @@ export default function MemosPage() {
                   </div>
                 </div>
 
+                {/* Phase-9 — review-workflow stages bar. Hidden for legacy
+                    memos that haven't been migrated yet (currentStage is
+                    null until the backfill runs). */}
+                {detailMemo.currentStage && (
+                  <MemoStagesBar
+                    currentStage={detailMemo.currentStage as MemoStageValue}
+                  />
+                )}
+
                 {detailMemo.description && (
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">الوصف</p>
@@ -1375,6 +1568,51 @@ export default function MemosPage() {
                 )}
 
                 <div className="flex flex-wrap gap-2">
+                  {/* Phase-9 — review-workflow action buttons. Each opens
+                      a dedicated dialog. Visibility is gated on the
+                      memo's currentStage and the user's role. */}
+                  {user && canDoMemoInternalReview(
+                    detailMemo,
+                    user.role,
+                    user.id,
+                    getMemoCase(detailMemo),
+                    user.departmentId,
+                  ) && (
+                    <Button
+                      data-testid={`button-internal-review-${detailMemo.id}`}
+                      onClick={() => openInternalReviewDialog(detailMemo)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      <ClipboardCheck className="w-4 h-4 ml-2" />
+                      المراجعة الداخلية
+                    </Button>
+                  )}
+                  {user && canDoMemoCommitteeDecision(detailMemo, user.role) && (
+                    <Button
+                      data-testid={`button-committee-decision-${detailMemo.id}`}
+                      onClick={() => openCommitteeDialog(detailMemo)}
+                      className="bg-purple-600 hover:bg-purple-700 text-white"
+                    >
+                      <CheckCircle className="w-4 h-4 ml-2" />
+                      قرار اللجنة
+                    </Button>
+                  )}
+                  {user && canDoMemoTakeNotesOutcome(
+                    detailMemo,
+                    user.role,
+                    user.id,
+                    getMemoCase(detailMemo),
+                    user.departmentId,
+                  ) && (
+                    <Button
+                      data-testid={`button-take-notes-outcome-${detailMemo.id}`}
+                      onClick={() => openTakeNotesDialog(detailMemo)}
+                      className="bg-amber-600 hover:bg-amber-700 text-white"
+                    >
+                      <FileText className="w-4 h-4 ml-2" />
+                      نتيجة الأخذ بالملاحظات
+                    </Button>
+                  )}
                   {detailMemo.status === MemoStatus.NOT_STARTED && canUserChangeStatus(detailMemo) && (
                     <Button
                       data-testid="button-start-drafting"
@@ -1622,6 +1860,186 @@ export default function MemosPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Phase-9 — internal-review dialog. 2 outcomes: PASSED → COMMITTEE,
+          NEEDS_NOTES → DRAFTING. */}
+      <Dialog
+        open={showInternalReviewDialog}
+        onOpenChange={(open) => { if (!open) closeInternalReviewDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5" />
+              المراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              اختر نتيجة المراجعة. <strong>اعتماد</strong> ينقل المذكرة إلى لجنة المراجعة،
+              و<strong>يوجد ملاحظات</strong> يعيدها إلى مرحلة التحرير.
+            </p>
+            <div>
+              <Label>الملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-memo-internal-review-notes"
+                value={internalReviewNotes}
+                onChange={(e) => setInternalReviewNotes(e.target.value)}
+                placeholder="ملاحظات المراجع الداخلي..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeInternalReviewDialog}
+              data-testid="button-cancel-memo-internal-review"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-memo-internal-review-needs-notes"
+              onClick={() => handleInternalReview(InternalReviewDecision.NEEDS_NOTES)}
+              disabled={reviewActionInProgress}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              يوجد ملاحظات
+            </Button>
+            <Button
+              data-testid="button-memo-internal-review-passed"
+              onClick={() => handleInternalReview(InternalReviewDecision.PASSED)}
+              disabled={reviewActionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Phase-9 — committee-decision dialog. 2 outcomes: APPROVED → READY,
+          NEEDS_NOTES → TAKING_NOTES. */}
+      <Dialog
+        open={showCommitteeDialog}
+        onOpenChange={(open) => { if (!open) closeCommitteeDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5" />
+              قرار لجنة المراجعة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              <strong>اعتماد</strong> ينقل المذكرة إلى مرحلة "جاهزة للرفع"،
+              و<strong>يوجد ملاحظات</strong> ينقلها إلى "الأخذ بالملاحظات".
+            </p>
+            <div>
+              <Label>ملاحظات اللجنة (اختياري)</Label>
+              <Textarea
+                data-testid="input-memo-committee-notes"
+                value={committeeNotes}
+                onChange={(e) => setCommitteeNotes(e.target.value)}
+                placeholder="ملاحظات اللجنة للمحامي المسؤول..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeCommitteeDialog}
+              data-testid="button-cancel-memo-committee"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-memo-committee-needs-notes"
+              onClick={() => handleCommitteeDecision(CommitteeDecision.NEEDS_NOTES)}
+              disabled={reviewActionInProgress}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              يوجد ملاحظات
+            </Button>
+            <Button
+              data-testid="button-memo-committee-approved"
+              onClick={() => handleCommitteeDecision(CommitteeDecision.APPROVED)}
+              disabled={reviewActionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Phase-9 — take-notes-outcome dialog. 3 outcomes (DONE / NOT_DONE
+          / PARTIAL); all advance to READY per spec. The outcome is
+          recorded for audit only, not used for routing. */}
+      <Dialog
+        open={showTakeNotesDialog}
+        onOpenChange={(open) => { if (!open) closeTakeNotesDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              نتيجة الأخذ بالملاحظات
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              اختر نتيجة معالجة ملاحظات اللجنة. جميع النتائج تنقل المذكرة إلى
+              "جاهزة للرفع"؛ النتيجة تُسجَّل للأرشيف فقط.
+            </p>
+            <div>
+              <Label>الملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-memo-take-notes-notes"
+                value={takeNotesNotes}
+                onChange={(e) => setTakeNotesNotes(e.target.value)}
+                placeholder="ملاحظات حول معالجة ملاحظات اللجنة..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeTakeNotesDialog}
+              data-testid="button-cancel-memo-take-notes"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-memo-take-notes-not-done"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.NOT_DONE)}
+              disabled={reviewActionInProgress}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              لم يتم
+            </Button>
+            <Button
+              data-testid="button-memo-take-notes-partial"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.PARTIAL)}
+              disabled={reviewActionInProgress}
+              className="bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              جزئياً
+            </Button>
+            <Button
+              data-testid="button-memo-take-notes-done"
+              onClick={() => handleTakeNotesOutcome(NoteOutcome.DONE)}
+              disabled={reviewActionInProgress}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              تم
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
