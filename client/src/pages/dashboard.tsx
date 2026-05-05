@@ -106,7 +106,17 @@ export default function DashboardPage() {
       return m.assignedTo === user.id;
     });
 
-    const casesAtCommittee = cases.filter((c) => c.currentStage === CaseStage.REVIEW_COMMITTEE);
+    // Cases: check BOTH currentStage AND the legacy status column.
+    // Older flows (and getReviewCases in the cases context) wrote only
+    // status="لجنة_المراجعة"; newer ones write currentStage="إحالة_للجنة_المراجعة".
+    // The two values aren't equal — they're two different enum spaces.
+    // OR-ing the predicate so a case counts under EITHER convention is
+    // the safe bet, especially while data may be mid-migration.
+    const casesAtCommittee = cases.filter(
+      (c) =>
+        c.currentStage === CaseStage.REVIEW_COMMITTEE
+        || c.status === CaseStatus.REVIEW_COMMITTEE,
+    );
     const consAtCommittee = consultations.filter(
       (c) => c.status === "active" && c.currentStage === ConsultationStage.COMMITTEE,
     );
@@ -208,10 +218,21 @@ export default function DashboardPage() {
     return `status=pending_review&assignedTo=${encodeURIComponent(user.id)}`;
   };
 
+  // Dedicated handler for the "بانتظار المراجعة" popup trigger. Hoisted
+  // out of the switch below so the JSX can wire it directly — the
+  // earlier `getWidgetOnClick(widget.id)` indirection was producing a
+  // fresh closure per render and (per the bug report) something in the
+  // path was reverting to a navigation. Using a named handler removes
+  // any ambiguity about which onClick attaches to the card.
+  const openPendingReviewPopup = () => setPendingReviewPopupOpen(true);
+
   const getWidgetOnClick = (widgetId: string): (() => void) | undefined => {
     switch (widgetId) {
       case "active_cases": return () => setLocation("/cases");
-      case "pending_review": return () => setPendingReviewPopupOpen(true);
+      // pending_review is rendered with openPendingReviewPopup directly
+      // in the JSX — kept here as a fallback in case anything else
+      // routes through this switch.
+      case "pending_review": return openPendingReviewPopup;
       case "today_hearings": return () => setLocation("/hearings");
       case "overdue_tasks": return () => setLocation("/field-tasks");
       case "active_consultations": return () => setLocation("/consultations");
@@ -319,7 +340,14 @@ export default function DashboardPage() {
           const variant = widgetVariants[widget.id] || "default";
           const isAlert = widget.id === "today_hearings" || widget.id === "overdue_tasks";
           const sizeClass = getSizeClass(widget.size, widget.type);
-          
+          // Direct attachment for the popup-trigger widget — bypasses
+          // the getWidgetOnClick switch so there's no chance of a stale
+          // navigation handler leaking through.
+          const handleClick =
+            widget.id === "pending_review"
+              ? openPendingReviewPopup
+              : getWidgetOnClick(widget.id);
+
           return (
             <div key={widget.id} className={sizeClass} data-testid={`widget-${widget.id}`}>
               <StatCardWidget
@@ -328,7 +356,7 @@ export default function DashboardPage() {
                 icon={Icon}
                 variant={variant}
                 alert={isAlert}
-                onClick={getWidgetOnClick(widget.id)}
+                onClick={handleClick}
               />
             </div>
           );
