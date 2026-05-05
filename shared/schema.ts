@@ -408,6 +408,14 @@ export const memos = pgTable("memos", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // Phase-9 — review-workflow stage column. Mirrors the consultations
+  // currentStage axis but with memo-specific labels (جاهزة_للرفع /
+  // مرفوعة instead of جاهزة_للتسليم / منجزة). Nullable because legacy
+  // rows pre-Phase-9 don't have a stage; the backfill in
+  // script/backfill-memo-stages.sql maps the old `status` enum to a
+  // stage. The legacy `status` column above stays as-is — cancellation
+  // ("ملغاة") lives there, not on currentStage.
+  currentStage:       varchar("current_stage", { length: 50 }),
 });
 
 export const caseActivityLog = pgTable("case_activity_log", {
@@ -437,6 +445,41 @@ export const memoActivityLog = pgTable("memo_activity_log", {
   metadata: jsonb("metadata").default({}),
   performedBy: varchar("performed_by", { length: 255 }),
   performedAt: timestamp("performed_at").defaultNow(),
+});
+
+// Phase-9 — review-workflow helper tables. One row per peer-review
+// decision, committee decision, and take-notes outcome on a memo.
+// Mirrors the three consultation_* helper tables; values come from the
+// shared InternalReviewDecision / CommitteeDecision / NoteOutcome enums
+// (the Arabic tokens are identical across entities). Inserts happen
+// server-side in the same DB transaction as the memo stage update and
+// the activity log row — see storage.recordMemo*.
+// Migration: script/add-memo-helper-tables.sql.
+export const memoReviews = pgTable("memo_reviews", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  reviewerId: varchar("reviewer_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const memoCommitteeDecisions = pgTable("memo_committee_decisions", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  decision: varchar("decision", { length: 50 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  decidedBy: varchar("decided_by", { length: 255 }).notNull(),
+  decidedAt: timestamp("decided_at").defaultNow(),
+});
+
+export const memoNoteOutcomes = pgTable("memo_note_outcomes", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  memoId: varchar("memo_id", { length: 255 }).notNull(),
+  outcome: varchar("outcome", { length: 20 }).notNull(),
+  notes: text("notes").notNull().default(""),
+  recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
+  recordedAt: timestamp("recorded_at").defaultNow(),
 });
 
 export const caseNotes = pgTable("case_notes", {
@@ -549,6 +592,10 @@ export const insertConsultationCommitteeDecisionDbSchema = createInsertSchema(co
 export const insertConsultationNoteOutcomeDbSchema = createInsertSchema(consultationNoteOutcomes).omit({ recordedAt: true });
 export const insertConsultationDeliveryExtensionDbSchema = createInsertSchema(consultationDeliveryExtensions).omit({ extendedAt: true });
 export const insertConsultationActivityLogDbSchema = createInsertSchema(consultationActivityLog).omit({ performedAt: true });
+// Phase-9 — memo review-workflow helper tables.
+export const insertMemoReviewDbSchema = createInsertSchema(memoReviews).omit({ createdAt: true });
+export const insertMemoCommitteeDecisionDbSchema = createInsertSchema(memoCommitteeDecisions).omit({ decidedAt: true });
+export const insertMemoNoteOutcomeDbSchema = createInsertSchema(memoNoteOutcomes).omit({ recordedAt: true });
 export const insertSavedFilterDbSchema = createInsertSchema(savedFilters).omit({ createdAt: true });
 
 // ==================== Select Types ====================
@@ -575,6 +622,9 @@ export type DbConsultationReview = typeof consultationReviews.$inferSelect;
 export type DbConsultationCommitteeDecision = typeof consultationCommitteeDecisions.$inferSelect;
 export type DbConsultationNoteOutcome = typeof consultationNoteOutcomes.$inferSelect;
 export type DbConsultationActivityLog = typeof consultationActivityLog.$inferSelect;
+export type DbMemoReview = typeof memoReviews.$inferSelect;
+export type DbMemoCommitteeDecision = typeof memoCommitteeDecisions.$inferSelect;
+export type DbMemoNoteOutcome = typeof memoNoteOutcomes.$inferSelect;
 export type DbSavedFilter = typeof savedFilters.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
@@ -1386,6 +1436,61 @@ export const MemoStatusLabels: Record<MemoStatusValue, string> = {
   "ملغاة": "ملغاة",
 };
 
+// ==================== Memo Stage (Phase-9 review workflow) ====================
+// Mirrors the consultations 7+1-stage workflow but with memo-specific
+// terminal labels: جاهزة_للرفع / مرفوعة (filing) instead of
+// جاهزة_للتسليم / منجزة (delivery). TAKING_NOTES is conditional, only
+// reached when committee returns "يوجد_ملاحظات".
+//
+// Stored on memos.current_stage (added in Phase-9). The legacy `status`
+// column is retained for cancellation ("ملغاة") and back-compat reads;
+// the new workflow operates on currentStage.
+export const MemoStage = {
+  RECEIVED:        "استلام",
+  DRAFTING:        "تحرير",
+  INTERNAL_REVIEW: "مراجعة_داخلية",
+  COMMITTEE:       "لجنة_مراجعة",
+  TAKING_NOTES:    "الأخذ_بالملاحظات",
+  READY:           "جاهزة_للرفع",
+  FILED:           "مرفوعة",
+} as const;
+
+export type MemoStageValue = typeof MemoStage[keyof typeof MemoStage];
+
+export const MemoStageLabels: Record<MemoStageValue, string> = {
+  "استلام":           "استلام",
+  "تحرير":            "تحرير",
+  "مراجعة_داخلية":    "مراجعة داخلية",
+  "لجنة_مراجعة":      "لجنة مراجعة",
+  "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
+  "جاهزة_للرفع":      "جاهزة للرفع",
+  "مرفوعة":           "مرفوعة",
+};
+
+// Linear happy-path order (excludes TAKING_NOTES, which is conditional).
+export const MemoStagesOrder: MemoStageValue[] = [
+  MemoStage.RECEIVED,
+  MemoStage.DRAFTING,
+  MemoStage.INTERNAL_REVIEW,
+  MemoStage.COMMITTEE,
+  MemoStage.READY,
+  MemoStage.FILED,
+];
+
+// All stages in canonical order, including the conditional TAKING_NOTES
+// branch (entered only when committee returns يوجد_ملاحظات). Used for
+// rollback validation and for the stages bar when the memo has been
+// through TAKING_NOTES at least once.
+export const MemoStagesAll: MemoStageValue[] = [
+  MemoStage.RECEIVED,
+  MemoStage.DRAFTING,
+  MemoStage.INTERNAL_REVIEW,
+  MemoStage.COMMITTEE,
+  MemoStage.TAKING_NOTES,
+  MemoStage.READY,
+  MemoStage.FILED,
+];
+
 // ==================== أنواع المستندات ====================
 export const DocumentType = {
   ID: "هوية",
@@ -1700,13 +1805,19 @@ export interface ConsultationActivity {
   performedAt: string;
 }
 
-// Phase-8 — memo activity log mirroring ConsultationActivityType. Memos
-// don't have the consultation-specific stage workflow events, so the
-// memo type list is shorter — just creation + the cross-cutting Phase-8
-// pause / await-completion events. Stored as plain varchar so adding a
+// Phase-8 — memo activity log mirroring ConsultationActivityType.
+// Phase-9 — extended with the review-workflow events (assigned, stage
+// transitions, internal-review, committee-decision, take-notes-outcome)
+// to match the consultations side. Stored as plain varchar so adding a
 // new event kind is a value change, not a DDL change.
 export const MemoActivityType = {
   CREATED:                "created",
+  ASSIGNED:               "assigned",
+  STAGE_ADVANCED:         "stage_advanced",
+  STAGE_RETURNED:         "stage_returned",
+  INTERNAL_REVIEW:        "internal_review",
+  COMMITTEE_DECISION:     "committee_decision",
+  TAKE_NOTES_OUTCOME:     "take_notes_outcome",
   PAUSED:                 "paused",
   UNPAUSED:               "unpaused",
   AWAIT_COMPLETION:       "await_completion",
@@ -1718,6 +1829,12 @@ export type MemoActivityTypeValue =
 
 export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
   created:                "إنشاء",
+  assigned:               "إسناد",
+  stage_advanced:         "تقدم في المرحلة",
+  stage_returned:         "إرجاع للمرحلة السابقة",
+  internal_review:        "مراجعة داخلية",
+  committee_decision:     "قرار اللجنة",
+  take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
   paused:                 "تعليق",
   unpaused:               "إلغاء التعليق",
   await_completion:       "بانتظار استكمال المرفقات والبيانات",
@@ -1732,6 +1849,37 @@ export interface MemoActivity {
   metadata: Record<string, any>;
   performedBy: string | null;
   performedAt: string;
+}
+
+// Phase-9 — review-workflow helper-row interfaces. Mirror the
+// consultation_* counterparts. The decision/outcome columns hold the
+// shared Arabic enum values (InternalReviewDecision / CommitteeDecision
+// / NoteOutcome) — same tokens as on the consultations side.
+export interface MemoReview {
+  id: string;
+  memoId: string;
+  reviewerId: string;
+  decision: string;
+  notes: string;
+  createdAt: string;
+}
+
+export interface MemoCommitteeDecision {
+  id: string;
+  memoId: string;
+  decision: string;
+  notes: string;
+  decidedBy: string;
+  decidedAt: string;
+}
+
+export interface MemoNoteOutcome {
+  id: string;
+  memoId: string;
+  outcome: string;
+  notes: string;
+  recordedBy: string;
+  recordedAt: string;
 }
 
 export interface Hearing {
@@ -1878,6 +2026,10 @@ export interface Memo {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  // Phase-9 — review-workflow stage. Null on legacy memos until the
+  // backfill in script/backfill-memo-stages.sql runs. New memos start
+  // at MemoStage.RECEIVED ("استلام").
+  currentStage: MemoStageValue | null;
 }
 
 // ==================== أنواع التواصل مع العملاء ====================

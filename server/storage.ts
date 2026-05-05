@@ -631,6 +631,9 @@ function mapDbMemo(dbMemo: any): Memo {
     pausedAt: toISOStringOrNull(dbMemo.pausedAt),
     awaitingCompletion: dbMemo.awaitingCompletion ?? false,
     savedStage: dbMemo.savedStage ?? null,
+    // Phase-9 — review-workflow stage. Legacy rows pre-backfill surface
+    // as null; the FE treats null as "no stage yet" (legacy status flow).
+    currentStage: dbMemo.currentStage ?? null,
   };
 }
 
@@ -1598,6 +1601,10 @@ export class DatabaseStorage implements IStorage {
       reminderSentOverdue: false,
       createdAt: now,
       updatedAt: now,
+      // Phase-9 — new memos enter the review workflow at RECEIVED.
+      // Legacy (status-only) callers are unaffected; the column is
+      // nullable in the DB so this default just means "use the new flow".
+      currentStage: data.currentStage || "استلام",
     };
 
     await db.insert(memos).values(newMemo);
