@@ -166,21 +166,15 @@ function canDoMemoInternalReview(
   memo: Memo,
   userRole: string,
   userId: string,
-  memoCase: { departmentId?: string | null } | null,
-  userDeptId: string | null,
 ): boolean {
   if (!memoIsActionable(memo)) return false;
   if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) return false;
-  if (
-    userRole === "department_head" &&
-    memoCase &&
-    memoCase.departmentId !== userDeptId
-  ) {
-    return false;
-  }
-  const baseRoles = ["employee", "department_head", "cases_review_head", "branch_manager"];
-  if (baseRoles.includes(userRole)) return true;
-  return !!memo.assignedTo && memo.assignedTo === userId;
+  // Phase-9.1 — actor lock matches the server gate on
+  // POST /api/memos/:id/internal-review: only the designated peer
+  // reviewer (memo.internalReviewerId) or the branch_manager can
+  // record the decision.
+  if (userRole === "branch_manager") return true;
+  return !!memo.internalReviewerId && memo.internalReviewerId === userId;
 }
 
 function canDoMemoCommitteeDecision(
@@ -683,13 +677,17 @@ export default function MemosPage() {
   };
 
   // Phase-9 — generic stage advance for the linear-path transitions
-  // (RECEIVED → DRAFTING, DRAFTING → INTERNAL_REVIEW, READY → FILED).
-  // The dedicated review/committee/take-notes endpoints handle the
-  // branching transitions; this helper just POSTs /advance-stage.
-  const handleAdvanceMemoStage = async (memo: Memo, targetStage: MemoStageValue) => {
+  // (RECEIVED → DRAFTING, READY → FILED). DRAFTING → INTERNAL_REVIEW
+  // goes through the dedicated dialog below since it requires a
+  // reviewer selection.
+  const handleAdvanceMemoStage = async (
+    memo: Memo,
+    targetStage: MemoStageValue,
+    extraBody: Record<string, unknown> = {},
+  ) => {
     setSubmitting(true);
     try {
-      await apiRequest("POST", `/api/memos/${memo.id}/advance-stage`, { targetStage });
+      await apiRequest("POST", `/api/memos/${memo.id}/advance-stage`, { targetStage, ...extraBody });
       await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
       toast({ title: "تم تحديث المرحلة" });
     } catch (err) {
@@ -697,6 +695,39 @@ export default function MemosPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // Phase-9.1 — DRAFTING → INTERNAL_REVIEW dialog state. Mirrors the
+  // cases-side internal-reviewer picker (case-progress-bar.tsx). The
+  // dropdown is sourced from users in the same department as the
+  // memo's parent case (computed at render time in the dialog).
+  const [showSendToReviewDialog, setShowSendToReviewDialog] = useState(false);
+  const [sendToReviewMemo, setSendToReviewMemo] = useState<Memo | null>(null);
+  const [sendToReviewReviewerId, setSendToReviewReviewerId] = useState("");
+  const openSendToReviewDialog = (memo: Memo) => {
+    setSendToReviewMemo(memo);
+    // Pre-select the previous reviewer on loop-back rounds so the
+    // user doesn't have to re-pick after يوجد ملاحظات.
+    setSendToReviewReviewerId(memo.internalReviewerId || "");
+    setShowSendToReviewDialog(true);
+  };
+  const closeSendToReviewDialog = () => {
+    setShowSendToReviewDialog(false);
+    setSendToReviewMemo(null);
+    setSendToReviewReviewerId("");
+  };
+  const handleSendToReview = async () => {
+    if (!sendToReviewMemo) return;
+    if (!sendToReviewReviewerId) {
+      toast({ title: "اختر المراجع الداخلي", variant: "destructive" });
+      return;
+    }
+    await handleAdvanceMemoStage(
+      sendToReviewMemo,
+      MemoStage.INTERNAL_REVIEW,
+      { internalReviewerId: sendToReviewReviewerId },
+    );
+    closeSendToReviewDialog();
   };
 
   // FE-side gate for the 3 linear-path stage advances. Server still
@@ -1627,13 +1658,7 @@ export default function MemosPage() {
                   {/* Phase-9 — review-workflow action buttons. Each opens
                       a dedicated dialog. Visibility is gated on the
                       memo's currentStage and the user's role. */}
-                  {user && canDoMemoInternalReview(
-                    detailMemo,
-                    user.role,
-                    user.id,
-                    getMemoCase(detailMemo),
-                    user.departmentId,
-                  ) && (
+                  {user && canDoMemoInternalReview(detailMemo, user.role, user.id) && (
                     <Button
                       data-testid={`button-internal-review-${detailMemo.id}`}
                       onClick={() => openInternalReviewDialog(detailMemo)}
@@ -1686,7 +1711,7 @@ export default function MemosPage() {
                   {detailMemo.currentStage === MemoStage.DRAFTING && canAdvanceMemoStage(detailMemo, MemoStage.INTERNAL_REVIEW) && (
                     <Button
                       data-testid="button-memo-advance-to-internal-review"
-                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.INTERNAL_REVIEW)}
+                      onClick={() => openSendToReviewDialog(detailMemo)}
                       disabled={submitting}
                     >
                       <AlertTriangle className="w-4 h-4 ml-2" />
@@ -1962,6 +1987,82 @@ export default function MemosPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Phase-9.1 — send-to-internal-review dialog. Mirrors the cases
+          internal-reviewer picker. The dropdown is sourced from users
+          in the same department as the memo's parent case, excluding
+          admin_support / branch_manager (universal access) / hr /
+          technical_support / the current user. */}
+      <Dialog
+        open={showSendToReviewDialog}
+        onOpenChange={(open) => { if (!open) closeSendToReviewDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="w-5 h-5" />
+              إرسال للمراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              اختر المراجع الداخلي. ستُحال المذكرة إليه ليُسجل قراره
+              (اعتماد / يوجد ملاحظات).
+            </p>
+            <div className="space-y-2">
+              <Label>المراجع الداخلي <span className="text-red-500">*</span></Label>
+              {(() => {
+                const memoCase = sendToReviewMemo ? cases.find(c => c.id === sendToReviewMemo.caseId) : null;
+                const eligibleReviewers = users.filter(u =>
+                  u.isActive
+                  && u.role !== "admin_support"
+                  && u.role !== "branch_manager"
+                  && u.role !== "hr"
+                  && u.role !== "technical_support"
+                  && u.id !== user?.id
+                  && (!memoCase?.departmentId || u.departmentId === memoCase.departmentId)
+                );
+                return (
+                  <>
+                    <select
+                      value={sendToReviewReviewerId}
+                      onChange={(e) => setSendToReviewReviewerId(e.target.value)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      data-testid="select-memo-internal-reviewer"
+                    >
+                      <option value="">-- اختر مراجعاً --</option>
+                      {eligibleReviewers.map(u => (
+                        <option key={u.id} value={u.id}>{u.name}</option>
+                      ))}
+                    </select>
+                    {eligibleReviewers.length === 0 && (
+                      <p className="text-xs text-red-600">لا يوجد مراجعون مؤهلون في قسم القضية</p>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeSendToReviewDialog}
+              data-testid="button-cancel-memo-send-to-review"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-confirm-memo-send-to-review"
+              onClick={handleSendToReview}
+              disabled={submitting || !sendToReviewReviewerId}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              <ClipboardCheck className="w-4 h-4 ml-2" />
+              تأكيد الإرسال
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Phase-9 — internal-review dialog. 2 outcomes: PASSED → COMMITTEE,
           NEEDS_NOTES → DRAFTING. */}
       <Dialog
@@ -1976,6 +2077,16 @@ export default function MemosPage() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {/* Phase-9.1 — show the designated reviewer so the current
+                user can see whether they're the right person to act
+                (the action buttons below are server-locked to that
+                reviewer or branch_manager). */}
+            {internalReviewMemo?.internalReviewerId && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm" data-testid="memo-internal-reviewer-name">
+                <span className="text-muted-foreground">المراجع الداخلي المعين: </span>
+                <strong>{getUserName(internalReviewMemo.internalReviewerId)}</strong>
+              </div>
+            )}
             <p className="text-sm text-muted-foreground">
               اختر نتيجة المراجعة. <strong>اعتماد</strong> ينقل المذكرة إلى لجنة المراجعة،
               و<strong>يوجد ملاحظات</strong> يعيدها إلى مرحلة التحرير.

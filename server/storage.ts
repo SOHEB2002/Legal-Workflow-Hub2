@@ -674,6 +674,8 @@ function mapDbMemo(dbMemo: any): Memo {
     // Phase-9 — review-workflow stage. Legacy rows pre-backfill surface
     // as null; the FE treats null as "no stage yet" (legacy status flow).
     currentStage: dbMemo.currentStage ?? null,
+    // Phase-9.1 — designated peer reviewer (set on DRAFTING→INTERNAL_REVIEW).
+    internalReviewerId: dbMemo.internalReviewerId ?? null,
   };
 }
 

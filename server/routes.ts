@@ -356,7 +356,8 @@ function validateStageTransition(
   }
 
   const isInternalReviewer =
-    entityType === "case" && !!user && !!entityData && entityData.internalReviewerId === user.id;
+    (entityType === "case" || entityType === "memo")
+    && !!user && !!entityData && entityData.internalReviewerId === user.id;
 
   // Internal review stages are locked: only the designated internal reviewer,
   // the department head, or the branch manager can transition out of them.
@@ -364,6 +365,21 @@ function validateStageTransition(
     entityType === "case" &&
     (currentStage === "مراجعة_داخلية" || currentStage === "مراجعة_داخلية_للتظلم")
   ) {
+    const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
+    if (!isInternalReviewer && !isHeadOrManager) {
+      return {
+        allowed: false,
+        reason: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية",
+      };
+    }
+  }
+
+  // Memo INTERNAL_REVIEW lock — same semantics as cases. Prevents users
+  // bypassing the dedicated /internal-review endpoint by calling
+  // /advance-stage or /return-stage from المراجعة_داخلية. The dedicated
+  // endpoint already enforces this; this is belt-and-braces for the
+  // generic stage-transition routes.
+  if (entityType === "memo" && currentStage === "مراجعة_داخلية") {
     const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
     if (!isInternalReviewer && !isHeadOrManager) {
       return {
@@ -3734,15 +3750,54 @@ export async function registerRoutes(
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
+      // Phase-9.1 — DRAFTING → INTERNAL_REVIEW requires a designated
+      // peer reviewer. Same rules as the cases-side (server/routes.ts
+      // ~1925): take from body, fall back to existing on the memo for
+      // loop-back rounds, validate active + not admin_support + same
+      // dept as the parent case.
+      const updateFields: any = { currentStage: targetStage };
+      const activityMetadata: Record<string, any> = { fromStage: memo.currentStage, toStage: targetStage };
+      if (
+        memo.currentStage === MemoStage.DRAFTING
+        && targetStage === MemoStage.INTERNAL_REVIEW
+      ) {
+        const reviewerId: string | undefined =
+          (typeof req.body?.internalReviewerId === "string" && req.body.internalReviewerId)
+          || (memo.internalReviewerId ?? undefined);
+        if (!reviewerId) {
+          return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
+        }
+        const reviewer = await storage.getUser(reviewerId);
+        if (!reviewer || !reviewer.isActive) {
+          return res.status(400).json({ error: "المراجع الداخلي المختار غير صالح" });
+        }
+        if (reviewer.role === "admin_support" || reviewer.role === "branch_manager") {
+          return res.status(400).json({ error: "لا يمكن اختيار هذا الدور كمراجع داخلي" });
+        }
+        const parentCase = await storage.getCaseById(memo.caseId);
+        if (parentCase && parentCase.departmentId && reviewer.departmentId !== parentCase.departmentId) {
+          return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم القضية" });
+        }
+        if (reviewer.id === reqUser.id) {
+          return res.status(400).json({ error: "لا يمكن اختيار نفسك كمراجع داخلي" });
+        }
+        updateFields.internalReviewerId = reviewerId;
+        activityMetadata.reviewerId = reviewerId;
+        activityMetadata.reviewerName = reviewer.name;
+      }
+
       const fromLabel = (MemoStageLabels as any)[memo.currentStage] || memo.currentStage;
       const toLabel = (MemoStageLabels as any)[targetStage] || targetStage;
+      const description = activityMetadata.reviewerName
+        ? `انتقال من ${fromLabel} إلى ${toLabel} — المراجع: ${activityMetadata.reviewerName}`
+        : `انتقال من ${fromLabel} إلى ${toLabel}`;
       const updated = await storage.updateMemoAndLog(
         memo.id,
-        { currentStage: targetStage } as any,
+        updateFields,
         {
           activityType: MemoActivityType.STAGE_ADVANCED,
-          description: `انتقال من ${fromLabel} إلى ${toLabel}`,
-          metadata: { fromStage: memo.currentStage, toStage: targetStage },
+          description,
+          metadata: activityMetadata,
           performedBy: reqUser.id,
         },
       );
@@ -3834,10 +3889,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة ليست في مرحلة المراجعة الداخلية" });
       }
 
-      const baseAllowed = ["employee", "department_head", "cases_review_head", "branch_manager"];
-      const isLawyer = !!memo.assignedTo && memo.assignedTo === reqUser.id;
-      if (!baseAllowed.includes(reqUser.role) && !isLawyer) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
+      // Phase-9.1 — actor lock. Only the designated peer reviewer or
+      // the branch_manager can record the decision. This is stricter
+      // than the consultations-side internal-review (which is permissive
+      // pending the active_reviewer_id TODO).
+      const isAssignedReviewer =
+        !!memo.internalReviewerId && memo.internalReviewerId === reqUser.id;
+      const isBranchManager = reqUser.role === "branch_manager";
+      if (!isAssignedReviewer && !isBranchManager) {
+        return res.status(403).json({
+          error: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم تسجيل قرار المراجعة الداخلية",
+        });
       }
 
       const nextStage = decision === InternalReviewDecision.PASSED
@@ -3857,7 +3919,12 @@ export async function registerRoutes(
         nextStage,
         activity: {
           description,
-          metadata: { decision, notes, reviewerId: reqUser.id },
+          metadata: {
+            decision,
+            notes,
+            reviewerId: reqUser.id,
+            reviewerName: reqUser.name,
+          },
           performedBy: reqUser.id,
         },
       });

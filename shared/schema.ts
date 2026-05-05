@@ -416,6 +416,13 @@ export const memos = pgTable("memos", {
   // stage. The legacy `status` column above stays as-is — cancellation
   // ("ملغاة") lives there, not on currentStage.
   currentStage:       varchar("current_stage", { length: 50 }),
+  // Phase-9.1 — designated peer reviewer for the مراجعة_داخلية stage.
+  // Mirrors lawCases.internalReviewerId. Set when the assigned lawyer
+  // advances DRAFTING → INTERNAL_REVIEW; cleared/overwritten on the
+  // next round if the memo loops back via "يوجد ملاحظات". The
+  // /internal-review endpoint locks the decision to (this user) OR
+  // branch_manager. Migration: script/add-memo-internal-reviewer.sql.
+  internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
 });
 
 export const caseActivityLog = pgTable("case_activity_log", {
@@ -2030,6 +2037,9 @@ export interface Memo {
   // backfill in script/backfill-memo-stages.sql runs. New memos start
   // at MemoStage.RECEIVED ("استلام").
   currentStage: MemoStageValue | null;
+  // Phase-9.1 — designated peer reviewer for the مراجعة_داخلية stage.
+  // Mirrors LawCase.internalReviewerId.
+  internalReviewerId: string | null;
 }
 
 // ==================== أنواع التواصل مع العملاء ====================
