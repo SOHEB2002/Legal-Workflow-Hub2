@@ -176,6 +176,19 @@ function getStageBadgeClass(stage: MemoStageValue): string {
   }
 }
 
+// Virtual stage grouping. Lifecycle states (cancelled / paused) remap
+// to specific stages so the stage filter axis stays purely stage-based:
+//   status='ملغاة' → مرفوعة (terminal — done)
+//   pausedAt set   → تحرير (parked drafting; memos have no "awaiting"
+//                            stage like consultations/cases do)
+//   otherwise      → currentStage (may be null on legacy pre-backfill rows)
+// The details-dialog stages bar still uses the literal currentStage.
+function getMemoDisplayStage(m: Memo): MemoStageValue | null {
+  if (m.status === MemoStatus.CANCELLED) return MemoStage.FILED;
+  if (m.pausedAt) return MemoStage.DRAFTING;
+  return (m.currentStage as MemoStageValue | null) ?? null;
+}
+
 function getDeadlineColor(deadline: string): string {
   const days = differenceInDays(new Date(deadline), new Date());
   if (days < 0) return "text-destructive font-bold";
@@ -863,14 +876,15 @@ export default function MemosPage() {
     const q = searchQuery.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
     return memos.filter((m) => {
-      // Phase-9 — quick filter operates on the new currentStage axis.
-      // The special "ملغاة" option falls back to the legacy status
-      // column because cancellation lives there (orthogonal to stage).
+      // Quick filter operates on displayStage (virtual grouping):
+      // cancelled memos appear under مرفوعة, paused memos under تحرير.
+      // The "ملغاة" option remains as a special status-only filter
+      // (so users who want ONLY cancelled rows can still narrow down).
       if (filterStatus !== "all") {
         if (filterStatus === MemoStatus.CANCELLED) {
           if (m.status !== MemoStatus.CANCELLED) return false;
         } else {
-          if (m.currentStage !== filterStatus) return false;
+          if (getMemoDisplayStage(m) !== filterStatus) return false;
         }
       }
       const relatedCase = cases.find(c => c.id === m.caseId);
@@ -894,14 +908,15 @@ export default function MemosPage() {
 
       // Advanced filters (empty = no constraint, all AND'd)
       if (advFilters.memoTypes.length && !advFilters.memoTypes.includes(m.memoType)) return false;
-      // Phase-9 — same branching as the quick filter: "ملغاة" falls
-      // back to the legacy status; other values match against the new
-      // currentStage axis.
+      // Same virtual-grouping logic as the quick filter: "ملغاة"
+      // matches strictly by status; other values match against
+      // displayStage (cancelled→مرفوعة, paused→تحرير, else currentStage).
       if (advFilters.statuses.length) {
+        const ds = getMemoDisplayStage(m);
         const matched = advFilters.statuses.some((s) =>
           s === MemoStatus.CANCELLED
             ? m.status === MemoStatus.CANCELLED
-            : m.currentStage === s,
+            : ds === s,
         );
         if (!matched) return false;
       }
@@ -1122,24 +1137,37 @@ export default function MemosPage() {
                         </TableCell>
                         <TableCell className="text-center">
                           <div className="flex flex-col items-center gap-1">
-                            {/* Phase-9 — three-way badge:
-                                  1. status === ملغاة → legacy CANCELLED badge
-                                     (cancellation is orthogonal to stage,
-                                     so a memo can have both — show ملغاة).
-                                  2. currentStage non-null → stage label.
-                                  3. Otherwise (legacy / pre-backfill) →
-                                     fall back to legacy status. */}
-                            {memo.status === MemoStatus.CANCELLED ? (
-                              <Badge className={getStatusBadgeClass(MemoStatus.CANCELLED)}>
+                            {/* Stage badge uses displayStage (virtual
+                                grouping): cancelled memos show under
+                                مرفوعة + ملغاة pill; paused memos show
+                                under تحرير + معلّقة pill; legacy memos
+                                with currentStage=null still fall back
+                                to the legacy status badge. */}
+                            {(() => {
+                              const ds = getMemoDisplayStage(memo);
+                              if (ds) {
+                                return (
+                                  <Badge className={getStageBadgeClass(ds)}>
+                                    {MemoStageLabels[ds] || ds}
+                                  </Badge>
+                                );
+                              }
+                              return (
+                                <Badge className={getStatusBadgeClass(memo.status)}>
+                                  {MemoStatusLabels[memo.status]}
+                                </Badge>
+                              );
+                            })()}
+                            {/* "ملغاة" lifecycle pill — surfaces the
+                                cancellation while the stage badge
+                                shows the displayStage (مرفوعة). */}
+                            {memo.status === MemoStatus.CANCELLED && (
+                              <Badge
+                                variant="outline"
+                                className="border-destructive/40 bg-destructive/10 text-destructive text-[10px] px-1 py-0"
+                                data-testid={`badge-memo-cancelled-${memo.id}`}
+                              >
                                 {MemoStatusLabels[MemoStatus.CANCELLED]}
-                              </Badge>
-                            ) : memo.currentStage ? (
-                              <Badge className={getStageBadgeClass(memo.currentStage as MemoStageValue)}>
-                                {MemoStageLabels[memo.currentStage as MemoStageValue] || memo.currentStage}
-                              </Badge>
-                            ) : (
-                              <Badge className={getStatusBadgeClass(memo.status)}>
-                                {MemoStatusLabels[memo.status]}
                               </Badge>
                             )}
                             {/* Phase-8 — paused indicator. Distinct amber badge

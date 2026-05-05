@@ -100,6 +100,7 @@ import {
   CaseStageLabels,
   CaseStagesOrder,
   CaseStage,
+  CaseStatus,
   Priority,
   Department,
   CaseClassification,
@@ -298,6 +299,20 @@ export default function CasesPage() {
   };
 
   const isCasePaused = (c: LawCase): boolean => !!c.pausedAt;
+
+  // Virtual stage grouping. Lifecycle states (paused / closed /
+  // archived) remap to specific stages so the stage filter stays
+  // purely stage-based:
+  //   paused              → استكمال_البيانات (parked, awaiting data)
+  //   مغلق / isArchived   → مقفلة (canonical terminal)
+  //   otherwise           → currentStage
+  // The details-dialog progress bar still uses the literal currentStage
+  // — virtualization is for filtering and the table badge only.
+  const getCaseDisplayStage = (c: LawCase): CaseStageValue => {
+    if (c.pausedAt) return CaseStage.DATA_COMPLETION;
+    if (c.status === CaseStatus.CLOSED || (c as any).isArchived) return CaseStage.CLOSED;
+    return c.currentStage;
+  };
 
   const openPauseCaseDialog = (c: LawCase) => {
     setPauseCaseTarget(c);
@@ -896,7 +911,11 @@ export default function CasesPage() {
         (clientName && clientName.toLowerCase().includes(q)) ||
         (c.plaintiffName && c.plaintiffName.toLowerCase().includes(q)) ||
         (c.opponentName && c.opponentName.toLowerCase().includes(q));
-      const matchesStatus = statusFilter === "all" || c.currentStage === statusFilter;
+      // Stage filter operates on displayStage (virtual grouping) so a
+      // closed/archived case appears under مقفلة and a paused one
+      // under استكمال_البيانات.
+      const displayStage = getCaseDisplayStage(c);
+      const matchesStatus = statusFilter === "all" || displayStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
       const matchesClassification = classificationFilter === "all" ||
         c.caseClassification === classificationFilter;
@@ -904,7 +923,7 @@ export default function CasesPage() {
       const matchesAdvPriority =
         advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
       const matchesAdvStage =
-        advFilters.stages.length === 0 || advFilters.stages.includes(c.currentStage as string);
+        advFilters.stages.length === 0 || advFilters.stages.includes(displayStage as string);
       const matchesAdvDept =
         advFilters.depts.length === 0 || advFilters.depts.includes(c.departmentId);
       const matchesAdvClassification =
@@ -976,17 +995,18 @@ export default function CasesPage() {
   const handleTransferRequest = async () => {
     const caseItem = transferCaseId ? getCaseById(transferCaseId) : null;
     if (!caseItem || !transferData.toDepartmentId || !transferData.reason.trim()) return;
-    const fromDeptName = getDepartmentName(caseItem.departmentId || user?.departmentId || "");
-    const toDeptName = getDepartmentName(transferData.toDepartmentId);
     try {
-      await requestCaseTransfer(
-        caseItem.id, caseItem.caseNumber,
-        fromDeptName, transferData.toDepartmentId, toDeptName,
-        transferData.reason,
-      );
-      toast({ title: "تم إرسال طلب التحويل بنجاح", description: "سيتم إشعارك عند الموافقة أو الرفض" });
-    } catch {
-      toast({ title: "فشل إرسال طلب التحويل", variant: "destructive" });
+      // Direct PATCH triggers the server's isDeptTransfer flow:
+      // resets currentStage to استلام, clears lawyers, emits a
+      // department_transferred activity log entry with the reason.
+      await apiRequest("PATCH", `/api/cases/${caseItem.id}`, {
+        departmentId: transferData.toDepartmentId,
+        transferReason: transferData.reason,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+      toast({ title: "تم تحويل القضية", description: "أُعيدت لمرحلة الاستلام في القسم الجديد" });
+    } catch (e: any) {
+      toast({ title: "فشل تحويل القضية", description: e?.message || "حدث خطأ", variant: "destructive" });
     }
     setShowTransferDialog(false);
     setTransferCaseId(null);
@@ -1263,8 +1283,11 @@ export default function CasesPage() {
                   </TableCell>
                   <TableCell className="text-center">
                     <div className="inline-flex items-center gap-1">
-                      <Badge className={`${getStageColor(c.currentStage)} inline-flex justify-center`}>
-                        {getStageLabel(c.currentStage)}
+                      {/* displayStage groups paused → استكمال_البيانات
+                          and closed/archived → مقفلة so the badge
+                          matches what the stage filter returns. */}
+                      <Badge className={`${getStageColor(getCaseDisplayStage(c))} inline-flex justify-center`}>
+                        {getStageLabel(getCaseDisplayStage(c))}
                       </Badge>
                       {/* Phase-8 — paused indicator. Distinct amber badge so
                           it reads as orthogonal to the stage. */}
@@ -3322,11 +3345,24 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {isDeptHead && selectedCase.departmentId === user?.departmentId && (
+                    {(() => {
+                      // Transfer is allowed for: assigned_lawyer +
+                      // admin_support + department_head (own dept) +
+                      // branch_manager. Stage no longer matters — the
+                      // server lifted that restriction.
+                      if (!user) return false;
+                      if (user.role === "branch_manager" || user.role === "admin_support") return true;
+                      if (user.role === "department_head" && selectedCase.departmentId === user.departmentId) return true;
+                      const isAssigned =
+                        selectedCase.primaryLawyerId === user.id ||
+                        selectedCase.responsibleLawyerId === user.id ||
+                        (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id));
+                      return isAssigned;
+                    })() && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
                         <div>
-                          <p className="font-medium text-sm">طلب تحويل لقسم آخر</p>
-                          <p className="text-xs text-muted-foreground">تقديم طلب تحويل القضية لقسم مختلف</p>
+                          <p className="font-medium text-sm">تحويل لقسم آخر</p>
+                          <p className="text-xs text-muted-foreground">تحويل القضية لقسم مختلف — تُعاد للاستلام في القسم الجديد</p>
                         </div>
                         <Button size="sm" variant="outline" data-testid={`button-transfer-details-${selectedCase.id}`} onClick={() => { openTransferDialog(selectedCase); }}>
                           <ArrowLeftRight className="w-4 h-4 ml-1" />تحويل
@@ -3344,7 +3380,14 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(isDeptHead && selectedCase.departmentId === user?.departmentId) && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
+                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(() => {
+                      if (!user) return false;
+                      if (user.role === "branch_manager" || user.role === "admin_support") return true;
+                      if (user.role === "department_head" && selectedCase.departmentId === user.departmentId) return true;
+                      return selectedCase.primaryLawyerId === user.id
+                        || selectedCase.responsibleLawyerId === user.id
+                        || (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id));
+                    })() && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>

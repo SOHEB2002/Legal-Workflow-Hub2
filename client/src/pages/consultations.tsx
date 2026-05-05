@@ -297,33 +297,25 @@ function getStageBadgeColor(stage: ConsultationStageValue): string {
   }
 }
 
-// Combined badge: derives label + colour from currentStage + status.
-//   active     → live stage label + stage colour (drives the row's eye)
-//   paused     → "معلّقة" + amber (Phase-8 — orthogonal to stage)
-//   converted  → "محولة لقضية" + violet
-//   closed     → "مقفلة" + muted
+// Virtual stage grouping. Lifecycle states (paused / closed / converted)
+// remap to specific stages so the filter axis stays purely stage-based:
+//   paused    → استكمال_المرفقات_والبيانات (parked, awaiting data)
+//   closed    → منجزة (terminal — done)
+//   converted → منجزة (terminal — handed off to a case)
+//   active    → currentStage (the consultation's actual position)
+// The details-dialog stages bar still uses the literal currentStage
+// — virtualization is for filtering and the table badge only.
+function getConsultationDisplayStage(c: Consultation): ConsultationStageValue {
+  if (c.status === "paused") return ConsultationStage.RECEIVED_PENDING_COMPLETION;
+  if (c.status === "closed" || c.status === "converted") return ConsultationStage.COMPLETED;
+  return c.currentStage;
+}
+
 function getConsultationDisplayBadge(c: Consultation): { label: string; className: string } {
-  if (c.status === "paused") {
-    return {
-      label: ConsultationStatusDisplayLabels.paused,
-      className: "bg-amber-500/20 text-amber-600 border-amber-500/30",
-    };
-  }
-  if (c.status === "converted") {
-    return {
-      label: ConsultationStatusDisplayLabels.converted,
-      className: "bg-violet-500/20 text-violet-600 border-violet-500/30",
-    };
-  }
-  if (c.status === "closed") {
-    return {
-      label: ConsultationStatusDisplayLabels.closed,
-      className: "bg-muted text-muted-foreground border-muted",
-    };
-  }
+  const stage = getConsultationDisplayStage(c);
   return {
-    label: ConsultationStageLabels[c.currentStage] || c.currentStage,
-    className: getStageBadgeColor(c.currentStage),
+    label: ConsultationStageLabels[stage] || stage,
+    className: getStageBadgeColor(stage),
   };
 }
 
@@ -1335,7 +1327,10 @@ export default function ConsultationsPage() {
     }
     if (advFilters.status !== "all" && consultation.status !== advFilters.status) return false;
     if (advFilters.departmentId && consultation.departmentId !== advFilters.departmentId) return false;
-    if (advFilters.stages.length > 0 && !advFilters.stages.includes(consultation.currentStage)) return false;
+    // Stage filter operates on displayStage (virtual grouping) so a
+    // closed/converted consultation appears under منجزة and a paused
+    // one under استكمال_المرفقات_والبيانات.
+    if (advFilters.stages.length > 0 && !advFilters.stages.includes(getConsultationDisplayStage(consultation))) return false;
     if (advFilters.lawyers.length > 0) {
       const assignedTo = consultation.assignedTo;
       if (!assignedTo || !advFilters.lawyers.includes(assignedTo)) return false;
@@ -1602,14 +1597,46 @@ export default function ConsultationsPage() {
                     <Badge variant="outline">{consultation.consultationType}</Badge>
                   </TableCell>
                   <TableCell className="text-center">
-                    <div className="inline-flex items-center gap-1">
+                    <div className="inline-flex items-center gap-1 flex-wrap justify-center">
                       {(() => {
                         const b = getConsultationDisplayBadge(consultation);
                         return <Badge className={b.className}>{b.label}</Badge>;
                       })()}
-                      {/* Phase-8 — awaiting-completion indicator. Distinct
-                          amber pill so it reads as orthogonal even though
-                          the stage badge is also showing PENDING_COMPLETION. */}
+                      {/* Status pills — orthogonal to the stage badge so the
+                          stage stays visible no matter the lifecycle state.
+                          Filter by stage="دراسة" still returns these rows. */}
+                      {consultation.status === "paused" && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-paused-${consultation.id}`}
+                          title={consultation.pauseReason || "معلّقة"}
+                        >
+                          <Pause className="w-2.5 h-2.5 ml-1" />
+                          معلّقة
+                        </Badge>
+                      )}
+                      {consultation.status === "converted" && (
+                        <Badge
+                          variant="outline"
+                          className="border-violet-500 bg-violet-500/10 text-violet-700 text-[10px] px-1 py-0"
+                          data-testid={`badge-converted-${consultation.id}`}
+                          title={ConsultationStatusDisplayLabels.converted}
+                        >
+                          {ConsultationStatusDisplayLabels.converted}
+                        </Badge>
+                      )}
+                      {consultation.status === "closed" && (
+                        <Badge
+                          variant="outline"
+                          className="border-muted bg-muted/30 text-muted-foreground text-[10px] px-1 py-0"
+                          data-testid={`badge-closed-${consultation.id}`}
+                          title={ConsultationStatusDisplayLabels.closed}
+                        >
+                          {ConsultationStatusDisplayLabels.closed}
+                        </Badge>
+                      )}
+                      {/* Phase-8 — awaiting-completion indicator. */}
                       {consultation.awaitingCompletion && consultation.status === "active" && (
                         <Badge
                           variant="outline"

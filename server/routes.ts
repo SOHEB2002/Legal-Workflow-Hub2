@@ -1910,6 +1910,9 @@ export async function registerRoutes(
 
       // When a case is transferred to a new department without a simultaneous
       // lawyer assignment, clear the old lawyer so the new department can re-assign.
+      // Stage restriction was lifted: transfer is now allowed from any stage.
+      // The case's currentStage is reset to "استلام" (the new department's
+      // path starts fresh). Caller may pass `transferReason` for the activity log.
       const isDeptTransfer =
         "departmentId" in req.body &&
         req.body.departmentId &&
@@ -1917,16 +1920,25 @@ export async function registerRoutes(
         !req.body.primaryLawyerId &&
         !req.body.assignedLawyers;
 
-      if (isDeptTransfer) {
-        const currentStageIndex = CaseStagesOrder.indexOf(existing.currentStage as any);
-        const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE as any);
-        if (currentStageIndex >= reviewStageIndex) {
-          return res.status(400).json({ error: "لا يمكن تحويل القضية في هذه المرحلة - القضية في مرحلة متقدمة من المراجعة" });
-        }
+      // Capture pre-transfer values BEFORE we mutate req.body so the activity
+      // log gets the right "from" snapshot.
+      const transferFromStage = existing.currentStage;
+      const transferFromDeptId = existing.departmentId;
+      const transferReason = typeof req.body.transferReason === "string"
+        ? req.body.transferReason.trim()
+        : "";
 
+      if (isDeptTransfer) {
         req.body.primaryLawyerId = null;
         req.body.responsibleLawyerId = null;
         req.body.assignedLawyers = [];
+        // Reset to استلام so the new department starts the case fresh in
+        // its own stage path. The downstream stageHistory update (line ~1982)
+        // picks this up and writes a stage_changed entry alongside the
+        // department_transferred entry.
+        if (req.body.currentStage === undefined) {
+          req.body.currentStage = CaseStage.RECEPTION;
+        }
         // Also unassign the lawyer from pending hearings and active memos
         const caseId = String(req.params.id);
         try {
@@ -2115,10 +2127,16 @@ export async function registerRoutes(
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
-              actionType: "case_updated",
+              actionType: "department_transferred",
               title: `تم تحويل القضية من قسم إلى آخر`,
-              previousValue: existing.departmentId || "",
+              previousValue: transferFromDeptId || "",
               newValue: req.body.departmentId,
+              details: JSON.stringify({
+                fromDeptId: transferFromDeptId || null,
+                toDeptId: req.body.departmentId,
+                reason: transferReason || null,
+                fromStage: transferFromStage,
+              }),
             });
           } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
             await storage.logCaseActivity({
@@ -4353,6 +4371,14 @@ export async function registerRoutes(
 
       const data = hearingResultSchema.parse(req.body);
 
+      // Jurisdiction-declined: court ruling that this case belongs to a
+      // different department. Requires the FE to pass the target dept.
+      if (data.result === HearingResult.JURISDICTION_DECLINED) {
+        if (!data.transferToDepartmentId) {
+          return res.status(400).json({ error: "يجب اختيار القسم المحوّل إليه عند تسجيل عدم الاختصاص" });
+        }
+      }
+
       const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
 
       if (!hearing.caseId && effectiveCaseId) {
@@ -4414,6 +4440,50 @@ export async function registerRoutes(
           lastHearingResult: data.result,
           lastHearingDate: hearing.hearingDate,
         };
+
+        // ==================== PATH H: JURISDICTION DECLINED (عدم_الاختصاص) ====================
+        // Court ruled it lacks jurisdiction → case moves to the target
+        // department. Reset stage to استلام, clear lawyers, keep
+        // classification (still IN_COURT). Log a dedicated
+        // jurisdiction_transferred activity with the source/target dept
+        // ids and the hearing id, then short-circuit — no other PATH
+        // applies.
+        if (data.result === HearingResult.JURISDICTION_DECLINED) {
+          const fromDeptId = existingCase.departmentId || null;
+          const toDeptId = data.transferToDepartmentId!;
+          await storage.updateCase(effectiveCaseId, {
+            ...caseUpdate,
+            departmentId: toDeptId,
+            currentStage: CaseStage.RECEPTION,
+            primaryLawyerId: null,
+            responsibleLawyerId: null,
+            assignedLawyers: [],
+          } as any);
+          if (reqUser) {
+            try {
+              await storage.logCaseActivity({
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "jurisdiction_transferred",
+                title: "تحويل بسبب عدم الاختصاص",
+                previousValue: fromDeptId || "",
+                newValue: toDeptId,
+                details: JSON.stringify({
+                  fromDeptId,
+                  toDeptId,
+                  hearingId,
+                  reason: data.transferReason || null,
+                }),
+                relatedEntityType: "hearing",
+                relatedEntityId: hearingId,
+              });
+            } catch (e) {
+              console.error("[hearing-result/jurisdiction] logCaseActivity failed", e);
+            }
+          }
+          return res.json({ hearing: updatedHearing, createdTasks: [], createdMemos: [] });
+        }
 
         // ==================== PATH A: NEW SESSION (موعد_جديد) ====================
         // Unified handler for what used to be two outcomes (تأجيل + موعد_جديد).
