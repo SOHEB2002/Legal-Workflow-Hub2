@@ -995,17 +995,18 @@ export default function CasesPage() {
   const handleTransferRequest = async () => {
     const caseItem = transferCaseId ? getCaseById(transferCaseId) : null;
     if (!caseItem || !transferData.toDepartmentId || !transferData.reason.trim()) return;
-    const fromDeptName = getDepartmentName(caseItem.departmentId || user?.departmentId || "");
-    const toDeptName = getDepartmentName(transferData.toDepartmentId);
     try {
-      await requestCaseTransfer(
-        caseItem.id, caseItem.caseNumber,
-        fromDeptName, transferData.toDepartmentId, toDeptName,
-        transferData.reason,
-      );
-      toast({ title: "تم إرسال طلب التحويل بنجاح", description: "سيتم إشعارك عند الموافقة أو الرفض" });
-    } catch {
-      toast({ title: "فشل إرسال طلب التحويل", variant: "destructive" });
+      // Direct PATCH triggers the server's isDeptTransfer flow:
+      // resets currentStage to استلام, clears lawyers, emits a
+      // department_transferred activity log entry with the reason.
+      await apiRequest("PATCH", `/api/cases/${caseItem.id}`, {
+        departmentId: transferData.toDepartmentId,
+        transferReason: transferData.reason,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+      toast({ title: "تم تحويل القضية", description: "أُعيدت لمرحلة الاستلام في القسم الجديد" });
+    } catch (e: any) {
+      toast({ title: "فشل تحويل القضية", description: e?.message || "حدث خطأ", variant: "destructive" });
     }
     setShowTransferDialog(false);
     setTransferCaseId(null);
@@ -3344,11 +3345,24 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {isDeptHead && selectedCase.departmentId === user?.departmentId && (
+                    {(() => {
+                      // Transfer is allowed for: assigned_lawyer +
+                      // admin_support + department_head (own dept) +
+                      // branch_manager. Stage no longer matters — the
+                      // server lifted that restriction.
+                      if (!user) return false;
+                      if (user.role === "branch_manager" || user.role === "admin_support") return true;
+                      if (user.role === "department_head" && selectedCase.departmentId === user.departmentId) return true;
+                      const isAssigned =
+                        selectedCase.primaryLawyerId === user.id ||
+                        selectedCase.responsibleLawyerId === user.id ||
+                        (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id));
+                      return isAssigned;
+                    })() && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
                         <div>
-                          <p className="font-medium text-sm">طلب تحويل لقسم آخر</p>
-                          <p className="text-xs text-muted-foreground">تقديم طلب تحويل القضية لقسم مختلف</p>
+                          <p className="font-medium text-sm">تحويل لقسم آخر</p>
+                          <p className="text-xs text-muted-foreground">تحويل القضية لقسم مختلف — تُعاد للاستلام في القسم الجديد</p>
                         </div>
                         <Button size="sm" variant="outline" data-testid={`button-transfer-details-${selectedCase.id}`} onClick={() => { openTransferDialog(selectedCase); }}>
                           <ArrowLeftRight className="w-4 h-4 ml-1" />تحويل
@@ -3366,7 +3380,14 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(isDeptHead && selectedCase.departmentId === user?.departmentId) && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
+                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(() => {
+                      if (!user) return false;
+                      if (user.role === "branch_manager" || user.role === "admin_support") return true;
+                      if (user.role === "department_head" && selectedCase.departmentId === user.departmentId) return true;
+                      return selectedCase.primaryLawyerId === user.id
+                        || selectedCase.responsibleLawyerId === user.id
+                        || (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id));
+                    })() && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>

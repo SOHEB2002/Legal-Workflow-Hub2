@@ -1282,6 +1282,12 @@ export const HearingResult = {
   SETTLEMENT_REACHED: "تم_الصلح",
   SETTLEMENT_FAILED: "لم_يتم_الصلح",
   DISMISSAL: "شطب",
+  // Court ruling: lack of jurisdiction. Triggers a department transfer
+  // on the linked case (same flow as the manual transfer button on
+  // cases.tsx). The FE shows a department picker when this result is
+  // chosen; the server applies the transfer and emits a
+  // jurisdiction_transferred activity log entry.
+  JURISDICTION_DECLINED: "عدم_الاختصاص",
   OTHER: "أخرى",
 } as const;
 
@@ -1301,6 +1307,7 @@ export const HearingResultLabels: Record<HearingResultValue, string> = {
   "تم_الصلح": "تم الصلح",
   "لم_يتم_الصلح": "لم يتم الصلح",
   "شطب": "شطب",
+  "عدم_الاختصاص": "عدم الاختصاص",
   "أخرى": "أخرى",
 };
 
@@ -2244,8 +2251,12 @@ export const insertHearingSchema = z.object({
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
 
 export const hearingResultSchema = z.object({
-  result: z.enum(["موعد_جديد", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "أخرى"]),
+  result: z.enum(["موعد_جديد", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "عدم_الاختصاص", "أخرى"]),
   resultDetails: z.string().optional().default(""),
+  // Jurisdiction-declined transfer payload. Required iff result===عدم_الاختصاص.
+  // Applied server-side to the linked case (departmentId, stage reset, lawyers cleared).
+  transferToDepartmentId: z.string().nullable().optional(),
+  transferReason: z.string().optional(),
   // Judgment fields
   judgmentType: z.enum(["لصالحنا", "ضدنا", "جزئي"]).nullable().optional(),
   judgmentFinal: z.boolean().nullable().optional(),
@@ -2971,6 +2982,10 @@ export const CaseActivityActionLabels: Record<string, string> = {
   unpaused: "إلغاء التعليق",
   await_completion: "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
+  // Department transfer. The manual button on cases.tsx and the
+  // automatic عدم_الاختصاص hearing-result flow both emit one of these.
+  department_transferred: "تحويل لقسم آخر",
+  jurisdiction_transferred: "تحويل بسبب عدم الاختصاص",
 };
 
 export const CaseNoteCategoryLabels: Record<string, string> = {
