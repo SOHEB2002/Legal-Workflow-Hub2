@@ -34,6 +34,8 @@ import {
   MemoTypeLabels,
   MemoStatus,
   MemoStatusLabels,
+  MemoStage,
+  MemoStageLabels,
   CaseClassification,
   CaseClassificationLabels,
 } from "@shared/schema";
@@ -263,12 +265,21 @@ export function MemosAdvancedFilters({ filters, onChange, departments, users }: 
       })),
     [],
   );
+  // Phase-9 — status options now use the new MemoStage axis. The
+  // legacy MemoStatus.CANCELLED is kept as a special "ملغاة" entry
+  // because cancellation is orthogonal lifecycle, not a stage. The
+  // matching logic in memos.tsx branches on this value.
   const statusOptions = useMemo(
-    () =>
-      Object.values(MemoStatus).map((v) => ({
+    () => [
+      ...Object.values(MemoStage).map((v) => ({
         value: v,
-        label: MemoStatusLabels[v as keyof typeof MemoStatusLabels] || v,
+        label: MemoStageLabels[v as keyof typeof MemoStageLabels] || v,
       })),
+      {
+        value: MemoStatus.CANCELLED,
+        label: MemoStatusLabels[MemoStatus.CANCELLED],
+      },
+    ],
     [],
   );
   const priorityOptions = useMemo(
@@ -368,7 +379,12 @@ export function MemosAdvancedFilters({ filters, onChange, departments, users }: 
     if (f.memoTypes.length)
       parts.push(`النوع: ${f.memoTypes.map((t) => MemoTypeLabels[t as keyof typeof MemoTypeLabels] || t).join("، ")}`);
     if (f.statuses.length)
-      parts.push(`الحالة: ${f.statuses.map((s) => MemoStatusLabels[s as keyof typeof MemoStatusLabels] || s).join("، ")}`);
+      parts.push(`الحالة: ${f.statuses.map((s) =>
+        // Phase-9 — stage values first; "ملغاة" falls through to the
+        // legacy MemoStatusLabels map.
+        MemoStageLabels[s as keyof typeof MemoStageLabels]
+        || MemoStatusLabels[s as keyof typeof MemoStatusLabels]
+        || s).join("، ")}`);
     if (f.priorities.length) parts.push(`الأولوية: ${f.priorities.join("، ")}`);
     if (f.depts.length) parts.push(`القسم: ${f.depts.map(deptNameById).join("، ")}`);
     if (f.lawyers.length) parts.push(`المسند إليه: ${f.lawyers.map(userNameById).join("، ")}`);
