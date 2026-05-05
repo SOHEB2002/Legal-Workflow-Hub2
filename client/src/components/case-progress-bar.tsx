@@ -550,7 +550,7 @@ export function CaseProgressBar({
                   <AlertDialogFooter className="gap-2 flex-wrap">
                     <AlertDialogCancel>إلغاء</AlertDialogCancel>
                     <AlertDialogAction
-                      onClick={() => handleSettlementDecision("أغلق_طلب_الصلح", { isSettlementCase: false })}
+                      onClick={() => handleSettlementDecision("أغلق_طلب_الصلح", { isSettlementCase: false, caseClassification: "قيد_الدراسة" })}
                       data-testid="button-settlement-failed-continue"
                       className="bg-blue-600 hover:bg-blue-700"
                     >
