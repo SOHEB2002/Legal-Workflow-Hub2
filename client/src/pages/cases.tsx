@@ -277,12 +277,22 @@ export default function CasesPage() {
   // (global), department_head (own dept), assigned lawyer (primary |
   // responsible | in assignedLawyers). The case must still be active —
   // currentStage !== "مقفلة" is the cases-side equivalent of the
-  // consultation status === "active" check.
+  // consultation status === "active" check. The dept-scope check requires
+  // BOTH sides to have a non-empty departmentId — otherwise a dept_head
+  // with a null department would falsely match a case that also has a null
+  // departmentId (legacy rows or "أخرى" assignments).
   const canEarlyCloseCase = (c: LawCase): boolean => {
     if (!user) return false;
     if (c.currentStage === "مقفلة") return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+    if (
+      user.role === "department_head" &&
+      !!user.departmentId &&
+      !!c.departmentId &&
+      c.departmentId === user.departmentId
+    ) {
+      return true;
+    }
     if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
     return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
@@ -1351,6 +1361,24 @@ export default function CasesPage() {
                               <Pause className="w-4 h-4" />
                             </Button>
                           )}
+                      {/* Early-close inline action — mirrors the consultations
+                          table dropdown's إغلاق مبكر item. Visible to all
+                          spec-allowed roles (canEarlyCloseCase). The dialog
+                          actions tab also has the same button; this row
+                          shortcut means dept_head / lawyer don't need to open
+                          the case dialog and click "الإجراءات" first. */}
+                      {canEarlyCloseCase(c) && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="text-red-600 hover:text-red-700"
+                          title="إغلاق مبكر"
+                          data-testid={`button-early-close-row-${c.id}`}
+                          onClick={() => { setEarlyCloseCase(c); setShowEarlyCloseDialog(true); }}
+                        >
+                          <XCircle className="w-4 h-4" />
+                        </Button>
+                      )}
                       {user?.role === "branch_manager" && (
                         <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive" title="حذف القضية" data-testid={`button-delete-case-${c.id}`} onClick={() => { setCaseToDelete(c); setShowDeleteDialog(true); }}>
                           <Trash2 className="w-4 h-4" />
@@ -3263,7 +3291,7 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !(isDeptHead && selectedCase.departmentId === user?.departmentId) && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
+                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(isDeptHead && selectedCase.departmentId === user?.departmentId) && !(permissions.canSendReminders && (selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)) && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>
