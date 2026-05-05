@@ -739,34 +739,39 @@ export default function CasesPage() {
       computedSentToContext: computedClientRole,
       isDefendantSelection: formData.clientRole === "مدعى_عليه",
     });
-    await addCase({
-      clientId: formData.clientId || "",
-      plaintiffName: formData.plaintiffName || "",
-      caseType: formData.caseType,
-      caseTypeOther: formData.caseTypeOther,
-      departmentId: formData.departmentId,
-      departmentOther: formData.departmentOther,
-      priority: formData.priority,
-      courtName: isPlaintiffNew ? "" : formData.courtName,
-      courtCaseNumber: formData.courtCaseNumber,
-      opponentName: formData.opponentName,
-      caseClassification: formData.caseClassification as CaseClassificationValue,
-      clientRole: formData.caseClassification === CaseClassification.IN_COURT
-        ? (formData.clientRole || "مدعي")
-        : null,
-      previousHearingsCount: formData.previousHearingsCount,
-      currentSituation: formData.currentSituation,
-      responseDeadline: formData.responseDeadline || null,
-      nextHearingDate: isPlaintiffNew ? null : (formData.nextHearingDate || null),
-      nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
-      adminCaseSubType: formData.adminCaseSubType || null,
-      prescriptionDate: formData.prescriptionDate || null,
-      memoRequired: formData.memoRequired,
-      startingStage: formData.caseClassification === CaseClassification.IN_COURT
-        ? formData.startingStage
-        : undefined,
-    } as any, user.id, user.name);
-    
+    try {
+      await addCase({
+        clientId: formData.clientId || "",
+        plaintiffName: formData.plaintiffName || "",
+        caseType: formData.caseType,
+        caseTypeOther: formData.caseTypeOther,
+        departmentId: formData.departmentId,
+        departmentOther: formData.departmentOther,
+        priority: formData.priority,
+        courtName: isPlaintiffNew ? "" : formData.courtName,
+        courtCaseNumber: formData.courtCaseNumber,
+        opponentName: formData.opponentName,
+        caseClassification: formData.caseClassification as CaseClassificationValue,
+        clientRole: formData.caseClassification === CaseClassification.IN_COURT
+          ? (formData.clientRole || "مدعي")
+          : null,
+        previousHearingsCount: formData.previousHearingsCount,
+        currentSituation: formData.currentSituation,
+        responseDeadline: formData.responseDeadline || null,
+        nextHearingDate: isPlaintiffNew ? null : (formData.nextHearingDate || null),
+        nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
+        adminCaseSubType: formData.adminCaseSubType || null,
+        prescriptionDate: formData.prescriptionDate || null,
+        memoRequired: formData.memoRequired,
+        startingStage: formData.caseClassification === CaseClassification.IN_COURT
+          ? formData.startingStage
+          : undefined,
+      } as any, user.id, user.name);
+    } catch (err) {
+      toast({ title: "فشل إنشاء القضية", description: extractApiError(err), variant: "destructive" });
+      return;
+    }
+
     const classLabel = CaseClassificationLabels[formData.caseClassification as CaseClassificationValue] || "";
     toast({ title: `تم إضافة القضية بنجاح (${classLabel})` });
     setShowAddDialog(false);

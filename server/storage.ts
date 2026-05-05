@@ -27,6 +27,27 @@ import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
 
+// Detect a Postgres unique-constraint violation (SQLSTATE 23505) on a
+// specific column. node-postgres surfaces these on the error object as
+// `code === "23505"` plus a `constraint` name (e.g. "law_cases_case_number_unique")
+// and a `detail` line ("Key (case_number)=(...) already exists."). Either
+// signal is enough to confirm the column.
+function isUniqueViolationOn(err: unknown, columnName: string): boolean {
+  const e = err as any;
+  if (!e || e.code !== "23505") return false;
+  const constraint = String(e.constraint || "");
+  const detail = String(e.detail || "");
+  return constraint.includes(columnName) || detail.includes(`(${columnName})`);
+}
+
+function generateCaseNumber(): string {
+  return `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+}
+
+function generateConsultationNumber(): string {
+  return `CON-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+}
+
 export interface IStorage {
   // Users
   getUser(id: string): Promise<User | undefined>;
@@ -712,12 +733,14 @@ export class DatabaseStorage implements IStorage {
 
   async createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase> {
     const id = randomUUID();
-    const caseNumber = data.courtCaseNumber ? data.courtCaseNumber : `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     const now = new Date();
-    
-    const newCase = {
+    // When the user supplies a court case number we use it verbatim — no
+    // retry, because regenerating the user's input would silently change
+    // it. Auto-generated numbers (nanoid suffix) collide rarely; retry up
+    // to 3 times before surfacing a clear error.
+    const userSupplied = !!data.courtCaseNumber;
+    const baseCase = {
       id,
-      caseNumber,
       clientId: data.clientId || "",
       caseType: data.caseType || "",
       caseTypeOther: data.caseTypeOther || "",
@@ -755,15 +778,37 @@ export class DatabaseStorage implements IStorage {
       closedAt: null,
     };
 
-    console.log("[clientRole][storage:createCase] inserting case with clientRole:", {
-      incoming: (data as any).clientRole,
-      incomingType: typeof (data as any).clientRole,
-      incomingLength: typeof (data as any).clientRole === "string" ? (data as any).clientRole.length : null,
-      finalValue: newCase.clientRole,
-      caseClassification: newCase.caseClassification,
-    });
-    await db.insert(lawCases).values(newCase);
-    return mapDbCase(newCase);
+    const maxAttempts = userSupplied ? 1 : 3;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const caseNumber = userSupplied ? data.courtCaseNumber! : generateCaseNumber();
+      const newCase = { ...baseCase, caseNumber };
+      try {
+        if (attempt === 0) {
+          console.log("[clientRole][storage:createCase] inserting case with clientRole:", {
+            incoming: (data as any).clientRole,
+            incomingType: typeof (data as any).clientRole,
+            incomingLength: typeof (data as any).clientRole === "string" ? (data as any).clientRole.length : null,
+            finalValue: newCase.clientRole,
+            caseClassification: newCase.caseClassification,
+          });
+        }
+        await db.insert(lawCases).values(newCase);
+        return mapDbCase(newCase);
+      } catch (err) {
+        lastErr = err;
+        if (isUniqueViolationOn(err, "case_number")) {
+          if (userSupplied) {
+            throw new Error("CASE_NUMBER_EXISTS");
+          }
+          console.warn("[storage:createCase] case_number collision on attempt", attempt + 1, "of", maxAttempts);
+          continue;
+        }
+        throw err;
+      }
+    }
+    console.error("[storage:createCase] exhausted retries — auto-generated case_number kept colliding", lastErr);
+    throw new Error("DUPLICATE_CASE_NUMBER");
   }
 
   async updateCase(id: string, data: Partial<LawCase>): Promise<LawCase | undefined> {
@@ -890,7 +935,6 @@ export class DatabaseStorage implements IStorage {
 
   async createConsultation(data: Partial<Consultation>, createdBy: string): Promise<Consultation> {
     const id = randomUUID();
-    const consultationNumber = `CON-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     const now = new Date();
 
     // Phase-4: category drives the SLA. Default to STANDARD (3 days) when
@@ -909,9 +953,8 @@ export class DatabaseStorage implements IStorage {
     // lifecycle enum (active | converted | closed) per spec §3.1.2;
     // currentStage carries the workflow position. Keep them apart at the
     // insert site so the column defaults aren't the only line of defence.
-    const newConsultation = {
+    const baseConsultation = {
       id,
-      consultationNumber,
       clientId: data.clientId || "",
       consultationType: data.consultationType || "عام",
       deliveryType: data.deliveryType || "مكتوبة",
@@ -936,20 +979,38 @@ export class DatabaseStorage implements IStorage {
 
     // Phase-6: insert the consultation row and the "created" activity row
     // in a single transaction so the activity log can never get out of
-    // sync with the actual state.
-    await db.transaction(async (tx) => {
-      await tx.insert(consultations).values(newConsultation);
-      await tx.insert(consultationActivityLog).values({
-        id: randomUUID(),
-        consultationId: id,
-        activityType: ConsultationActivityType.CREATED,
-        description: "تم إنشاء الاستشارة",
-        metadata: {},
-        performedBy: createdBy,
-        performedAt: now,
-      } as any);
-    });
-    return mapDbConsultation(newConsultation);
+    // sync with the actual state. consultationNumber is auto-generated and
+    // can collide on its 6-char nanoid suffix — retry up to 3 times before
+    // surfacing a clear error to the caller.
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const consultationNumber = generateConsultationNumber();
+      const newConsultation = { ...baseConsultation, consultationNumber };
+      try {
+        await db.transaction(async (tx) => {
+          await tx.insert(consultations).values(newConsultation);
+          await tx.insert(consultationActivityLog).values({
+            id: randomUUID(),
+            consultationId: id,
+            activityType: ConsultationActivityType.CREATED,
+            description: "تم إنشاء الاستشارة",
+            metadata: {},
+            performedBy: createdBy,
+            performedAt: now,
+          } as any);
+        });
+        return mapDbConsultation(newConsultation);
+      } catch (err) {
+        lastErr = err;
+        if (isUniqueViolationOn(err, "consultation_number")) {
+          console.warn("[storage:createConsultation] consultation_number collision on attempt", attempt + 1, "of 3");
+          continue;
+        }
+        throw err;
+      }
+    }
+    console.error("[storage:createConsultation] exhausted retries — consultation_number kept colliding", lastErr);
+    throw new Error("DUPLICATE_CONSULTATION_NUMBER");
   }
 
   async updateConsultation(id: string, data: Partial<Consultation>): Promise<Consultation | undefined> {
@@ -2319,8 +2380,38 @@ export class DatabaseStorage implements IStorage {
   //
   // Throws sentinel Error names on validation failure inside the txn so
   // the route handler can map them to specific 4xx codes:
-  //   CONSULTATION_NOT_FOUND, CONSULTATION_NOT_ACTIVE, CONSULTATION_COMPLETED.
+  //   CONSULTATION_NOT_FOUND, CONSULTATION_NOT_ACTIVE, CONSULTATION_COMPLETED,
+  //   CASE_NUMBER_EXISTS (user-supplied courtCaseNumber collides),
+  //   DUPLICATE_CASE_NUMBER (auto-generated suffix collided 3× in a row).
   async convertConsultationToCase(
+    consultationId: string,
+    caseFields: Partial<LawCase>,
+    actorId: string,
+    activityCtx?: { targetCaseStage?: string },
+  ): Promise<{ case: LawCase; consultation: Consultation }> {
+    const userSupplied = !!caseFields.courtCaseNumber;
+    const maxAttempts = userSupplied ? 1 : 3;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await this.convertConsultationToCaseOnce(consultationId, caseFields, actorId, activityCtx);
+      } catch (err) {
+        lastErr = err;
+        if (isUniqueViolationOn(err, "case_number")) {
+          if (userSupplied) {
+            throw new Error("CASE_NUMBER_EXISTS");
+          }
+          console.warn("[storage:convertConsultationToCase] case_number collision on attempt", attempt + 1, "of", maxAttempts);
+          continue;
+        }
+        throw err;
+      }
+    }
+    console.error("[storage:convertConsultationToCase] exhausted retries — auto-generated case_number kept colliding", lastErr);
+    throw new Error("DUPLICATE_CASE_NUMBER");
+  }
+
+  private async convertConsultationToCaseOnce(
     consultationId: string,
     caseFields: Partial<LawCase>,
     actorId: string,
@@ -2337,7 +2428,7 @@ export class DatabaseStorage implements IStorage {
       const newCaseId = randomUUID();
       const caseNumber = caseFields.courtCaseNumber
         ? caseFields.courtCaseNumber
-        : `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+        : generateCaseNumber();
       const now = new Date();
 
       const newCaseRow = {
