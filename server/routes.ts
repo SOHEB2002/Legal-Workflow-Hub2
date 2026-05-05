@@ -150,7 +150,7 @@ interface StageTransitionRule {
 
 const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // ==================== COMMON TRANSITIONS ====================
-  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["department_head", "branch_manager"] },
+  { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
@@ -1427,10 +1427,19 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
 
+      // Role gate: assigned_lawyer + admin_support + department_head
+      // (own dept) + branch_manager. cases_review_head retained from
+      // the previous gate to avoid regressing existing workflows.
+      const isOwnDeptHead =
+        user.role === "department_head"
+        && !!user.departmentId
+        && caseItem.departmentId === user.departmentId;
       const authorized =
-        user.role === "branch_manager" ||
-        user.role === "cases_review_head" ||
-        isAssignedLawyer(user, caseItem);
+        user.role === "branch_manager"
+        || user.role === "admin_support"
+        || user.role === "cases_review_head"
+        || isOwnDeptHead
+        || isAssignedLawyer(user, caseItem);
       if (!authorized) {
         return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال المرفقات والبيانات" });
       }
