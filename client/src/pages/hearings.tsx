@@ -85,7 +85,16 @@ import { useDepartments } from "@/lib/departments-context";
 import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
 import { HearingStatus, HearingResult, CourtType, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
-import { formatTimeAmPm, formatDualDate } from "@/lib/date-utils";
+import { formatTimeAmPm, formatDualDate, formatHijriDateFull } from "@/lib/date-utils";
+
+// Arabic weekday names indexed by JS Date.getDay() (Sunday = 0).
+const ARABIC_WEEKDAYS = [
+  "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت",
+] as const;
+const arabicWeekday = (date: string): string => {
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "" : ARABIC_WEEKDAYS[d.getDay()];
+};
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useToast } from "@/hooks/use-toast";
@@ -1002,13 +1011,14 @@ export default function HearingsPage() {
             <div className="w-full overflow-hidden">
               <table className="w-full caption-bottom text-xs" style={{ tableLayout: 'fixed' }}>
                 <colgroup>
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '19%' }} />
+                  <col style={{ width: '12%' }} />
                   <col style={{ width: '13%' }} />
-                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '17%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '17%' }} />
                 </colgroup>
                 <thead className="[&_tr]:border-b">
                   <tr className="border-b">
@@ -1017,12 +1027,13 @@ export default function HearingsPage() {
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">المدعى عليه</th>
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">الصفة</th>
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">القضية / المحكمة</th>
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">المحامي المكلف</th>
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">النتيجة</th>
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">الإجراءات</th>
                   </tr>
                 </thead>
                 <tbody className="[&_tr:last-child]:border-0">
-                  {pagedHearings.map((hearing) => {
+                  {pagedHearings.map((hearing, idx) => {
                       const caseInfo = getCaseInfo(hearing.caseId);
                       const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
                       const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
@@ -1034,14 +1045,38 @@ export default function HearingsPage() {
                         user?.role === "admin_support";
                       const canReassignAttendingLawyer = user?.role === "department_head";
                       const isFutureHearing = isHearingInFuture(hearing.hearingDate);
+                      // Day-boundary separator: thicken the row's bottom
+                      // border when the next row is a different date so
+                      // day-grouping reads at a glance. Last row stays
+                      // thin (the [&_tr:last-child]:border-0 on tbody
+                      // strips it anyway).
+                      const nextDate = pagedHearings[idx + 1]?.hearingDate;
+                      const isDayBoundary = !!nextDate && nextDate !== hearing.hearingDate;
+                      // Look up the attending lawyer's display name.
+                      const attendingLawyerName = hearing.attendingLawyerId
+                        ? users.find((u: any) => u.id === hearing.attendingLawyerId)?.name || "—"
+                        : "—";
                       return (
-                        <tr key={hearing.id} data-testid={`row-hearing-${hearing.id}`} className="border-b transition-colors hover:bg-muted/50">
+                        <tr
+                          key={hearing.id}
+                          data-testid={`row-hearing-${hearing.id}`}
+                          className={`${isDayBoundary ? "border-b-2" : "border-b"} transition-colors hover:bg-muted/50`}
+                        >
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
+                              {/* Top: full Hijri date — e.g. "18 ذو القعدة 1447 هـ" */}
                               <Badge className={getUrgencyColor(hearing.hearingDate)}>
-                                <DualDateDisplay date={hearing.hearingDate} compact />
+                                {formatHijriDateFull(hearing.hearingDate)}
                               </Badge>
-                              <LtrInline className="text-xs text-muted-foreground">{formatTimeAmPm(hearing.hearingTime)}</LtrInline>
+                              {/* Bottom: weekday + time on one line; time
+                                  larger and bold for at-a-glance scanning. */}
+                              <div className="flex items-center gap-1 text-muted-foreground">
+                                <span className="text-xs">{arabicWeekday(hearing.hearingDate)}</span>
+                                <span className="text-xs">-</span>
+                                <LtrInline className="text-lg font-semibold text-foreground">
+                                  {formatTimeAmPm(hearing.hearingTime)}
+                                </LtrInline>
+                              </div>
                             </div>
                           </td>
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
@@ -1068,6 +1103,12 @@ export default function HearingsPage() {
                                 )}
                               </div>
                             </div>
+                          </td>
+                          {/* المحامي المكلف */}
+                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
+                            <span className="text-sm" data-testid={`cell-attending-lawyer-${hearing.id}`}>
+                              <BidiText>{attendingLawyerName}</BidiText>
+                            </span>
                           </td>
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
