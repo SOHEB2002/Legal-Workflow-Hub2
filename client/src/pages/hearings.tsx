@@ -611,9 +611,22 @@ export default function HearingsPage() {
       return true;
     })
     .sort((a, b) => {
-      const dateDiff = a.hearingDate.localeCompare(b.hearingDate);
+      // Two-tier sort: upcoming (today + future) first ascending so the
+      // closest hearing is at the top, then past hearings descending so
+      // the most recently completed sit just below the upcoming block.
+      // Today's date is computed from local components — toISOString
+      // would shift to UTC and flip "today" backwards by one day for
+      // anyone reading the page in the small hours of Riyadh time.
+      const now = new Date();
+      const todayIso =
+        `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      const aIsPast = a.hearingDate < todayIso;
+      const bIsPast = b.hearingDate < todayIso;
+      if (aIsPast !== bIsPast) return aIsPast ? 1 : -1;
+      const dir = aIsPast ? -1 : 1;
+      const dateDiff = a.hearingDate.localeCompare(b.hearingDate) * dir;
       if (dateDiff !== 0) return dateDiff;
-      return (a.hearingTime || "").localeCompare(b.hearingTime || "");
+      return (a.hearingTime || "").localeCompare(b.hearingTime || "") * dir;
     });
 
   const HEARING_PAGE_SIZE = 15;
