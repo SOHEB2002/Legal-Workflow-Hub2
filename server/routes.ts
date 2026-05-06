@@ -1625,13 +1625,24 @@ export async function registerRoutes(
         return res.status(403).json({ error: "تعديل بيانات القضية متاح فقط لمدير الفرع والدعم الإداري" });
       }
 
-      // Guard departmentId changes – use explicit presence check to catch null/empty string too
+      // Guard departmentId changes – use explicit presence check to catch null/empty string too.
+      // Transfer-to-another-department is allowed for: branch_manager,
+      // admin_support, department_head of the case's CURRENT department
+      // (shipping a case OUT of their dept), and the assigned lawyer
+      // (primaryLawyerId / responsibleLawyerId / assignedLawyers). The
+      // previous version of this gate only let canEditCaseData roles
+      // through plus a department_head branch that misread the target dept
+      // as the actor's gate, which silently 403'd assigned lawyers.
       if ("departmentId" in req.body && req.body.departmentId !== existing.departmentId) {
-        if (!canEditCaseData(user)) {
-          // department_head may only set their own department, and only when req.body.departmentId is their dept
-          if (user.role !== "department_head" || req.body.departmentId !== user.departmentId) {
-            return res.status(403).json({ error: "لا تملك صلاحية تغيير قسم هذه القضية" });
-          }
+        const isBranchOrAdmin = user.role === "branch_manager" || user.role === "admin_support";
+        const isOwnDeptHead =
+          user.role === "department_head" && existing.departmentId === user.departmentId;
+        const isAssignedLawyer =
+          existing.primaryLawyerId === user.id ||
+          existing.responsibleLawyerId === user.id ||
+          (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(user.id));
+        if (!isBranchOrAdmin && !isOwnDeptHead && !isAssignedLawyer) {
+          return res.status(403).json({ error: "لا تملك صلاحية تغيير قسم هذه القضية" });
         }
       }
 
