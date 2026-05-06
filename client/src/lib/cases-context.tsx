@@ -14,7 +14,7 @@ interface CasesContextType {
   addCase: (data: Partial<LawCase>, createdBy: string, createdByName: string) => Promise<LawCase>;
   updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
   deleteCase: (id: string) => Promise<void>;
-  assignCase: (id: string, lawyerId: string, departmentId: string) => void;
+  assignCase: (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null) => void;
   sendToReviewCommittee: (id: string) => void;
   approveCase: (id: string, notes?: string) => void;
   rejectCase: (id: string, notes: string, decision: ReviewDecisionType) => void;
@@ -297,7 +297,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     setComments((prev) => prev.filter((c) => c.caseId !== id));
   };
 
-  const assignCase = (id: string, lawyerId: string, departmentId: string) => {
+  const assignCase = (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null) => {
     const lawCase = cases.find(c => c.id === id);
     const isReassign = !!(lawCase?.primaryLawyerId);
     const updateData: any = {
@@ -306,6 +306,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       responsibleLawyerId: lawyerId,
       departmentId,
     };
+    // The internal reviewer slot is the persistent intake-time choice. Pass
+    // through `null` so the dept head can clear it; only `undefined` skips
+    // the field (preserving the existing value).
+    if (internalReviewerId !== undefined) {
+      updateData.internalReviewerId = internalReviewerId || null;
+    }
     if (!isReassign) {
       updateData.status = CaseStatus.STUDY as CaseStatusValue;
     }

@@ -741,6 +741,7 @@ export default function CasesPage() {
   const [assignData, setAssignData] = useState({
     lawyerId: "",
     departmentId: "",
+    internalReviewerId: "",
   });
   const [inlineEditField, setInlineEditField] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
@@ -862,13 +863,18 @@ export default function CasesPage() {
 
   const handleAssign = () => {
     if (!selectedCase || !assignData.lawyerId || !assignData.departmentId) return;
-    
+
     const isReassign = !!selectedCase.primaryLawyerId;
-    assignCase(selectedCase.id, assignData.lawyerId, assignData.departmentId);
+    assignCase(
+      selectedCase.id,
+      assignData.lawyerId,
+      assignData.departmentId,
+      assignData.internalReviewerId || null,
+    );
     toast({ title: isReassign ? "تم تعديل الإسناد بنجاح" : "تم إسناد القضية بنجاح" });
     setShowAssignDialog(false);
     setSelectedCaseId(null);
-    setAssignData({ lawyerId: "", departmentId: "" });
+    setAssignData({ lawyerId: "", departmentId: "", internalReviewerId: "" });
   };
 
   const handleSendToReview = (caseItem: LawCase) => {
@@ -980,9 +986,10 @@ export default function CasesPage() {
 
   const openAssignDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
-    setAssignData({ 
-      lawyerId: caseItem.primaryLawyerId || "", 
-      departmentId: isDeptHead ? (String(user?.departmentId || "")) : (String(caseItem.departmentId || ""))
+    setAssignData({
+      lawyerId: caseItem.primaryLawyerId || "",
+      departmentId: isDeptHead ? (String(user?.departmentId || "")) : (String(caseItem.departmentId || "")),
+      internalReviewerId: (caseItem as any).internalReviewerId || "",
     });
     setShowAssignDialog(true);
   };
@@ -1108,8 +1115,9 @@ export default function CasesPage() {
     setReminderCaseId(null);
   };
 
-  const canAssign = (c: LawCase) => 
-    (user?.role === "branch_manager" || 
+  const canAssign = (c: LawCase) =>
+    (user?.role === "branch_manager" ||
+     user?.role === "admin_support" ||
      (permissions.canAssignInDepartment && c.departmentId === user?.departmentId));
 
   const canSendToReview = (c: LawCase) => 
@@ -1213,13 +1221,13 @@ export default function CasesPage() {
           <Table className="w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '11%' }} />
-              <col style={{ width: '15%' }} />
+              <col style={{ width: '13%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '12%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
             </colgroup>
             <TableHeader>
@@ -1230,7 +1238,7 @@ export default function CasesPage() {
                 <TableHead className="text-center">صفة العميل</TableHead>
                 <TableHead className="text-center">الحالة</TableHead>
                 <TableHead className="text-center">المحامي المسؤول</TableHead>
-                <TableHead className="text-center">الأولوية</TableHead>
+                <TableHead className="text-center">المراجع الداخلي</TableHead>
                 <TableHead className="text-center">القسم</TableHead>
                 <TableHead className="text-center">الإجراءات</TableHead>
               </TableRow>
@@ -1342,8 +1350,10 @@ export default function CasesPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
-                  <TableCell className="text-center">
-                    <Badge className={getPriorityColor(c.priority)}>{c.priority}</Badge>
+                  <TableCell className="text-center text-sm">
+                    {(c as any).internalReviewerId
+                      ? (users.find(u => u.id === (c as any).internalReviewerId)?.name || "—")
+                      : "—"}
                   </TableCell>
                   <TableCell className="text-center text-sm">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell className="text-center">
@@ -1788,7 +1798,7 @@ export default function CasesPage() {
               ) : (
                 <Select
                   value={assignData.departmentId}
-                  onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "" })}
+                  onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "", internalReviewerId: "" })}
                 >
                   <SelectTrigger data-testid="select-assign-department">
                     <SelectValue placeholder="اختر القسم" />
@@ -1805,7 +1815,12 @@ export default function CasesPage() {
               <Label>المحامي المسؤول</Label>
               <Select
                 value={assignData.lawyerId}
-                onValueChange={(value) => setAssignData({ ...assignData, lawyerId: value })}
+                onValueChange={(value) => setAssignData({
+                  ...assignData,
+                  lawyerId: value,
+                  // Drop the reviewer if it now collides with the chosen lawyer.
+                  internalReviewerId: assignData.internalReviewerId === value ? "" : assignData.internalReviewerId,
+                })}
               >
                 <SelectTrigger data-testid="select-assign-lawyer">
                   <SelectValue placeholder="اختر المحامي" />
@@ -1826,6 +1841,51 @@ export default function CasesPage() {
                     return filtered.map((lawyer) => (
                       <SelectItem key={lawyer.id} value={lawyer.id}>{lawyer.name}</SelectItem>
                     ));
+                  })()}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>المراجع الداخلي</Label>
+              <Select
+                value={assignData.internalReviewerId || "__none__"}
+                onValueChange={(value) => setAssignData({
+                  ...assignData,
+                  internalReviewerId: value === "__none__" ? "" : value,
+                })}
+              >
+                <SelectTrigger data-testid="select-assign-internal-reviewer">
+                  <SelectValue placeholder="اختر المراجع الداخلي (اختياري)" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(() => {
+                    // Same eligibility rules as the memo internal-reviewer
+                    // dropdown: same department as the case, exclude management
+                    // / support roles, and exclude the assigned lawyer.
+                    const filtered = users.filter(u =>
+                      u.isActive &&
+                      u.role !== "branch_manager" &&
+                      u.role !== "admin_support" &&
+                      u.role !== "hr" &&
+                      u.role !== "technical_support" &&
+                      u.id !== assignData.lawyerId &&
+                      (!assignData.departmentId || String(u.departmentId) === String(assignData.departmentId))
+                    );
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="px-3 py-2 text-sm text-muted-foreground text-center">
+                          {assignData.departmentId ? "لا يوجد مراجعون مؤهلون في هذا القسم" : "اختر القسم أولاً"}
+                        </div>
+                      );
+                    }
+                    return (
+                      <>
+                        <SelectItem value="__none__">— بدون —</SelectItem>
+                        {filtered.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                        ))}
+                      </>
+                    );
                   })()}
                 </SelectContent>
               </Select>
@@ -2068,9 +2128,13 @@ export default function CasesPage() {
                   eligibleInternalReviewers={users
                     .filter(u =>
                       u.isActive &&
+                      u.role !== "branch_manager" &&
                       u.role !== "admin_support" &&
+                      u.role !== "hr" &&
+                      u.role !== "technical_support" &&
                       u.departmentId === selectedCase.departmentId &&
-                      u.id !== user?.id
+                      u.id !== selectedCase.primaryLawyerId &&
+                      u.id !== selectedCase.responsibleLawyerId
                     )
                     .map(u => ({ id: u.id, name: u.name }))}
                   onMoveToNext={async (notes, internalReviewerId, reviewDecision, extraFields, explicitTargetStage) => {

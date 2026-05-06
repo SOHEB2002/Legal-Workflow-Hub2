@@ -1961,13 +1961,27 @@ export async function registerRoutes(
 
       // When moving to an internal-review stage, require an internalReviewerId
       // (either newly provided in req.body or already set on the existing case
-      // from a previous round of the review loop) and validate it.
+      // from intake / a previous round of the review loop) and validate it.
+      //
+      // Per-review override semantics: if the case already has a persistent
+      // intake-set reviewer, a different reviewer in req.body is treated as a
+      // single-round override — used for the notification routing on this
+      // PATCH but NOT written back to cases.internal_reviewer_id, so the
+      // permanent assignment survives. If no persistent reviewer is set yet
+      // (legacy rows pre-intake-assignment), the chosen one is persisted to
+      // bootstrap the field.
+      let activeReviewerForNotification: string | null = null;
       if (
         (req.body.currentStage === "مراجعة_داخلية" || req.body.currentStage === "مراجعة_داخلية_للتظلم") &&
         existing.currentStage !== req.body.currentStage
       ) {
-        const reviewerId: string | undefined =
-          req.body.internalReviewerId || (existing as any).internalReviewerId;
+        const persistedReviewer: string | undefined =
+          (existing as any).internalReviewerId || undefined;
+        const overrideReviewer: string | undefined =
+          (typeof req.body.internalReviewerId === "string" && req.body.internalReviewerId)
+            ? req.body.internalReviewerId
+            : undefined;
+        const reviewerId: string | undefined = overrideReviewer || persistedReviewer;
         if (!reviewerId || typeof reviewerId !== "string") {
           return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
         }
@@ -1983,8 +1997,15 @@ export async function registerRoutes(
           if (targetDeptId && reviewer.departmentId !== targetDeptId) {
             return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم القضية" });
           }
-          // Ensure it's persisted even on loop-back re-entries
-          req.body.internalReviewerId = reviewerId;
+          if (persistedReviewer) {
+            // Permanent reviewer is the source of truth — never let a
+            // per-review override mutate it.
+            delete req.body.internalReviewerId;
+          } else {
+            // Bootstrap the persistent slot from the chosen reviewer.
+            req.body.internalReviewerId = reviewerId;
+          }
+          activeReviewerForNotification = reviewerId;
         } catch (e) {
           console.error("[PATCH cases] reviewer validation failed", e);
         }
@@ -2200,14 +2221,16 @@ export async function registerRoutes(
         } catch (e) {}
       }
 
-      // Notify the selected internal reviewer when transitioning into either
+      // Notify the active internal reviewer when transitioning into either
       // مراجعة_داخلية or مراجعة_داخلية_للتظلم (covers both the initial assignment
       // and re-entries after the lawyer revises following reviewer notes).
+      // Use activeReviewerForNotification — that's the one set above (override
+      // for this round if provided, otherwise the persisted intake reviewer).
       if (
         updated &&
         (req.body.currentStage === "مراجعة_داخلية" || req.body.currentStage === "مراجعة_داخلية_للتظلم") &&
         existing.currentStage !== req.body.currentStage &&
-        req.body.internalReviewerId
+        activeReviewerForNotification
       ) {
         try {
           await storage.createNotification({
@@ -2218,7 +2241,7 @@ export async function registerRoutes(
             message: `تم إسنادك لمراجعة القضية رقم ${updated.caseNumber} مراجعة داخلية`,
             senderId: user.id,
             senderName: user.name || user.id,
-            recipientId: req.body.internalReviewerId,
+            recipientId: activeReviewerForNotification,
             requiresResponse: false,
             relatedType: "case",
             relatedId: String(req.params.id),
