@@ -8,6 +8,7 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
+  type SidebarCounts, type SidebarSectionValue, SIDEBAR_SECTIONS,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -16,7 +17,7 @@ import {
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
-  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
+  caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationDeliveryExtensions, consultationActivityLog,
@@ -24,7 +25,7 @@ import {
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, lte, gte, sql } from "drizzle-orm";
+import { eq, and, or, gt, desc, asc, lte, gte, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
@@ -175,6 +176,14 @@ export interface IStorage {
   createSavedFilter(userId: string, data: InsertSavedFilter): Promise<SavedFilter>;
   updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined>;
   deleteSavedFilter(id: string): Promise<boolean>;
+
+  // Sidebar "new since last visit" counts. Counts items per section
+  // visible to the user that were created/assigned after their
+  // user_section_views.last_viewed_at for that section. If no row
+  // exists for a section yet, that section returns 0 (avoids
+  // overwhelming new users with the all-time backlog).
+  getSidebarCounts(user: { id: string; role: string; departmentId: string | null }): Promise<SidebarCounts>;
+  markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void>;
 
   // Convert consultation to case (rebuild §3.2.3) — single DB transaction.
   convertConsultationToCase(
@@ -2271,6 +2280,163 @@ export class DatabaseStorage implements IStorage {
   async deleteSavedFilter(id: string): Promise<boolean> {
     const result = await db.delete(savedFilters).where(eq(savedFilters.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ==================== Sidebar Section Views ====================
+  // Counts items "new since last visit" for each of the four
+  // badge-bearing sections (cases / consultations / hearings / memos),
+  // filtered by the role-based visibility rules. If the user has no
+  // user_section_views row for a section yet, that section returns 0
+  // — see DESIGN NOTE in the spec ("don't overwhelm new users with
+  // all-time backlog"). All counts are integers (a user-facing badge
+  // can't show fractions).
+  async getSidebarCounts(user: { id: string; role: string; departmentId: string | null }): Promise<SidebarCounts> {
+    const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+    const isAdmin = adminRoles.includes(user.role);
+    const isDeptHead = user.role === "department_head";
+
+    // Pull all of this user's last-viewed timestamps in one shot.
+    const viewRows = await db.select().from(userSectionViews)
+      .where(eq(userSectionViews.userId, user.id));
+    const lastViewed = new Map<string, Date>();
+    for (const r of viewRows) {
+      if (r.lastViewedAt) lastViewed.set(r.section, r.lastViewedAt as Date);
+    }
+
+    const counts: SidebarCounts = { cases: 0, consultations: 0, hearings: 0, memos: 0 };
+
+    // Tiny helper — runs a count query and stuffs the integer result
+    // into `counts[section]`. Drizzle returns count() as string|number
+    // depending on driver; coerce to number.
+    const fillCount = async (
+      section: SidebarSectionValue,
+      query: Promise<Array<{ c: any }>>,
+    ): Promise<void> => {
+      const rows = await query;
+      const raw = rows[0]?.c;
+      counts[section] = typeof raw === "number" ? raw : Number(raw ?? 0);
+    };
+
+    const casesSince = lastViewed.get("cases");
+    if (casesSince) {
+      const visibility = isAdmin
+        ? sql`true`
+        : isDeptHead
+          ? sql`${lawCases.departmentId} = ${user.departmentId ?? ""}`
+          : sql`(
+              ${lawCases.primaryLawyerId} = ${user.id}
+              OR ${lawCases.responsibleLawyerId} = ${user.id}
+              OR ${lawCases.internalReviewerId} = ${user.id}
+              OR ${lawCases.assignedLawyers} @> ${JSON.stringify([user.id])}::jsonb
+            )`;
+      await fillCount(
+        "cases",
+        db.select({ c: sql<number>`count(*)::int` })
+          .from(lawCases)
+          .where(and(gt(lawCases.createdAt, casesSince), visibility)),
+      );
+    }
+
+    const consultationsSince = lastViewed.get("consultations");
+    if (consultationsSince) {
+      const visibility = isAdmin
+        ? sql`true`
+        : isDeptHead
+          ? sql`${consultations.departmentId} = ${user.departmentId ?? ""}`
+          : sql`(${consultations.assignedTo} = ${user.id} OR ${consultations.createdBy} = ${user.id})`;
+      await fillCount(
+        "consultations",
+        db.select({ c: sql<number>`count(*)::int` })
+          .from(consultations)
+          .where(and(gt(consultations.createdAt, consultationsSince), visibility)),
+      );
+    }
+
+    const hearingsSince = lastViewed.get("hearings");
+    if (hearingsSince) {
+      // Hearings don't carry a department of their own — for dept_head
+      // visibility we have to look at the parent case's department.
+      // Lawyers see hearings where they are the attendingLawyerId.
+      // Admin roles see everything.
+      if (isAdmin) {
+        await fillCount(
+          "hearings",
+          db.select({ c: sql<number>`count(*)::int` })
+            .from(hearings)
+            .where(gt(hearings.createdAt, hearingsSince)),
+        );
+      } else if (isDeptHead) {
+        await fillCount(
+          "hearings",
+          db.select({ c: sql<number>`count(*)::int` })
+            .from(hearings)
+            .innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
+            .where(and(
+              gt(hearings.createdAt, hearingsSince),
+              eq(lawCases.departmentId, user.departmentId ?? ""),
+            )),
+        );
+      } else {
+        await fillCount(
+          "hearings",
+          db.select({ c: sql<number>`count(*)::int` })
+            .from(hearings)
+            .where(and(
+              gt(hearings.createdAt, hearingsSince),
+              eq(hearings.attendingLawyerId, user.id),
+            )),
+        );
+      }
+    }
+
+    const memosSince = lastViewed.get("memos");
+    if (memosSince) {
+      if (isAdmin) {
+        await fillCount(
+          "memos",
+          db.select({ c: sql<number>`count(*)::int` })
+            .from(memos)
+            .where(gt(memos.createdAt, memosSince)),
+        );
+      } else if (isDeptHead) {
+        await fillCount(
+          "memos",
+          db.select({ c: sql<number>`count(*)::int` })
+            .from(memos)
+            .innerJoin(lawCases, eq(memos.caseId, lawCases.id))
+            .where(and(
+              gt(memos.createdAt, memosSince),
+              eq(lawCases.departmentId, user.departmentId ?? ""),
+            )),
+        );
+      } else {
+        const visibility = sql`(
+          ${memos.assignedTo} = ${user.id}
+          OR ${memos.internalReviewerId} = ${user.id}
+          OR ${memos.createdBy} = ${user.id}
+        )`;
+        await fillCount(
+          "memos",
+          db.select({ c: sql<number>`count(*)::int` })
+            .from(memos)
+            .where(and(gt(memos.createdAt, memosSince), visibility)),
+        );
+      }
+    }
+
+    return counts;
+  }
+
+  async markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void> {
+    // Upsert: insert a row at NOW(); if one already exists for this
+    // (user, section) pair, bump last_viewed_at to NOW(). This is what
+    // clears the badge after a user opens the page.
+    await db.insert(userSectionViews)
+      .values({ userId, section, lastViewedAt: new Date() } as any)
+      .onConflictDoUpdate({
+        target: [userSectionViews.userId, userSectionViews.section],
+        set: { lastViewedAt: new Date() },
+      });
   }
 
   // ==================== Consultation Studies / Drafts / Reviews / Committee / Notes ====================

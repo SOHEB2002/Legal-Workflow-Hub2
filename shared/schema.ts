@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, varchar, boolean, timestamp, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, jsonb, integer, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // ==================== Drizzle Tables ====================
@@ -560,6 +560,19 @@ export const savedFilters = pgTable("saved_filters", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Tracks the last time each user opened a given sidebar section
+// (cases / consultations / hearings / memos). Drives the
+// "new since last visit" badge counts in the sidebar. PK is
+// (userId, section) so each user has at most one row per section.
+// Migration: script/add-user-section-views.sql.
+export const userSectionViews = pgTable("user_section_views", {
+  userId: varchar("user_id", { length: 255 }).notNull(),
+  section: varchar("section", { length: 50 }).notNull(),
+  lastViewedAt: timestamp("last_viewed_at").notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.userId, t.section] }),
+}));
+
 export const supportTickets = pgTable("support_tickets", {
   id: varchar("id", { length: 255 }).primaryKey(),
   ticketNumber: varchar("ticket_number", { length: 50 }).notNull().unique(),
@@ -610,6 +623,7 @@ export const insertMemoReviewDbSchema = createInsertSchema(memoReviews).omit({ c
 export const insertMemoCommitteeDecisionDbSchema = createInsertSchema(memoCommitteeDecisions).omit({ decidedAt: true });
 export const insertMemoNoteOutcomeDbSchema = createInsertSchema(memoNoteOutcomes).omit({ recordedAt: true });
 export const insertSavedFilterDbSchema = createInsertSchema(savedFilters).omit({ createdAt: true });
+export const insertUserSectionViewDbSchema = createInsertSchema(userSectionViews).omit({ lastViewedAt: true });
 
 // ==================== Select Types ====================
 
@@ -639,6 +653,7 @@ export type DbMemoReview = typeof memoReviews.$inferSelect;
 export type DbMemoCommitteeDecision = typeof memoCommitteeDecisions.$inferSelect;
 export type DbMemoNoteOutcome = typeof memoNoteOutcomes.$inferSelect;
 export type DbSavedFilter = typeof savedFilters.$inferSelect;
+export type DbUserSectionView = typeof userSectionViews.$inferSelect;
 
 // ==================== الأدوار (Roles) ====================
 export const UserRole = {
@@ -3515,3 +3530,24 @@ export const RolePermissions: Record<UserRoleType, PermissionType[]> = {
     "view_users",
   ],
 };
+
+// ==================== Sidebar Sections ====================
+// Sections that participate in the "new since last visit" sidebar
+// badge counts. Stored verbatim in user_section_views.section.
+export const SidebarSection = {
+  CASES:         "cases",
+  CONSULTATIONS: "consultations",
+  HEARINGS:      "hearings",
+  MEMOS:         "memos",
+} as const;
+
+export type SidebarSectionValue = typeof SidebarSection[keyof typeof SidebarSection];
+
+export const SIDEBAR_SECTIONS: SidebarSectionValue[] = [
+  "cases",
+  "consultations",
+  "hearings",
+  "memos",
+];
+
+export type SidebarCounts = Record<SidebarSectionValue, number>;

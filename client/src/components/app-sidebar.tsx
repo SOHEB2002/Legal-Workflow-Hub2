@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, FileText, FileBarChart, ScrollText, Headphones, ArrowLeftRight } from "lucide-react";
 import {
@@ -16,10 +17,20 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-provider";
-import { UserRoleLabels } from "@shared/schema";
+import { UserRoleLabels, type SidebarSectionValue } from "@shared/schema";
+import { useSidebarCounts } from "@/hooks/use-sidebar-counts";
 import logoImage from "@assets/WhatsApp_Image_2026-02-13_at_2.24.30_PM_1770981889395.jpeg";
 
-const menuItems = [
+type MenuItem = {
+  title: string;
+  url: string;
+  icon: typeof LayoutDashboard;
+  // The four sections that participate in the "new since last visit"
+  // sidebar badges. Other items leave this undefined.
+  countSection?: SidebarSectionValue;
+};
+
+const menuItems: MenuItem[] = [
   {
     title: "الرئيسية",
     url: "/",
@@ -29,11 +40,13 @@ const menuItems = [
     title: "القضايا",
     url: "/cases",
     icon: Briefcase,
+    countSection: "cases",
   },
   {
     title: "الاستشارات",
     url: "/consultations",
     icon: MessageSquare,
+    countSection: "consultations",
   },
   {
     title: "العملاء",
@@ -44,11 +57,13 @@ const menuItems = [
     title: "الجلسات",
     url: "/hearings",
     icon: Calendar,
+    countSection: "hearings",
   },
   {
     title: "المذكرات القانونية",
     url: "/memos",
     icon: ScrollText,
+    countSection: "memos",
   },
   {
     title: "المهام الميدانية",
@@ -131,10 +146,34 @@ const toolsMenuItems = [
   },
 ];
 
+function formatBadgeCount(n: number): string {
+  return n > 99 ? "99+" : String(n);
+}
+
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout, permissions } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { counts, markViewed } = useSidebarCounts();
+
+  // Catch direct/deep navigation (typed URL, dashboard widget, etc.) —
+  // not just clicks on the sidebar link. Whenever the route lands on a
+  // page that has a badge section, mark it viewed. The route prefix
+  // match handles `/cases/:id` style detail pages too.
+  useEffect(() => {
+    const map: Record<string, SidebarSectionValue> = {
+      "/cases": "cases",
+      "/consultations": "consultations",
+      "/hearings": "hearings",
+      "/memos": "memos",
+    };
+    for (const [prefix, section] of Object.entries(map)) {
+      if (location === prefix || location.startsWith(`${prefix}/`)) {
+        markViewed(section);
+        break;
+      }
+    }
+  }, [location, markViewed]);
 
   const getInitials = (name: string) => {
     return name
@@ -167,20 +206,35 @@ export function AppSidebar() {
           <SidebarGroupLabel className="text-sidebar-foreground/60">القائمة الرئيسية</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={location === item.url}
-                    tooltip={item.title}
-                  >
-                    <Link href={item.url} data-testid={`link-${item.url.slice(1) || "dashboard"}`}>
-                      <item.icon className="w-4 h-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {menuItems.map((item) => {
+                const count = item.countSection ? counts[item.countSection] : 0;
+                const showBadge = !!item.countSection && count > 0;
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === item.url}
+                      tooltip={item.title}
+                    >
+                      <Link
+                        href={item.url}
+                        data-testid={`link-${item.url.slice(1) || "dashboard"}`}
+                      >
+                        <item.icon className="w-4 h-4" />
+                        <span>{item.title}</span>
+                        {showBadge && (
+                          <span
+                            data-testid={`badge-${item.countSection}`}
+                            className="ms-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-[10px] font-semibold leading-none text-accent-foreground group-data-[collapsible=icon]:hidden"
+                          >
+                            {formatBadgeCount(count)}
+                          </span>
+                        )}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
