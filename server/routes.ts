@@ -599,7 +599,7 @@ export async function registerRoutes(
         return res.status(401).json({ error: "اسم المستخدم أو كلمة المرور غير صحيحة" });
       }
 
-      const token = generateToken(user.id, user.role, user.departmentId);
+      const token = generateToken(user.id, user.role, user.departmentId, user.name);
       const csrfToken = generateCsrfToken(user.id);
       const { password, ...userWithoutPassword } = user;
       res.json({ user: userWithoutPassword, token, csrfToken, mustChangePassword: user.mustChangePassword });
@@ -626,7 +626,7 @@ export async function registerRoutes(
       if (!user || !user.isActive) {
         return res.status(401).json({ error: "المستخدم غير فعال" });
       }
-      const newToken = generateToken(user.id, user.role, user.departmentId);
+      const newToken = generateToken(user.id, user.role, user.departmentId, user.name);
       const csrfToken = generateCsrfToken(user.id);
       res.json({ token: newToken, csrfToken });
     } catch (error) {
@@ -650,7 +650,7 @@ export async function registerRoutes(
       if (isSamePassword) return res.status(400).json({ error: "كلمة المرور الجديدة يجب أن تكون مختلفة عن الحالية" });
       const hashed = await hashPassword(newPassword);
       await storage.updateUser(user.id, { password: hashed, mustChangePassword: false } as any);
-      const newToken = generateToken(user.id, user.role, user.departmentId);
+      const newToken = generateToken(user.id, user.role, user.departmentId, dbUser.name);
       const csrfToken = generateCsrfToken(user.id);
       res.json({ success: true, token: newToken, csrfToken });
     } catch (error) {
@@ -6251,11 +6251,12 @@ export async function registerRoutes(
       const comment = await storage.createCaseComment({
         caseId: String(req.params.id),
         userId: user.id,
-        userName: user.name,
+        userName: user.name || user.id,
         content: String(content).trim(),
       });
       res.status(201).json(comment);
     } catch (error) {
+      console.error("[POST /api/cases/:id/comments] failed", error);
       res.status(500).json({ error: "حدث خطأ في إضافة التعليق" });
     }
   });
@@ -6287,22 +6288,31 @@ export async function registerRoutes(
       if (!content || !String(content).trim()) {
         return res.status(400).json({ error: "محتوى الملاحظة مطلوب" });
       }
+      // user.name is populated from the JWT — but pre-existing tokens
+      // issued before the JWT-name fix carry no name, in which case
+      // requireAuth fills it with user.id as a sentinel. Either way we
+      // get a non-null string here, so the NOT-NULL user_name column
+      // accepts the row.
+      const userName = user.name || user.id;
       const note = await storage.createCaseNote({
         ...req.body,
         content: String(content).trim().substring(0, 5000),
         caseId: String(req.params.id),
         userId: user.id,
-        userName: user.name,
+        userName,
       });
       await storage.logCaseActivity({
         caseId: String(req.params.id),
         userId: user.id,
-        userName: user.name,
+        userName,
         actionType: "note_added",
         title: "تمت إضافة ملاحظة داخلية",
       });
       res.json(note);
     } catch (error) {
+      // Surface the real cause in server logs — silent 500s here have
+      // burned us before. The client still gets a sanitized message.
+      console.error("[POST /api/cases/:id/notes] failed", error);
       res.status(500).json({ error: "حدث خطأ في إضافة الملاحظة" });
     }
   });

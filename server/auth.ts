@@ -30,22 +30,33 @@ export async function comparePassword(
   }
 }
 
-export function generateToken(userId: string, role: string, departmentId?: string | null): string {
-  return jwt.sign({ userId, role, departmentId: departmentId || null }, JWT_SECRET!, {
+// JWT now also carries `name` so audit-log inserts that need
+// userName (case_notes, case_comments, case_activity_log, etc.) can
+// pull it straight off req.user without a DB roundtrip. Tokens issued
+// before this change carry no name; consumers must fall back to user.id
+// to avoid NOT-NULL violations on the userName column.
+export function generateToken(userId: string, role: string, departmentId?: string | null, name?: string | null): string {
+  return jwt.sign({ userId, role, departmentId: departmentId || null, name: name || null }, JWT_SECRET!, {
     expiresIn: TOKEN_EXPIRY,
   });
 }
 
 export function verifyToken(
   token: string
-): { userId: string; role: string; departmentId: string | null } | null {
+): { userId: string; role: string; departmentId: string | null; name: string | null } | null {
   try {
     const decoded = jwt.verify(token, JWT_SECRET!) as {
       userId: string;
       role: string;
       departmentId: string | null;
+      name?: string | null;
     };
-    return { userId: decoded.userId, role: decoded.role, departmentId: decoded.departmentId || null };
+    return {
+      userId: decoded.userId,
+      role: decoded.role,
+      departmentId: decoded.departmentId || null,
+      name: decoded.name || null,
+    };
   } catch {
     return null;
   }
@@ -53,12 +64,13 @@ export function verifyToken(
 
 export function verifyTokenForRefresh(
   token: string
-): { userId: string; role: string; departmentId: string | null } | null {
+): { userId: string; role: string; departmentId: string | null; name: string | null } | null {
   try {
     const decoded = jwt.verify(token, JWT_SECRET!, { ignoreExpiration: true }) as {
       userId: string;
       role: string;
       departmentId: string | null;
+      name?: string | null;
       exp?: number;
     };
     if (decoded.exp) {
@@ -68,7 +80,12 @@ export function verifyTokenForRefresh(
         return null;
       }
     }
-    return { userId: decoded.userId, role: decoded.role, departmentId: decoded.departmentId || null };
+    return {
+      userId: decoded.userId,
+      role: decoded.role,
+      departmentId: decoded.departmentId || null,
+      name: decoded.name || null,
+    };
   } catch {
     return null;
   }
@@ -96,6 +113,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     id: decoded.userId,
     role: decoded.role,
     departmentId: decoded.departmentId,
+    name: decoded.name || decoded.userId,
   };
   next();
 }
@@ -135,6 +153,7 @@ export function authMiddleware(
         id: decoded.userId,
         role: decoded.role,
         departmentId: decoded.departmentId,
+        name: decoded.name || decoded.userId,
       };
     }
   }

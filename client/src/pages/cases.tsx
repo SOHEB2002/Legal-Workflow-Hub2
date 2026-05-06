@@ -36,6 +36,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  MoreHorizontal,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -1368,13 +1369,63 @@ export default function CasesPage() {
                     })()}
                   </TableCell>
                   <TableCell className="text-center">
-                    <div className="inline-flex items-center gap-1">
-                      {/* displayStage groups paused → استكمال_البيانات
-                          and closed/archived → مقفلة so the badge
-                          matches what the stage filter returns. */}
-                      <Badge className={`${getStageColor(getCaseDisplayStage(c))} inline-flex justify-center`}>
-                        {getStageLabel(getCaseDisplayStage(c))}
-                      </Badge>
+                    {/* Stack the stage badge on top with the inline status
+                        indicators (paused / awaiting / platform-notes /
+                        رد خصم) and put the post-review "تعديلات" pill on
+                        its own row below — keeps the cell from overflowing
+                        when both the stage label and the loop marker are
+                        present. */}
+                    <div className="flex flex-col items-center gap-1">
+                      <div className="inline-flex items-center gap-1">
+                        {/* displayStage groups paused → استكمال_البيانات
+                            and closed/archived → مقفلة so the badge
+                            matches what the stage filter returns. */}
+                        <Badge className={`${getStageColor(getCaseDisplayStage(c))} inline-flex justify-center`}>
+                          {getStageLabel(getCaseDisplayStage(c))}
+                        </Badge>
+                        {/* Phase-8 — paused indicator. */}
+                        {isCasePaused(c) && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                            data-testid={`badge-paused-${c.id}`}
+                            title={c.pauseReason || "معلّقة"}
+                          >
+                            <Pause className="w-2.5 h-2.5 ml-1" />
+                            معلّقة
+                          </Badge>
+                        )}
+                        {/* Phase-8 — awaiting-completion indicator. */}
+                        {c.awaitingCompletion && !isCasePaused(c) && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                            data-testid={`badge-awaiting-case-${c.id}`}
+                            title="بانتظار استكمال البيانات"
+                          >
+                            <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                            بانتظار
+                          </Badge>
+                        )}
+                        {(c.currentStage === "قيد_التدقيق_في_تراضي" ||
+                          c.currentStage === "قيد_التدقيق_في_ناجز" ||
+                          c.currentStage === "قيد_التدقيق_في_معين") &&
+                          (c as any).platformReviewNotes &&
+                          String((c as any).platformReviewNotes).trim() && (
+                            <span
+                              className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 border border-amber-400"
+                              title="يوجد ملاحظات من المنصة"
+                              data-testid={`platform-notes-indicator-${c.id}`}
+                            >
+                              <AlertTriangle className="w-3 h-3 text-amber-700" />
+                            </span>
+                          )}
+                        {getHearingsByCase(c.id).some(h => h.opponentResponseRequired) && (
+                          <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600 dark:text-orange-400 px-1 py-0">
+                            رد خصم
+                          </Badge>
+                        )}
+                      </div>
                       {caseHasReturnedFromReview(c) && (
                         <Badge
                           variant="outline"
@@ -1384,49 +1435,6 @@ export default function CasesPage() {
                         >
                           <RotateCcw className="w-2.5 h-2.5 ml-1" />
                           تعديلات
-                        </Badge>
-                      )}
-                      {/* Phase-8 — paused indicator. Distinct amber badge so
-                          it reads as orthogonal to the stage. */}
-                      {isCasePaused(c) && (
-                        <Badge
-                          variant="outline"
-                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
-                          data-testid={`badge-paused-${c.id}`}
-                          title={c.pauseReason || "معلّقة"}
-                        >
-                          <Pause className="w-2.5 h-2.5 ml-1" />
-                          معلّقة
-                        </Badge>
-                      )}
-                      {/* Phase-8 — awaiting-completion indicator. */}
-                      {c.awaitingCompletion && !isCasePaused(c) && (
-                        <Badge
-                          variant="outline"
-                          className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
-                          data-testid={`badge-awaiting-case-${c.id}`}
-                          title="بانتظار استكمال البيانات"
-                        >
-                          <AlertTriangle className="w-2.5 h-2.5 ml-1" />
-                          بانتظار
-                        </Badge>
-                      )}
-                      {(c.currentStage === "قيد_التدقيق_في_تراضي" ||
-                        c.currentStage === "قيد_التدقيق_في_ناجز" ||
-                        c.currentStage === "قيد_التدقيق_في_معين") &&
-                        (c as any).platformReviewNotes &&
-                        String((c as any).platformReviewNotes).trim() && (
-                          <span
-                            className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 border border-amber-400"
-                            title="يوجد ملاحظات من المنصة"
-                            data-testid={`platform-notes-indicator-${c.id}`}
-                          >
-                            <AlertTriangle className="w-3 h-3 text-amber-700" />
-                          </span>
-                        )}
-                      {getHearingsByCase(c.id).some(h => h.opponentResponseRequired) && (
-                        <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600 dark:text-orange-400 px-1 py-0">
-                          رد خصم
                         </Badge>
                       )}
                     </div>
@@ -1439,109 +1447,138 @@ export default function CasesPage() {
                   </TableCell>
                   <TableCell className="text-center text-sm">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell className="text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <Button size="icon" variant="ghost" className="text-primary hover:text-primary" title="عرض التفاصيل" data-testid={`button-view-${c.id}`} onClick={() => openDetailsDialog(c)}>
-                        <Eye className="w-4 h-4" />
-                      </Button>
-                      {(user?.role === "branch_manager" || user?.role === "admin_support") && (
-                        <Button size="icon" variant="ghost" title="تعديل البيانات" data-testid={`button-edit-${c.id}`} onClick={() => openEditDialog(c)}>
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                      )}
-                      {user?.role === "department_head" && c.currentStage !== "مقفلة" && !(c as any).isArchived && (
-                        <Button size="icon" variant="ghost" title="إسناد لمحامي" data-testid={`button-reassign-case-${c.id}`} onClick={() => openReassignCaseDialog(c)}>
-                          <UserCog className="w-4 h-4" />
-                        </Button>
-                      )}
-                      {/* Phase-8 — await-completion / resume actions. Mirror
-                          the pause/unpause pair: same permission gate, same
-                          inline icon style. Hidden when paused (user must
-                          unpause first per server gate) and when already in
-                          استكمال_البيانات stage and not awaiting (tautology
-                          guard mirroring the server). */}
-                      {!isCasePaused(c) && c.awaitingCompletion
-                        ? canPauseCase(c) && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="text-green-600 hover:text-green-700"
-                              title="تم الاستكمال"
-                              data-testid={`button-resume-case-${c.id}`}
-                              onClick={() => openResumeCaseDialog(c)}
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                            </Button>
-                          )
-                        : !isCasePaused(c)
-                          && c.status !== "مغلق"
-                          && !(c as any).isArchived
-                          && c.currentStage !== "استكمال_البيانات"
-                          && canPauseCase(c) && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="text-amber-600 hover:text-amber-700"
-                              title="بانتظار استكمال البيانات"
-                              data-testid={`button-await-case-${c.id}`}
-                              onClick={() => openAwaitCaseDialog(c)}
-                            >
-                              <AlertTriangle className="w-4 h-4" />
-                            </Button>
+                    {/* Row actions — Eye stays inline for the common
+                        "open details" path; everything else moves into a
+                        3-dot dropdown so the column doesn't grow with the
+                        number of permissions a role unlocks. Mirrors the
+                        consultations.tsx pattern. Each dropdown item is
+                        gated by its own permission check, so dept_heads
+                        only ever see the actions they're actually
+                        allowed to perform. */}
+                    {(() => {
+                      const canEdit = user?.role === "branch_manager" || user?.role === "admin_support";
+                      const canReassign = user?.role === "department_head" && c.currentStage !== "مقفلة" && !(c as any).isArchived;
+                      const canResumeAwait = !isCasePaused(c) && c.awaitingCompletion && canPauseCase(c);
+                      const canMarkAwait = !isCasePaused(c)
+                        && !c.awaitingCompletion
+                        && c.status !== "مغلق"
+                        && !(c as any).isArchived
+                        && c.currentStage !== "استكمال_البيانات"
+                        && canPauseCase(c);
+                      const canUnpause = isCasePaused(c) && canPauseCase(c);
+                      const canPause = !isCasePaused(c) && c.status !== "مغلق" && !(c as any).isArchived && canPauseCase(c);
+                      const canEarlyClose = canEarlyCloseCase(c);
+                      const canDelete = user?.role === "branch_manager";
+                      const hasAnyAction = canEdit || canReassign || canResumeAwait || canMarkAwait
+                        || canUnpause || canPause || canEarlyClose || canDelete;
+                      return (
+                        <div className="flex items-center justify-center gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="text-primary hover:text-primary"
+                            title="عرض التفاصيل"
+                            data-testid={`button-view-${c.id}`}
+                            onClick={() => openDetailsDialog(c)}
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                          {hasAnyAction && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button size="icon" variant="ghost" data-testid={`button-actions-${c.id}`}>
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {canEdit && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-edit-${c.id}`}
+                                    onClick={() => openEditDialog(c)}
+                                  >
+                                    <Pencil className="w-4 h-4 ml-2" />
+                                    تعديل البيانات
+                                  </DropdownMenuItem>
+                                )}
+                                {canReassign && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-reassign-case-${c.id}`}
+                                    onClick={() => openReassignCaseDialog(c)}
+                                  >
+                                    <UserCog className="w-4 h-4 ml-2" />
+                                    إسناد لمحامي
+                                  </DropdownMenuItem>
+                                )}
+                                {/* Phase-8 — await-completion / resume actions.
+                                    Same permission gate as pause/unpause; one of
+                                    the two renders depending on awaitingCompletion. */}
+                                {canResumeAwait && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-resume-case-${c.id}`}
+                                    className="text-green-600 focus:text-green-700"
+                                    onClick={() => openResumeCaseDialog(c)}
+                                  >
+                                    <CheckCircle className="w-4 h-4 ml-2" />
+                                    تم الاستكمال
+                                  </DropdownMenuItem>
+                                )}
+                                {canMarkAwait && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-await-case-${c.id}`}
+                                    className="text-amber-600 focus:text-amber-700"
+                                    onClick={() => openAwaitCaseDialog(c)}
+                                  >
+                                    <AlertTriangle className="w-4 h-4 ml-2" />
+                                    بانتظار استكمال البيانات
+                                  </DropdownMenuItem>
+                                )}
+                                {(canUnpause || canPause) && <DropdownMenuSeparator />}
+                                {canUnpause && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-unpause-case-${c.id}`}
+                                    onClick={() => openUnpauseCaseDialog(c)}
+                                  >
+                                    <Play className="w-4 h-4 ml-2" />
+                                    إلغاء التعليق
+                                  </DropdownMenuItem>
+                                )}
+                                {canPause && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-pause-case-${c.id}`}
+                                    className="text-amber-600 focus:text-amber-700"
+                                    onClick={() => openPauseCaseDialog(c)}
+                                  >
+                                    <Pause className="w-4 h-4 ml-2" />
+                                    تعليق القضية
+                                  </DropdownMenuItem>
+                                )}
+                                {(canEarlyClose || canDelete) && <DropdownMenuSeparator />}
+                                {canEarlyClose && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-early-close-row-${c.id}`}
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() => { setEarlyCloseCase(c); setShowEarlyCloseDialog(true); }}
+                                  >
+                                    <XCircle className="w-4 h-4 ml-2" />
+                                    إغلاق مبكر
+                                  </DropdownMenuItem>
+                                )}
+                                {canDelete && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-delete-case-${c.id}`}
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() => { setCaseToDelete(c); setShowDeleteDialog(true); }}
+                                  >
+                                    <Trash2 className="w-4 h-4 ml-2" />
+                                    حذف القضية
+                                  </DropdownMenuItem>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
-                      {/* Phase-8 — pause / unpause action. Pause shows when
-                          not paused, status not closed, not archived, and the
-                          user has permission. Unpause replaces it when paused.
-                          Workflow actions on the case are accessed via the
-                          details dialog, not this row, so we don't need to
-                          gate other inline buttons here. */}
-                      {isCasePaused(c)
-                        ? canPauseCase(c) && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              title="إلغاء التعليق"
-                              data-testid={`button-unpause-case-${c.id}`}
-                              onClick={() => openUnpauseCaseDialog(c)}
-                            >
-                              <Play className="w-4 h-4" />
-                            </Button>
-                          )
-                        : c.status !== "مغلق" && !(c as any).isArchived && canPauseCase(c) && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="text-amber-600 hover:text-amber-700"
-                              title="تعليق القضية"
-                              data-testid={`button-pause-case-${c.id}`}
-                              onClick={() => openPauseCaseDialog(c)}
-                            >
-                              <Pause className="w-4 h-4" />
-                            </Button>
-                          )}
-                      {/* Early-close inline action — mirrors the consultations
-                          table dropdown's إغلاق مبكر item. Visible to all
-                          spec-allowed roles (canEarlyCloseCase). The dialog
-                          actions tab also has the same button; this row
-                          shortcut means dept_head / lawyer don't need to open
-                          the case dialog and click "الإجراءات" first. */}
-                      {canEarlyCloseCase(c) && (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="text-red-600 hover:text-red-700"
-                          title="إغلاق مبكر"
-                          data-testid={`button-early-close-row-${c.id}`}
-                          onClick={() => { setEarlyCloseCase(c); setShowEarlyCloseDialog(true); }}
-                        >
-                          <XCircle className="w-4 h-4" />
-                        </Button>
-                      )}
-                      {user?.role === "branch_manager" && (
-                        <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive" title="حذف القضية" data-testid={`button-delete-case-${c.id}`} onClick={() => { setCaseToDelete(c); setShowDeleteDialog(true); }}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      )}
-                    </div>
+                        </div>
+                      );
+                    })()}
                   </TableCell>
                 </TableRow>
               ))}
