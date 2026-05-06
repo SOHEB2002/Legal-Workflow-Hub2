@@ -1440,9 +1440,11 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = (req as any).user;
 
-      // Role gate: assigned_lawyer + admin_support + department_head
-      // (own dept) + branch_manager. cases_review_head retained from
-      // the previous gate to avoid regressing existing workflows.
+      // Role gate: branch_manager + admin_support + department_head
+      // (own dept) + assigned_lawyer (primary / responsible / in
+      // assignedLawyers — see isAssignedLawyer). Mirrors the client
+      // gate on the "تجاوز" button in case-progress-bar.tsx so the
+      // button visibility and the server check never drift.
       const isOwnDeptHead =
         user.role === "department_head"
         && !!user.departmentId
@@ -1450,7 +1452,6 @@ export async function registerRoutes(
       const authorized =
         user.role === "branch_manager"
         || user.role === "admin_support"
-        || user.role === "cases_review_head"
         || isOwnDeptHead
         || isAssignedLawyer(user, caseItem);
       if (!authorized) {

@@ -2390,10 +2390,16 @@ export default function CasesPage() {
                     }
                   }}
                   onSkipDataCompletion={
+                    // Skip-completion is allowed for the same 4 roles
+                    // the server permits: branch_manager, admin_support,
+                    // dept_head (own dept), and any assigned lawyer
+                    // (primary / responsible / in assignedLawyers).
                     user && (
                       user.role === "branch_manager" ||
-                      user.role === "cases_review_head" ||
+                      user.role === "admin_support" ||
+                      (user.role === "department_head" && selectedCase.departmentId === user.departmentId) ||
                       selectedCase.primaryLawyerId === user.id ||
+                      selectedCase.responsibleLawyerId === user.id ||
                       (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
                     ) ? async (notes) => {
                       if (!user) return;
