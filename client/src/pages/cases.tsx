@@ -232,6 +232,110 @@ function caseHasReturnedFromReview(c: {
   return c.stageHistory.some((t) => REVIEW_LOOP_STAGES.has(t?.stage));
 }
 
+// Priority-group sort. The cases table puts urgent rows on top and
+// pushes terminal rows to the bottom so lawyers see what needs their
+// attention first. See getCasePriorityGroup below for the rules.
+//   1 = unassigned (highest)
+//   2 = action required from us (drafting / reviewing internally)
+//   3 = in court with an active memo (firm still working)
+//   4 = waiting on external (court, client, opponent, paused)
+//   5 = closed / archived / terminated (lowest)
+// Within each group rows order by updatedAt DESC.
+//
+// "Action required from us" stages — internal workflow steps where
+// the firm owes work. Includes the parallel admin/grievance and
+// memo-jawabiyya drafting stages so a defendant case at
+// تحرير_مذكرة_جوابية surfaces alongside a plaintiff case at
+// تحرير_صحيفة_الدعوى.
+const ACTION_REQUIRED_FROM_US_STAGES = new Set([
+  "استلام",
+  "استكمال_البيانات",
+  "دراسة",
+  "تحرير_صحيفة_الدعوى",
+  "تحرير_مذكرة_جوابية",
+  "تحرير_صيغة_التظلم",
+  "مراجعة_داخلية",
+  "مراجعة_داخلية_للتظلم",
+  "إحالة_للجنة_المراجعة",
+  "الأخذ_بالملاحظات",
+  "جاهزة_للرفع",
+]);
+// Stages where the next move is on someone else.
+const WAITING_EXTERNAL_STAGES = new Set([
+  "منظورة",
+  "منظورة_استئناف",
+  "قيد_التدقيق_في_تراضي",
+  "قيد_التدقيق_في_ناجز",
+  "قيد_التدقيق_في_معين",
+  "مداولة_الصلح",
+  "أغلق_طلب_الصلح",
+  "بانتظار_رفع_العميل_للتسوية",
+  "تقديم_التظلم",
+  "انتظار_رد_التظلم",
+]);
+// Terminal stages — final outcomes. محكوم_حكم_ابتدائي is qualified
+// elsewhere: only terminal when no active memo (an open objection
+// memo means the case is still alive).
+const TERMINATED_STAGES = new Set([
+  "محكوم_حكم_نهائي",
+  "محكوم_حكم_ابتدائي",
+  "مشطوبة",
+  "تحصيل",
+  "مقفلة",
+  "مؤرشفة",
+]);
+// Stages where the case is sitting in court with the firm's role
+// being to push the active memo forward; if the memo is open this
+// outranks "waiting on external" / "terminated".
+const IN_COURT_STAGES_FOR_MEMO_GROUP = new Set([
+  "منظورة",
+  "منظورة_استئناف",
+  "محكوم_حكم_ابتدائي",
+  "محكوم_حكم_نهائي",
+]);
+
+function getCasePriorityGroup(
+  c: LawCase,
+  hasActiveMemo: boolean,
+): 1 | 2 | 3 | 4 | 5 {
+  // Closed / archived always go last regardless of stage or assignment.
+  if (c.status === CaseStatus.CLOSED || (c as any).isArchived) return 5;
+
+  const hasNoLawyer =
+    !c.primaryLawyerId &&
+    !c.responsibleLawyerId &&
+    (!Array.isArray(c.assignedLawyers) || c.assignedLawyers.length === 0);
+  if (hasNoLawyer) return 1;
+
+  const stage = c.currentStage;
+
+  // In-court stages with an open memo trump terminal/external —
+  // the firm is still actively pushing paperwork.
+  if (IN_COURT_STAGES_FOR_MEMO_GROUP.has(stage) && hasActiveMemo) return 3;
+
+  if (TERMINATED_STAGES.has(stage)) return 5;
+
+  // Paused or awaiting-completion = waiting on external action even
+  // if the underlying stage would otherwise put the case in group 2.
+  if (c.pausedAt || c.awaitingCompletion) return 4;
+
+  if (ACTION_REQUIRED_FROM_US_STAGES.has(stage)) return 2;
+  if (WAITING_EXTERNAL_STAGES.has(stage)) return 4;
+  // Anything that doesn't match a known bucket falls into "in
+  // progress / waiting" — safer than mis-promoting it.
+  return 4;
+}
+
+// "Active" memo for the group-3 rule: not cancelled, not filed.
+function isActiveMemo(m: { status?: string | null; currentStage?: string | null }): boolean {
+  if (m.status === "ملغاة") return false;
+  if (m.currentStage === "مرفوعة") return false;
+  // Legacy memos pre-Phase-9 might still carry status="مرفوعة" without
+  // a currentStage — treat that as filed too.
+  if (m.status === "مرفوعة") return false;
+  return true;
+}
+
 export default function CasesPage() {
   const {
     cases,
@@ -258,7 +362,7 @@ export default function CasesPage() {
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
-  const { getMemosByCase } = useMemos();
+  const { memos, getMemosByCase } = useMemos();
   const { getTasksByCase } = useFieldTasks();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
@@ -986,8 +1090,21 @@ export default function CasesPage() {
     setCaseToDelete(null);
   };
 
+  // Per-case "has an active memo" lookup, precomputed once per
+  // memos/cases change so the sort comparator stays O(1) per call
+  // instead of scanning the memo list for every comparison.
+  const caseHasActiveMemoMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const m of memos) {
+      if (!m.caseId) continue;
+      if (map.get(m.caseId)) continue;
+      if (isActiveMemo(m as any)) map.set(m.caseId, true);
+    }
+    return map;
+  }, [memos]);
+
   const filteredCases = useMemo(() => {
-    return cases.filter((c) => {
+    const matched = cases.filter((c) => {
       const clientName = c.clientId ? getClientName(c.clientId) : "";
       const q = searchQuery.trim().toLowerCase();
       const matchesSearch = !q ||
@@ -1031,7 +1148,21 @@ export default function CasesPage() {
         matchesAdvLawyer
       );
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName]);
+    // Default ordering: priority group ASC, then updatedAt DESC
+    // within each group. The user can layer filters/search on top —
+    // those run before this sort. A future column-header sort would
+    // replace this default; for now there's no header sort to honor.
+    const updatedAtMs = (c: LawCase): number => {
+      const t = c.updatedAt ? new Date(c.updatedAt).getTime() : 0;
+      return Number.isFinite(t) ? t : 0;
+    };
+    return matched.slice().sort((a, b) => {
+      const ga = getCasePriorityGroup(a, !!caseHasActiveMemoMap.get(a.id));
+      const gb = getCasePriorityGroup(b, !!caseHasActiveMemoMap.get(b.id));
+      if (ga !== gb) return ga - gb;
+      return updatedAtMs(b) - updatedAtMs(a);
+    });
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap]);
 
   const basicAllowedStages = useMemo(() => {
     const cls = classificationFilter !== "all" ? [classificationFilter] : [];
@@ -1331,9 +1462,38 @@ export default function CasesPage() {
                     لا توجد قضايا مطابقة للبحث
                   </TableCell>
                 </TableRow>
-              ) : pagedCases.map((c) => (
-                <TableRow key={c.id} data-testid={`row-case-${c.id}`}>
-                  <TableCell className="text-center font-medium"><LtrInline>{c.caseNumber}</LtrInline></TableCell>
+              ) : pagedCases.map((c) => {
+                const hasActiveMemo = !!caseHasActiveMemoMap.get(c.id);
+                const priorityGroup = getCasePriorityGroup(c, hasActiveMemo);
+                // Row tinting: group 1 picks up an amber background to
+                // catch the eye, groups 4 + 5 dim so they read as
+                // backlog without dropping off the page.
+                const rowClass =
+                  priorityGroup === 1
+                    ? "bg-amber-50/60 dark:bg-amber-950/20"
+                    : priorityGroup === 5
+                      ? "opacity-60"
+                      : priorityGroup === 4
+                        ? "opacity-80"
+                        : "";
+                return (
+                <TableRow key={c.id} data-testid={`row-case-${c.id}`} className={rowClass}>
+                  <TableCell className="text-center font-medium">
+                    <div className="flex flex-col items-center gap-1">
+                      <LtrInline>{c.caseNumber}</LtrInline>
+                      {priorityGroup === 1 && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-unassigned-${c.id}`}
+                          title="القضية لم تُسنَد لمحامٍ بعد"
+                        >
+                          <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                          غير مسندة
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-center">
                     <div>
                       <div className="font-medium text-sm leading-snug">{c.plaintiffName || getClientName(c.clientId)}</div>
@@ -1435,6 +1595,17 @@ export default function CasesPage() {
                         >
                           <RotateCcw className="w-2.5 h-2.5 ml-1" />
                           تعديلات
+                        </Badge>
+                      )}
+                      {priorityGroup === 3 && (
+                        <Badge
+                          variant="outline"
+                          className="border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-active-memo-${c.id}`}
+                          title="القضية منظورة في المحكمة وفيها مذكرة جارية"
+                        >
+                          <RotateCcw className="w-2.5 h-2.5 ml-1" />
+                          مذكرة جارية
                         </Badge>
                       )}
                     </div>
@@ -1581,7 +1752,8 @@ export default function CasesPage() {
                     })()}
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
           </div>
