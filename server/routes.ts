@@ -987,9 +987,20 @@ export async function registerRoutes(
   app.get("/api/cases", requireAuth, async (req, res) => {
     try {
       const allCases = await storage.getAllCases();
-      // Strip stageHistory from list responses — it can be 20-50 entries per case
-      // and is only needed in the case detail view (GET /api/cases/:id).
-      const stripped = allCases.map(({ stageHistory: _sh, ...c }) => c);
+      // Strip stageHistory from list responses — it can be 20-50 entries
+      // per case and is only needed in the case detail view (GET
+      // /api/cases/:id). Replace it with a derived boolean the cases-table
+      // badge needs ("has this case bounced through internal review?")
+      // so the table doesn't have to ship the whole history just to
+      // render a tiny indicator pill.
+      const stripped = allCases.map(({ stageHistory, ...c }) => ({
+        ...c,
+        hasReturnedFromReview:
+          Array.isArray(stageHistory) &&
+          stageHistory.some((t: any) =>
+            t?.stage === "مراجعة_داخلية" || t?.stage === "مراجعة_داخلية_للتظلم"
+          ),
+      }));
       res.json(stripped);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب القضايا" });
@@ -6265,8 +6276,12 @@ export async function registerRoutes(
       const user = req.user!;
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      if (!isAssignedLawyer(user, caseItem) && !canModifyCase(user, caseItem)) {
-        return res.status(403).json({ error: "إضافة الملاحظات متاحة فقط لمن له علاقة بالقضية" });
+      // Match the case-comments POST gate: anyone who can VIEW the case
+      // can drop an internal note. The previous rule (assigned-lawyer
+      // OR modify) silently 403'd dept_heads viewing a case outside
+      // their dept and any read-only viewer who tried to leave a note.
+      if (!canViewCase(user, caseItem)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لإضافة ملاحظة على هذه القضية" });
       }
       const { content } = req.body;
       if (!content || !String(content).trim()) {

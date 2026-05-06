@@ -369,7 +369,7 @@ export function CaseProgressBar({
                 </span>
                 {status === "current" && hasReturnedFromReview && (
                   <span
-                    className="mt-1 inline-block rounded-sm border border-purple-500 bg-purple-500/10 px-1 py-px text-[9px] leading-tight text-purple-700 dark:text-purple-300"
+                    className="mt-1 inline-block rounded-sm border border-amber-500 bg-amber-500/10 px-1 py-px text-[9px] leading-tight text-amber-700 dark:text-amber-300"
                     data-testid="label-post-review-current"
                     title="عادت من المراجعة الداخلية — تعديلات وليس صياغة أولية"
                   >
