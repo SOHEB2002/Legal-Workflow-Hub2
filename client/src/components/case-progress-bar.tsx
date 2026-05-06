@@ -173,7 +173,7 @@ export function CaseProgressBar({
       : null;
 
   const canConfirmNext =
-    (!nextIsInternalReview || !!selectedReviewerId) &&
+    (!nextIsInternalReview || !!(selectedReviewerId || caseInternalReviewerId)) &&
     (!platformFieldInfo || !!platformNumber.trim());
   const canConfirmPrev = !prevIsInternalReview || !!(selectedReviewerId || caseInternalReviewerId);
 
@@ -203,7 +203,11 @@ export function CaseProgressBar({
   const canActOnInternalReview = isReviewerActor || isHeadOrManager;
 
   const handleMoveNext = () => {
-    if (nextIsInternalReview && !selectedReviewerId) return;
+    // For the internal-review transition the dropdown is pre-filled from the
+    // intake-set caseInternalReviewerId, so accept that value (or any
+    // override the lawyer picked) — block only if neither is present.
+    const reviewerForNext = selectedReviewerId || caseInternalReviewerId || "";
+    if (nextIsInternalReview && !reviewerForNext) return;
     if (platformFieldInfo && !platformNumber.trim()) return;
     const extraFields = platformFieldInfo
       ? { [platformFieldInfo.field]: platformNumber.trim() }
@@ -213,7 +217,7 @@ export function CaseProgressBar({
     // and post-settlement transitions and silently dropped the PATCH.
     onMoveToNext(
       notes,
-      nextIsInternalReview ? selectedReviewerId : undefined,
+      nextIsInternalReview ? reviewerForNext : undefined,
       undefined,
       extraFields,
       nextStage,
@@ -931,7 +935,7 @@ export function CaseProgressBar({
                 <div className="mt-3 space-y-1" dir="rtl">
                   <label className="text-sm font-semibold">اختر المراجع الداخلي <span className="text-red-500">*</span></label>
                   <select
-                    value={selectedReviewerId}
+                    value={selectedReviewerId || caseInternalReviewerId || ""}
                     onChange={(e) => setSelectedReviewerId(e.target.value)}
                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                     data-testid="select-internal-reviewer"
@@ -941,7 +945,12 @@ export function CaseProgressBar({
                       <option key={r.id} value={r.id}>{r.name}</option>
                     ))}
                   </select>
-                  {eligibleInternalReviewers.length === 0 && (
+                  {caseInternalReviewerId && !selectedReviewerId && (
+                    <p className="text-xs text-muted-foreground">
+                      المراجع المعيَّن لهذه القضية. يمكنك تغييره لهذه المراجعة فقط دون تعديل الإعداد الدائم.
+                    </p>
+                  )}
+                  {eligibleInternalReviewers.length === 0 && !caseInternalReviewerId && (
                     <p className="text-xs text-red-600">لا يوجد مراجعون مؤهلون في هذا القسم</p>
                   )}
                 </div>
