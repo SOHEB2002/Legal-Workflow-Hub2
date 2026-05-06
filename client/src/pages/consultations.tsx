@@ -908,6 +908,27 @@ export default function ConsultationsPage() {
     }
   };
 
+  const handleReturnConsultationToCommittee = async () => {
+    if (!takeNotesConsultation) return;
+    if (!takeNotesNotes.trim()) {
+      toast({ title: "الملاحظات مطلوبة", description: "اشرح ما تم تطبيقه أو سبب الإعادة", variant: "destructive" });
+      return;
+    }
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${takeNotesConsultation.id}/return-to-committee`, {
+        notes: takeNotesNotes.trim(),
+      });
+      await refreshConsultations();
+      toast({ title: "تم إعادة الاستشارة للجنة المراجعة" });
+      closeTakeNotesDialog();
+    } catch (err) {
+      toast({ title: "فشل إعادة الاستشارة للجنة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
   const openConvertDialog = (c: Consultation) => {
     setConvertConsultation(c);
     setConvertData({
@@ -2600,16 +2621,16 @@ export default function ConsultationsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              اختر نتيجة معالجة ملاحظات اللجنة. جميع النتائج تنقل الاستشارة إلى
-              "جاهزة للتسليم"؛ النتيجة تُسجَّل للأرشيف فقط.
+              اختر نتيجة معالجة ملاحظات اللجنة. تم/جزئياً/لم يتم تنقل الاستشارة إلى
+              "جاهزة للتسليم". "إعادة للجنة المراجعة" ترجعها للجنة (تتطلب ملاحظات).
             </p>
             <div>
-              <Label>الملاحظات (اختياري)</Label>
+              <Label>الملاحظات (مطلوبة عند الإعادة للجنة)</Label>
               <Textarea
                 data-testid="input-take-notes-notes"
                 value={takeNotesNotes}
                 onChange={(e) => setTakeNotesNotes(e.target.value)}
-                placeholder="ملاحظات حول معالجة ملاحظات اللجنة..."
+                placeholder="ملاحظات حول معالجة ملاحظات اللجنة / ما تم تطبيقه أو سبب الإعادة..."
                 rows={4}
               />
             </div>
@@ -2621,6 +2642,15 @@ export default function ConsultationsPage() {
               data-testid="button-cancel-take-notes"
             >
               إلغاء
+            </Button>
+            <Button
+              variant="outline"
+              data-testid="button-return-to-committee"
+              onClick={handleReturnConsultationToCommittee}
+              disabled={actionInProgress || !takeNotesNotes.trim()}
+              className="border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+            >
+              إعادة للجنة المراجعة
             </Button>
             <Button
               data-testid="button-take-notes-not-done"

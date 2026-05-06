@@ -21,6 +21,7 @@ interface CaseProgressBarProps {
   onMoveToPrevious: (notes: string, internalReviewerId?: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
+  onReturnToCommittee?: (notes: string) => void;
   onPlatformReviewAddNotes?: (notes: string) => void;
   onPlatformReviewResubmit?: () => void;
   hasPlatformNotes?: boolean;
@@ -49,6 +50,7 @@ export function CaseProgressBar({
   onMoveToPrevious,
   onSkipDataCompletion,
   onInternalReviewSendBack,
+  onReturnToCommittee,
   onPlatformReviewAddNotes,
   onPlatformReviewResubmit,
   hasPlatformNotes = false,
@@ -73,6 +75,7 @@ export function CaseProgressBar({
   const [platformNumber, setPlatformNumber] = useState("");
   const [courtCaseNumber, setCourtCaseNumber] = useState("");
   const [platformNotes, setPlatformNotes] = useState("");
+  const [returnToCommitteeNotes, setReturnToCommitteeNotes] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قيد_الدراسة";
   let stagesOrder = getStagesForClassification(
@@ -232,6 +235,12 @@ export function CaseProgressBar({
 
   const handleCommitteeNotesDecision = (decision: string) => {
     onMoveToNext("", undefined, decision);
+  };
+
+  const handleReturnToCommittee = () => {
+    if (!onReturnToCommittee || !returnToCommitteeNotes.trim()) return;
+    onReturnToCommittee(returnToCommitteeNotes.trim());
+    setReturnToCommitteeNotes("");
   };
 
   const handlePlatformReviewAccept = () => {
@@ -674,6 +683,48 @@ export function CaseProgressBar({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+
+          {onReturnToCommittee && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={disabled}
+                  className="border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+                  data-testid="button-committee-notes-return"
+                >
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                  إعادة للجنة المراجعة
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>إعادة القضية للجنة المراجعة</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    سيتم إرجاع القضية إلى مرحلة <strong>إحالة للجنة المراجعة</strong>.
+                    اشرح ما تم تطبيقه أو سبب الإعادة. الملاحظات مطلوبة.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <Textarea
+                  placeholder="ما تم تطبيقه / سبب الإعادة..."
+                  value={returnToCommitteeNotes}
+                  onChange={(e) => setReturnToCommitteeNotes(e.target.value)}
+                  className="mt-2"
+                  data-testid="input-return-to-committee-notes"
+                />
+                <AlertDialogFooter className="gap-2">
+                  <AlertDialogCancel onClick={() => setReturnToCommitteeNotes("")}>إلغاء</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleReturnToCommittee}
+                    disabled={!returnToCommitteeNotes.trim()}
+                  >
+                    تأكيد الإعادة
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
       )}
 

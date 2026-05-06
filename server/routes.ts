@@ -2842,6 +2842,48 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/consultations/:id/return-to-committee
+  // Body: { notes }. Notes are required — the committee needs to know
+  // what was applied / why the lawyer is bouncing it back. Sends the
+  // consultation from الأخذ_بالملاحظات back to لجنة_مراجعة. Allowed
+  // roles: assigned_lawyer (synthetic), admin_support, department_head,
+  // branch_manager — same gate as take-notes-outcome plus admin_support.
+  app.post("/api/consultations/:id/return-to-committee", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const notes = String(req.body?.notes ?? "").trim();
+      if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      if (consultation.currentStage !== ConsultationStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة الأخذ بالملاحظات" });
+      }
+
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      const allowedRoles = ["admin_support", "department_head", "branch_manager"];
+      if (!isLawyer && !allowedRoles.includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإعادة الاستشارة للجنة" });
+      }
+
+      const updated = await storage.returnConsultationToCommittee(consultation.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إعادة الاستشارة للجنة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/return-to-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // POST /api/consultations/:id/early-close
   // Body: { reason, otherText? }. Sets status='closed', closedAt=now(),
   // persists closure_reason (and closure_reason_other when reason='other').
@@ -3189,6 +3231,54 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[consultations/unpause] error:", error);
       res.status(500).json({ error: error.message || "فشل إلغاء التعليق" });
+    }
+  });
+
+  // POST /api/cases/:id/return-to-committee
+  // Body: { notes }. Required notes — sends case from الأخذ_بالملاحظات
+  // back to إحالة_للجنة_المراجعة. Allowed: assigned_lawyer +
+  // admin_support + department_head (own dept) + branch_manager.
+  app.post("/api/cases/:id/return-to-committee", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const notes = String(req.body?.notes ?? "").trim();
+      if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      if (lawCase.currentStage !== "الأخذ_بالملاحظات") {
+        return res.status(400).json({ error: "القضية ليست في مرحلة الأخذ بالملاحظات" });
+      }
+      if (lawCase.pausedAt || (lawCase as any).awaitingCompletion) {
+        return res.status(400).json({ error: "القضية في حالة لا تسمح بإعادتها للجنة" });
+      }
+
+      const isLawyer = isAssignedLawyer(reqUser, lawCase);
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && lawCase.departmentId === reqUser.departmentId;
+      const allowed =
+        reqUser.role === "branch_manager"
+        || reqUser.role === "admin_support"
+        || isOwnDeptHead
+        || isLawyer;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة القضية للجنة" });
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = performer?.name || reqUser.id;
+      const updated = await storage.returnCaseToCommittee(lawCase.id, {
+        notes,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إعادة القضية للجنة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/return-to-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
 
@@ -4070,6 +4160,57 @@ export async function registerRoutes(
       res.json({ outcome: result.outcome, memo: result.memo });
     } catch (error: any) {
       console.error("[memos/take-notes-outcome] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/memos/:id/return-to-committee
+  // Body: { notes }. Required notes — sends memo from الأخذ_بالملاحظات
+  // back to لجنة_مراجعة. Allowed: assigned_lawyer + admin_support +
+  // department_head (own dept via parent case) + branch_manager.
+  app.post("/api/memos/:id/return-to-committee", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const notes = String(req.body?.notes ?? "").trim();
+      if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بإعادتها للجنة" });
+      }
+      if (memo.currentStage !== MemoStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة الأخذ بالملاحظات" });
+      }
+
+      const parentCase = reqUser.role === "department_head" && memo.caseId
+        ? await storage.getCaseById(memo.caseId)
+        : null;
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && !!parentCase
+        && parentCase.departmentId === reqUser.departmentId;
+      const isAssigned = !!memo.assignedTo && memo.assignedTo === reqUser.id;
+      const allowed =
+        reqUser.role === "branch_manager"
+        || reqUser.role === "admin_support"
+        || isOwnDeptHead
+        || isAssigned;
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإعادة المذكرة للجنة" });
+      }
+
+      const updated = await storage.returnMemoToCommittee(memo.id, {
+        notes,
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إعادة المذكرة للجنة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/return-to-committee] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
