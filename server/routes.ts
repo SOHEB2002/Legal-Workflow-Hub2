@@ -1935,6 +1935,7 @@ export async function registerRoutes(
       // log gets the right "from" snapshot.
       const transferFromStage = existing.currentStage;
       const transferFromDeptId = existing.departmentId;
+      const transferFromInternalReviewerId = (existing as any).internalReviewerId || null;
       const transferReason = typeof req.body.transferReason === "string"
         ? req.body.transferReason.trim()
         : "";
@@ -1943,6 +1944,10 @@ export async function registerRoutes(
         req.body.primaryLawyerId = null;
         req.body.responsibleLawyerId = null;
         req.body.assignedLawyers = [];
+        // The intake-set internal reviewer is scoped to the source
+        // department's roster — they aren't a valid reviewer for the
+        // destination dept. Clear it; the new dept head re-assigns at intake.
+        req.body.internalReviewerId = null;
         // Reset to استلام so the new department starts the case fresh in
         // its own stage path. The downstream stageHistory update (line ~1982)
         // picks this up and writes a stage_changed entry alongside the
@@ -2168,6 +2173,7 @@ export async function registerRoutes(
                 toDeptId: req.body.departmentId,
                 reason: transferReason || null,
                 fromStage: transferFromStage,
+                previousInternalReviewerId: transferFromInternalReviewerId,
               }),
             });
           } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -4683,6 +4689,10 @@ export async function registerRoutes(
         if (data.result === HearingResult.JURISDICTION_DECLINED) {
           const fromDeptId = existingCase.departmentId || null;
           const toDeptId = data.transferToDepartmentId!;
+          // The intake-set internal reviewer belongs to the source dept's
+          // roster; clear it on jurisdiction transfer so the new dept head
+          // can re-assign someone valid at intake.
+          const previousInternalReviewerId = (existingCase as any).internalReviewerId || null;
           await storage.updateCase(effectiveCaseId, {
             ...caseUpdate,
             departmentId: toDeptId,
@@ -4690,6 +4700,7 @@ export async function registerRoutes(
             primaryLawyerId: null,
             responsibleLawyerId: null,
             assignedLawyers: [],
+            internalReviewerId: null,
           } as any);
           if (reqUser) {
             try {
@@ -4706,6 +4717,7 @@ export async function registerRoutes(
                   toDeptId,
                   hearingId,
                   reason: data.transferReason || null,
+                  previousInternalReviewerId,
                 }),
                 relatedEntityType: "hearing",
                 relatedEntityId: hearingId,
