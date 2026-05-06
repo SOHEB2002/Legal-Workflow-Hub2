@@ -6224,8 +6224,14 @@ export async function registerRoutes(
       const user = req.user!;
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      if (!isAssignedLawyer(user, caseItem)) {
-        return res.status(403).json({ error: "إضافة التعليقات متاحة فقط للمحامين المسندة إليهم القضية" });
+      // Anyone who can view the case can comment on it — admins, the
+      // dept_head of the case's department, and any assigned lawyer
+      // (primary / responsible / in assignedLawyers / internal reviewer).
+      // Previously this was gated to assigned-lawyer only, which made
+      // the "إضافة" button silently 403 for branch_managers / admin_support
+      // / dept_heads opening a case detail dialog.
+      if (!canViewCase(user, caseItem)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لإضافة تعليق على هذه القضية" });
       }
       const { content } = req.body;
       if (!content || !String(content).trim()) {

@@ -198,6 +198,27 @@ function getPriorityColor(priority: PriorityType) {
   }
 }
 
+// True when the case is currently sitting on a drafting stage and its
+// stageHistory shows it has bounced through internal review at least
+// once — i.e. the lawyer is iterating on revisions, not writing the
+// first draft. Used to render a "تعديلات بعد المراجعة" marker in the
+// table and the progress bar so the lawyer doesn't mistake a loop for
+// a fresh draft. Pure derivation from existing state — no DB writes.
+const REVIEW_LOOP_STAGES = new Set([
+  "مراجعة_داخلية",
+  "مراجعة_داخلية_للتظلم",
+]);
+const DRAFTING_LOOP_STAGES = new Set([
+  "تحرير_صحيفة_الدعوى",
+  "تحرير_مذكرة_جوابية",
+  "تحرير_صيغة_التظلم",
+]);
+function caseHasReturnedFromReview(c: { currentStage: string; stageHistory?: any[] | null }): boolean {
+  if (!DRAFTING_LOOP_STAGES.has(c.currentStage)) return false;
+  if (!Array.isArray(c.stageHistory)) return false;
+  return c.stageHistory.some((t) => REVIEW_LOOP_STAGES.has(t?.stage));
+}
+
 export default function CasesPage() {
   const {
     cases,
@@ -1342,6 +1363,16 @@ export default function CasesPage() {
                       <Badge className={`${getStageColor(getCaseDisplayStage(c))} inline-flex justify-center`}>
                         {getStageLabel(getCaseDisplayStage(c))}
                       </Badge>
+                      {caseHasReturnedFromReview(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-purple-500 bg-purple-500/10 text-purple-700 dark:text-purple-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-post-review-${c.id}`}
+                          title="عادت من المراجعة الداخلية — تعديلات وليس صياغة أولية"
+                        >
+                          تعديلات بعد المراجعة
+                        </Badge>
+                      )}
                       {/* Phase-8 — paused indicator. Distinct amber badge so
                           it reads as orthogonal to the stage. */}
                       {isCasePaused(c) && (
@@ -2163,6 +2194,7 @@ export default function CasesPage() {
                       (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
                     )
                   }
+                  hasReturnedFromReview={caseHasReturnedFromReview(selectedCase)}
                   eligibleInternalReviewers={users
                     .filter(u =>
                       u.isActive &&
@@ -2904,32 +2936,75 @@ export default function CasesPage() {
                 <TabsContent value="hearings" className="mt-4">
                   {(() => {
                     const caseHearings = getHearingsByCase(selectedCase.id);
-                    if (caseHearings.length === 0) {
-                      return <p className="text-muted-foreground text-center py-8">لا توجد جلسات مسجلة لهذه القضية</p>;
-                    }
+                    // Add-hearing is allowed for branch_manager,
+                    // admin_support, and the dept_head of the case's
+                    // own department — same gate used elsewhere on the
+                    // case actions tab.
+                    const canAddHearing =
+                      !!user && (
+                        user.role === "branch_manager" ||
+                        user.role === "admin_support" ||
+                        (user.role === "department_head" && selectedCase.departmentId === user.departmentId)
+                      );
                     return (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="text-right">التاريخ</TableHead>
-                            <TableHead className="text-right">الوقت</TableHead>
-                            <TableHead className="text-right">المحكمة</TableHead>
-                            <TableHead className="text-right">الحالة</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {caseHearings.map((hearing) => (
-                            <TableRow key={hearing.id}>
-                              <TableCell><DualDateDisplay date={hearing.hearingDate} compact /></TableCell>
-                              <TableCell><LtrInline>{formatTimeAmPm(hearing.hearingTime)}</LtrInline></TableCell>
-                              <TableCell>{hearing.courtName}</TableCell>
-                              <TableCell>
-                                <Badge variant="outline">{hearing.status}</Badge>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                      <div className="space-y-3">
+                        {canAddHearing && (
+                          <div className="flex justify-start">
+                            <Button
+                              size="sm"
+                              data-testid="button-add-hearing-from-case"
+                              onClick={() => {
+                                const params = new URLSearchParams({
+                                  action: "create",
+                                  caseId: selectedCase.id,
+                                });
+                                setLocation(`/hearings?${params.toString()}`);
+                              }}
+                            >
+                              <Plus className="w-4 h-4 ml-1" />
+                              إضافة جلسة
+                            </Button>
+                          </div>
+                        )}
+                        {caseHearings.length === 0 ? (
+                          <p className="text-muted-foreground text-center py-8">لا توجد جلسات مسجلة لهذه القضية</p>
+                        ) : (
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="text-right">التاريخ</TableHead>
+                                <TableHead className="text-right">الوقت</TableHead>
+                                <TableHead className="text-right">المحكمة</TableHead>
+                                <TableHead className="text-right">الحالة</TableHead>
+                                <TableHead className="text-center w-[60px]">إجراءات</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {caseHearings.map((hearing) => (
+                                <TableRow key={hearing.id}>
+                                  <TableCell><DualDateDisplay date={hearing.hearingDate} compact /></TableCell>
+                                  <TableCell><LtrInline>{formatTimeAmPm(hearing.hearingTime)}</LtrInline></TableCell>
+                                  <TableCell>{hearing.courtName}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline">{hearing.status}</Badge>
+                                  </TableCell>
+                                  <TableCell className="text-center">
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      title="عرض تفاصيل الجلسة"
+                                      data-testid={`button-view-hearing-${hearing.id}`}
+                                      onClick={() => setLocation(`/hearings?openHearing=${hearing.id}`)}
+                                    >
+                                      <Eye className="w-4 h-4" />
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        )}
+                      </div>
                     );
                   })()}
                 </TabsContent>
@@ -3058,11 +3133,18 @@ export default function CasesPage() {
                       />
                       <Button
                         data-testid="button-add-comment"
-                        onClick={() => {
-                          if (user && newComment.trim()) {
-                            addComment(selectedCase.id, user.id, user.name, newComment.trim());
+                        onClick={async () => {
+                          if (!user || !newComment.trim()) return;
+                          try {
+                            await addComment(selectedCase.id, user.id, user.name, newComment.trim());
                             setNewComment("");
                             toast({ title: "تم إضافة التعليق" });
+                          } catch (err) {
+                            toast({
+                              title: "تعذّر إضافة التعليق",
+                              description: extractApiError(err),
+                              variant: "destructive",
+                            });
                           }
                         }}
                         disabled={!newComment.trim()}
