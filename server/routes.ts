@@ -1935,6 +1935,7 @@ export async function registerRoutes(
       // log gets the right "from" snapshot.
       const transferFromStage = existing.currentStage;
       const transferFromDeptId = existing.departmentId;
+      const transferFromInternalReviewerId = (existing as any).internalReviewerId || null;
       const transferReason = typeof req.body.transferReason === "string"
         ? req.body.transferReason.trim()
         : "";
@@ -1943,6 +1944,10 @@ export async function registerRoutes(
         req.body.primaryLawyerId = null;
         req.body.responsibleLawyerId = null;
         req.body.assignedLawyers = [];
+        // The intake-set internal reviewer is scoped to the source
+        // department's roster — they aren't a valid reviewer for the
+        // destination dept. Clear it; the new dept head re-assigns at intake.
+        req.body.internalReviewerId = null;
         // Reset to استلام so the new department starts the case fresh in
         // its own stage path. The downstream stageHistory update (line ~1982)
         // picks this up and writes a stage_changed entry alongside the
@@ -2168,6 +2173,7 @@ export async function registerRoutes(
                 toDeptId: req.body.departmentId,
                 reason: transferReason || null,
                 fromStage: transferFromStage,
+                previousInternalReviewerId: transferFromInternalReviewerId,
               }),
             });
           } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -4683,6 +4689,10 @@ export async function registerRoutes(
         if (data.result === HearingResult.JURISDICTION_DECLINED) {
           const fromDeptId = existingCase.departmentId || null;
           const toDeptId = data.transferToDepartmentId!;
+          // The intake-set internal reviewer belongs to the source dept's
+          // roster; clear it on jurisdiction transfer so the new dept head
+          // can re-assign someone valid at intake.
+          const previousInternalReviewerId = (existingCase as any).internalReviewerId || null;
           await storage.updateCase(effectiveCaseId, {
             ...caseUpdate,
             departmentId: toDeptId,
@@ -4690,6 +4700,7 @@ export async function registerRoutes(
             primaryLawyerId: null,
             responsibleLawyerId: null,
             assignedLawyers: [],
+            internalReviewerId: null,
           } as any);
           if (reqUser) {
             try {
@@ -4706,6 +4717,7 @@ export async function registerRoutes(
                   toDeptId,
                   hearingId,
                   reason: data.transferReason || null,
+                  previousInternalReviewerId,
                 }),
                 relatedEntityType: "hearing",
                 relatedEntityId: hearingId,
@@ -4852,52 +4864,71 @@ export async function registerRoutes(
             }
           } else {
             // === PRIMARY (ابتدائي) JUDGMENTS ===
+            // A primary judgment is NOT terminal — it can still be objected
+            // to (لائحة اعتراضية) or escalated to appeal. Closure depends on
+            // finality, not on which side won/lost: stay at محكوم_حكم_ابتدائي
+            // for every judgmentType. The previous version closed the case
+            // on (ضدنا + !needsAppeal), which broke the standard flow where
+            // the lawyer plans to file an objection and supplies an
+            // objectionDeadline.
             caseUpdate.currentStage = "محكوم_حكم_ابتدائي";
+            await storage.updateCase(effectiveCaseId, caseUpdate);
 
-            if (judgmentType === "لصالحنا") {
-              // Case 4: primary + for us → wait for opponent appeal
-              await storage.updateCase(effectiveCaseId, caseUpdate);
-            } else if (judgmentType === "ضدنا") {
-              if (needsAppeal) {
-                // Case 5: primary + against us + needs appeal → flag for appeal
-                await storage.updateCase(effectiveCaseId, caseUpdate);
-                await storage.logCaseActivity({
-                  caseId: effectiveCaseId,
-                  userId: reqUser.id,
-                  userName: reqUser.name || reqUser.id,
-                  actionType: "case_updated",
-                  title: "القضية تحتاج اعتراض (استئناف)",
-                });
-              } else {
-                // Case 6: primary + against us + no appeal → close
-                await storage.updateCase(effectiveCaseId, caseUpdate);
-                const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
-                await storage.updateCase(effectiveCaseId, {
-                  currentStage: "مقفلة",
-                  closureReason: "حكم_ابتدائي_بدون_اعتراض",
-                  closedAt: new Date().toISOString(),
-                  stageHistory: [
-                    ...stageHistory,
-                    { stage: "محكوم_حكم_ابتدائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: "حكم ابتدائي ضدنا" },
-                    { stage: "مقفلة", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "إغلاق تلقائي — حكم ابتدائي ضدنا بدون اعتراض" },
-                  ],
-                } as any);
-              }
-            } else if (judgmentType === "جزئي") {
-              if (needsAppeal) {
-                // Case 7: primary + partial + needs appeal → flag for appeal
-                await storage.updateCase(effectiveCaseId, caseUpdate);
-                await storage.logCaseActivity({
-                  caseId: effectiveCaseId,
-                  userId: reqUser.id,
-                  userName: reqUser.name || reqUser.id,
-                  actionType: "case_updated",
-                  title: "القضية تحتاج اعتراض (استئناف) — حكم جزئي",
-                });
-              } else {
-                // Case 8: primary + partial + no appeal → wait for opponent
-                await storage.updateCase(effectiveCaseId, caseUpdate);
-              }
+            // If we lost (ضدنا) or got a partial judgment (جزئي), the lawyer
+            // signals that an objection is on the table by passing
+            // objectionFeasible=true, an objectionDeadline, or
+            // needsAppeal=true. Auto-create the لائحة_اعتراضية memo so the
+            // drafting work is on the timeline immediately, with the
+            // recorded deadline (or +30 days as a fallback when only the
+            // intent flag is set).
+            const objectionIntended =
+              data.objectionFeasible === true ||
+              !!data.objectionDeadline ||
+              needsAppeal === true;
+            if ((judgmentType === "ضدنا" || judgmentType === "جزئي") && objectionIntended) {
+              const memoAssignee =
+                existingCase.primaryLawyerId ||
+                existingCase.responsibleLawyerId ||
+                lawyerAssignee;
+              const objectionDeadlineStr =
+                (typeof data.objectionDeadline === "string" && data.objectionDeadline)
+                  ? data.objectionDeadline
+                  : (() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() + 30);
+                      return d.toISOString().split("T")[0];
+                    })();
+              const memo = await storage.createMemo({
+                caseId: effectiveCaseId,
+                hearingId,
+                memoType: MemoType.OBJECTION,
+                title: `لائحة اعتراضية — قضية رقم ${existingCase.caseNumber}`,
+                description: `صدر حكم ابتدائي ${judgmentType} — يرجى تحرير لائحة اعتراضية قبل ${objectionDeadlineStr}`,
+                priority: "عاجل",
+                assignedTo: memoAssignee,
+                createdBy: "system",
+                deadline: objectionDeadlineStr,
+                isAutoGenerated: true,
+                autoGenerateReason: "حكم_ابتدائي_يستوجب_اعتراض",
+              });
+              createdMemos.push({ type: "objection_memo", id: memo.id, description: "لائحة اعتراضية تلقائية" });
+
+              // Keep activeMemoCount fresh — mirrors PATH A's pattern.
+              const activeCount = await getActiveMemoCount(effectiveCaseId);
+              await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
+
+              await storage.logCaseActivity({
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "case_updated",
+                title: "تم إنشاء لائحة اعتراضية تلقائياً",
+                details: JSON.stringify({
+                  memoId: memo.id,
+                  judgmentType,
+                  deadline: objectionDeadlineStr,
+                }),
+              });
             }
           }
 
