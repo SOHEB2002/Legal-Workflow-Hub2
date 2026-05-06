@@ -35,6 +35,7 @@ import {
   UserCog,
   Pause,
   Play,
+  RotateCcw,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -198,12 +199,18 @@ function getPriorityColor(priority: PriorityType) {
   }
 }
 
-// True when the case is currently sitting on a drafting stage and its
-// stageHistory shows it has bounced through internal review at least
-// once — i.e. the lawyer is iterating on revisions, not writing the
-// first draft. Used to render a "تعديلات بعد المراجعة" marker in the
-// table and the progress bar so the lawyer doesn't mistake a loop for
-// a fresh draft. Pure derivation from existing state — no DB writes.
+// True when the case is currently sitting on a drafting stage and has
+// bounced through internal review at least once — i.e. the lawyer is
+// iterating on revisions, not writing the first draft. Drives an amber
+// "تعديلات" marker in the table and the progress bar so the lawyer
+// doesn't mistake a loop for a fresh draft. Pure derivation — no DB
+// writes.
+//
+// The list endpoint /api/cases strips stageHistory and emits a derived
+// hasReturnedFromReview boolean (per case row) so the table can render
+// the badge without the full history. The detail endpoint
+// /api/cases/:id keeps stageHistory, which we fall back to here so the
+// in-dialog progress bar still works on rows fetched directly.
 const REVIEW_LOOP_STAGES = new Set([
   "مراجعة_داخلية",
   "مراجعة_داخلية_للتظلم",
@@ -213,8 +220,13 @@ const DRAFTING_LOOP_STAGES = new Set([
   "تحرير_مذكرة_جوابية",
   "تحرير_صيغة_التظلم",
 ]);
-function caseHasReturnedFromReview(c: { currentStage: string; stageHistory?: any[] | null }): boolean {
+function caseHasReturnedFromReview(c: {
+  currentStage: string;
+  stageHistory?: any[] | null;
+  hasReturnedFromReview?: boolean;
+}): boolean {
   if (!DRAFTING_LOOP_STAGES.has(c.currentStage)) return false;
+  if (c.hasReturnedFromReview) return true;
   if (!Array.isArray(c.stageHistory)) return false;
   return c.stageHistory.some((t) => REVIEW_LOOP_STAGES.has(t?.stage));
 }
@@ -1366,11 +1378,12 @@ export default function CasesPage() {
                       {caseHasReturnedFromReview(c) && (
                         <Badge
                           variant="outline"
-                          className="border-purple-500 bg-purple-500/10 text-purple-700 dark:text-purple-300 text-[10px] px-1 py-0"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] px-1 py-0"
                           data-testid={`badge-post-review-${c.id}`}
                           title="عادت من المراجعة الداخلية — تعديلات وليس صياغة أولية"
                         >
-                          تعديلات بعد المراجعة
+                          <RotateCcw className="w-2.5 h-2.5 ml-1" />
+                          تعديلات
                         </Badge>
                       )}
                       {/* Phase-8 — paused indicator. Distinct amber badge so
@@ -2936,16 +2949,12 @@ export default function CasesPage() {
                 <TabsContent value="hearings" className="mt-4">
                   {(() => {
                     const caseHearings = getHearingsByCase(selectedCase.id);
-                    // Add-hearing is allowed for branch_manager,
-                    // admin_support, and the dept_head of the case's
-                    // own department — same gate used elsewhere on the
-                    // case actions tab.
+                    // Add-hearing is restricted to branch_manager and
+                    // admin_support only — dept_heads do not get this
+                    // button per product feedback (they coordinate
+                    // hearings through the global Hearings page).
                     const canAddHearing =
-                      !!user && (
-                        user.role === "branch_manager" ||
-                        user.role === "admin_support" ||
-                        (user.role === "department_head" && selectedCase.departmentId === user.departmentId)
-                      );
+                      !!user && (user.role === "branch_manager" || user.role === "admin_support");
                     return (
                       <div className="space-y-3">
                         {canAddHearing && (
@@ -3134,12 +3143,26 @@ export default function CasesPage() {
                       <Button
                         data-testid="button-add-comment"
                         onClick={async () => {
-                          if (!user || !newComment.trim()) return;
+                          // Diagnostic — logs to the browser console so a
+                          // "nothing happens" report has a paper trail.
+                          // eslint-disable-next-line no-console
+                          console.log("[add-comment] clicked", {
+                            caseId: selectedCase?.id,
+                            userId: user?.id,
+                            length: newComment.trim().length,
+                          });
+                          if (!user || !newComment.trim()) {
+                            // eslint-disable-next-line no-console
+                            console.log("[add-comment] aborted — no user or empty body");
+                            return;
+                          }
                           try {
                             await addComment(selectedCase.id, user.id, user.name, newComment.trim());
                             setNewComment("");
                             toast({ title: "تم إضافة التعليق" });
                           } catch (err) {
+                            // eslint-disable-next-line no-console
+                            console.error("[add-comment] failed", err);
                             toast({
                               title: "تعذّر إضافة التعليق",
                               description: extractApiError(err),

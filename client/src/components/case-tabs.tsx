@@ -127,6 +127,21 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
     enabled: !!caseId && caseId.length > 0,
   });
 
+  // Pull a useful error message out of the standard apiRequest throw
+  // shape ("400: {\"error\":\"...\"}") so the toast says something
+  // actionable instead of "تعذّر".
+  const errMsg = (err: unknown): string => {
+    const msg = (err as any)?.message || "";
+    const match = msg.match(/^\d+: (.+)$/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed?.error) return parsed.error;
+      } catch {}
+    }
+    return msg || "حدث خطأ غير متوقع";
+  };
+
   const addNoteMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/cases/${caseId}/notes`, {
@@ -142,6 +157,11 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
       setIsImportant(false);
       toast({ title: "تمت إضافة الملاحظة" });
     },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error("[add-note] failed", err);
+      toast({ title: "تعذّر إضافة الملاحظة", description: errMsg(err), variant: "destructive" });
+    },
   });
 
   const updateNoteMutation = useMutation({
@@ -154,6 +174,11 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
       setEditingNote(null);
       toast({ title: "تم تعديل الملاحظة" });
     },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error("[update-note] failed", err);
+      toast({ title: "تعذّر تعديل الملاحظة", description: errMsg(err), variant: "destructive" });
+    },
   });
 
   const deleteNoteMutation = useMutation({
@@ -163,6 +188,11 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/cases', caseId, 'notes'] });
       toast({ title: "تم حذف الملاحظة" });
+    },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error("[delete-note] failed", err);
+      toast({ title: "تعذّر حذف الملاحظة", description: errMsg(err), variant: "destructive" });
     },
   });
 
@@ -198,7 +228,11 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
             </Button>
           </div>
           <Button
-            onClick={() => addNoteMutation.mutate()}
+            onClick={() => {
+              // eslint-disable-next-line no-console
+              console.log("[add-note] clicked", { caseId, length: newNote.trim().length });
+              addNoteMutation.mutate();
+            }}
             disabled={!newNote.trim() || addNoteMutation.isPending}
             data-testid="button-add-note"
           >
