@@ -903,6 +903,27 @@ export default function MemosPage() {
     }
   };
 
+  const handleReturnMemoToCommittee = async () => {
+    if (!takeNotesMemo) return;
+    if (!takeNotesNotes.trim()) {
+      toast({ title: "الملاحظات مطلوبة", description: "اشرح ما تم تطبيقه أو سبب الإعادة", variant: "destructive" });
+      return;
+    }
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${takeNotesMemo.id}/return-to-committee`, {
+        notes: takeNotesNotes.trim(),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم إعادة المذكرة للجنة المراجعة" });
+      closeTakeNotesDialog();
+    } catch (err) {
+      toast({ title: "فشل إعادة المذكرة للجنة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
   // Resolve a memo's parent case so the role-gate helpers can scope
   // department_head correctly.
   const getMemoCase = (memo: Memo): { departmentId?: string | null } | null => {
@@ -2467,16 +2488,16 @@ export default function MemosPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              اختر نتيجة معالجة ملاحظات اللجنة. جميع النتائج تنقل المذكرة إلى
-              "جاهزة للرفع"؛ النتيجة تُسجَّل للأرشيف فقط.
+              اختر نتيجة معالجة ملاحظات اللجنة. تم/جزئياً/لم يتم تنقل المذكرة إلى
+              "جاهزة للرفع". "إعادة للجنة المراجعة" ترجعها للجنة (تتطلب ملاحظات).
             </p>
             <div>
-              <Label>الملاحظات (اختياري)</Label>
+              <Label>الملاحظات (مطلوبة عند الإعادة للجنة)</Label>
               <Textarea
                 data-testid="input-memo-take-notes-notes"
                 value={takeNotesNotes}
                 onChange={(e) => setTakeNotesNotes(e.target.value)}
-                placeholder="ملاحظات حول معالجة ملاحظات اللجنة..."
+                placeholder="ملاحظات حول معالجة ملاحظات اللجنة / ما تم تطبيقه أو سبب الإعادة..."
                 rows={4}
               />
             </div>
@@ -2488,6 +2509,15 @@ export default function MemosPage() {
               data-testid="button-cancel-memo-take-notes"
             >
               إلغاء
+            </Button>
+            <Button
+              variant="outline"
+              data-testid="button-memo-return-to-committee"
+              onClick={handleReturnMemoToCommittee}
+              disabled={reviewActionInProgress || !takeNotesNotes.trim()}
+              className="border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+            >
+              إعادة للجنة المراجعة
             </Button>
             <Button
               data-testid="button-memo-take-notes-not-done"

@@ -2190,6 +2190,21 @@ export default function CasesPage() {
                       setStageTransitioning(false);
                     }
                   }}
+                  onReturnToCommittee={async (returnNotes) => {
+                    if (!user) return;
+                    setStageTransitioning(true);
+                    try {
+                      await apiRequest("POST", `/api/cases/${selectedCase.id}/return-to-committee`, {
+                        notes: returnNotes,
+                      });
+                      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                      toast({ title: "تم إعادة القضية للجنة المراجعة" });
+                    } catch (err) {
+                      toast({ title: "تعذّر إعادة القضية للجنة", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setStageTransitioning(false);
+                    }
+                  }}
                   onSkipDataCompletion={
                     user && (
                       user.role === "branch_manager" ||

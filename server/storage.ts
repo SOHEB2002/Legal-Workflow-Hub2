@@ -14,7 +14,7 @@ import {
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
-  ConsultationActivityType, MemoActivityType, type MemoActivity,
+  ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters,
   consultationStudies, consultationDrafts, consultationReviews,
@@ -317,6 +317,22 @@ export interface IStorage {
     id: string,
     input: { reason: string; performedBy: string },
   ): Promise<Memo | undefined>;
+
+  // Return-to-committee from الأخذ_بالملاحظات → لجنة_المراجعة. One
+  // transaction: stage update + activity-log row. Used by the
+  // /return-to-committee endpoints across the three entities.
+  returnCaseToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined>;
+  returnMemoToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string },
+  ): Promise<Memo | undefined>;
+  returnConsultationToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string },
+  ): Promise<Consultation | undefined>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -2128,6 +2144,35 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async returnMemoToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const truncated = input.notes ? input.notes.slice(0, 120) : "";
+      await tx.update(memos).set({
+        currentStage: MemoStage.COMMITTEE,
+        updatedAt: now,
+      } as any).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.RETURNED_TO_COMMITTEE,
+        description: truncated
+          ? `إعادة للجنة المراجعة — ${truncated}`
+          : "إعادة للجنة المراجعة",
+        metadata: { notes: input.notes },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
   // ==================== Attachments ====================
 
   async getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]> {
@@ -2600,6 +2645,35 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async returnConsultationToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const truncated = input.notes ? input.notes.slice(0, 120) : "";
+      await tx.update(consultations).set({
+        currentStage: ConsultationStage.COMMITTEE,
+        updatedAt: now,
+      } as any).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.RETURNED_TO_COMMITTEE,
+        description: truncated
+          ? `إعادة للجنة المراجعة — ${truncated}`
+          : "إعادة للجنة المراجعة",
+        metadata: { notes: input.notes },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
   async getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]> {
     const rows = await db.select().from(consultationNoteOutcomes)
       .where(eq(consultationNoteOutcomes.consultationId, consultationId))
@@ -2893,6 +2967,54 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(caseActivityLog)
       .where(eq(caseActivityLog.caseId, caseId))
       .orderBy(desc(caseActivityLog.createdAt));
+  }
+
+  async returnCaseToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const targetStage = "إحالة_للجنة_المراجعة";
+      const existingHistory = Array.isArray((existing as any).stageHistory)
+        ? (existing as any).stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: input.notes
+            ? `إعادة للجنة المراجعة — ${input.notes}`
+            : "إعادة للجنة المراجعة",
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: targetStage,
+        stageHistory,
+        updatedAt: now,
+      } as any).where(eq(lawCases.id, id));
+      const truncated = input.notes ? input.notes.slice(0, 120) : "";
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "returned_to_committee",
+        title: "إعادة للجنة المراجعة",
+        details: truncated || null,
+        previousValue: fromStage,
+        newValue: targetStage,
+        createdAt: now,
+      } as any);
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
   }
 
   // Phase-8 — pause / unpause on cases. Atomic update + case_activity_log
