@@ -1338,11 +1338,22 @@ export default function HearingsPage() {
                       : null;
                     const isAdminCourt =
                       ht === HearingType.COURT && linkedCase?.caseType === "إداري";
+                    // Settlement-only cases parked on مداولة_الصلح get a
+                    // restricted 3-outcome list regardless of hearingType
+                    // (a court hearing on such a case is still a
+                    // conciliation hearing, just heard inside the court).
+                    // The حكم / شطب / عدم_الاختصاص results don't apply
+                    // here — there's no judgment to record at this stage.
+                    const isSettlementContext =
+                      (!!(linkedCase as any)?.isSettlementCase
+                        && linkedCase?.currentStage === "مداولة_الصلح")
+                      || ht === HearingType.TARADI
+                      || ht === HearingType.SETTLEMENT;
 
-                    // Settlement (تراضي / تسوية_ودية): conciliation outcome only.
-                    if (ht === HearingType.TARADI || ht === HearingType.SETTLEMENT) {
+                    if (isSettlementContext) {
                       return (
                         <>
+                          <SelectItem value="موعد_جديد">موعد جديد</SelectItem>
                           <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
                           <SelectItem value="لم_يتم_الصلح">لم يتم الصلح</SelectItem>
                         </>

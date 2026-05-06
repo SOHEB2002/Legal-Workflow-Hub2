@@ -4631,6 +4631,35 @@ export async function registerRoutes(
         }
       }
 
+      // Settlement hearings (parent case is a settlement-only case
+      // currently parked on مداولة_الصلح) only ever produce one of
+      // three outcomes: موعد_جديد (postpone), تم_الصلح (advance to
+      // تحصيل) or لم_يتم_الصلح (close / continue dialog). Any of the
+      // judgment / dismissal / jurisdiction results is meaningless
+      // here — the court hasn't ruled, it's mediating. The FE filters
+      // these out, this guard catches direct API calls and stale
+      // dialog state. Keep this check before we mutate anything.
+      const settlementProbeCaseId = hearing.caseId
+        || (data.caseId && data.caseId !== "none" ? data.caseId : null);
+      const settlementProbeCase = settlementProbeCaseId
+        ? await storage.getCaseById(settlementProbeCaseId)
+        : null;
+      const isSettlementHearing =
+        !!(settlementProbeCase as any)?.isSettlementCase
+        && (settlementProbeCase as any)?.currentStage === "مداولة_الصلح";
+      if (isSettlementHearing) {
+        const allowedSettlementResults: string[] = [
+          HearingResult.NEW_SESSION,
+          HearingResult.SETTLEMENT_REACHED,
+          HearingResult.SETTLEMENT_FAILED,
+        ];
+        if (!allowedSettlementResults.includes(data.result)) {
+          return res.status(400).json({
+            error: "هذه جلسة صلح — النتائج المتاحة: موعد جديد، تم الصلح، أو لم يتم الصلح",
+          });
+        }
+      }
+
       const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
 
       if (!hearing.caseId && effectiveCaseId) {
