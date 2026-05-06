@@ -2333,11 +2333,23 @@ export class DatabaseStorage implements IStorage {
   // all-time backlog"). All counts are integers (a user-facing badge
   // can't show fractions).
   async getSidebarCounts(user: { id: string; role: string; departmentId: string | null }): Promise<SidebarCounts> {
-    const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
-    const isAdmin = adminRoles.includes(user.role);
+    // Three role buckets per the sidebar spec:
+    //   admin  → counts everything in the system
+    //   dept   → counts only items inside the user's own department
+    //   member → counts only items the user is assigned to / involved in
+    // branch_manager + admin_support are the explicit "all" bucket;
+    // the two review-committee heads are bundled in because they
+    // already see every case/consultation per canViewCase. hr and
+    // technical_support fall into the member bucket — they aren't
+    // assigned to legal items so their badges naturally come out as 0.
+    const ADMIN_ROLES = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+    const isAdmin = ADMIN_ROLES.includes(user.role);
     const isDeptHead = user.role === "department_head";
+    // For dept_head with no department on file we count nothing rather
+    // than fall back to `= ''` — an empty-string match would leak any
+    // legacy rows that have a blank department_id.
+    const userDept = user.departmentId && user.departmentId.length > 0 ? user.departmentId : null;
 
-    // Pull all of this user's last-viewed timestamps in one shot.
     const viewRows = await db.select().from(userSectionViews)
       .where(eq(userSectionViews.userId, user.id));
     const lastViewed = new Map<string, Date>();
@@ -2347,82 +2359,104 @@ export class DatabaseStorage implements IStorage {
 
     const counts: SidebarCounts = { cases: 0, consultations: 0, hearings: 0, memos: 0 };
 
-    // Tiny helper — runs a count query and stuffs the integer result
-    // into `counts[section]`. Drizzle returns count() as string|number
-    // depending on driver; coerce to number.
-    const fillCount = async (
-      section: SidebarSectionValue,
-      query: Promise<Array<{ c: any }>>,
-    ): Promise<void> => {
+    const runCount = async (query: Promise<Array<{ c: any }>>): Promise<number> => {
       const rows = await query;
       const raw = rows[0]?.c;
-      counts[section] = typeof raw === "number" ? raw : Number(raw ?? 0);
+      return typeof raw === "number" ? raw : Number(raw ?? 0);
     };
 
+    // ---- Cases ----
     const casesSince = lastViewed.get("cases");
     if (casesSince) {
-      const visibility = isAdmin
-        ? sql`true`
-        : isDeptHead
-          ? sql`${lawCases.departmentId} = ${user.departmentId ?? ""}`
-          : sql`(
-              ${lawCases.primaryLawyerId} = ${user.id}
-              OR ${lawCases.responsibleLawyerId} = ${user.id}
-              OR ${lawCases.internalReviewerId} = ${user.id}
-              OR ${lawCases.assignedLawyers} @> ${JSON.stringify([user.id])}::jsonb
-            )`;
-      await fillCount(
-        "cases",
-        db.select({ c: sql<number>`count(*)::int` })
-          .from(lawCases)
-          .where(and(gt(lawCases.createdAt, casesSince), visibility)),
-      );
+      if (isAdmin) {
+        counts.cases = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(lawCases)
+            .where(gt(lawCases.createdAt, casesSince)),
+        );
+      } else if (isDeptHead) {
+        if (userDept) {
+          counts.cases = await runCount(
+            db.select({ c: sql<number>`count(*)::int` }).from(lawCases)
+              .where(and(
+                gt(lawCases.createdAt, casesSince),
+                eq(lawCases.departmentId, userDept),
+              )),
+          );
+        }
+      } else {
+        counts.cases = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(lawCases)
+            .where(and(
+              gt(lawCases.createdAt, casesSince),
+              or(
+                eq(lawCases.primaryLawyerId, user.id),
+                eq(lawCases.responsibleLawyerId, user.id),
+                eq(lawCases.internalReviewerId, user.id),
+                sql`${lawCases.assignedLawyers} @> ${JSON.stringify([user.id])}::jsonb`,
+              ),
+            )),
+        );
+      }
     }
 
+    // ---- Consultations ----
     const consultationsSince = lastViewed.get("consultations");
     if (consultationsSince) {
-      const visibility = isAdmin
-        ? sql`true`
-        : isDeptHead
-          ? sql`${consultations.departmentId} = ${user.departmentId ?? ""}`
-          : sql`(${consultations.assignedTo} = ${user.id} OR ${consultations.createdBy} = ${user.id})`;
-      await fillCount(
-        "consultations",
-        db.select({ c: sql<number>`count(*)::int` })
-          .from(consultations)
-          .where(and(gt(consultations.createdAt, consultationsSince), visibility)),
-      );
+      if (isAdmin) {
+        counts.consultations = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(consultations)
+            .where(gt(consultations.createdAt, consultationsSince)),
+        );
+      } else if (isDeptHead) {
+        if (userDept) {
+          counts.consultations = await runCount(
+            db.select({ c: sql<number>`count(*)::int` }).from(consultations)
+              .where(and(
+                gt(consultations.createdAt, consultationsSince),
+                eq(consultations.departmentId, userDept),
+              )),
+          );
+        }
+      } else {
+        counts.consultations = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(consultations)
+            .where(and(
+              gt(consultations.createdAt, consultationsSince),
+              or(
+                eq(consultations.assignedTo, user.id),
+                eq(consultations.createdBy, user.id),
+              ),
+            )),
+        );
+      }
     }
 
+    // ---- Hearings ----
+    // Hearings don't carry a department on the row itself — for
+    // dept_head visibility we look through to the parent case's
+    // department. Lawyers see hearings where they are the
+    // attendingLawyerId.
     const hearingsSince = lastViewed.get("hearings");
     if (hearingsSince) {
-      // Hearings don't carry a department of their own — for dept_head
-      // visibility we have to look at the parent case's department.
-      // Lawyers see hearings where they are the attendingLawyerId.
-      // Admin roles see everything.
       if (isAdmin) {
-        await fillCount(
-          "hearings",
-          db.select({ c: sql<number>`count(*)::int` })
-            .from(hearings)
+        counts.hearings = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(hearings)
             .where(gt(hearings.createdAt, hearingsSince)),
         );
       } else if (isDeptHead) {
-        await fillCount(
-          "hearings",
-          db.select({ c: sql<number>`count(*)::int` })
-            .from(hearings)
-            .innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
-            .where(and(
-              gt(hearings.createdAt, hearingsSince),
-              eq(lawCases.departmentId, user.departmentId ?? ""),
-            )),
-        );
+        if (userDept) {
+          counts.hearings = await runCount(
+            db.select({ c: sql<number>`count(*)::int` }).from(hearings)
+              .innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
+              .where(and(
+                gt(hearings.createdAt, hearingsSince),
+                eq(lawCases.departmentId, userDept),
+              )),
+          );
+        }
       } else {
-        await fillCount(
-          "hearings",
-          db.select({ c: sql<number>`count(*)::int` })
-            .from(hearings)
+        counts.hearings = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(hearings)
             .where(and(
               gt(hearings.createdAt, hearingsSince),
               eq(hearings.attendingLawyerId, user.id),
@@ -2431,37 +2465,36 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // ---- Memos ----
     const memosSince = lastViewed.get("memos");
     if (memosSince) {
       if (isAdmin) {
-        await fillCount(
-          "memos",
-          db.select({ c: sql<number>`count(*)::int` })
-            .from(memos)
+        counts.memos = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(memos)
             .where(gt(memos.createdAt, memosSince)),
         );
       } else if (isDeptHead) {
-        await fillCount(
-          "memos",
-          db.select({ c: sql<number>`count(*)::int` })
-            .from(memos)
-            .innerJoin(lawCases, eq(memos.caseId, lawCases.id))
+        if (userDept) {
+          counts.memos = await runCount(
+            db.select({ c: sql<number>`count(*)::int` }).from(memos)
+              .innerJoin(lawCases, eq(memos.caseId, lawCases.id))
+              .where(and(
+                gt(memos.createdAt, memosSince),
+                eq(lawCases.departmentId, userDept),
+              )),
+          );
+        }
+      } else {
+        counts.memos = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(memos)
             .where(and(
               gt(memos.createdAt, memosSince),
-              eq(lawCases.departmentId, user.departmentId ?? ""),
+              or(
+                eq(memos.assignedTo, user.id),
+                eq(memos.internalReviewerId, user.id),
+                eq(memos.createdBy, user.id),
+              ),
             )),
-        );
-      } else {
-        const visibility = sql`(
-          ${memos.assignedTo} = ${user.id}
-          OR ${memos.internalReviewerId} = ${user.id}
-          OR ${memos.createdBy} = ${user.id}
-        )`;
-        await fillCount(
-          "memos",
-          db.select({ c: sql<number>`count(*)::int` })
-            .from(memos)
-            .where(and(gt(memos.createdAt, memosSince), visibility)),
         );
       }
     }
