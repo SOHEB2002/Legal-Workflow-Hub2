@@ -42,6 +42,11 @@ interface CaseProgressBarProps {
   caseInternalReviewerId?: string | null;
   currentUserId?: string;
   isAssignedLawyer?: boolean;
+  // True when the case is on a drafting stage AND has bounced through
+  // internal review at least once (derived in the parent from
+  // stageHistory). Drives a "تعديلات بعد المراجعة" hint under the
+  // current stage label so the lawyer reads "revisions" not "fresh draft".
+  hasReturnedFromReview?: boolean;
 }
 
 export function CaseProgressBar({
@@ -67,6 +72,7 @@ export function CaseProgressBar({
   caseInternalReviewerId,
   currentUserId,
   isAssignedLawyer = false,
+  hasReturnedFromReview = false,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
@@ -172,9 +178,16 @@ export function CaseProgressBar({
       ? { field: "moeenNumber", label: "رقم القيد في معين", placeholder: "أدخل رقم القيد في معين" }
       : null;
 
+  // Reception → data-completion is the one transition where the notes
+  // field carries real meaning (the missing docs/data the lawyer is
+  // asking the client for), not optional chatter — block the confirm
+  // button until something is typed.
+  const isReceptionToDataCompletion =
+    normalizedStage === "استلام" && nextStage === "استكمال_البيانات";
   const canConfirmNext =
     (!nextIsInternalReview || !!(selectedReviewerId || caseInternalReviewerId)) &&
-    (!platformFieldInfo || !!platformNumber.trim());
+    (!platformFieldInfo || !!platformNumber.trim()) &&
+    (!isReceptionToDataCompletion || !!notes.trim());
   const canConfirmPrev = !prevIsInternalReview || !!(selectedReviewerId || caseInternalReviewerId);
 
   const isAtInternalReview =
@@ -354,6 +367,15 @@ export function CaseProgressBar({
                 >
                   {getStageLabel(stage)}
                 </span>
+                {status === "current" && hasReturnedFromReview && (
+                  <span
+                    className="mt-1 inline-block rounded-sm border border-purple-500 bg-purple-500/10 px-1 py-px text-[9px] leading-tight text-purple-700 dark:text-purple-300"
+                    data-testid="label-post-review-current"
+                    title="عادت من المراجعة الداخلية — تعديلات وليس صياغة أولية"
+                  >
+                    تعديلات بعد المراجعة
+                  </span>
+                )}
               </div>
               {index < stagesOrder.length - 1 && (
                 <div
@@ -970,8 +992,17 @@ export function CaseProgressBar({
                   />
                 </div>
               )}
+              {isReceptionToDataCompletion && (
+                <label className="mt-3 block text-sm font-semibold" dir="rtl">
+                  البيانات المطلوبة <span className="text-red-500">*</span>
+                </label>
+              )}
               <Textarea
-                placeholder="ملاحظات (اختياري)"
+                placeholder={
+                  isReceptionToDataCompletion
+                    ? "اذكر المرفقات والبيانات المطلوبة من العميل لاستكمال القضية"
+                    : "ملاحظات (اختياري)"
+                }
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 className="mt-2"

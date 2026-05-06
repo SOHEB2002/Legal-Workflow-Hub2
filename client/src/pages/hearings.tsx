@@ -230,6 +230,21 @@ export default function HearingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cases.length]);
 
+  // Open the hearing-detail dialog when navigated here from the case
+  // dialog's hearings tab with ?openHearing=<id>. Waits until the
+  // hearings list has loaded so the lookup actually finds the row.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("openHearing");
+    if (!id) return;
+    if (!hearings.some((h) => h.id === id)) return;
+    setDetailHearingId(id);
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState(null, "", cleanUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hearings.length]);
+
   const [resultForm, setResultForm] = useState({
     result: "" as string,
     resultDetails: "",
