@@ -109,7 +109,7 @@ import {
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer } from "@/lib/notification-triggers";
+import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
@@ -628,11 +628,19 @@ export default function CasesPage() {
     opponentPhone: "",
     opponentNotes: "",
     caseClassification: "" as CaseClassificationValue | "",
+    clientRole: "" as string,
     previousHearingsCount: 0,
     currentSituation: "",
     responseDeadline: "",
     adminCaseSubType: "" as string,
     prescriptionDate: "",
+    grievanceRequired: false,
+    memoRequired: false,
+    isSettlementCase: false,
+    whatsappGroupLink: "",
+    googleDriveFolderId: "",
+    internalReviewerId: "",
+    primaryLawyerId: "",
   });
 
   const openEditDialog = (caseItem: LawCase) => {
@@ -654,17 +662,28 @@ export default function CasesPage() {
       opponentPhone: caseItem.opponentPhone || "",
       opponentNotes: caseItem.opponentNotes || "",
       caseClassification: (caseItem.caseClassification || "") as CaseClassificationValue | "",
+      clientRole: ((caseItem as any).clientRole || "") as string,
       previousHearingsCount: caseItem.previousHearingsCount || 0,
       currentSituation: caseItem.currentSituation || "",
       responseDeadline: caseItem.responseDeadline || "",
       adminCaseSubType: caseItem.adminCaseSubType || "",
       prescriptionDate: caseItem.prescriptionDate || "",
+      grievanceRequired: !!(caseItem as any).grievanceRequired,
+      memoRequired: !!(caseItem as any).memoRequired,
+      isSettlementCase: !!(caseItem as any).isSettlementCase,
+      whatsappGroupLink: (caseItem as any).whatsappGroupLink || "",
+      googleDriveFolderId: (caseItem as any).googleDriveFolderId || "",
+      internalReviewerId: (caseItem as any).internalReviewerId || "",
+      primaryLawyerId: caseItem.primaryLawyerId || "",
     });
     setShowEditDialog(true);
   };
 
   const handleEditCase = async () => {
     if (!editCaseId) return;
+    const original = cases.find(c => c.id === editCaseId);
+    const lawyerChanged =
+      (original?.primaryLawyerId || "") !== (editFormData.primaryLawyerId || "");
     try {
       await updateCase(editCaseId, {
         clientId: editFormData.clientId,
@@ -683,12 +702,31 @@ export default function CasesPage() {
         opponentPhone: editFormData.opponentPhone,
         opponentNotes: editFormData.opponentNotes,
         caseClassification: editFormData.caseClassification as CaseClassificationValue,
+        clientRole: editFormData.clientRole || null,
         previousHearingsCount: editFormData.previousHearingsCount,
         currentSituation: editFormData.currentSituation,
         responseDeadline: editFormData.responseDeadline || null,
         adminCaseSubType: editFormData.adminCaseSubType || null,
         prescriptionDate: editFormData.prescriptionDate || null,
+        grievanceRequired: editFormData.grievanceRequired,
+        memoRequired: editFormData.memoRequired,
+        isSettlementCase: editFormData.isSettlementCase,
+        whatsappGroupLink: editFormData.whatsappGroupLink || "",
+        googleDriveFolderId: editFormData.googleDriveFolderId || "",
+        internalReviewerId: editFormData.internalReviewerId || null,
+        primaryLawyerId: editFormData.primaryLawyerId || null,
+        responsibleLawyerId: editFormData.primaryLawyerId || null,
+        assignedLawyers: editFormData.primaryLawyerId ? [editFormData.primaryLawyerId] : [],
       } as any);
+      // Fire the same notification the assign dialog does, so changing the
+      // lawyer here doesn't silently skip the heads-up to the new lawyer.
+      if (lawyerChanged && editFormData.primaryLawyerId) {
+        notifyCaseAssigned(
+          editCaseId,
+          original?.caseNumber || "",
+          editFormData.primaryLawyerId,
+        ).catch(() => {});
+      }
       toast({ title: "تم تحديث بيانات القضية بنجاح" });
       setShowEditDialog(false);
       setEditCaseId(null);
@@ -3778,6 +3816,48 @@ export default function CasesPage() {
             <DialogTitle>تعديل بيانات القضية</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {/* === Classification === */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>تصنيف القضية</Label>
+                <Select
+                  value={editFormData.caseClassification || ""}
+                  onValueChange={(value) =>
+                    setEditFormData({ ...editFormData, caseClassification: value as CaseClassificationValue })
+                  }
+                >
+                  <SelectTrigger data-testid="edit-case-classification">
+                    <SelectValue placeholder="اختر التصنيف" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.values(CaseClassification).map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {CaseClassificationLabels[c as CaseClassificationValue] || c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {editFormData.caseClassification === CaseClassification.IN_COURT && (
+                <div>
+                  <Label>صفة العميل</Label>
+                  <Select
+                    value={editFormData.clientRole || ""}
+                    onValueChange={(value) => setEditFormData({ ...editFormData, clientRole: value })}
+                  >
+                    <SelectTrigger data-testid="edit-client-role">
+                      <SelectValue placeholder="اختر صفة العميل" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="مدعي">مدعي</SelectItem>
+                      <SelectItem value="مدعى_عليه">مدعى عليه</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+
+            {/* === Client + Plaintiff === */}
             <div>
               <Label>العميل</Label>
               <ClientAutocomplete
@@ -3795,15 +3875,8 @@ export default function CasesPage() {
                 placeholder=""
               />
             </div>
-            <div>
-              <Label>اسم الخصم</Label>
-              <SmartInput
-                inputType="text"
-                data-testid="edit-opponent-name"
-                value={editFormData.opponentName}
-                onChange={(e) => setEditFormData({ ...editFormData, opponentName: e.target.value })}
-              />
-            </div>
+
+            {/* === Case type / priority === */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>نوع القضية</Label>
@@ -3832,6 +3905,8 @@ export default function CasesPage() {
                 </Select>
               </div>
             </div>
+
+            {/* === Department + departmentOther === */}
             <div>
               <Label>القسم</Label>
               <Select
@@ -3848,7 +3923,19 @@ export default function CasesPage() {
                   <SelectItem value="أخرى">أخرى</SelectItem>
                 </SelectContent>
               </Select>
+              {editFormData.departmentId === "أخرى" && (
+                <SmartInput
+                  inputType="text"
+                  data-testid="edit-department-other"
+                  value={editFormData.departmentOther}
+                  onChange={(e) => setEditFormData({ ...editFormData, departmentOther: e.target.value })}
+                  placeholder="اكتب اسم القسم..."
+                  className="mt-2"
+                />
+              )}
             </div>
+
+            {/* === Court details === */}
             <div>
               <Label>رقم القضية لدى المحكمة</Label>
               <SmartInput
@@ -3888,9 +3975,20 @@ export default function CasesPage() {
                 onChange={(e) => setEditFormData({ ...editFormData, judgeName: e.target.value })}
               />
             </div>
+
+            {/* === Opponent === */}
             <div className="border-t pt-4">
               <h4 className="font-semibold mb-3">بيانات الخصم</h4>
-              <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>اسم الخصم</Label>
+                <SmartInput
+                  inputType="text"
+                  data-testid="edit-opponent-name"
+                  value={editFormData.opponentName}
+                  onChange={(e) => setEditFormData({ ...editFormData, opponentName: e.target.value })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4 mt-3">
                 <div>
                   <Label>محامي الخصم</Label>
                   <SmartInput
@@ -3920,16 +4018,211 @@ export default function CasesPage() {
                 />
               </div>
             </div>
+
+            {/* === UNDER_STUDY + إداري specific === */}
+            {editFormData.caseClassification === CaseClassification.UNDER_STUDY &&
+              getDepartmentName(editFormData.departmentId) === "إداري" && (
+                <div className="border-t pt-4 space-y-3">
+                  <h4 className="font-semibold">بيانات القضية الإدارية</h4>
+                  <div>
+                    <Label>نوع القضية الإدارية</Label>
+                    <Select
+                      value={editFormData.adminCaseSubType}
+                      onValueChange={(value) => setEditFormData({ ...editFormData, adminCaseSubType: value })}
+                    >
+                      <SelectTrigger data-testid="edit-admin-case-subtype">
+                        <SelectValue placeholder="اختر النوع" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="تظلم">تظلم</SelectItem>
+                        <SelectItem value="قضية">قضية</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>تاريخ التقادم</Label>
+                    <HijriDatePicker
+                      value={editFormData.prescriptionDate}
+                      onChange={(v) => setEditFormData({ ...editFormData, prescriptionDate: v })}
+                      data-testid="edit-prescription-date"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Checkbox
+                      id="edit-grievanceRequired"
+                      checked={editFormData.grievanceRequired}
+                      onCheckedChange={(checked) =>
+                        setEditFormData({ ...editFormData, grievanceRequired: !!checked })
+                      }
+                      data-testid="edit-checkbox-grievance-required"
+                    />
+                    <Label htmlFor="edit-grievanceRequired" className="text-sm cursor-pointer">
+                      مطلوب تظلم
+                    </Label>
+                  </div>
+                </div>
+              )}
+
+            {/* === IN_COURT specific === */}
             {editFormData.caseClassification === CaseClassification.IN_COURT && (
-              <div>
-                <Label>موعد الرد</Label>
-                <HijriDatePicker
-                  value={editFormData.responseDeadline}
-                  onChange={(v) => setEditFormData({ ...editFormData, responseDeadline: v })}
-                  data-testid="edit-response-deadline"
-                />
+              <div className="border-t pt-4 space-y-3">
+                <h4 className="font-semibold">بيانات الجلسات والمذكرات</h4>
+                <div>
+                  <Label>عدد الجلسات السابقة</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    data-testid="edit-previous-hearings-count"
+                    value={editFormData.previousHearingsCount}
+                    onChange={(e) =>
+                      setEditFormData({
+                        ...editFormData,
+                        previousHearingsCount: parseInt(e.target.value, 10) || 0,
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <Checkbox
+                    id="edit-memoRequired"
+                    checked={editFormData.memoRequired}
+                    onCheckedChange={(checked) =>
+                      setEditFormData({ ...editFormData, memoRequired: !!checked })
+                    }
+                    data-testid="edit-checkbox-memo-required"
+                  />
+                  <Label htmlFor="edit-memoRequired" className="text-sm cursor-pointer">
+                    مطلوب مذكرة
+                  </Label>
+                </div>
+                {editFormData.memoRequired && (
+                  <div>
+                    <Label>مهلة الرد</Label>
+                    <HijriDatePicker
+                      value={editFormData.responseDeadline}
+                      onChange={(v) => setEditFormData({ ...editFormData, responseDeadline: v })}
+                      data-testid="edit-response-deadline"
+                    />
+                  </div>
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <Checkbox
+                    id="edit-isSettlementCase"
+                    checked={editFormData.isSettlementCase}
+                    onCheckedChange={(checked) =>
+                      setEditFormData({ ...editFormData, isSettlementCase: !!checked })
+                    }
+                    data-testid="edit-checkbox-is-settlement-case"
+                  />
+                  <Label htmlFor="edit-isSettlementCase" className="text-sm cursor-pointer">
+                    قضية تسوية فقط
+                  </Label>
+                </div>
               </div>
             )}
+
+            {/* === Description / current situation === */}
+            <div>
+              <Label>وصف الوضع الحالي</Label>
+              <Textarea
+                data-testid="edit-current-situation"
+                value={editFormData.currentSituation}
+                onChange={(e) => setEditFormData({ ...editFormData, currentSituation: e.target.value })}
+                rows={3}
+              />
+            </div>
+
+            {/* === Lawyer assignment === */}
+            <div className="border-t pt-4 space-y-3">
+              <h4 className="font-semibold">الإسناد</h4>
+              <div>
+                <Label>المحامي المسؤول</Label>
+                <Select
+                  value={editFormData.primaryLawyerId || "__none__"}
+                  onValueChange={(value) =>
+                    setEditFormData({
+                      ...editFormData,
+                      primaryLawyerId: value === "__none__" ? "" : value,
+                      // Drop the reviewer if it now collides with the chosen lawyer.
+                      internalReviewerId:
+                        editFormData.internalReviewerId === value ? "" : editFormData.internalReviewerId,
+                    })
+                  }
+                >
+                  <SelectTrigger data-testid="edit-primary-lawyer">
+                    <SelectValue placeholder="اختر المحامي" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— بدون —</SelectItem>
+                    {lawyers
+                      .filter((l) =>
+                        !editFormData.departmentId ||
+                        String(l.departmentId) === String(editFormData.departmentId),
+                      )
+                      .map((lawyer) => (
+                        <SelectItem key={lawyer.id} value={lawyer.id}>{lawyer.name}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>المراجع الداخلي</Label>
+                <Select
+                  value={editFormData.internalReviewerId || "__none__"}
+                  onValueChange={(value) =>
+                    setEditFormData({
+                      ...editFormData,
+                      internalReviewerId: value === "__none__" ? "" : value,
+                    })
+                  }
+                >
+                  <SelectTrigger data-testid="edit-internal-reviewer">
+                    <SelectValue placeholder="اختر المراجع الداخلي (اختياري)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— بدون —</SelectItem>
+                    {users
+                      .filter((u) =>
+                        u.isActive &&
+                        u.role !== "branch_manager" &&
+                        u.role !== "admin_support" &&
+                        u.role !== "hr" &&
+                        u.role !== "technical_support" &&
+                        u.id !== editFormData.primaryLawyerId &&
+                        (!editFormData.departmentId || String(u.departmentId) === String(editFormData.departmentId)),
+                      )
+                      .map((u) => (
+                        <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* === Communication links === */}
+            <div className="border-t pt-4 space-y-3">
+              <h4 className="font-semibold">روابط التواصل</h4>
+              <div>
+                <Label>رابط مجموعة الواتساب</Label>
+                <SmartInput
+                  inputType="text"
+                  data-testid="edit-whatsapp-group-link"
+                  value={editFormData.whatsappGroupLink}
+                  onChange={(e) => setEditFormData({ ...editFormData, whatsappGroupLink: e.target.value })}
+                  placeholder="https://chat.whatsapp.com/..."
+                />
+              </div>
+              <div>
+                <Label>معرّف مجلد جوجل درايف</Label>
+                <SmartInput
+                  inputType="text"
+                  data-testid="edit-google-drive-folder-id"
+                  value={editFormData.googleDriveFolderId}
+                  onChange={(e) => setEditFormData({ ...editFormData, googleDriveFolderId: e.target.value })}
+                  placeholder="معرّف المجلد على درايف"
+                />
+              </div>
+            </div>
           </div>
           <DialogFooter className="gap-2 mt-4">
             <Button variant="outline" onClick={() => setShowEditDialog(false)} data-testid="button-cancel-edit">
