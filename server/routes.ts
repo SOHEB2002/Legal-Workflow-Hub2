@@ -44,6 +44,8 @@ import {
   insertLegalDeadlineSchema,
   insertSavedFilterSchema,
   updateSavedFilterSchema,
+  SIDEBAR_SECTIONS,
+  type SidebarSectionValue,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -6049,6 +6051,38 @@ export async function registerRoutes(
       }
       const success = await storage.deleteSavedFilter(String(req.params.id));
       if (!success) return res.status(404).json({ error: "الفلتر غير موجود" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ==================== Sidebar Counts ====================
+
+  app.get("/api/sidebar-counts", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const counts = await storage.getSidebarCounts({
+        id: reqUser.id,
+        role: reqUser.role,
+        departmentId: reqUser.departmentId ?? null,
+      });
+      res.json(counts);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/sidebar-counts/mark-viewed", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const section = String(req.body?.section ?? "");
+      if (!SIDEBAR_SECTIONS.includes(section as SidebarSectionValue)) {
+        return res.status(400).json({ error: "قسم غير صالح" });
+      }
+      await storage.markSectionViewed(reqUser.id, section as SidebarSectionValue);
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
