@@ -525,6 +525,56 @@ export default function ContractsPage() {
   const [returnTarget, setReturnTarget] = useState<Contract | null>(null);
   const [returnStageValue, setReturnStageValue] = useState<string>("");
 
+  // Stage-aware advance dialog. Only opens when the destination
+  // stage requires extra input — RECEIVED_PENDING_COMPLETION (notes
+  // required), INTERNAL_REVIEW (reviewer required), COMMITTEE
+  // (priority required, reason optional). Other transitions skip
+  // the dialog and call advanceStage directly. State is reset on
+  // every open so the previous form's values don't leak between
+  // contracts.
+  const [showAdvance, setShowAdvance] = useState(false);
+  const [advanceTarget, setAdvanceTarget] = useState<Contract | null>(null);
+  const [advanceTargetStage, setAdvanceTargetStage] = useState<ContractStageValue | null>(null);
+  const [advanceNotes, setAdvanceNotes] = useState("");
+  const [advanceReviewerId, setAdvanceReviewerId] = useState<string>("");
+  const [advancePriority, setAdvancePriority] = useState<string>("");
+  const [advancePriorityReason, setAdvancePriorityReason] = useState<string>("");
+
+  const stageRequiresAdvanceDialog = (target: ContractStageValue): boolean =>
+    target === ContractStage.RECEIVED_PENDING_COMPLETION
+    || target === ContractStage.INTERNAL_REVIEW
+    || target === ContractStage.COMMITTEE;
+
+  const openAdvanceDialog = (contract: Contract, target: ContractStageValue) => {
+    setAdvanceTarget(contract);
+    setAdvanceTargetStage(target);
+    setAdvanceNotes("");
+    // Default reviewer to whatever the contract already carries —
+    // the advance is usually a no-op on this field, with the picker
+    // present only so dept_head can change the assignment when
+    // re-routing the file to a different reviewer than last time.
+    setAdvanceReviewerId(contract.internalReviewerId || "");
+    setAdvancePriority(contract.priority || "");
+    setAdvancePriorityReason(contract.priorityReason || "");
+    setShowAdvance(true);
+  };
+
+  // Pool of users eligible to be picked as internal reviewer for
+  // this contract: active, in the contract's department, not the
+  // assigned lawyer (a lawyer reviewing their own draft is the bug
+  // we're trying to prevent), and not branch_manager / admin_support /
+  // hr / technical_support (administrative roles, not reviewers).
+  const reviewerExcludedRoles = new Set([
+    "branch_manager", "admin_support", "hr", "technical_support",
+  ]);
+  const eligibleReviewers = (contract: Contract) =>
+    users.filter((u) =>
+      u.isActive
+      && !reviewerExcludedRoles.has(u.role)
+      && u.departmentId === contract.departmentId
+      && u.id !== contract.assignedTo,
+    );
+
   const [showInternalReview, setShowInternalReview] = useState(false);
   const [reviewTarget, setReviewTarget] = useState<Contract | null>(null);
   const [reviewNotes, setReviewNotes] = useState("");
@@ -844,13 +894,19 @@ export default function ContractsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          {c.status === "active" && c.currentStage === ContractStage.RECEIVED && (
+                          {/* Assign / reassign — available at ANY stage (not
+                              just RECEIVED) for branch_manager, admin_support,
+                              and own-dept department_head. The button label
+                              flips between "إسناد" (no current assignee) and
+                              "تعديل الإسناد" (existing assignee). Server
+                              accepts reassignment regardless of stage. */}
+                          {c.status === "active" && canTransferContract(c) && (
                             <DropdownMenuItem
                               data-testid={`row-action-assign-${c.id}`}
                               onClick={() => { setAssignTarget(c); setAssignLawyerId(c.assignedTo || ""); setShowAssign(true); }}
                             >
                               <UserPlus className="w-4 h-4 ml-2" />
-                              إسناد
+                              {c.assignedTo ? "تعديل الإسناد" : "إسناد"}
                             </DropdownMenuItem>
                           )}
                           {/* Await / resume — same gate as pause, complementary
@@ -976,17 +1032,30 @@ export default function ContractsPage() {
               <div className="flex flex-wrap gap-2 justify-end">
                 {(() => {
                   const target = user ? getAdvanceTarget(selected, user.role, user.id, user.departmentId) : null;
-                  return target ? (
+                  if (!target) return null;
+                  // Stages that need extra context open a dialog;
+                  // everything else advances directly.
+                  const needsDialog = stageRequiresAdvanceDialog(target);
+                  return (
                     <Button
                       size="sm"
-                      onClick={() => wrap(() => advanceStage(selected.id, target), `انتقل إلى ${ContractStageLabels[target] || target}`)}
+                      onClick={() => {
+                        if (needsDialog) {
+                          openAdvanceDialog(selected, target);
+                        } else {
+                          wrap(
+                            () => advanceStage(selected.id, target),
+                            `انتقل إلى ${ContractStageLabels[target] || target}`,
+                          );
+                        }
+                      }}
                       disabled={busy}
                       data-testid="dialog-advance"
                     >
                       <ChevronLeft className="w-4 h-4 ml-1" />
                       المرحلة التالية
                     </Button>
-                  ) : null;
+                  );
                 })()}
                 {user && getReturnTargets(selected, user.role, user.id, user.departmentId).length > 0 && (
                   <Button
@@ -1509,29 +1578,185 @@ export default function ContractsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* ============ Advance dialog (stage-aware) ============ */}
+      {/* Shown only when the destination needs extra context. The body
+          branches on advanceTargetStage so PENDING_COMPLETION renders
+          a required notes field, INTERNAL_REVIEW renders a reviewer
+          Select, and COMMITTEE renders priority + reason. */}
+      <Dialog open={showAdvance} onOpenChange={setShowAdvance}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>
+              {advanceTargetStage
+                ? `الانتقال إلى ${ContractStageLabels[advanceTargetStage] || advanceTargetStage}`
+                : "الانتقال للمرحلة التالية"}
+            </DialogTitle>
+          </DialogHeader>
+          {advanceTarget && advanceTargetStage && (
+            <div className="space-y-4">
+              {/* RECEIVED → PENDING_COMPLETION: notes required —
+                  describes what data is missing. */}
+              {advanceTargetStage === ContractStage.RECEIVED_PENDING_COMPLETION && (
+                <div>
+                  <Label>
+                    الملاحظات / البيانات المطلوبة <span className="text-destructive">*</span>
+                  </Label>
+                  <Textarea
+                    data-testid="advance-notes-required"
+                    value={advanceNotes}
+                    onChange={(e) => setAdvanceNotes(e.target.value)}
+                    rows={3}
+                    placeholder="اشرح ما هي البيانات أو المرفقات المطلوب استكمالها..."
+                  />
+                </div>
+              )}
+
+              {/* DRAFTING → INTERNAL_REVIEW: reviewer required (or
+                  inherit from contract.internalReviewerId). The pool
+                  excludes the assigned lawyer + admin/branch roles. */}
+              {advanceTargetStage === ContractStage.INTERNAL_REVIEW && (
+                <div>
+                  <Label>
+                    المراجع الداخلي <span className="text-destructive">*</span>
+                  </Label>
+                  <Select value={advanceReviewerId} onValueChange={setAdvanceReviewerId}>
+                    <SelectTrigger data-testid="advance-reviewer-select">
+                      <SelectValue placeholder="اختر المراجع" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {eligibleReviewers(advanceTarget).map((u) => (
+                        <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                      ))}
+                      {eligibleReviewers(advanceTarget).length === 0 && (
+                        <div className="text-xs text-muted-foreground p-2">
+                          لا يوجد مراجعون متاحون في القسم
+                        </div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    المحامون النشطون في نفس القسم باستثناء المحامي المسند ورؤساء الإدارة.
+                  </p>
+                </div>
+              )}
+
+              {/* INTERNAL_REVIEW → COMMITTEE: priority required, reason
+                  optional. Priority defaults to whatever's already on
+                  the contract (set inline on the committee card if it
+                  was reached earlier and bounced back). */}
+              {advanceTargetStage === ContractStage.COMMITTEE && (
+                <>
+                  <div>
+                    <Label>
+                      الأولوية <span className="text-destructive">*</span>
+                    </Label>
+                    <Select value={advancePriority} onValueChange={setAdvancePriority}>
+                      <SelectTrigger data-testid="advance-priority-select">
+                        <SelectValue placeholder="اختر الأولوية" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.values(ContractPriority) as ContractPriorityValue[]).map((p) => (
+                          <SelectItem key={p} value={p}>
+                            {ContractPriorityLabels[p]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>سبب الأولوية (اختياري)</Label>
+                    <Textarea
+                      data-testid="advance-priority-reason"
+                      value={advancePriorityReason}
+                      onChange={(e) => setAdvancePriorityReason(e.target.value)}
+                      rows={2}
+                      placeholder="اشرح سبب اختيار هذه الأولوية..."
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAdvance(false)}>إلغاء</Button>
+            <Button
+              data-testid="advance-confirm"
+              onClick={async () => {
+                if (!advanceTarget || !advanceTargetStage) return;
+                // Per-stage validation mirrors the server. Bail
+                // here so the user gets fast feedback rather than a
+                // 400 round-trip.
+                if (
+                  advanceTargetStage === ContractStage.RECEIVED_PENDING_COMPLETION
+                  && !advanceNotes.trim()
+                ) return;
+                if (
+                  advanceTargetStage === ContractStage.INTERNAL_REVIEW
+                  && !advanceReviewerId
+                ) return;
+                if (
+                  advanceTargetStage === ContractStage.COMMITTEE
+                  && !advancePriority
+                ) return;
+                const extras: Record<string, string> = {};
+                if (advanceNotes.trim()) extras.notes = advanceNotes.trim();
+                if (advanceReviewerId) extras.internalReviewerId = advanceReviewerId;
+                if (advancePriority) extras.priority = advancePriority;
+                if (advancePriorityReason.trim()) extras.priorityReason = advancePriorityReason.trim();
+                await wrap(
+                  () => advanceStage(advanceTarget.id, advanceTargetStage, extras),
+                  `انتقل إلى ${ContractStageLabels[advanceTargetStage] || advanceTargetStage}`,
+                );
+                setShowAdvance(false);
+              }}
+              disabled={
+                busy
+                || !advanceTargetStage
+                || (advanceTargetStage === ContractStage.RECEIVED_PENDING_COMPLETION && !advanceNotes.trim())
+                || (advanceTargetStage === ContractStage.INTERNAL_REVIEW && !advanceReviewerId)
+                || (advanceTargetStage === ContractStage.COMMITTEE && !advancePriority)
+              }
+            >تأكيد</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ============ Internal review dialog ============ */}
       <Dialog open={showInternalReview} onOpenChange={setShowInternalReview}>
         <DialogContent dir="rtl">
           <DialogHeader><DialogTitle>المراجعة الداخلية</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <Label>الملاحظات (اختياري)</Label>
-            <Textarea value={reviewNotes} onChange={(e) => setReviewNotes(e.target.value)} rows={3} />
+            {/* Notes are optional for "اعتماد" but REQUIRED for
+                "يوجد ملاحظات" — the * + per-button disabled state
+                surfaces this without splitting into two textareas. */}
+            <Label>
+              الملاحظات
+              <span className="text-muted-foreground text-xs mr-1">
+                (مطلوبة عند اختيار "يوجد ملاحظات")
+              </span>
+            </Label>
+            <Textarea
+              data-testid="internal-review-notes"
+              value={reviewNotes}
+              onChange={(e) => setReviewNotes(e.target.value)}
+              rows={3}
+            />
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowInternalReview(false)}>إلغاء</Button>
             <Button
               variant="destructive"
               onClick={async () => {
-                if (!reviewTarget) return;
-                await wrap(() => submitInternalReview(reviewTarget.id, InternalReviewDecision.NEEDS_NOTES, reviewNotes), "أُعيد للتعديل");
+                if (!reviewTarget || !reviewNotes.trim()) return;
+                await wrap(() => submitInternalReview(reviewTarget.id, InternalReviewDecision.NEEDS_NOTES, reviewNotes.trim()), "أُعيد للتعديل");
                 setShowInternalReview(false);
               }}
-              disabled={busy}
+              disabled={busy || !reviewNotes.trim()}
             >يوجد ملاحظات</Button>
             <Button
               onClick={async () => {
                 if (!reviewTarget) return;
-                await wrap(() => submitInternalReview(reviewTarget.id, InternalReviewDecision.PASSED, reviewNotes), "تم الاعتماد للجنة");
+                await wrap(() => submitInternalReview(reviewTarget.id, InternalReviewDecision.PASSED, reviewNotes.trim()), "تم الاعتماد للجنة");
                 setShowInternalReview(false);
               }}
               disabled={busy}
@@ -1545,24 +1770,34 @@ export default function ContractsPage() {
         <DialogContent dir="rtl">
           <DialogHeader><DialogTitle>قرار اللجنة</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <Label>الملاحظات (اختياري)</Label>
-            <Textarea value={committeeNotes} onChange={(e) => setCommitteeNotes(e.target.value)} rows={3} />
+            <Label>
+              الملاحظات
+              <span className="text-muted-foreground text-xs mr-1">
+                (مطلوبة عند اختيار "يوجد ملاحظات")
+              </span>
+            </Label>
+            <Textarea
+              data-testid="committee-notes"
+              value={committeeNotes}
+              onChange={(e) => setCommitteeNotes(e.target.value)}
+              rows={3}
+            />
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowCommittee(false)}>إلغاء</Button>
             <Button
               variant="destructive"
               onClick={async () => {
-                if (!committeeTarget) return;
-                await wrap(() => submitCommitteeDecision(committeeTarget.id, CommitteeDecision.NEEDS_NOTES, committeeNotes), "أُعيد للملاحظات");
+                if (!committeeTarget || !committeeNotes.trim()) return;
+                await wrap(() => submitCommitteeDecision(committeeTarget.id, CommitteeDecision.NEEDS_NOTES, committeeNotes.trim()), "أُعيد للملاحظات");
                 setShowCommittee(false);
               }}
-              disabled={busy}
+              disabled={busy || !committeeNotes.trim()}
             >يوجد ملاحظات</Button>
             <Button
               onClick={async () => {
                 if (!committeeTarget) return;
-                await wrap(() => submitCommitteeDecision(committeeTarget.id, CommitteeDecision.APPROVED, committeeNotes), "اعتماد اللجنة");
+                await wrap(() => submitCommitteeDecision(committeeTarget.id, CommitteeDecision.APPROVED, committeeNotes.trim()), "اعتماد اللجنة");
                 setShowCommittee(false);
               }}
               disabled={busy}
