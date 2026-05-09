@@ -2272,6 +2272,12 @@ export const ContractActivityType = {
   ATTACHMENT_ADDED:         "attachment_added",
   ATTACHMENT_REPLACED:      "attachment_replaced",
   ATTACHMENT_DELETED:       "attachment_deleted",
+  // Inline-edit activities for the committee referral card. Without
+  // these, changes to the persistent reviewer / priority / reason
+  // via PATCH would be silent — the audit log would skip the very
+  // edits that drive the committee form.
+  REVIEWER_ASSIGNED:        "reviewer_assigned",
+  PRIORITY_SET:             "priority_set",
 } as const;
 
 export type ContractActivityTypeValue =
@@ -2298,6 +2304,8 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   attachment_added:       "إضافة مرفق",
   attachment_replaced:    "استبدال مرفق",
   attachment_deleted:     "حذف مرفق",
+  reviewer_assigned:      "تعيين مراجع داخلي",
+  priority_set:           "تحديث الأولوية",
 };
 
 export interface Contract {
@@ -2774,7 +2782,10 @@ export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
 // set them, and only on the committee referral card.
 export const insertContractSchema = z.object({
   clientId:       z.string().min(1, "العميل مطلوب"),
-  title:          z.string().min(1, "العنوان مطلوب"),
+  // Title cap matches the DB column's varchar(500). Without it a
+  // hand-rolled API call could send a 10k-char title and 500 the
+  // insert when Postgres rejects the over-length value.
+  title:          z.string().min(1, "العنوان مطلوب").max(500, "العنوان طويل جداً"),
   contractType:   z.enum([ContractType.REVIEW, ContractType.DRAFT, ContractType.PROJECT]),
   departmentId:   z.string().min(1, "القسم مطلوب"),
   description:    z.string().optional().default(""),
