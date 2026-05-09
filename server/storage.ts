@@ -536,6 +536,11 @@ function mapDbConsultation(dbCon: any): Consultation {
     pausedAt: toISOStringOrNull(dbCon.pausedAt),
     awaitingCompletion: dbCon.awaitingCompletion ?? false,
     savedStage: dbCon.savedStage ?? null,
+    // Committee-referral fields. All nullable so legacy rows
+    // (pre-add-consultation-committee-fields migration) surface as null.
+    internalReviewerId: dbCon.internalReviewerId ?? null,
+    priority: dbCon.priority ?? null,
+    priorityReason: dbCon.priorityReason ?? null,
   };
 }
 
@@ -1093,6 +1098,13 @@ export class DatabaseStorage implements IStorage {
       reviewDecision: null,
       category,
       expectedDeliveryDate,
+      // Committee-referral fields. Optional at create — the committee
+      // form is typically filled in later, just before the consultation
+      // moves into لجنة_مراجعة. Pass-through any values the create
+      // dialog supplies.
+      internalReviewerId: (data as any).internalReviewerId ?? null,
+      priority:           (data as any).priority ?? null,
+      priorityReason:     (data as any).priorityReason ?? null,
       createdBy,
       createdAt: now,
       updatedAt: now,

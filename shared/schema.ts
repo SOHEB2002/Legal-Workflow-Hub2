@@ -169,6 +169,15 @@ export const consultations = pgTable("consultations", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // Committee-referral form fields (نموذج الإحالة للجنة المراجعة).
+  // Mirrors lawCases.internalReviewerId / priority — set when the
+  // assigned lawyer hands the file to the committee. priority_reason
+  // is the optional free-text justification behind the chosen priority.
+  // All three are nullable so existing rows surface as "not set".
+  // See script/add-consultation-committee-fields.sql.
+  internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
+  priority:           varchar("priority", { length: 50 }),
+  priorityReason:     text("priority_reason"),
 });
 
 export const consultationStudies = pgTable("consultation_studies", {
@@ -1811,6 +1820,16 @@ export interface Consultation {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  // Committee-referral fields. internalReviewerId is set/cleared by
+  // department_head / admin_support / branch_manager (mirrors cases /
+  // memos). priority + priorityReason are editable by anyone who can
+  // edit the consultation. All three nullable so legacy rows render as
+  // "not set". priority is intentionally untyped (string) at this
+  // boundary so legacy rows that never had the column don't widen the
+  // PriorityType union.
+  internalReviewerId: string | null;
+  priority: string | null;
+  priorityReason: string | null;
 }
 
 // Per consultations-rebuild-spec.md §3.2.2 (early-close): "match the cases
@@ -2363,6 +2382,12 @@ export const insertConsultationSchema = z.object({
   // that don't send the field get the standard SLA. The server uses this
   // to compute expectedDeliveryDate at insert time.
   category: z.enum(["سريعة", "عادية", "طويلة"]).optional().default("عادية"),
+  // Committee-referral fields. All optional at create time — the
+  // committee form is filled in later, just before the consultation
+  // moves into لجنة_مراجعة.
+  priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).optional(),
+  priorityReason: z.string().optional(),
+  internalReviewerId: z.string().optional().nullable(),
 });
 
 export type InsertConsultation = z.infer<typeof insertConsultationSchema>;

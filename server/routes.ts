@@ -2591,6 +2591,26 @@ export async function registerRoutes(
         }
       }
 
+      // Internal reviewer assignment mirrors cases / memos: gated to
+      // department_head (own dept — already enforced by canModifyConsultation),
+      // admin_support, branch_manager. Assigned-lawyer / creator can pass
+      // canModifyConsultation but cannot pick the reviewer; we silently
+      // strip the field for them rather than 403'ing the whole request,
+      // matching the consultationType handling below. Validate the
+      // referenced user is active when actually setting (null is allowed —
+      // it's the "unassign" case).
+      if (req.body.internalReviewerId !== undefined) {
+        const allowedReviewerSetters = ["branch_manager", "admin_support", "department_head"];
+        if (!allowedReviewerSetters.includes(user.role)) {
+          delete req.body.internalReviewerId;
+        } else if (req.body.internalReviewerId) {
+          const { valid } = await validateAssignedUsersActive([req.body.internalReviewerId]);
+          if (!valid) {
+            return res.status(400).json({ error: "المراجع الداخلي المختار غير نشط أو غير موجود" });
+          }
+        }
+      }
+
       // Consultation-type change is a workflow-impacting edit — restricted
       // to branch_manager / admin_support / department_head (own dept,
       // already enforced by canModifyConsultation above), validated to
