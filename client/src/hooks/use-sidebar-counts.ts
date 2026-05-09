@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth-context";
 import { apiRequest } from "@/lib/queryClient";
 import type { SidebarCounts, SidebarSectionValue } from "@shared/schema";
 
-const EMPTY: SidebarCounts = { cases: 0, consultations: 0, hearings: 0, memos: 0 };
+const EMPTY: SidebarCounts = { cases: 0, consultations: 0, contracts: 0, hearings: 0, memos: 0 };
 
 const POLL_MS = 30_000;
 
@@ -20,6 +20,7 @@ export function useSidebarCounts() {
       setCounts({
         cases: data.cases ?? 0,
         consultations: data.consultations ?? 0,
+        contracts: data.contracts ?? 0,
         hearings: data.hearings ?? 0,
         memos: data.memos ?? 0,
       });

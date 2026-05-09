@@ -13,15 +13,18 @@ import {
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
+  type Contract, type ContractAttachment, type ContractActivity,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
   ConsultationType, resolveConsultationType,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
+  ContractStage, ContractStatus, ContractActivityType,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationDeliveryExtensions, consultationActivityLog,
+  contracts, contractAttachments, contractActivityLog,
   memoActivityLog,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
@@ -342,6 +345,64 @@ export interface IStorage {
     input: { notes: string; performedBy: string },
   ): Promise<Consultation | undefined>;
 
+  // ==================== Contracts module ====================
+  // Mirror of the consultation surface (createConsultation /
+  // updateConsultationAndLog / record* / pause* / await* / skip*) for
+  // the new العقود والمشاريع module. Intentionally narrower than
+  // consultations — no delivery extensions, no convert-to-case, no
+  // study/draft helper tables. Attachment methods land in commit 3.
+  getAllContracts(): Promise<Contract[]>;
+  getContractById(id: string): Promise<Contract | undefined>;
+  createContract(data: Partial<Contract>, createdBy: string): Promise<Contract>;
+  updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined>;
+  updateContractAndLog(
+    id: string,
+    data: Partial<Contract>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Contract | undefined>;
+  deleteContract(id: string): Promise<boolean>;
+  pauseContract(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined>;
+  unpauseContract(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
+  awaitContractCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined>;
+  resumeContractFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
+  skipContractCompletion(id: string, input: { performedBy: string }): Promise<Contract | undefined>;
+  recordContractInternalReview(input: {
+    contractId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<Contract>;
+  recordContractCommitteeDecision(input: {
+    contractId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<Contract>;
+  recordContractNoteOutcome(input: {
+    contractId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<Contract>;
+  returnContractToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string },
+  ): Promise<Contract | undefined>;
+  createContractActivity(input: {
+    contractId: string;
+    activityType: string;
+    description: string;
+    metadata?: Record<string, any>;
+    performedBy: string | null;
+  }): Promise<ContractActivity>;
+  getContractActivities(contractId: string): Promise<ContractActivity[]>;
+
   // Initialization
   initializeDefaultData(): Promise<void>;
 }
@@ -553,6 +614,59 @@ function mapDbConsultationActivity(row: any): ConsultationActivity {
     performedBy: row.performedBy ?? null,
     performedAt: toISOString(row.performedAt),
   };
+}
+
+// ==================== Contract mappers + helpers ====================
+// Mirror of mapDbConsultation / mapDbConsultationActivity. Kept inline
+// rather than reused so the contract column set can drift independently
+// (e.g. attachment slot fields) without splitting the consultation
+// signature.
+function mapDbContract(row: any): Contract {
+  return {
+    id: row.id,
+    contractNumber: row.contractNumber,
+    title: row.title,
+    clientId: row.clientId,
+    contractType: row.contractType,
+    description: row.description ?? "",
+    currentStage: row.currentStage ?? "استلام",
+    status: row.status ?? "active",
+    departmentId: row.departmentId,
+    assignedTo: row.assignedTo ?? null,
+    internalReviewerId: row.internalReviewerId ?? null,
+    priority: row.priority ?? null,
+    priorityReason: row.priorityReason ?? null,
+    reviewNotes: row.reviewNotes ?? "",
+    closureReason: row.closureReason ?? null,
+    closureReasonOther: row.closureReasonOther ?? null,
+    pauseReason: row.pauseReason ?? null,
+    pausedBy: row.pausedBy ?? null,
+    pausedAt: toISOStringOrNull(row.pausedAt),
+    awaitingCompletion: row.awaitingCompletion ?? false,
+    savedStage: row.savedStage ?? null,
+    createdBy: row.createdBy,
+    createdAt: toISOString(row.createdAt),
+    updatedAt: toISOString(row.updatedAt),
+    closedAt: toISOStringOrNull(row.closedAt),
+  };
+}
+
+function mapDbContractActivity(row: any): ContractActivity {
+  return {
+    id: row.id,
+    contractId: row.contractId,
+    activityType: row.activityType,
+    description: row.description ?? "",
+    metadata: (row.metadata && typeof row.metadata === "object") ? row.metadata : {},
+    performedBy: row.performedBy ?? null,
+    performedAt: toISOString(row.performedAt),
+  };
+}
+
+// Same scheme as generateConsultationNumber — short prefix + nanoid
+// suffix. Collisions retried in createContract.
+function generateContractNumber(): string {
+  return `CT-${nanoid(6).toUpperCase()}`;
 }
 
 // Map DB hearing to interface Hearing
@@ -2335,7 +2449,7 @@ export class DatabaseStorage implements IStorage {
       if (r.lastViewedAt) lastViewed.set(r.section, r.lastViewedAt as Date);
     }
 
-    const counts: SidebarCounts = { cases: 0, consultations: 0, hearings: 0, memos: 0 };
+    const counts: SidebarCounts = { cases: 0, consultations: 0, contracts: 0, hearings: 0, memos: 0 };
 
     const runCount = async (query: Promise<Array<{ c: any }>>): Promise<number> => {
       const rows = await query;
@@ -2403,6 +2517,44 @@ export class DatabaseStorage implements IStorage {
               or(
                 eq(consultations.assignedTo, user.id),
                 eq(consultations.createdBy, user.id),
+              ),
+            )),
+        );
+      }
+    }
+
+    // ---- Contracts ----
+    // Mirrors the consultations branch: admins (branch_manager,
+    // admin_support, both review-committee chairs) see every contract;
+    // department heads see only their own dept's contracts; everyone
+    // else sees rows they're personally involved in (assigned lawyer,
+    // internal reviewer, or creator).
+    const contractsSince = lastViewed.get("contracts");
+    if (contractsSince) {
+      if (isAdmin) {
+        counts.contracts = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(contracts)
+            .where(gt(contracts.createdAt, contractsSince)),
+        );
+      } else if (isDeptHead) {
+        if (userDept) {
+          counts.contracts = await runCount(
+            db.select({ c: sql<number>`count(*)::int` }).from(contracts)
+              .where(and(
+                gt(contracts.createdAt, contractsSince),
+                eq(contracts.departmentId, userDept),
+              )),
+          );
+        }
+      } else {
+        counts.contracts = await runCount(
+          db.select({ c: sql<number>`count(*)::int` }).from(contracts)
+            .where(and(
+              gt(contracts.createdAt, contractsSince),
+              or(
+                eq(contracts.assignedTo, user.id),
+                eq(contracts.internalReviewerId, user.id),
+                eq(contracts.createdBy, user.id),
               ),
             )),
         );
@@ -3505,6 +3657,404 @@ export class DatabaseStorage implements IStorage {
   async deleteDelegation(id: string): Promise<boolean> {
     const result = await db.delete(delegationsTable).where(eq(delegationsTable.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ==================== Contracts module ====================
+  // Atomically: insert contract + log "created" activity. Retries the
+  // contract_number nanoid suffix on uniqueness collision (3 attempts)
+  // — same scheme as createConsultation.
+  async createContract(data: Partial<Contract>, createdBy: string): Promise<Contract> {
+    const id = randomUUID();
+    const now = new Date();
+
+    const baseContract = {
+      id,
+      title: data.title || "",
+      clientId: data.clientId || "",
+      contractType: data.contractType || "مراجعة_عقد",
+      description: data.description || "",
+      currentStage: ContractStage.RECEIVED,
+      status: ContractStatus.ACTIVE,
+      departmentId: data.departmentId || "",
+      assignedTo: data.assignedTo || null,
+      internalReviewerId: null,
+      priority: null,
+      priorityReason: null,
+      reviewNotes: "",
+      closureReason: null,
+      closureReasonOther: null,
+      pauseReason: null,
+      pausedBy: null,
+      pausedAt: null,
+      awaitingCompletion: false,
+      savedStage: null,
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+      closedAt: null,
+    };
+
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const contractNumber = generateContractNumber();
+      const newContract = { ...baseContract, contractNumber };
+      try {
+        await db.transaction(async (tx) => {
+          await tx.insert(contracts).values(newContract as any);
+          await tx.insert(contractActivityLog).values({
+            id: randomUUID(),
+            contractId: id,
+            activityType: ContractActivityType.CREATED,
+            description: "تم إنشاء العقد",
+            metadata: {},
+            performedBy: createdBy,
+            performedAt: now,
+          } as any);
+        });
+        return mapDbContract(newContract);
+      } catch (err) {
+        lastErr = err;
+        if (isUniqueViolationOn(err, "contract_number")) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("DUPLICATE_CONTRACT_NUMBER");
+  }
+
+  async getAllContracts(): Promise<Contract[]> {
+    const rows = await db.select().from(contracts).orderBy(desc(contracts.createdAt));
+    return rows.map(mapDbContract);
+  }
+
+  async getContractById(id: string): Promise<Contract | undefined> {
+    const rows = await db.select().from(contracts).where(eq(contracts.id, id));
+    return rows[0] ? mapDbContract(rows[0]) : undefined;
+  }
+
+  async updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined> {
+    const { createdAt, updatedAt, closedAt, ...rest } = data as any;
+    const update: any = { ...rest, updatedAt: new Date() };
+    if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
+    await db.update(contracts).set(update).where(eq(contracts.id, id));
+    return this.getContractById(id);
+  }
+
+  async updateContractAndLog(
+    id: string,
+    data: Partial<Contract>,
+    activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
+  ): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const { createdAt, updatedAt, closedAt, ...rest } = data as any;
+      const now = new Date();
+      const update: any = { ...rest, updatedAt: now };
+      if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
+      await tx.update(contracts).set(update).where(eq(contracts.id, id));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: activity.activityType,
+        description: activity.description,
+        metadata: activity.metadata ?? {},
+        performedBy: activity.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  async deleteContract(id: string): Promise<boolean> {
+    const result = await db.delete(contracts).where(eq(contracts.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async pauseContract(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(contracts).set({
+        status: ContractStatus.PAUSED,
+        pauseReason: input.reason,
+        pausedBy: input.performedBy,
+        pausedAt: now,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, id));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.PAUSED,
+        description: `تم تعليق العقد — السبب: ${input.reason}`,
+        metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  async unpauseContract(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(contracts).set({
+        status: ContractStatus.ACTIVE,
+        pauseReason: null,
+        pausedBy: null,
+        pausedAt: null,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.UNPAUSED,
+        description: notes ? `تم إلغاء التعليق — ${notes}` : "تم إلغاء التعليق",
+        metadata: { notes: notes || undefined },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  async awaitContractCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      await tx.update(contracts).set({
+        currentStage: ContractStage.RECEIVED_PENDING_COMPLETION,
+        savedStage: fromStage,
+        awaitingCompletion: true,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, id));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.AWAIT_COMPLETION,
+        description: `بانتظار استكمال البيانات والمرفقات — السبب: ${input.reason}`,
+        metadata: { reason: input.reason, savedStage: fromStage },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  async resumeContractFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const targetStage = existing.savedStage || ContractStage.DRAFTING;
+      await tx.update(contracts).set({
+        currentStage: targetStage,
+        savedStage: null,
+        awaitingCompletion: false,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, id));
+      const notes = (input.notes ?? "").trim();
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.RESUME_FROM_COMPLETION,
+        description: notes
+          ? `العودة من الاستكمال إلى ${targetStage} — ${notes}`
+          : `العودة من الاستكمال إلى ${targetStage}`,
+        metadata: { notes: notes || undefined, returnedToStage: targetStage },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  async skipContractCompletion(id: string, input: { performedBy: string }): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      // Single 8-stage flow regardless of contract type — skip lands
+      // on DRAFTING, same as the consultation WRITTEN flow's STUDY.
+      await tx.update(contracts).set({
+        currentStage: ContractStage.DRAFTING,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, id));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.COMPLETION_SKIPPED,
+        description: "تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى التحرير",
+        metadata: { targetStage: ContractStage.DRAFTING },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  async recordContractInternalReview(input: {
+    contractId: string;
+    reviewerId: string;
+    decision: string;
+    notes: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<Contract> {
+    const result = await db.transaction(async (tx) => {
+      const now = new Date();
+      await tx.update(contracts).set({
+        currentStage: input.nextStage,
+        reviewNotes: input.notes,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, input.contractId));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: input.contractId,
+        activityType: ContractActivityType.INTERNAL_REVIEW,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId));
+      return updated;
+    });
+    return mapDbContract(result);
+  }
+
+  async recordContractCommitteeDecision(input: {
+    contractId: string;
+    decision: string;
+    notes: string;
+    decidedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<Contract> {
+    const result = await db.transaction(async (tx) => {
+      const now = new Date();
+      await tx.update(contracts).set({
+        currentStage: input.nextStage,
+        reviewNotes: input.notes,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, input.contractId));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: input.contractId,
+        activityType: ContractActivityType.COMMITTEE_DECISION,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId));
+      return updated;
+    });
+    return mapDbContract(result);
+  }
+
+  async recordContractNoteOutcome(input: {
+    contractId: string;
+    outcome: string;
+    notes: string;
+    recordedBy: string;
+    nextStage: string;
+    activity: { description: string; metadata?: Record<string, any>; performedBy: string | null };
+  }): Promise<Contract> {
+    const result = await db.transaction(async (tx) => {
+      const now = new Date();
+      await tx.update(contracts).set({
+        currentStage: input.nextStage,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, input.contractId));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: input.contractId,
+        activityType: ContractActivityType.TAKE_NOTES_OUTCOME,
+        description: input.activity.description,
+        metadata: input.activity.metadata ?? {},
+        performedBy: input.activity.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId));
+      return updated;
+    });
+    return mapDbContract(result);
+  }
+
+  async returnContractToCommittee(
+    id: string,
+    input: { notes: string; performedBy: string },
+  ): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(contracts).set({
+        currentStage: ContractStage.COMMITTEE,
+        updatedAt: now,
+      } as any).where(eq(contracts.id, id));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.RETURNED_TO_COMMITTEE,
+        description: `إعادة إلى لجنة المراجعة — ${input.notes}`,
+        metadata: { notes: input.notes },
+        performedBy: input.performedBy,
+        performedAt: now,
+      } as any);
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  async createContractActivity(input: {
+    contractId: string;
+    activityType: string;
+    description: string;
+    metadata?: Record<string, any>;
+    performedBy: string | null;
+  }): Promise<ContractActivity> {
+    const id = randomUUID();
+    const now = new Date();
+    await db.insert(contractActivityLog).values({
+      id,
+      contractId: input.contractId,
+      activityType: input.activityType,
+      description: input.description,
+      metadata: input.metadata ?? {},
+      performedBy: input.performedBy,
+      performedAt: now,
+    } as any);
+    return {
+      id,
+      contractId: input.contractId,
+      activityType: input.activityType,
+      description: input.description,
+      metadata: input.metadata ?? {},
+      performedBy: input.performedBy,
+      performedAt: now.toISOString(),
+    };
+  }
+
+  async getContractActivities(contractId: string): Promise<ContractActivity[]> {
+    const rows = await db.select().from(contractActivityLog)
+      .where(eq(contractActivityLog.contractId, contractId))
+      .orderBy(desc(contractActivityLog.performedAt));
+    return rows.map(mapDbContractActivity);
   }
 
   // ==================== Initialize Default Data ====================

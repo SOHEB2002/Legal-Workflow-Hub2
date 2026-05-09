@@ -34,6 +34,18 @@ import {
   resolveConsultationType,
   getConsultationStagesForType,
   remapConsultationStageForType,
+  ContractStage,
+  ContractStagesAll,
+  ContractStageLabels,
+  ContractType,
+  ContractTypeLabels,
+  ContractActivityType,
+  ContractStatus,
+  ContractSlotsByType,
+  resolveContractType,
+  getContractStagesForType,
+  remapContractStageForType,
+  insertContractSchema,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
@@ -320,6 +332,56 @@ function getConsultationTransitionsForType(type: string): StageTransitionRule[] 
   return ALLOWED_CONSULTATION_TRANSITIONS;
 }
 
+// Contracts (العقود والمشاريع) — single 8-stage flow regardless of
+// contract type. Mirrors the WRITTEN consultation workflow: assign
+// from RECEIVED, optional data-completion stage with skip, drafting,
+// internal-review approve/has-notes loop, committee-decision loop
+// with conditional TAKING_NOTES, then READY → CLOSED. Committee chair
+// is consultations_review_head (per spec). Closure stage transition
+// (READY → CLOSED) is restricted to admin_support / branch_manager.
+const ALLOWED_CONTRACT_TRANSITIONS: StageTransitionRule[] = [
+  // Reception → data-completion (assign action; admin_support also allowed
+  // to mirror the WRITTEN consultation gate).
+  { from: ContractStage.RECEIVED,                    to: ContractStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  { from: ContractStage.RECEIVED_PENDING_COMPLETION, to: ContractStage.DRAFTING,                    allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  // Drafting → internal review (assigned lawyer also allowed).
+  { from: ContractStage.DRAFTING,                    to: ContractStage.INTERNAL_REVIEW,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Internal-review outcomes — endpoint enforces "actor must be the
+  // designated reviewer or dept_head/branch_manager" finely.
+  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.DRAFTING,                    allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.COMMITTEE,                   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Committee decisions — chair = consultations_review_head.
+  { from: ContractStage.COMMITTEE,                   to: ContractStage.READY,                       allowedRoles: ["consultations_review_head", "branch_manager"] },
+  { from: ContractStage.COMMITTEE,                   to: ContractStage.TAKING_NOTES,                allowedRoles: ["consultations_review_head", "branch_manager"] },
+  // Take-notes outcomes (تم | لم_يتم | جزئياً) all advance to READY.
+  { from: ContractStage.TAKING_NOTES,                to: ContractStage.READY,                       allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Final closure — admin_support / branch_manager only.
+  { from: ContractStage.READY,                       to: ContractStage.CLOSED,                      allowedRoles: ["admin_support", "branch_manager"] },
+];
+
+function getContractTransitionsForType(_type: string): StageTransitionRule[] {
+  // All three contract types share the same 8-stage flow today; the
+  // helper exists so attachment-slot rules (per-type) can swap in a
+  // type-specific table later without touching the validators.
+  return ALLOWED_CONTRACT_TRANSITIONS;
+}
+
+function canModifyContract(
+  user: { id: string; role: string; departmentId: string | null },
+  contract: any,
+): boolean {
+  // Same shape as canModifyConsultation. consultations_review_head and
+  // cases_review_head are admin-class for visibility purposes (the
+  // committee chairs need to see every file at lجنة_مراجعة across the
+  // 4 modules).
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  if (adminRoles.includes(user.role)) return true;
+  if (user.role === "department_head" && contract.departmentId === user.departmentId) return true;
+  if (contract.assignedTo === user.id || contract.createdBy === user.id) return true;
+  if (contract.internalReviewerId === user.id) return true;
+  return false;
+}
+
 // Memos canonical 6+1 stage workflow (Phase-9). Mirrors consultations
 // but with memo-specific terminal labels (جاهزة_للرفع / مرفوعة) and no
 // STUDY / RECEIVED_PENDING_COMPLETION stages — memos go straight from
@@ -358,7 +420,7 @@ function validateStageTransition(
   currentStage: string,
   targetStage: string,
   userRole: string,
-  entityType: "case" | "consultation" | "memo",
+  entityType: "case" | "consultation" | "memo" | "contract",
   user?: { id: string; departmentId?: string | null },
   entityData?: any
 ): { allowed: boolean; reason?: string } {
@@ -511,6 +573,23 @@ function validateStageTransition(
     }
   }
 
+  // Contract rollback — same semantics as consultations / memos.
+  if (entityType === "contract" && entityData) {
+    const stages = ContractStagesAll as readonly string[];
+    const currentIdx = stages.indexOf(currentStage);
+    const targetIdx = stages.indexOf(targetStage);
+    if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
+      const isLawyer = effectiveRoles.includes("assigned_lawyer");
+      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+      if (isHeadOrManager) return { allowed: true };
+      if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
+      if (isLawyer && targetIdx < currentIdx - 1) {
+        return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
+      }
+      return { allowed: false, reason: "ليس لديك صلاحية للرجوع في المراحل" };
+    }
+  }
+
   // Forward transitions: route to the entity-specific table.
   // Consultation table is selected per workflow type — WRITTEN keeps
   // the existing 7+1 table; PHONE / PROCEDURAL use their own 5-stage
@@ -521,7 +600,9 @@ function validateStageTransition(
       ? ALLOWED_CASE_TRANSITIONS
       : entityType === "memo"
         ? ALLOWED_MEMO_TRANSITIONS
-        : getConsultationTransitionsForType(entityData?.consultationType);
+        : entityType === "contract"
+          ? getContractTransitionsForType(entityData?.contractType)
+          : getConsultationTransitionsForType(entityData?.consultationType);
   const rule = rules.find(r => r.from === currentStage && r.to === targetStage);
 
   if (!rule) {
@@ -3836,6 +3917,620 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[consultations/skip-completion] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // ==================== Contracts module (العقود والمشاريع) ====================
+  // Mirrors the WRITTEN consultation surface: list / get / create / patch /
+  // delete + advance / return / internal-review / committee-decision /
+  // take-notes-outcome / return-to-committee / early-close / pause /
+  // unpause / await-completion / resume / skip / activities. Attachment
+  // endpoints land in commit 3.
+
+  app.get("/api/contracts", requireAuth, async (_req, res) => {
+    try {
+      const rows = await storage.getAllContracts();
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[GET /api/contracts] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/contracts/:id", requireAuth, async (req, res) => {
+    try {
+      const row = await storage.getContractById(String(req.params.id));
+      if (!row) return res.status(404).json({ error: "العقد غير موجود" });
+      res.json(row);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts", requireAuth, async (req, res) => {
+    try {
+      const validated = insertContractSchema.parse(req.body);
+      const reqUser = (req as any).user;
+      const createdBy = reqUser?.id || "unknown";
+      const created = await storage.createContract(validated, createdBy);
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      const msg = (error as any)?.message || "";
+      if (msg === "DUPLICATE_CONTRACT_NUMBER") {
+        return res.status(400).json({ error: "تعذّر توليد رقم عقد فريد، يرجى المحاولة مرة أخرى" });
+      }
+      console.error("[POST /api/contracts] error:", error);
+      res.status(500).json({ error: "حدث خطأ في إنشاء العقد" });
+    }
+  });
+
+  // Generic PATCH — handles assignedTo, internalReviewerId, contractType
+  // (with stage remap + activity log), priority, priorityReason, title,
+  // description, departmentId. Same per-field role gates as consultations.
+  app.patch("/api/contracts/:id", requireAuth, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const existing = await storage.getContractById(String(req.params.id));
+      if (!existing) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!canModifyContract(user, existing)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا العقد" });
+      }
+
+      // Validate assignedTo user is active when set non-null.
+      if (req.body.assignedTo) {
+        const { valid } = await validateAssignedUsersActive([req.body.assignedTo]);
+        if (!valid) {
+          return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
+        }
+      }
+
+      // internalReviewerId — gated to admin_support / dept_head (own dept,
+      // already covered by canModifyContract) / branch_manager.
+      if (req.body.internalReviewerId !== undefined) {
+        const allowedReviewerSetters = ["branch_manager", "admin_support", "department_head"];
+        if (!allowedReviewerSetters.includes(user.role)) {
+          delete req.body.internalReviewerId;
+        } else if (req.body.internalReviewerId) {
+          const { valid } = await validateAssignedUsersActive([req.body.internalReviewerId]);
+          if (!valid) {
+            return res.status(400).json({ error: "المراجع الداخلي المختار غير نشط أو غير موجود" });
+          }
+        }
+      }
+
+      // contractType change — same shape as consultation type change:
+      // restricted to branch_manager / admin_support / department_head;
+      // remaps currentStage if invalid in the new type's stages list;
+      // writes a dedicated activity-log entry inside one transaction.
+      let typeChange: { from: string; to: string; fromStage: string; toStage: string; remapped: boolean } | null = null;
+      if (
+        req.body.contractType !== undefined
+        && req.body.contractType !== existing.contractType
+      ) {
+        const newType = String(req.body.contractType);
+        const validTypes = Object.values(ContractType) as string[];
+        const allowedRoles = ["branch_manager", "admin_support", "department_head"];
+        if (!allowedRoles.includes(user.role)) {
+          delete req.body.contractType;
+        } else if (!validTypes.includes(newType)) {
+          return res.status(400).json({ error: "نوع العقد غير صحيح" });
+        } else {
+          const remapped = remapContractStageForType(
+            existing.currentStage as any,
+            newType as any,
+          );
+          typeChange = {
+            from: existing.contractType,
+            to: newType,
+            fromStage: existing.currentStage,
+            toStage: remapped,
+            remapped: remapped !== existing.currentStage,
+          };
+          req.body.currentStage = remapped;
+        }
+      }
+
+      let updated;
+      if (typeChange) {
+        const fromTypeLabel = (ContractTypeLabels as any)[typeChange.from] || typeChange.from;
+        const toTypeLabel = (ContractTypeLabels as any)[typeChange.to] || typeChange.to;
+        const fromStageLabel = (ContractStageLabels as any)[typeChange.fromStage] || typeChange.fromStage;
+        const toStageLabel = (ContractStageLabels as any)[typeChange.toStage] || typeChange.toStage;
+        const description = typeChange.remapped
+          ? `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel} — أُعيد ضبط المرحلة من ${fromStageLabel} إلى ${toStageLabel}`
+          : `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel}`;
+        updated = await storage.updateContractAndLog(
+          String(req.params.id),
+          req.body,
+          {
+            activityType: ContractActivityType.TYPE_CHANGED,
+            description,
+            metadata: {
+              from: typeChange.from,
+              to: typeChange.to,
+              fromStage: typeChange.fromStage,
+              toStage: typeChange.toStage,
+              stageRemapped: typeChange.remapped,
+            },
+            performedBy: user.id,
+          },
+        );
+      } else {
+        updated = await storage.updateContract(String(req.params.id), req.body);
+      }
+      if (!updated) return res.status(404).json({ error: "العقد غير موجود" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PATCH /api/contracts/:id] error:", error);
+      res.status(500).json({ error: "حدث خطأ في تحديث العقد" });
+    }
+  });
+
+  app.delete("/api/contracts/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
+    try {
+      const ok = await storage.deleteContract(String(req.params.id));
+      if (!ok) return res.status(404).json({ error: "العقد غير موجود" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/contracts/:id/assign — same auto-advance pattern as the
+  // WRITTEN consultation /assign: when currentStage is RECEIVED, jump
+  // to PENDING_COMPLETION in the same write. Allowed: admin_support,
+  // department_head, branch_manager.
+  app.post("/api/contracts/:id/assign", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإسناد العقود" });
+      }
+      const { assignedTo } = req.body || {};
+      if (!assignedTo || typeof assignedTo !== "string") {
+        return res.status(400).json({ error: "assignedTo مطلوب" });
+      }
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      const { valid } = await validateAssignedUsersActive([assignedTo]);
+      if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
+      const lawyer = await storage.getUser(assignedTo);
+      const lawyerName = lawyer?.name || assignedTo;
+      const updates: any = { assignedTo };
+      const autoAdvance = contract.currentStage === ContractStage.RECEIVED;
+      if (autoAdvance) updates.currentStage = ContractStage.RECEIVED_PENDING_COMPLETION;
+      const updated = await storage.updateContractAndLog(contract.id, updates, {
+        activityType: ContractActivityType.ASSIGNED,
+        description: `تم إسناد العقد لـ ${lawyerName}`,
+        metadata: { assignedTo, lawyerName, autoAdvancedToStage: autoAdvance ? updates.currentStage : null },
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تحديث العقد" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/assign] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/advance-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      const check = validateStageTransition(
+        contract.currentStage,
+        targetStage,
+        reqUser.role,
+        "contract",
+        reqUser,
+        contract,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+      // Slot-validation gate (commit 3 wires the actual attachment
+      // lookup). The placeholder is left here so commit 3 only flips
+      // the early-return without touching this handler's structure.
+
+      const fromLabel = (ContractStageLabels as any)[contract.currentStage] || contract.currentStage;
+      const toLabel = (ContractStageLabels as any)[targetStage] || targetStage;
+      const reachedClosed = targetStage === ContractStage.CLOSED;
+      const updateData: any = { currentStage: targetStage };
+      if (reachedClosed) {
+        updateData.status = "closed";
+        updateData.closedAt = new Date();
+      }
+      const updated = await storage.updateContractAndLog(contract.id, updateData, {
+        activityType: ContractActivityType.STAGE_ADVANCED,
+        description: `انتقال من ${fromLabel} إلى ${toLabel}`,
+        metadata: { fromStage: contract.currentStage, toStage: targetStage, ...(reachedClosed ? { closedViaFinalStage: true } : {}) },
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تحديث العقد" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/return-stage", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const targetStage = String(req.body?.targetStage || "");
+      if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      const check = validateStageTransition(
+        contract.currentStage,
+        targetStage,
+        reqUser.role,
+        "contract",
+        reqUser,
+        contract,
+      );
+      if (!check.allowed) return res.status(400).json({ error: check.reason });
+      const fromLabel = (ContractStageLabels as any)[contract.currentStage] || contract.currentStage;
+      const toLabel = (ContractStageLabels as any)[targetStage] || targetStage;
+      const updated = await storage.updateContractAndLog(
+        contract.id,
+        { currentStage: targetStage } as any,
+        {
+          activityType: ContractActivityType.STAGE_RETURNED,
+          description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
+          metadata: { fromStage: contract.currentStage, toStage: targetStage },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل تحديث العقد" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/internal-review", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.currentStage !== ContractStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة المراجعة الداخلية" });
+      }
+      // Locked: only the designated internal reviewer + dept_head /
+      // branch_manager can act. Same shape as the cases / consultation
+      // internal-review gate.
+      const isReviewer = contract.internalReviewerId === reqUser.id;
+      const isHeadOrManager = ["department_head", "branch_manager"].includes(reqUser.role);
+      if (!isReviewer && !isHeadOrManager) {
+        return res.status(403).json({ error: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية" });
+      }
+      const nextStage = decision === InternalReviewDecision.PASSED
+        ? ContractStage.COMMITTEE
+        : ContractStage.DRAFTING;
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `مراجعة داخلية: ${decision} — ${truncatedNotes}`
+        : `مراجعة داخلية: ${decision}`;
+      const updated = await storage.recordContractInternalReview({
+        contractId: contract.id,
+        reviewerId: reqUser.id,
+        decision,
+        notes,
+        nextStage,
+        activity: { description, metadata: { decision, notes, reviewerId: reqUser.id }, performedBy: reqUser.id },
+      });
+      res.json({ contract: updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/committee-decision", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // Committee chair = consultations_review_head per spec.
+      if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار اللجنة غير صحيح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.currentStage !== ContractStage.COMMITTEE) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة لجنة المراجعة" });
+      }
+      const nextStage = decision === CommitteeDecision.APPROVED
+        ? ContractStage.READY
+        : ContractStage.TAKING_NOTES;
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `قرار اللجنة: ${decision} — ${truncatedNotes}`
+        : `قرار اللجنة: ${decision}`;
+      const updated = await storage.recordContractCommitteeDecision({
+        contractId: contract.id,
+        decision,
+        notes,
+        decidedBy: reqUser.id,
+        nextStage,
+        activity: { description, metadata: { decision, notes, decidedBy: reqUser.id }, performedBy: reqUser.id },
+      });
+      res.json({ contract: updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/take-notes-outcome", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const outcome = String(req.body?.outcome || "");
+      const notes = String(req.body?.notes || "");
+      const valid = (Object.values(NoteOutcome) as string[]).includes(outcome);
+      if (!valid) return res.status(400).json({ error: "نتيجة غير صحيحة" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.currentStage !== ContractStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة الأخذ بالملاحظات" });
+      }
+      const isLawyer = isAssignedLawyer(reqUser, contract);
+      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      if (!isLawyer && !isHead) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
+      }
+      const truncatedNotes = notes ? notes.slice(0, 120) : "";
+      const description = truncatedNotes
+        ? `نتيجة الأخذ بالملاحظات: ${outcome} — ${truncatedNotes}`
+        : `نتيجة الأخذ بالملاحظات: ${outcome}`;
+      const updated = await storage.recordContractNoteOutcome({
+        contractId: contract.id,
+        outcome,
+        notes,
+        recordedBy: reqUser.id,
+        nextStage: ContractStage.READY,
+        activity: { description, metadata: { outcome, notes }, performedBy: reqUser.id },
+      });
+      res.json({ contract: updated });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/return-to-committee", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const notes = String(req.body?.notes ?? "").trim();
+      if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.currentStage !== ContractStage.TAKING_NOTES) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة الأخذ بالملاحظات" });
+      }
+      const isLawyer = isAssignedLawyer(reqUser, contract);
+      const allowedRoles = ["admin_support", "department_head", "branch_manager"];
+      if (!isLawyer && !allowedRoles.includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإعادة العقد للجنة" });
+      }
+      const updated = await storage.returnContractToCommittee(contract.id, { notes, performedBy: reqUser.id });
+      if (!updated) return res.status(500).json({ error: "فشل إعادة العقد للجنة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/return-to-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  app.post("/api/contracts/:id/early-close", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      // Same role gate as the WRITTEN consultation: assigned_lawyer +
+      // admin_support / department_head / branch_manager.
+      const isLawyer = isAssignedLawyer(reqUser, contract);
+      const adminLike = ["admin_support", "department_head", "branch_manager"];
+      if (!adminLike.includes(reqUser.role) && !isLawyer) {
+        return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
+      }
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      const reason = String(req.body?.reason || "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب الإغلاق مطلوب" });
+      const updated = await storage.updateContractAndLog(contract.id, {
+        status: "closed",
+        closedAt: new Date() as any,
+        closureReason: reason,
+      } as any, {
+        activityType: ContractActivityType.EARLY_CLOSED,
+        description: `إغلاق مبكر — السبب: ${reason}`,
+        metadata: { reason },
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل الإغلاق المبكر" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Pause / unpause / await-completion / resume / skip-completion —
+  // same gate across all four (branch_manager / admin_support /
+  // department_head own dept / assigned lawyer) and same payload shape
+  // as the consultation handlers.
+  const allowContractPauseLike = (reqUser: any, contract: any): boolean =>
+    reqUser.role === "branch_manager"
+    || reqUser.role === "admin_support"
+    || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId)
+    || contract.assignedTo === reqUser.id;
+
+  app.post("/api/contracts/:id/pause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!allowContractPauseLike(reqUser, contract)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتعليق العقد" });
+      }
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
+      const updated = await storage.pauseContract(contract.id, { reason, performedBy: reqUser.id });
+      if (!updated) return res.status(500).json({ error: "فشل التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/unpause", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!allowContractPauseLike(reqUser, contract)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء التعليق" });
+      }
+      if (contract.status !== "paused") {
+        return res.status(400).json({ error: "العقد ليس معلّقاً" });
+      }
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.unpauseContract(contract.id, { notes, performedBy: reqUser.id });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء التعليق" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/await-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!allowContractPauseLike(reqUser, contract)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية" });
+      }
+      if (contract.status !== "active") return res.status(400).json({ error: "العقد ليس نشطاً" });
+      if (contract.awaitingCompletion) {
+        return res.status(400).json({ error: "العقد بالفعل بانتظار الاستكمال" });
+      }
+      if (contract.currentStage === ContractStage.RECEIVED_PENDING_COMPLETION) {
+        return res.status(400).json({ error: "العقد بالفعل في مرحلة الاستكمال" });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
+      const updated = await storage.awaitContractCompletion(contract.id, { reason, performedBy: reqUser.id });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/resume-from-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!allowContractPauseLike(reqUser, contract)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية" });
+      }
+      if (!contract.awaitingCompletion) {
+        return res.status(400).json({ error: "العقد ليس بانتظار الاستكمال" });
+      }
+      const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
+      const updated = await storage.resumeContractFromCompletion(contract.id, { notes, performedBy: reqUser.id });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/contracts/:id/skip-completion", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!allowContractPauseLike(reqUser, contract)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية" });
+      }
+      if (contract.status !== "active") return res.status(400).json({ error: "العقد ليس نشطاً" });
+      if (contract.currentStage !== ContractStage.RECEIVED_PENDING_COMPLETION) {
+        return res.status(400).json({ error: "تجاوز الاستكمال متاح فقط من مرحلة الاستكمال" });
+      }
+      if (contract.awaitingCompletion) {
+        return res.status(400).json({ error: "استخدم العودة من الاستكمال بدلاً من التجاوز" });
+      }
+      // Slot-validation gate (commit 3) lands here for مراجعة_عقد —
+      // requires "contract_under_review" attachment before skip.
+      const updated = await storage.skipContractCompletion(contract.id, { performedBy: reqUser.id });
+      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/contracts/:id/activities", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!canModifyContract(reqUser, contract)) {
+        return res.status(403).json({ error: "لا تملك صلاحية عرض هذا العقد" });
+      }
+      const activities = await storage.getContractActivities(contract.id);
+      res.json(activities);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 
