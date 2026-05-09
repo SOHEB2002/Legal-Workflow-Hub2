@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, varchar, boolean, timestamp, jsonb, integer, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, jsonb, integer, primaryKey, bigint } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // ==================== Drizzle Tables ====================
@@ -253,6 +253,74 @@ export const consultationActivityLog = pgTable("consultation_activity_log", {
   metadata: jsonb("metadata").default({}),
   performedBy: varchar("performed_by", { length: 255 }),
   performedAt: timestamp("performed_at").defaultNow(),
+});
+
+// ==================== Contracts module (العقود والمشاريع) ====================
+// Standalone module that mirrors the WRITTEN consultation 8-stage flow.
+// Distinct table + activity log so the contracts surface can evolve
+// independently (e.g. file-attachment slots) without forking
+// consultations. Migration: script/add-contracts-module.sql.
+export const contracts = pgTable("contracts", {
+  id:                 varchar("id", { length: 255 }).primaryKey(),
+  contractNumber:     varchar("contract_number", { length: 50 }).notNull().unique(),
+  title:              varchar("title", { length: 500 }).notNull(),
+  clientId:           varchar("client_id", { length: 255 }).notNull(),
+  // مراجعة_عقد / صياغة_عقد / مشروع — picks the attachment slots, not
+  // the workflow (single 8-stage flow regardless of type).
+  contractType:       varchar("contract_type", { length: 50 }).notNull(),
+  description:        text("description").notNull().default(""),
+  currentStage:       varchar("current_stage", { length: 50 }).notNull().default("استلام"),
+  status:             varchar("status", { length: 20 }).notNull().default("active"),
+  departmentId:       varchar("department_id", { length: 255 }).notNull(),
+  assignedTo:         varchar("assigned_to", { length: 255 }),
+  internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
+  // Committee-form fields. priority uses the 2-value ContractPriority
+  // enum (عاجلة / غير_عاجلة) — same vocabulary as consultations.
+  priority:           varchar("priority", { length: 50 }),
+  priorityReason:     text("priority_reason"),
+  reviewNotes:        text("review_notes").default(""),
+  closureReason:      varchar("closure_reason", { length: 50 }),
+  closureReasonOther: varchar("closure_reason_other", { length: 500 }),
+  // Pause + await-completion. Same shape as consultations / cases /
+  // memos so the cross-cutting workflow handlers can stay generic.
+  pauseReason:        text("pause_reason"),
+  pausedBy:           varchar("paused_by", { length: 255 }),
+  pausedAt:           timestamp("paused_at"),
+  awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
+  savedStage:         varchar("saved_stage", { length: 50 }),
+  createdBy:          varchar("created_by", { length: 255 }).notNull(),
+  createdAt:          timestamp("created_at").defaultNow(),
+  updatedAt:          timestamp("updated_at").defaultNow(),
+  closedAt:           timestamp("closed_at"),
+});
+
+// File attachments. Designated slots (slot_key non-null) are
+// single-file — re-upload replaces the existing row + deletes the old
+// file from disk. Free attachments use slot_key=NULL and accumulate.
+// The (contract_id, slot_key) unique constraint is partial (slot_key
+// NOT NULL only) — added in the migration as a partial unique index;
+// Drizzle's table-level constraints don't express partial uniqueness.
+export const contractAttachments = pgTable("contract_attachments", {
+  id:          varchar("id", { length: 255 }).primaryKey(),
+  contractId:  varchar("contract_id", { length: 255 }).notNull(),
+  slotKey:     varchar("slot_key", { length: 50 }),
+  fileName:    varchar("file_name", { length: 500 }).notNull(),
+  filePath:    varchar("file_path", { length: 1000 }).notNull(),
+  fileSize:    bigint("file_size", { mode: "number" }).notNull(),
+  mimeType:    varchar("mime_type", { length: 100 }).notNull(),
+  description: text("description"),
+  uploadedBy:  varchar("uploaded_by", { length: 255 }).notNull(),
+  uploadedAt:  timestamp("uploaded_at").defaultNow(),
+});
+
+export const contractActivityLog = pgTable("contract_activity_log", {
+  id:           varchar("id", { length: 255 }).primaryKey(),
+  contractId:   varchar("contract_id", { length: 255 }).notNull(),
+  activityType: varchar("activity_type", { length: 50 }).notNull(),
+  description:  text("description").notNull(),
+  metadata:     jsonb("metadata").default({}),
+  performedBy:  varchar("performed_by", { length: 255 }),
+  performedAt:  timestamp("performed_at").defaultNow(),
 });
 
 export const hearings = pgTable("hearings", {
@@ -658,6 +726,9 @@ export type DbConsultationReview = typeof consultationReviews.$inferSelect;
 export type DbConsultationCommitteeDecision = typeof consultationCommitteeDecisions.$inferSelect;
 export type DbConsultationNoteOutcome = typeof consultationNoteOutcomes.$inferSelect;
 export type DbConsultationActivityLog = typeof consultationActivityLog.$inferSelect;
+export type DbContract = typeof contracts.$inferSelect;
+export type DbContractAttachment = typeof contractAttachments.$inferSelect;
+export type DbContractActivityLog = typeof contractActivityLog.$inferSelect;
 export type DbMemoReview = typeof memoReviews.$inferSelect;
 export type DbMemoCommitteeDecision = typeof memoCommitteeDecisions.$inferSelect;
 export type DbMemoNoteOutcome = typeof memoNoteOutcomes.$inferSelect;
@@ -695,6 +766,10 @@ export const Department = {
   COMMERCIAL: "تجاري",
   LABOR: "عمالي",
   ADMINISTRATIVE: "إداري",
+  // System-managed dept that owns the contracts module by default. The
+  // contracts create form pre-selects this department; users can still
+  // route a contract to any other department before saving.
+  CONTRACTS_AND_PROJECTS: "العقود_والمشاريع",
 } as const;
 
 export type DepartmentType = typeof Department[keyof typeof Department];
@@ -1993,6 +2068,289 @@ export interface ConsultationActivity {
   performedAt: string;
 }
 
+// ==================== Contracts module enums + interfaces ====================
+// New module mirroring the WRITTEN consultation 8-stage flow. Stored
+// values are Arabic tokens (matches consultations / cases convention)
+// so the activity log stays human-readable without an extra label
+// join. resolveContractType + remapContractStageForType behave the
+// same as the consultation helpers — anything outside the enum reads
+// back as the safest default (REVIEW for the type, RECEIVED for the
+// stage).
+export const ContractType = {
+  REVIEW:  "مراجعة_عقد",
+  DRAFT:   "صياغة_عقد",
+  PROJECT: "مشروع",
+} as const;
+
+export type ContractTypeValue = typeof ContractType[keyof typeof ContractType];
+
+export const ContractTypeLabels: Record<ContractTypeValue, string> = {
+  "مراجعة_عقد": "مراجعة عقد",
+  "صياغة_عقد":  "صياغة عقد",
+  "مشروع":       "مشروع",
+};
+
+export function resolveContractType(raw: string | null | undefined): ContractTypeValue {
+  if (raw === ContractType.DRAFT) return ContractType.DRAFT;
+  if (raw === ContractType.PROJECT) return ContractType.PROJECT;
+  return ContractType.REVIEW;
+}
+
+export const ContractStage = {
+  RECEIVED:                    "استلام",
+  RECEIVED_PENDING_COMPLETION: "استكمال_البيانات_والمرفقات",
+  DRAFTING:                    "تحرير",
+  INTERNAL_REVIEW:             "مراجعة_داخلية",
+  COMMITTEE:                   "لجنة_مراجعة",
+  TAKING_NOTES:                "الأخذ_بالملاحظات",
+  READY:                       "جاهزة_للتسليم",
+  CLOSED:                      "مغلقة",
+} as const;
+
+export type ContractStageValue = typeof ContractStage[keyof typeof ContractStage];
+
+export const ContractStageLabels: Record<ContractStageValue, string> = {
+  "استلام":                       "استلام",
+  "استكمال_البيانات_والمرفقات":  "استكمال البيانات والمرفقات",
+  "تحرير":                        "تحرير",
+  "مراجعة_داخلية":               "مراجعة داخلية",
+  "لجنة_مراجعة":                  "لجنة مراجعة",
+  "الأخذ_بالملاحظات":             "الأخذ بالملاحظات",
+  "جاهزة_للتسليم":                "جاهزة للتسليم",
+  "مغلقة":                        "مغلقة",
+};
+
+// Linear forward order — excludes the conditional TAKING_NOTES branch
+// (entered only when the committee returns يوجد_ملاحظات).
+export const ContractStagesOrder: ContractStageValue[] = [
+  ContractStage.RECEIVED,
+  ContractStage.RECEIVED_PENDING_COMPLETION,
+  ContractStage.DRAFTING,
+  ContractStage.INTERNAL_REVIEW,
+  ContractStage.COMMITTEE,
+  ContractStage.READY,
+  ContractStage.CLOSED,
+];
+
+// All stages including the conditional TAKING_NOTES branch — used by
+// the rollback validator + the stages bar when the contract has
+// already been through the notes loop.
+export const ContractStagesAll: ContractStageValue[] = [
+  ContractStage.RECEIVED,
+  ContractStage.RECEIVED_PENDING_COMPLETION,
+  ContractStage.DRAFTING,
+  ContractStage.INTERNAL_REVIEW,
+  ContractStage.COMMITTEE,
+  ContractStage.TAKING_NOTES,
+  ContractStage.READY,
+  ContractStage.CLOSED,
+];
+
+export function getContractStagesForType(_type: ContractTypeValue): readonly ContractStageValue[] {
+  // All three contract types share the same 8-stage flow today —
+  // contractType drives the attachment slots, not the workflow. The
+  // helper is kept type-aware so per-type stage divergence (if it
+  // ever ships) is a one-place change.
+  return ContractStagesAll;
+}
+
+export function remapContractStageForType(
+  fromStage: ContractStageValue,
+  toType: ContractTypeValue,
+): ContractStageValue {
+  // All types share the same stage list, so this is currently a no-op
+  // unless `fromStage` somehow holds a value outside the enum (e.g. a
+  // legacy row hand-edited to a consultation stage). Falls back to
+  // RECEIVED on any unknown input — same safety net as the
+  // consultation helper.
+  const targetStages = getContractStagesForType(toType);
+  if (targetStages.includes(fromStage)) return fromStage;
+  return ContractStage.RECEIVED;
+}
+
+export const ContractStatus = {
+  ACTIVE: "active",
+  PAUSED: "paused",
+  CLOSED: "closed",
+} as const;
+
+export type ContractStatusValue = typeof ContractStatus[keyof typeof ContractStatus];
+
+// 2-value priority enum, matching the consultation ConsultationPriority
+// shape. priority is set/changed only on the committee referral card.
+export const ContractPriority = {
+  URGENT:     "عاجلة",
+  NOT_URGENT: "غير_عاجلة",
+} as const;
+
+export type ContractPriorityValue = typeof ContractPriority[keyof typeof ContractPriority];
+
+export const ContractPriorityLabels: Record<ContractPriorityValue, string> = {
+  "عاجلة":     "عاجلة",
+  "غير_عاجلة": "غير عاجلة",
+};
+
+// Designated attachment slots. Each non-null slot is single-file —
+// re-uploading replaces the existing row + deletes the old file from
+// disk (enforced server-side via a partial unique index on
+// (contract_id, slot_key) WHERE slot_key IS NOT NULL).
+export const ContractAttachmentSlot = {
+  CONTRACT_UNDER_REVIEW: "contract_under_review",
+  REVIEW_STUDY:          "review_study",
+  MOU:                   "mou",
+  DRAFTED_CONTRACT:      "drafted_contract",
+} as const;
+
+export type ContractAttachmentSlotValue =
+  typeof ContractAttachmentSlot[keyof typeof ContractAttachmentSlot];
+
+export const ContractAttachmentSlotLabels: Record<ContractAttachmentSlotValue, string> = {
+  contract_under_review: "العقد محل المراجعة",
+  review_study:          "دراسة المراجعة",
+  mou:                   "مذكرة تفاهم",
+  drafted_contract:      "العقد المُصاغ",
+};
+
+// Per-type required slots, surfaced on the create dialog and enforced
+// at advance-stage time. The validation table lives next to the enum
+// so route + UI agree on the rules.
+export interface ContractSlotRule {
+  slotKey: ContractAttachmentSlotValue;
+  label: string;
+  // When set, the route handler rejects an advance/skip transition
+  // FROM `requiredBeforeLeavingStage` until a row exists in this slot.
+  // null means "optional, no transition gate".
+  requiredBeforeLeavingStage: ContractStageValue | null;
+}
+
+export const ContractSlotsByType: Record<ContractTypeValue, ContractSlotRule[]> = {
+  "مراجعة_عقد": [
+    {
+      slotKey: ContractAttachmentSlot.CONTRACT_UNDER_REVIEW,
+      label: ContractAttachmentSlotLabels.contract_under_review,
+      requiredBeforeLeavingStage: ContractStage.RECEIVED,
+    },
+    {
+      slotKey: ContractAttachmentSlot.REVIEW_STUDY,
+      label: ContractAttachmentSlotLabels.review_study,
+      requiredBeforeLeavingStage: ContractStage.DRAFTING,
+    },
+  ],
+  "صياغة_عقد": [
+    {
+      slotKey: ContractAttachmentSlot.MOU,
+      label: ContractAttachmentSlotLabels.mou,
+      requiredBeforeLeavingStage: null,
+    },
+    {
+      slotKey: ContractAttachmentSlot.DRAFTED_CONTRACT,
+      label: ContractAttachmentSlotLabels.drafted_contract,
+      requiredBeforeLeavingStage: ContractStage.DRAFTING,
+    },
+  ],
+  "مشروع": [],
+};
+
+export const ContractActivityType = {
+  CREATED:                  "created",
+  ASSIGNED:                 "assigned",
+  STAGE_ADVANCED:           "stage_advanced",
+  STAGE_RETURNED:           "stage_returned",
+  INTERNAL_REVIEW:          "internal_review",
+  COMMITTEE_DECISION:       "committee_decision",
+  TAKE_NOTES_OUTCOME:       "take_notes_outcome",
+  RETURNED_TO_COMMITTEE:    "returned_to_committee",
+  EARLY_CLOSED:             "early_closed",
+  GENERAL_NOTE:             "general_note",
+  PAUSED:                   "paused",
+  UNPAUSED:                 "unpaused",
+  AWAIT_COMPLETION:         "await_completion",
+  RESUME_FROM_COMPLETION:   "resume_from_completion",
+  COMPLETION_SKIPPED:       "completion_skipped",
+  TYPE_CHANGED:             "contract_type_changed",
+  DEPARTMENT_TRANSFERRED:   "department_transferred",
+  ATTACHMENT_ADDED:         "attachment_added",
+  ATTACHMENT_REPLACED:      "attachment_replaced",
+  ATTACHMENT_DELETED:       "attachment_deleted",
+} as const;
+
+export type ContractActivityTypeValue =
+  typeof ContractActivityType[keyof typeof ContractActivityType];
+
+export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, string> = {
+  created:                "إنشاء",
+  assigned:               "إسناد",
+  stage_advanced:         "تقدم في المرحلة",
+  stage_returned:         "إرجاع للمرحلة السابقة",
+  internal_review:        "مراجعة داخلية",
+  committee_decision:     "قرار اللجنة",
+  take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
+  returned_to_committee:  "إعادة للجنة المراجعة",
+  early_closed:           "إغلاق مبكر",
+  general_note:           "ملاحظة عامة",
+  paused:                 "تعليق",
+  unpaused:               "إلغاء التعليق",
+  await_completion:       "بانتظار استكمال البيانات والمرفقات",
+  resume_from_completion: "العودة من الاستكمال",
+  completion_skipped:     "تجاوز مرحلة الاستكمال",
+  contract_type_changed:  "تغيير نوع العقد",
+  department_transferred: "تحويل القسم",
+  attachment_added:       "إضافة مرفق",
+  attachment_replaced:    "استبدال مرفق",
+  attachment_deleted:     "حذف مرفق",
+};
+
+export interface Contract {
+  id: string;
+  contractNumber: string;
+  title: string;
+  clientId: string;
+  contractType: string;
+  description: string;
+  currentStage: ContractStageValue;
+  status: ContractStatusValue;
+  departmentId: string;
+  assignedTo: string | null;
+  internalReviewerId: string | null;
+  priority: string | null;
+  priorityReason: string | null;
+  reviewNotes: string;
+  closureReason: string | null;
+  closureReasonOther: string | null;
+  pauseReason: string | null;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  awaitingCompletion: boolean;
+  savedStage: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+}
+
+export interface ContractAttachment {
+  id: string;
+  contractId: string;
+  slotKey: string | null;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  mimeType: string;
+  description: string | null;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
+export interface ContractActivity {
+  id: string;
+  contractId: string;
+  activityType: string;
+  description: string;
+  metadata: Record<string, any>;
+  performedBy: string | null;
+  performedAt: string;
+}
+
 // Phase-8 — memo activity log mirroring ConsultationActivityType.
 // Phase-9 — extended with the review-workflow events (assigned, stage
 // transitions, internal-review, committee-decision, take-notes-outcome)
@@ -2409,6 +2767,20 @@ export const insertConsultationSchema = z.object({
 });
 
 export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
+
+// Body schema for POST /api/contracts. Committee fields (priority,
+// priority_reason, internal_reviewer_id) are NOT accepted at create —
+// same convention as consultations: PATCH is the only path that can
+// set them, and only on the committee referral card.
+export const insertContractSchema = z.object({
+  clientId:       z.string().min(1, "العميل مطلوب"),
+  title:          z.string().min(1, "العنوان مطلوب"),
+  contractType:   z.enum([ContractType.REVIEW, ContractType.DRAFT, ContractType.PROJECT]),
+  departmentId:   z.string().min(1, "القسم مطلوب"),
+  description:    z.string().optional().default(""),
+});
+
+export type InsertContract = z.infer<typeof insertContractSchema>;
 
 // Phase-5 — body for POST /api/consultations/:id/extend-delivery.
 // newExpectedDeliveryDate must parse as a date; we keep it as a string in
@@ -3693,6 +4065,7 @@ export const RolePermissions: Record<UserRoleType, PermissionType[]> = {
 export const SidebarSection = {
   CASES:         "cases",
   CONSULTATIONS: "consultations",
+  CONTRACTS:     "contracts",
   HEARINGS:      "hearings",
   MEMOS:         "memos",
 } as const;
@@ -3702,6 +4075,7 @@ export type SidebarSectionValue = typeof SidebarSection[keyof typeof SidebarSect
 export const SIDEBAR_SECTIONS: SidebarSectionValue[] = [
   "cases",
   "consultations",
+  "contracts",
   "hearings",
   "memos",
 ];

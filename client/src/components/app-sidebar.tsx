@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, FileText, FileBarChart, ScrollText, Headphones, ArrowLeftRight } from "lucide-react";
+import { LayoutDashboard, Briefcase, Users, MessageSquare, Calendar, UserCog, LogOut, Moon, Sun, ClipboardList, BarChart3, HelpCircle, Settings, ClipboardCheck, Bell, Workflow, Activity, TrendingUp, FileText, FileBarChart, ScrollText, Headphones, ArrowLeftRight, FileSignature } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -47,6 +47,12 @@ const menuItems: MenuItem[] = [
     url: "/consultations",
     icon: MessageSquare,
     countSection: "consultations",
+  },
+  {
+    title: "العقود والمشاريع",
+    url: "/contracts",
+    icon: FileSignature,
+    countSection: "contracts",
   },
   {
     title: "العملاء",
@@ -164,6 +170,7 @@ export function AppSidebar() {
     const map: Record<string, SidebarSectionValue> = {
       "/cases": "cases",
       "/consultations": "consultations",
+      "/contracts": "contracts",
       "/hearings": "hearings",
       "/memos": "memos",
     };
