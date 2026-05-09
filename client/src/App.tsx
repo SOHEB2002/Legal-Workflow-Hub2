@@ -12,6 +12,7 @@ import { ThemeProvider } from "@/lib/theme-provider";
 import { CasesProvider } from "@/lib/cases-context";
 import { ClientsProvider } from "@/lib/clients-context";
 import { ConsultationsProvider } from "@/lib/consultations-context";
+import { ContractsProvider } from "@/lib/contracts-context";
 import { HearingsProvider } from "@/lib/hearings-context";
 import { DepartmentsProvider } from "@/lib/departments-context";
 import { FieldTasksProvider } from "@/lib/field-tasks-context";
@@ -36,6 +37,7 @@ const DashboardPage = lazy(() => import("@/pages/dashboard"));
 const CasesPage = lazy(() => import("@/pages/cases"));
 const ClientsPage = lazy(() => import("@/pages/clients"));
 const ConsultationsPage = lazy(() => import("@/pages/consultations"));
+const ContractsPage = lazy(() => import("@/pages/contracts"));
 const HearingsPage = lazy(() => import("@/pages/hearings"));
 const UsersPage = lazy(() => import("@/pages/users"));
 const FieldTasksPage = lazy(() => import("@/pages/field-tasks"));
@@ -74,6 +76,7 @@ function Router() {
         <Route path="/cases" component={CasesPage} />
         <Route path="/clients" component={ClientsPage} />
         <Route path="/consultations" component={ConsultationsPage} />
+        <Route path="/contracts" component={ContractsPage} />
         <Route path="/hearings" component={HearingsPage} />
         <Route path="/field-tasks" component={FieldTasksPage} />
         <Route path="/users" component={UsersPage} />
@@ -183,6 +186,7 @@ function App() {
             <ClientsProvider>
               <CasesProvider>
                 <ConsultationsProvider>
+                  <ContractsProvider>
                   <HearingsProvider>
                     <FieldTasksProvider>
                       <MemosProvider>
@@ -211,6 +215,7 @@ function App() {
                       </MemosProvider>
                     </FieldTasksProvider>
                   </HearingsProvider>
+                  </ContractsProvider>
                 </ConsultationsProvider>
               </CasesProvider>
             </ClientsProvider>
