@@ -25,16 +25,18 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, MessageSquare,
+  Upload, Download, FileIcon, Paperclip,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
-  Contract, ContractStageValue, ContractActivity,
+  Contract, ContractStageValue, ContractActivity, ContractAttachment, ContractTypeValue,
   InternalReviewDecisionValue, CommitteeDecisionValue, NoteOutcomeValue, ContractPriorityValue,
 } from "@shared/schema";
 import {
   ContractStage, ContractStageLabels, ContractStagesAll, ContractStagesOrder,
   ContractType, ContractTypeLabels,
   ContractPriority, ContractPriorityLabels,
+  ContractAttachmentSlot, ContractAttachmentSlotLabels, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
@@ -273,6 +275,121 @@ export default function ContractsPage() {
     fetchActivities(selected.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, selected?.updatedAt]);
+
+  // Attachments — split into per-slot map + free additional list. The
+  // server groups them on read but we still re-fetch on uploads /
+  // deletes so the slot card and the additional list stay in sync.
+  const [attachmentsBySlot, setAttachmentsBySlot] = useState<Record<string, ContractAttachment>>({});
+  const [additionalAttachments, setAdditionalAttachments] = useState<ContractAttachment[]>([]);
+  const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
+  const fetchAttachments = async (id: string) => {
+    try {
+      const res = await apiRequest("GET", `/api/contracts/${id}/attachments`);
+      const data = await res.json() as { slots: Record<string, ContractAttachment>; additional: ContractAttachment[] };
+      setAttachmentsBySlot(data.slots || {});
+      setAdditionalAttachments(data.additional || []);
+    } catch {
+      setAttachmentsBySlot({});
+      setAdditionalAttachments([]);
+    }
+  };
+  useEffect(() => {
+    if (!selected) {
+      setAttachmentsBySlot({});
+      setAdditionalAttachments([]);
+      return;
+    }
+    fetchAttachments(selected.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  const uploadAttachment = async (
+    contractId: string,
+    file: File,
+    slotKey: string | null,
+  ) => {
+    setUploadingSlot(slotKey || "additional");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (slotKey) fd.append("slotKey", slotKey);
+      const token = localStorage.getItem("lawfirm_token");
+      const res = await fetch(`/api/contracts/${contractId}/attachments`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || "فشل رفع الملف");
+      }
+      await fetchAttachments(contractId);
+      await fetchActivities(contractId);
+      toast({ title: "تم رفع الملف بنجاح" });
+    } catch (err: any) {
+      toast({ title: "فشل الرفع", description: err.message || String(err), variant: "destructive" });
+    } finally {
+      setUploadingSlot(null);
+    }
+  };
+
+  const deleteAttachment = async (contractId: string, attachmentId: string) => {
+    try {
+      await apiRequest("DELETE", `/api/contracts/${contractId}/attachments/${attachmentId}`);
+      await fetchAttachments(contractId);
+      await fetchActivities(contractId);
+      toast({ title: "تم حذف المرفق" });
+    } catch (err) {
+      toast({ title: "فشل الحذف", description: extractApiError(err), variant: "destructive" });
+    }
+  };
+
+  const downloadAttachment = (contractId: string, attachmentId: string) => {
+    // Simple anchor-driven download — the server returns
+    // Content-Disposition: attachment so the browser saves rather
+    // than navigates. Token-bearing fetch isn't an option for the
+    // streaming endpoint, so the cookie/jwt-via-bearer fallback on
+    // /uploads doesn't apply; we open the URL directly and rely on
+    // the requireAuth middleware honoring the session cookie. Most
+    // deployments here use bearer tokens, so we open in a new tab
+    // and let the user re-auth if needed.
+    const token = localStorage.getItem("lawfirm_token");
+    const url = `/api/contracts/${contractId}/attachments/${attachmentId}/download`;
+    if (token) {
+      // Bearer-token fetch + blob download.
+      fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+        .then(async (r) => {
+          if (!r.ok) throw new Error("فشل التحميل");
+          const blob = await r.blob();
+          const cd = r.headers.get("Content-Disposition") || "";
+          const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="([^"]+)"/);
+          const fileName = m ? decodeURIComponent(m[1]) : "download";
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+        })
+        .catch((err) => toast({ title: "فشل التحميل", description: String(err), variant: "destructive" }));
+    } else {
+      window.open(url, "_blank");
+    }
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  const canDeleteAttachment = (a: ContractAttachment, contract: Contract): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head" && contract.departmentId === user.departmentId) return true;
+    return a.uploadedBy === user.id;
+  };
 
   // ---- Action dialogs ----
   const [showAssign, setShowAssign] = useState(false);
@@ -728,6 +845,172 @@ export default function ContractsPage() {
               <div className="text-right">
                 <Label className="text-muted-foreground">طلب العميل</Label>
                 <p className="p-3 bg-muted rounded-md whitespace-pre-wrap">{selected.description || "—"}</p>
+              </div>
+
+              {/* ============ Attachments ============ */}
+              {/* Designated slots come first (per-type rules from
+                  ContractSlotsByType), then a free-form "additional"
+                  bucket. Re-uploading a designated slot replaces the
+                  prior file (server enforces the partial unique index
+                  + unlinks the old file from disk). */}
+              <div className="text-right border rounded-lg p-4 space-y-4" data-testid="contract-attachments">
+                <h4 className="font-semibold flex items-center gap-2">
+                  <Paperclip className="w-4 h-4" />
+                  المرفقات
+                </h4>
+                {(() => {
+                  const slotRules = (ContractSlotsByType as any)[selected.contractType as ContractTypeValue] || [];
+                  if (slotRules.length === 0) {
+                    return (
+                      <p className="text-xs text-muted-foreground">
+                        لا توجد ملفات مطلوبة لهذا النوع — استخدم "مرفقات إضافية" أدناه.
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="space-y-3">
+                      <p className="text-xs text-muted-foreground">ملفات مطلوبة</p>
+                      {slotRules.map((rule: any) => {
+                        const att = attachmentsBySlot[rule.slotKey];
+                        const isUploading = uploadingSlot === rule.slotKey;
+                        return (
+                          <div
+                            key={rule.slotKey}
+                            className="border rounded-md p-3 bg-muted/30"
+                            data-testid={`slot-card-${rule.slotKey}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-sm">{rule.label}</div>
+                                {att ? (
+                                  <div className="text-xs text-muted-foreground mt-1">
+                                    <BidiText>{att.fileName}</BidiText>
+                                    {" • "}
+                                    {formatFileSize(att.fileSize)}
+                                    {" • "}
+                                    <BidiText>{getLawyerName(att.uploadedBy)}</BidiText>
+                                    {" • "}
+                                    <LtrInline>{att.uploadedAt.slice(0, 10)}</LtrInline>
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-amber-700 mt-1 flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    لم يتم رفع الملف بعد
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {att && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => downloadAttachment(selected.id, att.id)}
+                                    data-testid={`download-slot-${rule.slotKey}`}
+                                  >
+                                    <Download className="w-4 h-4" />
+                                  </Button>
+                                )}
+                                <label className="cursor-pointer">
+                                  <input
+                                    type="file"
+                                    className="hidden"
+                                    disabled={isUploading}
+                                    onChange={(e) => {
+                                      const f = e.target.files?.[0];
+                                      e.target.value = "";
+                                      if (f) uploadAttachment(selected.id, f, rule.slotKey);
+                                    }}
+                                    data-testid={`upload-slot-${rule.slotKey}`}
+                                  />
+                                  <span className="inline-flex items-center justify-center h-8 px-3 rounded-md text-xs border bg-background hover:bg-accent">
+                                    <Upload className="w-3.5 h-3.5 ml-1" />
+                                    {att ? "استبدال" : "رفع"}
+                                  </span>
+                                </label>
+                                {att && canDeleteAttachment(att, selected) && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => deleteAttachment(selected.id, att.id)}
+                                    data-testid={`delete-slot-${rule.slotKey}`}
+                                  >
+                                    <Trash2 className="w-4 h-4 text-destructive" />
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+
+                {/* Additional attachments (free, multi). */}
+                <div className="space-y-2 pt-2 border-t">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">مرفقات إضافية ({additionalAttachments.length})</p>
+                    <label className="cursor-pointer">
+                      <input
+                        type="file"
+                        className="hidden"
+                        disabled={uploadingSlot === "additional"}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = "";
+                          if (f) uploadAttachment(selected.id, f, null);
+                        }}
+                        data-testid="upload-additional"
+                      />
+                      <span className="inline-flex items-center justify-center h-8 px-3 rounded-md text-xs border bg-background hover:bg-accent">
+                        <Upload className="w-3.5 h-3.5 ml-1" />
+                        إضافة مرفق
+                      </span>
+                    </label>
+                  </div>
+                  {additionalAttachments.length === 0 && (
+                    <p className="text-xs text-muted-foreground py-2">لا توجد مرفقات إضافية بعد</p>
+                  )}
+                  {additionalAttachments.map((a) => (
+                    <div
+                      key={a.id}
+                      className="flex items-center justify-between gap-2 border rounded-md p-2 bg-background"
+                      data-testid={`additional-attachment-${a.id}`}
+                    >
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <FileIcon className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate"><BidiText>{a.fileName}</BidiText></div>
+                          <div className="text-xs text-muted-foreground">
+                            {formatFileSize(a.fileSize)}
+                            {" • "}
+                            <BidiText>{getLawyerName(a.uploadedBy)}</BidiText>
+                            {" • "}
+                            <LtrInline>{a.uploadedAt.slice(0, 10)}</LtrInline>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => downloadAttachment(selected.id, a.id)}
+                        >
+                          <Download className="w-4 h-4" />
+                        </Button>
+                        {canDeleteAttachment(a, selected) && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => deleteAttachment(selected.id, a.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {/* Committee referral card — gated on stage = COMMITTEE */}

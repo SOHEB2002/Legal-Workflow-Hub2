@@ -41,6 +41,8 @@ import {
   ContractTypeLabels,
   ContractActivityType,
   ContractStatus,
+  ContractAttachmentSlot,
+  ContractAttachmentSlotLabels,
   ContractSlotsByType,
   resolveContractType,
   getContractStagesForType,
@@ -4140,9 +4142,18 @@ export async function registerRoutes(
         contract,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
-      // Slot-validation gate (commit 3 wires the actual attachment
-      // lookup). The placeholder is left here so commit 3 only flips
-      // the early-return without touching this handler's structure.
+      // Slot-validation gate per ContractSlotsByType. Required slots
+      // are checked at the moment the contract LEAVES their gating
+      // stage — e.g. مراجعة_عقد cannot leave RECEIVED without an
+      // uploaded "العقد محل المراجعة", and cannot leave DRAFTING
+      // without "دراسة المراجعة". Slots whose
+      // requiredBeforeLeavingStage doesn't match the from-stage are
+      // ignored for this transition.
+      const slotCheckErr = await checkRequiredSlotsForTransition(
+        contract,
+        contract.currentStage as any,
+      );
+      if (slotCheckErr) return res.status(400).json({ error: slotCheckErr });
 
       const fromLabel = (ContractStageLabels as any)[contract.currentStage] || contract.currentStage;
       const toLabel = (ContractStageLabels as any)[targetStage] || targetStage;
@@ -4508,8 +4519,21 @@ export async function registerRoutes(
       if (contract.awaitingCompletion) {
         return res.status(400).json({ error: "استخدم العودة من الاستكمال بدلاً من التجاوز" });
       }
-      // Slot-validation gate (commit 3) lands here for مراجعة_عقد —
-      // requires "contract_under_review" attachment before skip.
+      // Skip respects the same slot rules as a normal advance from
+      // PENDING_COMPLETION — e.g. مراجعة_عقد still needs the intake
+      // file (contract_under_review) on the row. The skip lands on
+      // DRAFTING just like advance from PENDING_COMPLETION; we use
+      // the from-stage RECEIVED_PENDING_COMPLETION here, which has
+      // no required slots itself, but the RECEIVED slot rule applies
+      // because it requires the file before LEAVING RECEIVED — which
+      // already happened to reach this stage. So the gate effectively
+      // covers the RECEIVED→PENDING transition, not the skip itself.
+      // We keep the call for symmetry / future-proofing.
+      const slotCheckErr = await checkRequiredSlotsForTransition(
+        contract,
+        contract.currentStage as any,
+      );
+      if (slotCheckErr) return res.status(400).json({ error: slotCheckErr });
       const updated = await storage.skipContractCompletion(contract.id, { performedBy: reqUser.id });
       if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
       res.json(updated);
@@ -4531,6 +4555,273 @@ export async function registerRoutes(
       res.json(activities);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ==================== Contract attachments ====================
+  // Per-contract upload directory: ./uploads/contracts/{contractId}/.
+  // Multer writes the file to disk first; the route handler then
+  // inserts the metadata row + activity log entry. Failed inserts
+  // unlink the orphan file so a retry succeeds without manual
+  // cleanup.
+  const contractsUploadsDir = path.join(uploadsDir, "contracts");
+  if (!fs.existsSync(contractsUploadsDir)) fs.mkdirSync(contractsUploadsDir, { recursive: true });
+
+  const contractUpload = multer({
+    storage: multer.diskStorage({
+      destination: (req, _file, cb) => {
+        const contractId = String(req.params?.id || "");
+        if (!contractId) return cb(new Error("contractId مطلوب") as any, "");
+        const dir = path.join(contractsUploadsDir, contractId);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (_req, file, cb) => {
+        // Strip everything but [a-zA-Z0-9.] from the original name's
+        // extension to defang path traversal / shell injection. The
+        // human-readable original name still lives on the row's
+        // file_name column for display + Content-Disposition.
+        const ext = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, '');
+        cb(null, `${Date.now()}-${randomUUID()}${ext}`);
+      },
+    }),
+    limits: { fileSize: 50 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "image/jpeg",
+        "image/png",
+      ];
+      cb(null, allowed.includes(file.mimetype));
+    },
+  });
+
+  // Per-stage required-slot validator. Looks up
+  // ContractSlotsByType[contract.contractType] and rejects the
+  // transition if any rule whose `requiredBeforeLeavingStage` matches
+  // the current stage is missing its row in contract_attachments.
+  // Returns an Arabic error string when something's missing, or null
+  // when the gate passes (or there are no rules for this type/stage).
+  async function checkRequiredSlotsForTransition(
+    contract: any,
+    fromStage: string,
+  ): Promise<string | null> {
+    const resolved = resolveContractType(contract.contractType);
+    const rules = (ContractSlotsByType as any)[resolved] || [];
+    const gating = rules.filter((r: any) => r.requiredBeforeLeavingStage === fromStage);
+    if (gating.length === 0) return null;
+    for (const rule of gating) {
+      const existing = await storage.getContractAttachmentBySlot(contract.id, rule.slotKey);
+      if (!existing) {
+        const slotLabel = (ContractAttachmentSlotLabels as any)[rule.slotKey] || rule.slotKey;
+        const stageLabel = (ContractStageLabels as any)[fromStage] || fromStage;
+        return `لا يمكن مغادرة مرحلة "${stageLabel}" قبل رفع المرفق "${slotLabel}"`;
+      }
+    }
+    return null;
+  }
+
+  // POST /api/contracts/:id/attachments — multipart upload. Body
+  // fields: file (required), slotKey (optional — null for "additional"),
+  // description (optional). Validates contractId + slotKey, hands off
+  // to storage.createContractAttachment which atomically replaces the
+  // prior file in the same slot when present. The displaced file is
+  // unlinked from disk after the DB transaction commits so a crashed
+  // upload can't orphan the new row.
+  app.post(
+    "/api/contracts/:id/attachments",
+    requireAuth,
+    (req, res, next) => contractUpload.single("file")(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "حجم الملف يتجاوز الحد المسموح (50MB)" });
+      }
+      return res.status(400).json({ error: "فشل تحميل الملف" });
+    }),
+    async (req, res) => {
+      try {
+        const reqUser = (req as any).user;
+        if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+        const contract = await storage.getContractById(String(req.params.id));
+        if (!contract) {
+          if ((req as any).file) fs.unlink((req as any).file.path, () => {});
+          return res.status(404).json({ error: "العقد غير موجود" });
+        }
+        if (!canModifyContract(reqUser, contract)) {
+          if ((req as any).file) fs.unlink((req as any).file.path, () => {});
+          return res.status(403).json({ error: "لا تملك صلاحية رفع مرفقات لهذا العقد" });
+        }
+        const file = (req as any).file as { originalname: string; filename: string; path: string; size: number; mimetype: string } | undefined;
+        if (!file) {
+          return res.status(400).json({ error: "الملف مطلوب أو نوعه غير مسموح" });
+        }
+        const rawSlot = typeof req.body?.slotKey === "string" ? req.body.slotKey.trim() : "";
+        const description = typeof req.body?.description === "string" ? req.body.description : null;
+        let slotKey: string | null = null;
+        if (rawSlot && rawSlot !== "null" && rawSlot !== "additional") {
+          const validSlots = Object.values(ContractAttachmentSlot) as string[];
+          if (!validSlots.includes(rawSlot)) {
+            fs.unlink(file.path, () => {});
+            return res.status(400).json({ error: "خانة المرفق غير صحيحة" });
+          }
+          // Slot must be allowed for this contract type (per ContractSlotsByType).
+          const resolved = resolveContractType(contract.contractType);
+          const allowedSlotsForType = ((ContractSlotsByType as any)[resolved] || []).map((r: any) => r.slotKey);
+          if (!allowedSlotsForType.includes(rawSlot)) {
+            fs.unlink(file.path, () => {});
+            return res.status(400).json({ error: "هذه الخانة غير متاحة لنوع العقد الحالي" });
+          }
+          slotKey = rawSlot;
+        }
+
+        const { attachment, replaced } = await storage.createContractAttachment({
+          contractId: contract.id,
+          slotKey,
+          fileName: file.originalname,
+          filePath: file.path,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          description,
+          uploadedBy: reqUser.id,
+        });
+
+        // Unlink the displaced file after the DB transaction has
+        // committed — best-effort, swallow errors.
+        if (replaced && replaced.filePath && replaced.filePath !== attachment.filePath) {
+          fs.unlink(replaced.filePath, () => {});
+        }
+
+        // Activity log entry — replaced vs added paths differ in
+        // copy + metadata so the timeline is unambiguous.
+        const slotLabel = slotKey ? ((ContractAttachmentSlotLabels as any)[slotKey] || slotKey) : "مرفقات إضافية";
+        if (replaced) {
+          await storage.createContractActivity({
+            contractId: contract.id,
+            activityType: ContractActivityType.ATTACHMENT_REPLACED,
+            description: `استبدال ملف "${slotLabel}" — ${replaced.fileName} ← ${file.originalname}`,
+            metadata: { slotKey, oldFileName: replaced.fileName, newFileName: file.originalname },
+            performedBy: reqUser.id,
+          });
+        } else {
+          await storage.createContractActivity({
+            contractId: contract.id,
+            activityType: ContractActivityType.ATTACHMENT_ADDED,
+            description: slotKey
+              ? `إضافة ملف "${slotLabel}" — ${file.originalname}`
+              : `إضافة مرفق إضافي — ${file.originalname}`,
+            metadata: { slotKey, fileName: file.originalname },
+            performedBy: reqUser.id,
+          });
+        }
+        res.status(201).json({ attachment, replaced });
+      } catch (error: any) {
+        // On any unexpected failure unlink the just-uploaded file so a
+        // retry doesn't accumulate orphans on disk.
+        if ((req as any).file) fs.unlink((req as any).file.path, () => {});
+        console.error("[contracts/attachments POST] error:", error);
+        res.status(500).json({ error: error.message || "فشل رفع المرفق" });
+      }
+    },
+  );
+
+  app.get("/api/contracts/:id/attachments", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!canModifyContract(reqUser, contract)) {
+        return res.status(403).json({ error: "لا تملك صلاحية عرض هذا العقد" });
+      }
+      const all = await storage.getContractAttachments(contract.id);
+      // Group by slot vs additional so the FE doesn't have to bucket.
+      const slots: Record<string, any> = {};
+      const additional: any[] = [];
+      for (const a of all) {
+        if (a.slotKey) slots[a.slotKey] = a;
+        else additional.push(a);
+      }
+      res.json({ slots, additional });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/contracts/:id/attachments/:attachmentId/download", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!canModifyContract(reqUser, contract)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
+      }
+      const att = await storage.getContractAttachmentById(String(req.params.attachmentId));
+      if (!att || att.contractId !== contract.id) {
+        return res.status(404).json({ error: "المرفق غير موجود" });
+      }
+      // Path-traversal guard: resolved file must live under the
+      // contracts/{contractId}/ directory.
+      const expectedRoot = path.resolve(contractsUploadsDir, contract.id);
+      const resolved = path.resolve(att.filePath);
+      if (!resolved.startsWith(expectedRoot)) {
+        return res.status(403).json({ error: "وصول مرفوض" });
+      }
+      if (!fs.existsSync(resolved)) {
+        return res.status(404).json({ error: "ملف غير موجود على القرص" });
+      }
+      // RFC 5987 filename* for the Arabic original name; ASCII fallback
+      // for older clients.
+      const safeAscii = att.fileName.replace(/[^\x20-\x7E]/g, "_");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(att.fileName)}`,
+      );
+      res.setHeader("Content-Type", att.mimeType || "application/octet-stream");
+      res.sendFile(resolved);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/contracts/:id/attachments/:attachmentId", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      const att = await storage.getContractAttachmentById(String(req.params.attachmentId));
+      if (!att || att.contractId !== contract.id) {
+        return res.status(404).json({ error: "المرفق غير موجود" });
+      }
+      // Per spec: uploader / dept_head (own dept) / branch_manager / admin_support.
+      const allowed =
+        att.uploadedBy === reqUser.id
+        || reqUser.role === "branch_manager"
+        || reqUser.role === "admin_support"
+        || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId);
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لحذف هذا المرفق" });
+      }
+      const deleted = await storage.deleteContractAttachment(att.id);
+      if (!deleted) return res.status(404).json({ error: "المرفق غير موجود" });
+      // Remove from disk after the DB row is gone — best effort.
+      if (deleted.filePath) fs.unlink(deleted.filePath, () => {});
+      await storage.createContractActivity({
+        contractId: contract.id,
+        activityType: ContractActivityType.ATTACHMENT_DELETED,
+        description: `حذف مرفق — ${deleted.fileName}`,
+        metadata: { slotKey: deleted.slotKey, fileName: deleted.fileName },
+        performedBy: reqUser.id,
+      });
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[contracts/attachments DELETE] error:", error);
+      res.status(500).json({ error: error.message || "فشل حذف المرفق" });
     }
   });
 

@@ -402,6 +402,24 @@ export interface IStorage {
     performedBy: string | null;
   }): Promise<ContractActivity>;
   getContractActivities(contractId: string): Promise<ContractActivity[]>;
+  // Attachment methods. Designated-slot uploads delete the prior file
+  // from disk + DB inside one transaction; the helper returns both the
+  // new row and the displaced one (when any) so the route layer can
+  // log "replaced" vs "added" deterministically.
+  createContractAttachment(input: {
+    contractId: string;
+    slotKey: string | null;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    description: string | null;
+    uploadedBy: string;
+  }): Promise<{ attachment: ContractAttachment; replaced: ContractAttachment | null }>;
+  getContractAttachments(contractId: string): Promise<ContractAttachment[]>;
+  getContractAttachmentById(id: string): Promise<ContractAttachment | undefined>;
+  getContractAttachmentBySlot(contractId: string, slotKey: string): Promise<ContractAttachment | undefined>;
+  deleteContractAttachment(id: string): Promise<ContractAttachment | undefined>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
@@ -648,6 +666,21 @@ function mapDbContract(row: any): Contract {
     createdAt: toISOString(row.createdAt),
     updatedAt: toISOString(row.updatedAt),
     closedAt: toISOStringOrNull(row.closedAt),
+  };
+}
+
+function mapDbContractAttachment(row: any): ContractAttachment {
+  return {
+    id: row.id,
+    contractId: row.contractId,
+    slotKey: row.slotKey ?? null,
+    fileName: row.fileName,
+    filePath: row.filePath,
+    fileSize: typeof row.fileSize === "number" ? row.fileSize : Number(row.fileSize ?? 0),
+    mimeType: row.mimeType,
+    description: row.description ?? null,
+    uploadedBy: row.uploadedBy,
+    uploadedAt: toISOString(row.uploadedAt),
   };
 }
 
@@ -4055,6 +4088,92 @@ export class DatabaseStorage implements IStorage {
       .where(eq(contractActivityLog.contractId, contractId))
       .orderBy(desc(contractActivityLog.performedAt));
     return rows.map(mapDbContractActivity);
+  }
+
+  // Designated-slot uploads atomically replace the prior file: delete
+  // the old DB row in the same transaction, then return its
+  // pre-deletion shape so the route layer can unlink the old file
+  // from disk after the commit. Free attachments (slotKey === null)
+  // skip the displacement step and just append.
+  async createContractAttachment(input: {
+    contractId: string;
+    slotKey: string | null;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    description: string | null;
+    uploadedBy: string;
+  }): Promise<{ attachment: ContractAttachment; replaced: ContractAttachment | null }> {
+    return await db.transaction(async (tx) => {
+      let replaced: ContractAttachment | null = null;
+      if (input.slotKey) {
+        const existing = await tx.select().from(contractAttachments)
+          .where(and(
+            eq(contractAttachments.contractId, input.contractId),
+            eq(contractAttachments.slotKey, input.slotKey),
+          ));
+        if (existing.length > 0) {
+          replaced = mapDbContractAttachment(existing[0]);
+          await tx.delete(contractAttachments).where(eq(contractAttachments.id, existing[0].id));
+        }
+      }
+      const id = randomUUID();
+      const now = new Date();
+      await tx.insert(contractAttachments).values({
+        id,
+        contractId: input.contractId,
+        slotKey: input.slotKey,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        description: input.description,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now,
+      } as any);
+      const attachment: ContractAttachment = {
+        id,
+        contractId: input.contractId,
+        slotKey: input.slotKey,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        description: input.description,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now.toISOString(),
+      };
+      return { attachment, replaced };
+    });
+  }
+
+  async getContractAttachments(contractId: string): Promise<ContractAttachment[]> {
+    const rows = await db.select().from(contractAttachments)
+      .where(eq(contractAttachments.contractId, contractId))
+      .orderBy(desc(contractAttachments.uploadedAt));
+    return rows.map(mapDbContractAttachment);
+  }
+
+  async getContractAttachmentById(id: string): Promise<ContractAttachment | undefined> {
+    const rows = await db.select().from(contractAttachments).where(eq(contractAttachments.id, id));
+    return rows[0] ? mapDbContractAttachment(rows[0]) : undefined;
+  }
+
+  async getContractAttachmentBySlot(contractId: string, slotKey: string): Promise<ContractAttachment | undefined> {
+    const rows = await db.select().from(contractAttachments)
+      .where(and(
+        eq(contractAttachments.contractId, contractId),
+        eq(contractAttachments.slotKey, slotKey),
+      ));
+    return rows[0] ? mapDbContractAttachment(rows[0]) : undefined;
+  }
+
+  async deleteContractAttachment(id: string): Promise<ContractAttachment | undefined> {
+    const rows = await db.select().from(contractAttachments).where(eq(contractAttachments.id, id));
+    if (rows.length === 0) return undefined;
+    await db.delete(contractAttachments).where(eq(contractAttachments.id, id));
+    return mapDbContractAttachment(rows[0]);
   }
 
   // ==================== Initialize Default Data ====================
