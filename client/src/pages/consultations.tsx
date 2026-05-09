@@ -683,7 +683,10 @@ export default function ConsultationsPage() {
   // opens and re-fetched after any workflow mutation that updates the
   // consultation row, so the timeline always reflects the latest state.
   const [activityLog, setActivityLog] = useState<ConsultationActivity[]>([]);
-  const [activityLogExpanded, setActivityLogExpanded] = useState(true);
+  // Default collapsed — the dialog body grows long once a consultation
+  // accumulates activity, and the list isn't usually the user's
+  // primary read on dialog open. Click the header chevron to expand.
+  const [activityLogExpanded, setActivityLogExpanded] = useState(false);
 
   // Phase-8 — pause / unpause dialog state. Two separate dialogs because
   // the entry vs exit forms differ (reason required on pause, optional
@@ -1448,11 +1451,12 @@ export default function ConsultationsPage() {
       setDeliveryExtensions([]);
       setExtensionsExpanded(false);
       setActivityLog([]);
-      setActivityLogExpanded(true);
+      setActivityLogExpanded(false);
       return;
     }
     setExtensionsExpanded(false);
-    setActivityLogExpanded(true);
+    // Default collapsed on every dialog open. User can toggle.
+    setActivityLogExpanded(false);
     fetchDeliveryExtensions(selectedConsultation.id);
     fetchActivityLog(selectedConsultation.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
