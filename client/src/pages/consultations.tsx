@@ -434,6 +434,21 @@ function canEarlyClose(
   return !!consultation.assignedTo && consultation.assignedTo === userId;
 }
 
+// Mirrors the role gate on PATCH /api/consultations/:id for the
+// consultationType field: branch_manager / admin_support /
+// department_head (own dept). The PATCH endpoint silently drops the
+// field for any other actor, but the UI hides the picker entirely so
+// those actors don't see a control they can't actually use.
+function canChangeConsultationType(
+  consultation: Consultation,
+  userRole: string,
+  userDeptId: string | null,
+): boolean {
+  if (userRole === "branch_manager" || userRole === "admin_support") return true;
+  if (userRole === "department_head" && consultation.departmentId === userDeptId) return true;
+  return false;
+}
+
 // Phase-6 — activity-type → icon component map. Kept inline for now
 // (consultations-only); promote to a shared helper if cases-side ever
 // adopts the same icon set.
@@ -450,6 +465,7 @@ function getActivityIcon(activityType: string) {
     case ConsultationActivityType.CONVERTED_TO_CASE:  return FileSymlink;
     case ConsultationActivityType.EARLY_CLOSED:       return XCircle;
     case ConsultationActivityType.GENERAL_NOTE:       return MessageSquare;
+    case ConsultationActivityType.TYPE_CHANGED:       return ArrowLeftRight;
     default: return Clock;
   }
 }
@@ -1293,6 +1309,33 @@ export default function ConsultationsPage() {
     }
     setShowDeleteDialog(false);
     setConsultationToDelete(null);
+  };
+
+  // Inline editor handler for the consultationType field on the details
+  // dialog. Server enforces the role gate + stage remap + activity log,
+  // so the client just fires the PATCH and refreshes — refreshConsultations
+  // pulls the updated row + (via the activity-log effect on
+  // selectedConsultation.updatedAt) the new log entry.
+  const [typeChangeInProgress, setTypeChangeInProgress] = useState(false);
+  const handleConsultationTypeChange = async (
+    consultation: Consultation,
+    newType: string,
+  ) => {
+    if (newType === consultation.consultationType) return;
+    setTypeChangeInProgress(true);
+    try {
+      await updateConsultation(consultation.id, { consultationType: newType });
+      await refreshConsultations();
+      toast({ title: "تم تحديث نوع الاستشارة" });
+    } catch (err) {
+      toast({
+        title: "فشل تحديث نوع الاستشارة",
+        description: extractApiError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setTypeChangeInProgress(false);
+    }
   };
 
   const [formData, setFormData] = useState({
@@ -2179,7 +2222,36 @@ export default function ConsultationsPage() {
                 </div>
                 <div>
                   <Label className="text-muted-foreground">النوع</Label>
-                  <p>{selectedConsultation.consultationType}</p>
+                  {user && canChangeConsultationType(selectedConsultation, user.role, user.departmentId) ? (
+                    <Select
+                      value={selectedConsultation.consultationType}
+                      onValueChange={(value) => handleConsultationTypeChange(selectedConsultation, value)}
+                      disabled={typeChangeInProgress}
+                    >
+                      <SelectTrigger
+                        className="mt-1"
+                        data-testid="dialog-consultation-type-select"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.values(ConsultationType) as string[]).map((t) => (
+                          <SelectItem
+                            key={t}
+                            value={t}
+                            data-testid={`dialog-option-consultation-type-${t}`}
+                          >
+                            {ConsultationTypeLabels[t as keyof typeof ConsultationTypeLabels] || t}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p>
+                      {ConsultationTypeLabels[selectedConsultation.consultationType as keyof typeof ConsultationTypeLabels]
+                        || selectedConsultation.consultationType}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <Label className="text-muted-foreground">المحامي المسؤول</Label>
