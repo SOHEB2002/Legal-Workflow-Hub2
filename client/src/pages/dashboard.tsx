@@ -119,13 +119,19 @@ export default function DashboardPage() {
       return m.assignedTo === user.id;
     });
     // Contracts use the consultations committee — chair =
-    // consultations_review_head, who's already in the seesAll branch
-    // above. Everyone else: dept_head sees their own dept's contracts;
+    // consultations_review_head. cases_review_head is INTENTIONALLY
+    // excluded from the contracts seesAll branch (they chair the
+    // cases committee, which has nothing to do with contracts) even
+    // though they remain seesAll for cases / consultations / memos.
+    // Everyone else: dept_head sees their own dept's contracts;
     // assigned lawyer + internal reviewer see their own files (the
     // reviewer needs to see the file at لجنة_مراجعة since they may be
     // pulled in for the committee discussion).
+    const seesAllContracts =
+      user.role === "branch_manager"
+      || user.role === "consultations_review_head";
     const filterContracts = (rows: Contract[]) => rows.filter((c) => {
-      if (seesAll) return true;
+      if (seesAllContracts) return true;
       if (isDeptHead) return c.departmentId === user.departmentId;
       return c.assignedTo === user.id || c.internalReviewerId === user.id;
     });

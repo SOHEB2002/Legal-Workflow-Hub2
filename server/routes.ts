@@ -385,11 +385,12 @@ function canModifyContract(
   user: { id: string; role: string; departmentId: string | null },
   contract: any,
 ): boolean {
-  // Same shape as canModifyConsultation. consultations_review_head and
-  // cases_review_head are admin-class for visibility purposes (the
-  // committee chairs need to see every file at lجنة_مراجعة across the
-  // 4 modules).
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  // consultations_review_head IS admin-class here because they're the
+  // committee chair for contracts. cases_review_head is intentionally
+  // EXCLUDED — they chair the cases committee, which has nothing to
+  // do with the contracts module. They can still see a contract if
+  // they're personally on it (assigned / creator / internal reviewer).
+  const adminRoles = ["branch_manager", "admin_support", "consultations_review_head"];
   if (adminRoles.includes(user.role)) return true;
   if (user.role === "department_head" && contract.departmentId === user.departmentId) return true;
   if (contract.assignedTo === user.id || contract.createdBy === user.id) return true;
@@ -608,15 +609,24 @@ function validateStageTransition(
     }
   }
 
-  // Contract rollback — same semantics as consultations / memos.
+  // Contract rollback — same single-step semantics as the other
+  // entities, plus a tighter dept_head dept-scope. department_head
+  // can only roll back contracts in their OWN department;
+  // branch_manager remains global. Earlier revisions had no
+  // dept-scope check, which let a dept_head from any dept call
+  // /return-stage on any contract just by knowing its id.
   if (entityType === "contract" && entityData) {
     const stages = ContractStagesAll as readonly string[];
     const currentIdx = stages.indexOf(currentStage);
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
-      if (isHeadOrManager) return { allowed: true };
+      const isBranchManager = userRole === "branch_manager";
+      const isOwnDeptHead =
+        userRole === "department_head"
+        && !!user?.departmentId
+        && entityData.departmentId === user.departmentId;
+      if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
         return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
@@ -4044,7 +4054,16 @@ export async function registerRoutes(
       // currentStage to RECEIVED so the new dept starts the file
       // fresh on its own intake. Writes a dedicated department_transferred
       // activity entry inside the same transaction as the row update.
-      let deptTransfer: { fromDeptId: string; toDeptId: string; fromStage: string; reason: string } | null = null;
+      let deptTransfer: {
+        fromDeptId: string;
+        toDeptId: string;
+        fromStage: string;
+        reason: string;
+        previousAssignedTo: string | null;
+        previousInternalReviewerId: string | null;
+        previousPriority: string | null;
+        previousPriorityReason: string | null;
+      } | null = null;
       if (
         req.body.departmentId !== undefined
         && req.body.departmentId
@@ -4064,6 +4083,14 @@ export async function registerRoutes(
           toDeptId: req.body.departmentId,
           fromStage: existing.currentStage,
           reason,
+          // Capture pre-mutation snapshots BEFORE the body is rewritten
+          // below — the activity log entry needs to record what the
+          // contract looked like in the source dept so the audit trail
+          // shows the dropped assignment + reviewer + priority.
+          previousAssignedTo: existing.assignedTo ?? null,
+          previousInternalReviewerId: existing.internalReviewerId ?? null,
+          previousPriority: existing.priority ?? null,
+          previousPriorityReason: existing.priorityReason ?? null,
         };
         // Reset assignment + reviewer + stage so the receiving dept
         // starts the file fresh. Mirrors cases.
@@ -4132,6 +4159,10 @@ export async function registerRoutes(
               fromStage: deptTransfer.fromStage,
               reason: deptTransfer.reason || null,
               alsoChangedType: !!typeChange,
+              previousAssignedTo: deptTransfer.previousAssignedTo,
+              previousInternalReviewerId: deptTransfer.previousInternalReviewerId,
+              previousPriority: deptTransfer.previousPriority,
+              previousPriorityReason: deptTransfer.previousPriorityReason,
             },
             performedBy: user.id,
           },
@@ -4161,7 +4192,78 @@ export async function registerRoutes(
           },
         );
       } else {
-        updated = await storage.updateContract(String(req.params.id), req.body);
+        // Inline-edit activity logging. The committee referral card
+        // posts PATCH-only changes for internalReviewerId / priority /
+        // priorityReason / assignedTo, and earlier revisions wrote
+        // those silently — the audit trail had a gap. Detect each
+        // semantic change and route the write through
+        // updateContractAndLog with the matching activity type. If
+        // multiple semantic fields change in one PATCH (rare) we
+        // pick the highest-priority (assignedTo > reviewer > priority)
+        // for the log entry; the others ride along on the same write.
+        const reviewerChanged =
+          req.body.internalReviewerId !== undefined
+          && req.body.internalReviewerId !== existing.internalReviewerId;
+        const priorityChanged =
+          (req.body.priority !== undefined && req.body.priority !== existing.priority)
+          || (req.body.priorityReason !== undefined && req.body.priorityReason !== existing.priorityReason);
+        const assignedToChanged =
+          req.body.assignedTo !== undefined
+          && req.body.assignedTo !== existing.assignedTo;
+
+        if (assignedToChanged) {
+          const newAssigneeId = req.body.assignedTo;
+          const lawyer = newAssigneeId ? await storage.getUser(newAssigneeId) : null;
+          const description = newAssigneeId
+            ? `تعديل الإسناد إلى ${lawyer?.name || newAssigneeId}`
+            : "إلغاء إسناد العقد";
+          updated = await storage.updateContractAndLog(String(req.params.id), req.body, {
+            activityType: ContractActivityType.ASSIGNED,
+            description,
+            metadata: {
+              assignedTo: newAssigneeId || null,
+              previousAssignedTo: existing.assignedTo ?? null,
+              viaPatch: true,
+            },
+            performedBy: user.id,
+          });
+        } else if (reviewerChanged) {
+          const newReviewerId = req.body.internalReviewerId;
+          const reviewer = newReviewerId ? await storage.getUser(newReviewerId) : null;
+          const description = newReviewerId
+            ? `تعيين المراجع الداخلي: ${reviewer?.name || newReviewerId}`
+            : "إلغاء تعيين المراجع الداخلي";
+          updated = await storage.updateContractAndLog(String(req.params.id), req.body, {
+            activityType: ContractActivityType.REVIEWER_ASSIGNED,
+            description,
+            metadata: {
+              internalReviewerId: newReviewerId || null,
+              previousInternalReviewerId: existing.internalReviewerId ?? null,
+            },
+            performedBy: user.id,
+          });
+        } else if (priorityChanged) {
+          const newPriority = req.body.priority ?? existing.priority;
+          const newReason = req.body.priorityReason ?? existing.priorityReason;
+          const description = newPriority
+            ? `تحديث الأولوية إلى "${newPriority}"${newReason ? ` — ${String(newReason).slice(0, 80)}` : ""}`
+            : "إلغاء الأولوية";
+          updated = await storage.updateContractAndLog(String(req.params.id), req.body, {
+            activityType: ContractActivityType.PRIORITY_SET,
+            description,
+            metadata: {
+              priority: newPriority || null,
+              priorityReason: newReason || null,
+              previousPriority: existing.priority ?? null,
+              previousPriorityReason: existing.priorityReason ?? null,
+            },
+            performedBy: user.id,
+          });
+        } else {
+          // No semantic change worth logging (e.g. a title-only edit).
+          // Silent write is the right outcome here.
+          updated = await storage.updateContract(String(req.params.id), req.body);
+        }
       }
       if (!updated) return res.status(404).json({ error: "العقد غير موجود" });
       res.json(updated);
@@ -4173,8 +4275,29 @@ export async function registerRoutes(
 
   app.delete("/api/contracts/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
-      const ok = await storage.deleteContract(String(req.params.id));
+      const id = String(req.params.id);
+      // The contract_attachments / contract_activity_log tables both
+      // CASCADE on contracts.id, so deleting the contract row removes
+      // their DB rows automatically. The attachment FILES on disk
+      // don't follow the FK cascade, though, so we read them BEFORE
+      // the delete and unlink afterward. Best-effort: failure to
+      // unlink is logged but doesn't fail the request — the DB is
+      // already in the right state.
+      const attachments = await storage.getContractAttachments(id);
+      const ok = await storage.deleteContract(id);
       if (!ok) return res.status(404).json({ error: "العقد غير موجود" });
+      for (const att of attachments) {
+        if (att.filePath) {
+          fs.unlink(att.filePath, (err) => {
+            if (err) console.warn(`[contracts/delete] failed to unlink ${att.filePath}:`, err.message);
+          });
+        }
+      }
+      // Remove the contract's directory if it's now empty. rmdir
+      // fails silently when non-empty (some unlinks may have
+      // failed); that's the safe behavior.
+      const contractDir = path.join(contractsUploadsDir, id);
+      fs.rmdir(contractDir, () => {});
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -4287,11 +4410,17 @@ export async function registerRoutes(
       }
 
       // → INTERNAL_REVIEW: a designated reviewer must be set on the
-      // row. We accept either an existing persistent reviewerId on
-      // the contract OR a newly provided one in the body. Validate
-      // the user is active and not admin_support (admin_support
-      // can't act as a reviewer). Persists the chosen reviewer so
-      // the locked-stage check on /internal-review picks it up.
+      // row. Validates the user is active and not admin_support
+      // (administrative role, not a reviewer). The persistence rule
+      // mirrors cases: a permanent intake-set reviewer is the source
+      // of truth and a body-provided reviewer is treated as a
+      // single-round override (used for the locked-stage check on
+      // this transition + activity log) but does NOT mutate
+      // internal_reviewer_id. The persistent slot is only bootstrapped
+      // when the contract had no reviewer yet — otherwise re-routing
+      // a round to a substitute reviewer would silently overwrite
+      // the original assignment. Contracts can bounce back from
+      // committee for multiple rounds, so this matters here too.
       let reviewerToPersist: string | null = null;
       if (targetStage === ContractStage.INTERNAL_REVIEW) {
         const reviewerId = rawReviewerId || contract.internalReviewerId || "";
@@ -4305,12 +4434,12 @@ export async function registerRoutes(
         if (reviewer.role === "admin_support") {
           return res.status(400).json({ error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" });
         }
-        // Persist the picked reviewer when the contract didn't have
-        // one yet, OR the body explicitly overrides. The "permanent
-        // intake-set reviewer survives a per-round override" pattern
-        // from cases isn't needed here: contracts have a single
-        // review cycle, not per-round overrides.
-        if (rawReviewerId || !contract.internalReviewerId) {
+        // Bootstrap-only persistence: only write to internal_reviewer_id
+        // if the contract didn't have a reviewer yet. A body-provided
+        // override on a contract that already has a persistent
+        // reviewer is intentionally NOT persisted (single-round
+        // override semantic).
+        if (!contract.internalReviewerId) {
           reviewerToPersist = reviewerId;
         }
       }
@@ -4589,11 +4718,12 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      // Same role gate as the WRITTEN consultation: assigned_lawyer +
-      // admin_support / department_head / branch_manager.
-      const isLawyer = isAssignedLawyer(reqUser, contract);
-      const adminLike = ["admin_support", "department_head", "branch_manager"];
-      if (!adminLike.includes(reqUser.role) && !isLawyer) {
+      // Per spec: admin_support + branch_manager only. Earlier
+      // revisions also allowed assigned_lawyer + department_head,
+      // which was wider than the FE button (which gates to the same
+      // two roles) and looser than the spec calls for.
+      const allowedClosers = ["admin_support", "branch_manager"];
+      if (!allowedClosers.includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
       }
       if (contract.status !== "active") {
@@ -4601,14 +4731,20 @@ export async function registerRoutes(
       }
       const reason = String(req.body?.reason || "").trim();
       if (!reason) return res.status(400).json({ error: "سبب الإغلاق مطلوب" });
+      // currentStage must move to CLOSED so status + stage stay in
+      // sync (the table badge, the stages bar progress, and the
+      // pendingReview filters all read currentStage; leaving it on
+      // the pre-close stage would create a "closed-but-still-at-تحرير"
+      // ghost row).
       const updated = await storage.updateContractAndLog(contract.id, {
         status: "closed",
+        currentStage: ContractStage.CLOSED,
         closedAt: new Date() as any,
         closureReason: reason,
       } as any, {
         activityType: ContractActivityType.EARLY_CLOSED,
         description: `إغلاق مبكر — السبب: ${reason}`,
-        metadata: { reason },
+        metadata: { reason, fromStage: contract.currentStage },
         performedBy: reqUser.id,
       });
       if (!updated) return res.status(500).json({ error: "فشل الإغلاق المبكر" });
