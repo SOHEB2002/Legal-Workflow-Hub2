@@ -1262,6 +1262,43 @@ export function getConsultationStagesForType(
   return ConsultationStagesAll;
 }
 
+// Remap currentStage when the consultation's workflow type changes. If
+// the existing stage is already valid in the new type's stages list,
+// keep it. Otherwise apply a small heuristic for stages that semantically
+// "match" (intake stays intake, data-completion stays data-completion,
+// study↔in-progress, terminal stages collapse to منجزة), and fall back
+// to RECEIVED for anything unmapped — the canonical safe restart point.
+export function remapConsultationStageForType(
+  fromStage: ConsultationStageValue,
+  toType: ConsultationTypeValue,
+): ConsultationStageValue {
+  const targetStages = getConsultationStagesForType(toType);
+  if (targetStages.includes(fromStage)) return fromStage;
+
+  // Heuristic mapping by semantic equivalence. Only applied when the
+  // raw stage isn't already valid for the target type.
+  const semanticMap: Partial<Record<ConsultationStageValue, ConsultationStageValue>> = {
+    [ConsultationStage.RECEIVED]:                    ConsultationStage.RECEIVED,
+    [ConsultationStage.RECEIVED_PENDING_COMPLETION]: ConsultationStage.RECEIVED_PENDING_COMPLETION,
+    // WRITTEN's working/review stages → the new type's stage 3 (STUDY
+    // for PHONE / IN_PROGRESS for PROCEDURAL). Pick whichever stage
+    // 3 the target uses by reading targetStages directly.
+    [ConsultationStage.STUDY]:                       targetStages[2] as ConsultationStageValue,
+    [ConsultationStage.DRAFTING]:                    targetStages[2] as ConsultationStageValue,
+    [ConsultationStage.INTERNAL_REVIEW]:             targetStages[2] as ConsultationStageValue,
+    [ConsultationStage.COMMITTEE]:                   targetStages[2] as ConsultationStageValue,
+    [ConsultationStage.TAKING_NOTES]:                targetStages[2] as ConsultationStageValue,
+    [ConsultationStage.READY]:                       ConsultationStage.COMPLETED,
+    [ConsultationStage.COMPLETED]:                   ConsultationStage.COMPLETED,
+    [ConsultationStage.IN_PROGRESS]:                 targetStages[2] as ConsultationStageValue,
+    [ConsultationStage.CLOSED_FINAL]:                ConsultationStage.COMPLETED,
+  };
+
+  const mapped = semanticMap[fromStage];
+  if (mapped && targetStages.includes(mapped)) return mapped;
+  return ConsultationStage.RECEIVED;
+}
+
 // ==================== Consultation Category (Phase 4 — SLA categories) ====================
 // Category is set once at consultation creation (no manual override) and
 // drives the expectedDeliveryDate via SLA_DAYS. Stored as plain varchar in
@@ -1881,29 +1918,31 @@ export const ConsultationActivityType = {
   AWAIT_COMPLETION:       "await_completion",
   RESUME_FROM_COMPLETION: "resume_from_completion",
   COMPLETION_SKIPPED:     "completion_skipped",
+  TYPE_CHANGED:           "consultation_type_changed",
 } as const;
 
 export type ConsultationActivityTypeValue =
   typeof ConsultationActivityType[keyof typeof ConsultationActivityType];
 
 export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValue, string> = {
-  created:                "إنشاء",
-  assigned:               "إسناد",
-  stage_advanced:         "تقدم في المرحلة",
-  stage_returned:         "إرجاع للمرحلة السابقة",
-  internal_review:        "مراجعة داخلية",
-  committee_decision:     "قرار اللجنة",
-  take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
-  returned_to_committee:  "إعادة للجنة المراجعة",
-  delivery_extended:      "تمديد تاريخ التسليم",
-  converted_to_case:      "تحويل إلى قضية",
-  early_closed:           "إغلاق مبكر",
-  general_note:           "ملاحظة عامة",
-  paused:                 "تعليق",
-  unpaused:               "إلغاء التعليق",
-  await_completion:       "بانتظار استكمال المرفقات والبيانات",
-  resume_from_completion: "العودة من الاستكمال",
-  completion_skipped:     "تجاوز مرحلة الاستكمال",
+  created:                  "إنشاء",
+  assigned:                 "إسناد",
+  stage_advanced:           "تقدم في المرحلة",
+  stage_returned:           "إرجاع للمرحلة السابقة",
+  internal_review:          "مراجعة داخلية",
+  committee_decision:       "قرار اللجنة",
+  take_notes_outcome:       "نتيجة الأخذ بالملاحظات",
+  returned_to_committee:    "إعادة للجنة المراجعة",
+  delivery_extended:        "تمديد تاريخ التسليم",
+  converted_to_case:        "تحويل إلى قضية",
+  early_closed:             "إغلاق مبكر",
+  general_note:             "ملاحظة عامة",
+  paused:                   "تعليق",
+  unpaused:                 "إلغاء التعليق",
+  await_completion:         "بانتظار استكمال المرفقات والبيانات",
+  resume_from_completion:   "العودة من الاستكمال",
+  completion_skipped:       "تجاوز مرحلة الاستكمال",
+  consultation_type_changed: "تغيير نوع الاستشارة",
 };
 
 export interface ConsultationActivity {

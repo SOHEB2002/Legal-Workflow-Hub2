@@ -30,8 +30,10 @@ import {
   ConsultationStagesAll,
   ConsultationStageLabels,
   ConsultationType,
+  ConsultationTypeLabels,
   resolveConsultationType,
   getConsultationStagesForType,
+  remapConsultationStageForType,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
@@ -2589,12 +2591,81 @@ export async function registerRoutes(
         }
       }
 
-      const updated = await storage.updateConsultation(String(req.params.id), req.body);
+      // Consultation-type change is a workflow-impacting edit — restricted
+      // to branch_manager / admin_support / department_head (own dept,
+      // already enforced by canModifyConsultation above), validated to
+      // the 3-value enum, and always paired with a stage remap +
+      // dedicated activity-log entry. Assigned-lawyer / creator can pass
+      // canModifyConsultation but are NOT allowed to change the type;
+      // we strip the field for them rather than 403 the whole request,
+      // since the rest of the body may be a legitimate edit.
+      let typeChange: { from: string; to: string; fromStage: string; toStage: string; remapped: boolean } | null = null;
+      if (
+        req.body.consultationType !== undefined
+        && req.body.consultationType !== existing.consultationType
+      ) {
+        const newType = String(req.body.consultationType);
+        const validTypes = Object.values(ConsultationType) as string[];
+        const allowedRoles = ["branch_manager", "admin_support", "department_head"];
+        if (!allowedRoles.includes(user.role)) {
+          // Drop the field silently for unauthorised actors so they can
+          // still edit other fields they're allowed to touch.
+          delete req.body.consultationType;
+        } else if (!validTypes.includes(newType)) {
+          return res.status(400).json({ error: "نوع الاستشارة غير صحيح" });
+        } else {
+          const remapped = remapConsultationStageForType(
+            existing.currentStage as any,
+            newType as any,
+          );
+          typeChange = {
+            from: existing.consultationType,
+            to: newType,
+            fromStage: existing.currentStage,
+            toStage: remapped,
+            remapped: remapped !== existing.currentStage,
+          };
+          // Always persist currentStage explicitly — even when the value
+          // is unchanged this keeps the transactional update + activity
+          // log self-contained and avoids relying on a separate write.
+          req.body.currentStage = remapped;
+        }
+      }
+
+      let updated;
+      if (typeChange) {
+        const fromTypeLabel = (ConsultationTypeLabels as any)[typeChange.from] || typeChange.from;
+        const toTypeLabel = (ConsultationTypeLabels as any)[typeChange.to] || typeChange.to;
+        const fromStageLabel = (ConsultationStageLabels as any)[typeChange.fromStage] || typeChange.fromStage;
+        const toStageLabel = (ConsultationStageLabels as any)[typeChange.toStage] || typeChange.toStage;
+        const description = typeChange.remapped
+          ? `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel} — أُعيد ضبط المرحلة من ${fromStageLabel} إلى ${toStageLabel}`
+          : `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel}`;
+        updated = await storage.updateConsultationAndLog(
+          String(req.params.id),
+          req.body,
+          {
+            activityType: ConsultationActivityType.TYPE_CHANGED,
+            description,
+            metadata: {
+              from: typeChange.from,
+              to: typeChange.to,
+              fromStage: typeChange.fromStage,
+              toStage: typeChange.toStage,
+              stageRemapped: typeChange.remapped,
+            },
+            performedBy: user.id,
+          },
+        );
+      } else {
+        updated = await storage.updateConsultation(String(req.params.id), req.body);
+      }
       if (!updated) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
       res.json(updated);
     } catch (error) {
+      console.error("[PATCH /api/consultations/:id] error:", error);
       res.status(500).json({ error: "حدث خطأ في تحديث الاستشارة" });
     }
   });
