@@ -104,11 +104,11 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
       // when omitted, but forwarding it explicitly keeps the create dialog
       // and the inserted row in lockstep.
       category: data.category || "عادية",
-      // Committee-referral fields (optional at create). Forwarded only
-      // when set so the server's defaults remain authoritative.
-      ...((data as any).priority ? { priority: (data as any).priority } : {}),
-      ...((data as any).priorityReason ? { priorityReason: (data as any).priorityReason } : {}),
-      ...((data as any).internalReviewerId ? { internalReviewerId: (data as any).internalReviewerId } : {}),
+      // Committee-referral fields (priority / priorityReason /
+      // internalReviewerId) are intentionally NOT forwarded at create —
+      // they're committee-form-only per Phase-9.1. New rows start with
+      // null on all three; the details dialog's committee card sets them
+      // via PATCH once the consultation reaches لجنة_مراجعة.
       createdBy,
     };
 

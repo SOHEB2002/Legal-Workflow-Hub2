@@ -1105,6 +1105,25 @@ export const Priority = {
 
 export type PriorityType = typeof Priority[keyof typeof Priority];
 
+// Consultations use a separate 2-value priority enum (committee-form-only,
+// per user feedback). Cases / memos keep the 4-value Priority enum above.
+// Stored on consultations.priority (varchar 50) — same column, narrower
+// vocabulary. Existing rows that had the legacy 4-value strings will read
+// back as-is; the UI's resolveConsultationPriorityLabel collapses them to
+// "—" so a stale value doesn't surface as an unrenderable badge.
+export const ConsultationPriority = {
+  URGENT:     "عاجلة",
+  NOT_URGENT: "غير_عاجلة",
+} as const;
+
+export type ConsultationPriorityValue =
+  typeof ConsultationPriority[keyof typeof ConsultationPriority];
+
+export const ConsultationPriorityLabels: Record<ConsultationPriorityValue, string> = {
+  "عاجلة":     "عاجلة",
+  "غير_عاجلة": "غير عاجلة",
+};
+
 // ==================== قرارات المراجعة ====================
 export const ReviewDecision = {
   APPROVED: "approved",
@@ -2382,12 +2401,11 @@ export const insertConsultationSchema = z.object({
   // that don't send the field get the standard SLA. The server uses this
   // to compute expectedDeliveryDate at insert time.
   category: z.enum(["سريعة", "عادية", "طويلة"]).optional().default("عادية"),
-  // Committee-referral fields. All optional at create time — the
-  // committee form is filled in later, just before the consultation
-  // moves into لجنة_مراجعة.
-  priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).optional(),
-  priorityReason: z.string().optional(),
-  internalReviewerId: z.string().optional().nullable(),
+  // Committee-referral fields are NOT accepted at create — per user
+  // feedback (Phase-9.1) the committee form is the only place priority,
+  // priority_reason, and internal_reviewer_id can be set/changed. PATCH
+  // /api/consultations/:id continues to accept them with per-field
+  // role gates.
 });
 
 export type InsertConsultation = z.infer<typeof insertConsultationSchema>;
