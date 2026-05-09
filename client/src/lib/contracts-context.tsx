@@ -19,7 +19,21 @@ interface ContractsContextType {
   updateContract: (id: string, data: Partial<Contract>) => Promise<void>;
   deleteContract: (id: string) => Promise<void>;
   assignContract: (id: string, assignedTo: string) => Promise<void>;
-  advanceStage: (id: string, targetStage: ContractStageValue) => Promise<void>;
+  // Extras carry stage-entry context that the server applies in the
+  // same transaction as the stage update (notes are logged to the
+  // activity entry; reviewerId persists to internal_reviewer_id;
+  // priority + priorityReason persist to the row when entering
+  // COMMITTEE so the referral card surfaces them right away).
+  advanceStage: (
+    id: string,
+    targetStage: ContractStageValue,
+    extras?: {
+      notes?: string;
+      internalReviewerId?: string;
+      priority?: string;
+      priorityReason?: string;
+    },
+  ) => Promise<void>;
   returnStage: (id: string, targetStage: ContractStageValue) => Promise<void>;
   submitInternalReview: (id: string, decision: InternalReviewDecisionValue, notes?: string) => Promise<void>;
   submitCommitteeDecision: (id: string, decision: CommitteeDecisionValue, notes?: string) => Promise<void>;
@@ -100,8 +114,22 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
     apply(updated);
   };
 
-  const advanceStage = async (id: string, targetStage: ContractStageValue): Promise<void> => {
-    const res = await apiRequest("POST", `/api/contracts/${id}/advance-stage`, { targetStage });
+  const advanceStage = async (
+    id: string,
+    targetStage: ContractStageValue,
+    extras?: {
+      notes?: string;
+      internalReviewerId?: string;
+      priority?: string;
+      priorityReason?: string;
+    },
+  ): Promise<void> => {
+    const body: Record<string, unknown> = { targetStage };
+    if (extras?.notes) body.notes = extras.notes;
+    if (extras?.internalReviewerId) body.internalReviewerId = extras.internalReviewerId;
+    if (extras?.priority) body.priority = extras.priority;
+    if (extras?.priorityReason) body.priorityReason = extras.priorityReason;
+    const res = await apiRequest("POST", `/api/contracts/${id}/advance-stage`, body);
     const updated = (await res.json()) as Contract;
     apply(updated);
   };

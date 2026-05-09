@@ -4212,6 +4212,81 @@ export async function registerRoutes(
       );
       if (slotCheckErr) return res.status(400).json({ error: slotCheckErr });
 
+      // Stage-entry context. The FE captures these on the advance
+      // dialog when the destination requires them; the server
+      // re-validates so a hand-rolled API call can't bypass the
+      // requirement.
+      const rawNotes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+      const rawReviewerId = typeof req.body?.internalReviewerId === "string" ? req.body.internalReviewerId : "";
+      const rawPriority = typeof req.body?.priority === "string" ? req.body.priority : "";
+      const rawPriorityReason = typeof req.body?.priorityReason === "string" ? req.body.priorityReason.trim() : "";
+
+      // RECEIVED → PENDING_COMPLETION: notes are required (the lawyer
+      // needs to know what data is missing). Mirrors the cases-side
+      // requirement.
+      if (
+        contract.currentStage === ContractStage.RECEIVED
+        && targetStage === ContractStage.RECEIVED_PENDING_COMPLETION
+        && !rawNotes
+      ) {
+        return res.status(400).json({
+          error: "الملاحظات مطلوبة عند النقل إلى استكمال البيانات والمرفقات",
+        });
+      }
+
+      // → INTERNAL_REVIEW: a designated reviewer must be set on the
+      // row. We accept either an existing persistent reviewerId on
+      // the contract OR a newly provided one in the body. Validate
+      // the user is active and not admin_support (admin_support
+      // can't act as a reviewer). Persists the chosen reviewer so
+      // the locked-stage check on /internal-review picks it up.
+      let reviewerToPersist: string | null = null;
+      if (targetStage === ContractStage.INTERNAL_REVIEW) {
+        const reviewerId = rawReviewerId || contract.internalReviewerId || "";
+        if (!reviewerId) {
+          return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
+        }
+        const reviewer = await storage.getUser(reviewerId);
+        if (!reviewer || !reviewer.isActive) {
+          return res.status(400).json({ error: "المراجع الداخلي المختار غير صالح" });
+        }
+        if (reviewer.role === "admin_support") {
+          return res.status(400).json({ error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" });
+        }
+        // Persist the picked reviewer when the contract didn't have
+        // one yet, OR the body explicitly overrides. The "permanent
+        // intake-set reviewer survives a per-round override" pattern
+        // from cases isn't needed here: contracts have a single
+        // review cycle, not per-round overrides.
+        if (rawReviewerId || !contract.internalReviewerId) {
+          reviewerToPersist = reviewerId;
+        }
+      }
+
+      // → COMMITTEE: priority is required. Reason is optional. If the
+      // contract already has a priority, we still allow overwriting
+      // when the body provides one. Validates the priority value
+      // against the 2-option enum.
+      let priorityToPersist: string | null = null;
+      let priorityReasonToPersist: string | null | undefined = undefined;
+      if (targetStage === ContractStage.COMMITTEE) {
+        const incoming = rawPriority || contract.priority || "";
+        if (!incoming) {
+          return res.status(400).json({ error: "يجب تحديد الأولوية قبل الإحالة للجنة" });
+        }
+        const validPriorities = ["عاجلة", "غير_عاجلة"];
+        if (!validPriorities.includes(incoming)) {
+          return res.status(400).json({ error: "قيمة الأولوية غير صحيحة" });
+        }
+        priorityToPersist = incoming;
+        // Reason: only persist when explicitly provided. Empty body
+        // value clears the prior reason; missing body value leaves
+        // the existing one alone.
+        if (req.body?.priorityReason !== undefined) {
+          priorityReasonToPersist = rawPriorityReason || null;
+        }
+      }
+
       const fromLabel = (ContractStageLabels as any)[contract.currentStage] || contract.currentStage;
       const toLabel = (ContractStageLabels as any)[targetStage] || targetStage;
       const reachedClosed = targetStage === ContractStage.CLOSED;
@@ -4220,10 +4295,25 @@ export async function registerRoutes(
         updateData.status = "closed";
         updateData.closedAt = new Date();
       }
+      if (reviewerToPersist) updateData.internalReviewerId = reviewerToPersist;
+      if (priorityToPersist) updateData.priority = priorityToPersist;
+      if (priorityReasonToPersist !== undefined) updateData.priorityReason = priorityReasonToPersist;
+
+      const description = rawNotes
+        ? `انتقال من ${fromLabel} إلى ${toLabel} — ${rawNotes.slice(0, 120)}`
+        : `انتقال من ${fromLabel} إلى ${toLabel}`;
       const updated = await storage.updateContractAndLog(contract.id, updateData, {
         activityType: ContractActivityType.STAGE_ADVANCED,
-        description: `انتقال من ${fromLabel} إلى ${toLabel}`,
-        metadata: { fromStage: contract.currentStage, toStage: targetStage, ...(reachedClosed ? { closedViaFinalStage: true } : {}) },
+        description,
+        metadata: {
+          fromStage: contract.currentStage,
+          toStage: targetStage,
+          ...(rawNotes ? { notes: rawNotes } : {}),
+          ...(reviewerToPersist ? { internalReviewerId: reviewerToPersist } : {}),
+          ...(priorityToPersist ? { priority: priorityToPersist } : {}),
+          ...(priorityReasonToPersist !== undefined ? { priorityReason: priorityReasonToPersist } : {}),
+          ...(reachedClosed ? { closedViaFinalStage: true } : {}),
+        },
         performedBy: reqUser.id,
       });
       if (!updated) return res.status(500).json({ error: "فشل تحديث العقد" });
@@ -4277,9 +4367,14 @@ export async function registerRoutes(
       const reqUser = (req as any).user;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const decision = String(req.body?.decision || "");
-      const notes = String(req.body?.notes || "");
+      const notes = String(req.body?.notes || "").trim();
       const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
       if (!valid) return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+      // NEEDS_NOTES requires notes — they're the actionable feedback
+      // the lawyer needs to address. PASSED leaves notes optional.
+      if (decision === InternalReviewDecision.NEEDS_NOTES && !notes) {
+        return res.status(400).json({ error: "الملاحظات مطلوبة عند اختيار يوجد ملاحظات" });
+      }
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
       if (contract.status !== "active") {
@@ -4326,9 +4421,14 @@ export async function registerRoutes(
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
       const decision = String(req.body?.decision || "");
-      const notes = String(req.body?.notes || "");
+      const notes = String(req.body?.notes || "").trim();
       const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
       if (!valid) return res.status(400).json({ error: "قرار اللجنة غير صحيح" });
+      // NEEDS_NOTES requires notes — same rule as the internal-review
+      // endpoint. APPROVED leaves notes optional.
+      if (decision === CommitteeDecision.NEEDS_NOTES && !notes) {
+        return res.status(400).json({ error: "الملاحظات مطلوبة عند اختيار يوجد ملاحظات" });
+      }
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
       if (contract.status !== "active") {
@@ -4715,6 +4815,21 @@ export async function registerRoutes(
         const file = (req as any).file as { originalname: string; filename: string; path: string; size: number; mimetype: string } | undefined;
         if (!file) {
           return res.status(400).json({ error: "الملف مطلوب أو نوعه غير مسموح" });
+        }
+        // Multer reads the multipart `filename` field as latin1 by
+        // default (busboy default for header parsing), so any
+        // non-ASCII original-filename bytes round-trip into mojibake
+        // ("اÙØ¹Ù‚د..."). Re-decode the latin1-as-bytes back into
+        // UTF-8 here, BEFORE we persist the row, so the DB / API
+        // response / Content-Disposition all carry the real Arabic
+        // string. Safe for ASCII-only names — the round-trip is
+        // identity for codepoints below 0x80.
+        try {
+          file.originalname = Buffer.from(file.originalname, "latin1").toString("utf8");
+        } catch {
+          // Defensive — Buffer.from never throws on a string input,
+          // but if some Node version surprises us, fall through with
+          // the raw value rather than 500ing the upload.
         }
         const rawSlot = typeof req.body?.slotKey === "string" ? req.body.slotKey.trim() : "";
         const description = typeof req.body?.description === "string" ? req.body.description : null;
