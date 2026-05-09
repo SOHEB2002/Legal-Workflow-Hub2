@@ -464,6 +464,29 @@ export default function ContractsPage() {
   const [showDelete, setShowDelete] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Contract | null>(null);
 
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferTarget, setTransferTarget] = useState<Contract | null>(null);
+  const [transferDeptId, setTransferDeptId] = useState("");
+  const [transferReason, setTransferReason] = useState("");
+
+  // Same gate as the cases-side transfer: branch_manager / admin_support /
+  // department_head (own dept). Anyone with admin-level access can move
+  // a contract to a different department; assigned lawyers cannot.
+  const canTransferContract = (c: Contract): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+    return false;
+  };
+
+  const canDeleteContract = (): boolean => !!user && user.role === "branch_manager";
+
+  const canEarlyClose = (c: Contract): boolean => {
+    if (!user) return false;
+    if (c.status !== "active") return false;
+    return user.role === "admin_support" || user.role === "branch_manager";
+  };
+
   const [busy, setBusy] = useState(false);
   const wrap = async (fn: () => Promise<void>, successMsg: string) => {
     setBusy(true);
@@ -694,34 +717,101 @@ export default function ContractsPage() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           {c.status === "active" && c.currentStage === ContractStage.RECEIVED && (
-                            <DropdownMenuItem onClick={() => { setAssignTarget(c); setAssignLawyerId(c.assignedTo || ""); setShowAssign(true); }}>
+                            <DropdownMenuItem
+                              data-testid={`row-action-assign-${c.id}`}
+                              onClick={() => { setAssignTarget(c); setAssignLawyerId(c.assignedTo || ""); setShowAssign(true); }}
+                            >
                               <UserPlus className="w-4 h-4 ml-2" />
                               إسناد
                             </DropdownMenuItem>
                           )}
+                          {/* Await / resume — same gate as pause, complementary
+                              actions. Only one of the two is shown depending
+                              on awaitingCompletion. */}
+                          {canPause(c, user) && c.status === "active" && c.awaitingCompletion && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-resume-${c.id}`}
+                              className="text-green-600 focus:text-green-700"
+                              onClick={() => wrap(() => resumeFromCompletion(c.id), "تم العودة من الاستكمال")}
+                            >
+                              <CheckCircle className="w-4 h-4 ml-2" />
+                              تم الاستكمال
+                            </DropdownMenuItem>
+                          )}
+                          {canPause(c, user) && c.status === "active" && !c.awaitingCompletion && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-await-${c.id}`}
+                              className="text-amber-600 focus:text-amber-700"
+                              onClick={() => { setAwaitTarget(c); setAwaitReason(""); setShowAwait(true); }}
+                            >
+                              <AlertTriangle className="w-4 h-4 ml-2" />
+                              بانتظار استكمال البيانات
+                            </DropdownMenuItem>
+                          )}
+                          {canPause(c, user) && c.status === "active"
+                            && c.currentStage === ContractStage.RECEIVED_PENDING_COMPLETION
+                            && !c.awaitingCompletion && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-skip-${c.id}`}
+                              onClick={() => wrap(() => skipCompletion(c.id), "تم تجاوز مرحلة الاستكمال")}
+                            >
+                              تجاوز الاستكمال
+                            </DropdownMenuItem>
+                          )}
+                          {canTransferContract(c) && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-transfer-${c.id}`}
+                              onClick={() => {
+                                setTransferTarget(c);
+                                setTransferDeptId("");
+                                setTransferReason("");
+                                setShowTransfer(true);
+                              }}
+                            >
+                              <ChevronLeft className="w-4 h-4 ml-2" />
+                              تحويل لقسم آخر
+                            </DropdownMenuItem>
+                          )}
+                          {(canPause(c, user)) && <DropdownMenuSeparator />}
                           {canPause(c, user) && c.status === "active" && (
-                            <DropdownMenuItem onClick={() => { setPauseTarget(c); setPauseReason(""); setShowPause(true); }}>
+                            <DropdownMenuItem
+                              data-testid={`row-action-pause-${c.id}`}
+                              className="text-amber-600 focus:text-amber-700"
+                              onClick={() => { setPauseTarget(c); setPauseReason(""); setShowPause(true); }}
+                            >
                               <Pause className="w-4 h-4 ml-2" />
                               تعليق
                             </DropdownMenuItem>
                           )}
                           {canPause(c, user) && c.status === "paused" && (
-                            <DropdownMenuItem onClick={() => wrap(() => unpauseContract(c.id), "تم إلغاء التعليق")}>
+                            <DropdownMenuItem
+                              data-testid={`row-action-unpause-${c.id}`}
+                              onClick={() => wrap(() => unpauseContract(c.id), "تم إلغاء التعليق")}
+                            >
                               <Play className="w-4 h-4 ml-2" />
                               إلغاء التعليق
                             </DropdownMenuItem>
                           )}
-                          {user && user.role === "branch_manager" && (
-                            <>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                className="text-destructive"
-                                onClick={() => { setDeleteTarget(c); setShowDelete(true); }}
-                              >
-                                <Trash2 className="w-4 h-4 ml-2" />
-                                حذف
-                              </DropdownMenuItem>
-                            </>
+                          {(canEarlyClose(c) || canDeleteContract()) && <DropdownMenuSeparator />}
+                          {canEarlyClose(c) && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-early-close-${c.id}`}
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => { setEarlyCloseTarget(c); setEarlyCloseReason(""); setShowEarlyClose(true); }}
+                            >
+                              <XCircle className="w-4 h-4 ml-2" />
+                              إغلاق مبكر
+                            </DropdownMenuItem>
+                          )}
+                          {canDeleteContract() && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-delete-${c.id}`}
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => { setDeleteTarget(c); setShowDelete(true); }}
+                            >
+                              <Trash2 className="w-4 h-4 ml-2" />
+                              حذف العقد
+                            </DropdownMenuItem>
                           )}
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -867,7 +957,25 @@ export default function ContractsPage() {
                 </div>
                 <div>
                   <Label className="text-muted-foreground">القسم</Label>
-                  <p>{getDepartmentName(selected.departmentId)}</p>
+                  {canTransferContract(selected) ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1 w-full justify-between font-normal"
+                      onClick={() => {
+                        setTransferTarget(selected);
+                        setTransferDeptId("");
+                        setTransferReason("");
+                        setShowTransfer(true);
+                      }}
+                      data-testid="dialog-dept-transfer-button"
+                    >
+                      <span>{getDepartmentName(selected.departmentId)}</span>
+                      <ChevronLeft className="w-3.5 h-3.5 mr-1 opacity-50" />
+                    </Button>
+                  ) : (
+                    <p>{getDepartmentName(selected.departmentId)}</p>
+                  )}
                 </div>
                 <div>
                   <Label className="text-muted-foreground">المحامي المسؤول</Label>
@@ -1391,6 +1499,66 @@ export default function ContractsPage() {
               }}
               disabled={!earlyCloseReason.trim() || busy}
             >تأكيد الإغلاق</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============ Department transfer dialog ============ */}
+      {/* Mirror of the cases-side transfer flow: pick the target dept,
+          optional reason. Server clears assignedTo + internalReviewerId
+          and resets currentStage to RECEIVED so the new dept owns the
+          intake fresh. The choice is the dropdown only (so the user
+          can't pick the same dept by accident); the active dept is
+          excluded from the options list. */}
+      <Dialog open={showTransfer} onOpenChange={setShowTransfer}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تحويل العقد لقسم آخر</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="text-xs text-muted-foreground">
+              عند التحويل سيتم: إعادة المرحلة إلى "استلام" — مسح المحامي المسند —
+              مسح المراجع الداخلي. هذا الإجراء غير قابل للتراجع المباشر.
+            </div>
+            <Label>القسم المستهدف</Label>
+            <Select value={transferDeptId} onValueChange={setTransferDeptId}>
+              <SelectTrigger data-testid="transfer-dept-select">
+                <SelectValue placeholder="اختر القسم" />
+              </SelectTrigger>
+              <SelectContent>
+                {departments
+                  .filter((d) => !transferTarget || d.id !== transferTarget.departmentId)
+                  .map((d) => (
+                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            <Label>سبب التحويل (اختياري)</Label>
+            <Textarea
+              data-testid="transfer-reason"
+              value={transferReason}
+              onChange={(e) => setTransferReason(e.target.value)}
+              rows={2}
+              placeholder="اشرح سبب التحويل..."
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTransfer(false)}>إلغاء</Button>
+            <Button
+              data-testid="transfer-confirm"
+              onClick={async () => {
+                if (!transferTarget || !transferDeptId) return;
+                await wrap(
+                  () => updateContract(transferTarget.id, {
+                    departmentId: transferDeptId,
+                    ...(transferReason.trim() ? { transferReason: transferReason.trim() } : {}),
+                  } as any),
+                  "تم تحويل العقد للقسم الجديد",
+                );
+                setShowTransfer(false);
+              }}
+              disabled={!transferDeptId || busy}
+            >تأكيد التحويل</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

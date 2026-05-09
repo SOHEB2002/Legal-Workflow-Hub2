@@ -4003,6 +4003,44 @@ export async function registerRoutes(
         }
       }
 
+      // Department transfer — same shape as the cases-side transfer:
+      // when departmentId changes, clear assignedTo + internalReviewerId
+      // (both are scoped to the source dept's roster) and reset
+      // currentStage to RECEIVED so the new dept starts the file
+      // fresh on its own intake. Writes a dedicated department_transferred
+      // activity entry inside the same transaction as the row update.
+      let deptTransfer: { fromDeptId: string; toDeptId: string; fromStage: string; reason: string } | null = null;
+      if (
+        req.body.departmentId !== undefined
+        && req.body.departmentId
+        && req.body.departmentId !== existing.departmentId
+      ) {
+        // Same role gate as cases — admin-class or own-dept dept_head.
+        // canModifyContract above already covers this, but we check
+        // explicitly so the transfer error message is clearer than a
+        // generic 403.
+        const allowedTransferRoles = ["branch_manager", "admin_support", "department_head"];
+        if (!allowedTransferRoles.includes(user.role)) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لتحويل العقد لقسم آخر" });
+        }
+        const reason = typeof req.body.transferReason === "string" ? req.body.transferReason.trim() : "";
+        deptTransfer = {
+          fromDeptId: existing.departmentId,
+          toDeptId: req.body.departmentId,
+          fromStage: existing.currentStage,
+          reason,
+        };
+        // Reset assignment + reviewer + stage so the receiving dept
+        // starts the file fresh. Mirrors cases.
+        req.body.assignedTo = null;
+        req.body.internalReviewerId = null;
+        req.body.currentStage = ContractStage.RECEIVED;
+        // Clear committee fields too — they're scoped to the originating
+        // dept's review cycle and don't carry to the new dept.
+        if (req.body.priority === undefined) req.body.priority = null;
+        if (req.body.priorityReason === undefined) req.body.priorityReason = null;
+      }
+
       // contractType change — same shape as consultation type change:
       // restricted to branch_manager / admin_support / department_head;
       // remaps currentStage if invalid in the new type's stages list;
@@ -4036,7 +4074,34 @@ export async function registerRoutes(
       }
 
       let updated;
-      if (typeChange) {
+      if (deptTransfer) {
+        // Department transfer takes precedence over a same-PATCH type
+        // change because the activity-log entry is the more important
+        // breadcrumb (the type change is logged by the post-write
+        // helper below if both happen — see metadata.alsoChangedType).
+        const fromDeptName = await storage.getDepartmentById(deptTransfer.fromDeptId).then((d) => d?.name || deptTransfer.fromDeptId).catch(() => deptTransfer.fromDeptId);
+        const toDeptName = await storage.getDepartmentById(deptTransfer.toDeptId).then((d) => d?.name || deptTransfer.toDeptId).catch(() => deptTransfer.toDeptId);
+        const fromStageLabel = (ContractStageLabels as any)[deptTransfer.fromStage] || deptTransfer.fromStage;
+        const description = deptTransfer.reason
+          ? `تحويل من قسم "${fromDeptName}" إلى قسم "${toDeptName}" — ${deptTransfer.reason}`
+          : `تحويل من قسم "${fromDeptName}" إلى قسم "${toDeptName}"`;
+        updated = await storage.updateContractAndLog(
+          String(req.params.id),
+          req.body,
+          {
+            activityType: ContractActivityType.DEPARTMENT_TRANSFERRED,
+            description,
+            metadata: {
+              fromDeptId: deptTransfer.fromDeptId,
+              toDeptId: deptTransfer.toDeptId,
+              fromStage: deptTransfer.fromStage,
+              reason: deptTransfer.reason || null,
+              alsoChangedType: !!typeChange,
+            },
+            performedBy: user.id,
+          },
+        );
+      } else if (typeChange) {
         const fromTypeLabel = (ContractTypeLabels as any)[typeChange.from] || typeChange.from;
         const toTypeLabel = (ContractTypeLabels as any)[typeChange.to] || typeChange.to;
         const fromStageLabel = (ContractStageLabels as any)[typeChange.fromStage] || typeChange.fromStage;
