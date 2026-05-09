@@ -82,7 +82,17 @@ export default function DashboardPage() {
   // AND the navigation can pass the appropriate URL params.
   const pendingReview = useMemo(() => {
     if (!user) return { cases: [], memos: [], consultations: [], total: 0 };
-    const seesAll = user.role === "branch_manager" || user.role === "cases_review_head";
+    // Both committee chairs are "see all" across ALL three target
+    // sections — the popup is a single cross-entity overview, so a chair
+    // that walks past their own section (e.g. consultations chair
+    // glancing at cases) shouldn't be silently downgraded to "items
+    // assigned to me", which would always be 0 for them. Mirrors the
+    // role check in buildPendingReviewQuery so counts and URL params
+    // stay aligned.
+    const seesAll =
+      user.role === "branch_manager"
+      || user.role === "cases_review_head"
+      || user.role === "consultations_review_head";
     const isDeptHead = user.role === "department_head";
 
     const filterCases = (rows: LawCase[]) => rows.filter((c) => {
@@ -209,7 +219,20 @@ export default function DashboardPage() {
   // consultations / memos all read these on mount.
   const buildPendingReviewQuery = (): string => {
     if (!user) return "status=pending_review";
-    if (user.role === "branch_manager" || user.role === "cases_review_head") {
+    // See-all group covers branch_manager + BOTH review-committee chairs
+    // (cases + consultations). Without consultations_review_head here,
+    // that role would fall through to the assignedTo fallback — which
+    // would scope the consultations list to items the chair is
+    // personally "assigned to" (a field reserved for the working
+    // lawyer, not the reviewer), reliably yielding zero results and
+    // hiding the very items the chair is supposed to review. Same role
+    // set is applied to all three popup buttons so counts and
+    // navigation agree.
+    if (
+      user.role === "branch_manager"
+      || user.role === "cases_review_head"
+      || user.role === "consultations_review_head"
+    ) {
       return "status=pending_review";
     }
     if (user.role === "department_head" && user.departmentId) {
