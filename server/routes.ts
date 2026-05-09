@@ -2785,11 +2785,13 @@ export async function registerRoutes(
   // ==================== Consultation workflow endpoints (rebuild §3.2.2) ====================
 
   // POST /api/consultations/:id/assign
-  // Body: { assignedTo, notes? }. Sets assignedTo. If currentStage is RECEIVED,
-  // advances in the same write — WRITTEN jumps to STUDY (legacy behavior),
-  // PHONE / PROCEDURAL jump to PENDING_COMPLETION per their 5-stage flow.
-  // Allowed roles: WRITTEN — admin_support, department_head, branch_manager;
-  // PHONE / PROCEDURAL — department_head, branch_manager only.
+  // Body: { assignedTo, notes? }. Sets assignedTo. Stage is NOT
+  // auto-advanced — keeping assignment and stage transitions as
+  // independent actions. The assigned lawyer (or dept_head / admin /
+  // branch_manager) drives the stage forward via /advance-stage when
+  // they're ready. Allowed roles: WRITTEN — admin_support,
+  // department_head, branch_manager; PHONE / PROCEDURAL —
+  // department_head, branch_manager only.
   app.post("/api/consultations/:id/assign", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
@@ -2821,20 +2823,10 @@ export async function registerRoutes(
       const lawyer = await storage.getUser(assignedTo);
       const lawyerName = lawyer?.name || assignedTo;
 
-      const updates: any = { assignedTo };
-      const autoAdvanceFromReceived = consultation.currentStage === ConsultationStage.RECEIVED;
-      if (autoAdvanceFromReceived) {
-        // WRITTEN keeps the legacy direct-to-STUDY skip; PHONE / PROCEDURAL
-        // step to PENDING_COMPLETION (the next stage on their 5-stage flow).
-        updates.currentStage = resolvedType === ConsultationType.WRITTEN
-          ? ConsultationStage.STUDY
-          : ConsultationStage.RECEIVED_PENDING_COMPLETION;
-      }
-
-      const updated = await storage.updateConsultationAndLog(consultation.id, updates, {
+      const updated = await storage.updateConsultationAndLog(consultation.id, { assignedTo } as any, {
         activityType: ConsultationActivityType.ASSIGNED,
         description: `تم إسناد الاستشارة لـ ${lawyerName}`,
-        metadata: { assignedTo, lawyerName, autoAdvancedToStage: autoAdvanceFromReceived ? updates.currentStage : null },
+        metadata: { assignedTo, lawyerName },
         performedBy: reqUser.id,
       });
       if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
@@ -4146,9 +4138,12 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/contracts/:id/assign — same auto-advance pattern as the
-  // WRITTEN consultation /assign: when currentStage is RECEIVED, jump
-  // to PENDING_COMPLETION in the same write. Allowed: admin_support,
+  // POST /api/contracts/:id/assign — sets assignedTo and writes an
+  // assigned activity entry. Stage is NOT auto-advanced: a contract
+  // at RECEIVED stays at RECEIVED after assignment so the assigned
+  // lawyer (or dept_head / admin / branch_manager) can choose between
+  // moving to PENDING_COMPLETION (normal flow) or skipping straight
+  // to DRAFTING via the تجاوز button. Allowed: admin_support,
   // department_head, branch_manager.
   app.post("/api/contracts/:id/assign", requireAuth, async (req, res) => {
     try {
@@ -4170,13 +4165,10 @@ export async function registerRoutes(
       if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
       const lawyer = await storage.getUser(assignedTo);
       const lawyerName = lawyer?.name || assignedTo;
-      const updates: any = { assignedTo };
-      const autoAdvance = contract.currentStage === ContractStage.RECEIVED;
-      if (autoAdvance) updates.currentStage = ContractStage.RECEIVED_PENDING_COMPLETION;
-      const updated = await storage.updateContractAndLog(contract.id, updates, {
+      const updated = await storage.updateContractAndLog(contract.id, { assignedTo } as any, {
         activityType: ContractActivityType.ASSIGNED,
         description: `تم إسناد العقد لـ ${lawyerName}`,
-        metadata: { assignedTo, lawyerName, autoAdvancedToStage: autoAdvance ? updates.currentStage : null },
+        metadata: { assignedTo, lawyerName },
         performedBy: reqUser.id,
       });
       if (!updated) return res.status(500).json({ error: "فشل تحديث العقد" });

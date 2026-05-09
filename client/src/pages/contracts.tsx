@@ -296,8 +296,10 @@ export default function ContractsPage() {
     if (fresh && fresh !== selected) setSelected(fresh);
   }, [contracts, selected]);
 
-  // Activity log
+  // Activity log — default collapsed so the dialog body stays scannable.
+  // Click the header chevron to expand.
   const [activities, setActivities] = useState<ContractActivity[]>([]);
+  const [activitiesExpanded, setActivitiesExpanded] = useState(false);
   const fetchActivities = async (id: string) => {
     try {
       const res = await apiRequest("GET", `/api/contracts/${id}/activities`);
@@ -350,11 +352,22 @@ export default function ContractsPage() {
       const fd = new FormData();
       fd.append("file", file);
       if (slotKey) fd.append("slotKey", slotKey);
+      // Multipart uploads can't go through apiRequest (which sets a
+      // JSON Content-Type); we hand-roll the fetch but still need the
+      // bearer token AND the CSRF token — same protection that the
+      // shared queryClient.apiRequest applies. Letting the browser
+      // pick the multipart Content-Type (with its boundary) is
+      // critical: setting it manually breaks parsing on the server.
       const token = localStorage.getItem("lawfirm_token");
+      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
       const res = await fetch(`/api/contracts/${contractId}/attachments`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers,
         body: fd,
+        credentials: "same-origin",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1251,10 +1264,24 @@ export default function ContractsPage() {
                 </div>
               )}
 
-              {/* Activity log */}
-              <div className="text-right border rounded-lg p-3 bg-muted/20">
-                <h4 className="text-sm font-medium mb-2">سجل النشاط ({activities.length})</h4>
-                <ul className="space-y-2">
+              {/* Activity log — collapsed by default, header chevron toggles */}
+              <div className="text-right border rounded-lg p-3 bg-muted/20" data-testid="contract-activity-log">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-sm font-medium w-full text-right"
+                  onClick={() => setActivitiesExpanded((v) => !v)}
+                  data-testid="button-toggle-contract-activity-log"
+                >
+                  <span>سجل النشاط ({activities.length})</span>
+                  <ChevronLeft
+                    className={
+                      "w-4 h-4 transition-transform " +
+                      (activitiesExpanded ? "-rotate-90" : "")
+                    }
+                  />
+                </button>
+                {activitiesExpanded && (
+                <ul className="mt-3 space-y-2">
                   {activities.length === 0 && (
                     <li className="text-xs text-muted-foreground py-2">لا يوجد نشاط بعد</li>
                   )}
@@ -1271,6 +1298,7 @@ export default function ContractsPage() {
                     </li>
                   ))}
                 </ul>
+                )}
               </div>
             </div>
           )}
