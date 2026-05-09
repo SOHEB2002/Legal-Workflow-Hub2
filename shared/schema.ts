@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { pgTable, text, varchar, boolean, timestamp, jsonb, integer, primaryKey, bigint } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, text, varchar, boolean, timestamp, jsonb, integer, primaryKey, bigint, index, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // ==================== Drizzle Tables ====================
@@ -121,7 +122,13 @@ export const lawCases = pgTable("law_cases", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
-});
+}, (t) => ({
+  convertedFromConsultationFk: foreignKey({
+    name: "law_cases_converted_from_consultation_id_fkey",
+    columns: [t.convertedFromConsultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("set null"),
+}));
 
 export const consultations = pgTable("consultations", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -186,7 +193,14 @@ export const consultationStudies = pgTable("consultation_studies", {
   notes: text("notes").notNull().default(""),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => ({
+  consultationFk: foreignKey({
+    name: "consultation_studies_consultation_id_fkey",
+    columns: [t.consultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("cascade"),
+  consultationIdx: index("consultation_studies_consultation_idx").on(t.consultationId),
+}));
 
 export const consultationDrafts = pgTable("consultation_drafts", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -194,7 +208,14 @@ export const consultationDrafts = pgTable("consultation_drafts", {
   content: text("content").notNull().default(""),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => ({
+  consultationFk: foreignKey({
+    name: "consultation_drafts_consultation_id_fkey",
+    columns: [t.consultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("cascade"),
+  consultationIdx: index("consultation_drafts_consultation_idx").on(t.consultationId),
+}));
 
 export const consultationReviews = pgTable("consultation_reviews", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -203,7 +224,14 @@ export const consultationReviews = pgTable("consultation_reviews", {
   decision: varchar("decision", { length: 50 }).notNull(),
   notes: text("notes").notNull().default(""),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => ({
+  consultationFk: foreignKey({
+    name: "consultation_reviews_consultation_id_fkey",
+    columns: [t.consultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("cascade"),
+  consultationIdx: index("consultation_reviews_consultation_idx").on(t.consultationId),
+}));
 
 export const consultationCommitteeDecisions = pgTable("consultation_committee_decisions", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -212,7 +240,14 @@ export const consultationCommitteeDecisions = pgTable("consultation_committee_de
   notes: text("notes").notNull().default(""),
   decidedBy: varchar("decided_by", { length: 255 }).notNull(),
   decidedAt: timestamp("decided_at").defaultNow(),
-});
+}, (t) => ({
+  consultationFk: foreignKey({
+    name: "consultation_committee_decisions_consultation_id_fkey",
+    columns: [t.consultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("cascade"),
+  consultationIdx: index("consultation_committee_decisions_consultation_idx").on(t.consultationId),
+}));
 
 export const consultationNoteOutcomes = pgTable("consultation_note_outcomes", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -221,7 +256,14 @@ export const consultationNoteOutcomes = pgTable("consultation_note_outcomes", {
   notes: text("notes").notNull().default(""),
   recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
   recordedAt: timestamp("recorded_at").defaultNow(),
-});
+}, (t) => ({
+  consultationFk: foreignKey({
+    name: "consultation_note_outcomes_consultation_id_fkey",
+    columns: [t.consultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("cascade"),
+  consultationIdx: index("consultation_note_outcomes_consultation_idx").on(t.consultationId),
+}));
 
 // Phase-5 — audit log for expectedDeliveryDate extensions. Each row
 // captures one extension (old → new) so the dialog can show a history
@@ -236,7 +278,15 @@ export const consultationDeliveryExtensions = pgTable("consultation_delivery_ext
   reason: text("reason").notNull().default(""),
   extendedBy: varchar("extended_by", { length: 255 }).notNull(),
   extendedAt: timestamp("extended_at").defaultNow(),
-});
+}, (t) => ({
+  consultationFk: foreignKey({
+    name: "consultation_delivery_extensions_consultation_id_fkey",
+    columns: [t.consultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("cascade"),
+  consultationIdx: index("consultation_delivery_extensions_consultation_idx").on(t.consultationId),
+  extendedAtIdx: index("consultation_delivery_extensions_extended_at_idx").on(t.extendedAt),
+}));
 
 // Phase-6 — chronological activity log for consultations. One row per
 // meaningful workflow event (created, assigned, stage transitions,
@@ -253,7 +303,15 @@ export const consultationActivityLog = pgTable("consultation_activity_log", {
   metadata: jsonb("metadata").default({}),
   performedBy: varchar("performed_by", { length: 255 }),
   performedAt: timestamp("performed_at").defaultNow(),
-});
+}, (t) => ({
+  consultationFk: foreignKey({
+    name: "consultation_activity_log_consultation_id_fkey",
+    columns: [t.consultationId],
+    foreignColumns: [consultations.id],
+  }).onDelete("cascade"),
+  consultationIdx: index("consultation_activity_log_consultation_idx").on(t.consultationId),
+  performedAtIdx: index("consultation_activity_log_performed_at_idx").on(t.performedAt),
+}));
 
 // ==================== Contracts module (العقود والمشاريع) ====================
 // Standalone module that mirrors the WRITTEN consultation 8-stage flow.
@@ -292,7 +350,12 @@ export const contracts = pgTable("contracts", {
   createdAt:          timestamp("created_at").defaultNow(),
   updatedAt:          timestamp("updated_at").defaultNow(),
   closedAt:           timestamp("closed_at"),
-});
+}, (t) => ({
+  departmentIdx: index("contracts_department_idx").on(t.departmentId),
+  assignedIdx:   index("contracts_assigned_idx").on(t.assignedTo),
+  stageIdx:      index("contracts_stage_idx").on(t.currentStage),
+  statusIdx:     index("contracts_status_idx").on(t.status),
+}));
 
 // File attachments. Designated slots (slot_key non-null) are
 // single-file — re-upload replaces the existing row + deletes the old
@@ -311,7 +374,18 @@ export const contractAttachments = pgTable("contract_attachments", {
   description: text("description"),
   uploadedBy:  varchar("uploaded_by", { length: 255 }).notNull(),
   uploadedAt:  timestamp("uploaded_at").defaultNow(),
-});
+}, (t) => ({
+  contractFk: foreignKey({
+    name: "contract_attachments_contract_id_fkey",
+    columns: [t.contractId],
+    foreignColumns: [contracts.id],
+  }).onDelete("cascade"),
+  slotUniqueIdx: uniqueIndex("contract_attachments_slot_unique_idx")
+    .on(t.contractId, t.slotKey)
+    .where(sql`slot_key IS NOT NULL`),
+  contractIdx:    index("contract_attachments_contract_idx").on(t.contractId),
+  slotLookupIdx:  index("contract_attachments_slot_lookup_idx").on(t.contractId, t.slotKey),
+}));
 
 export const contractActivityLog = pgTable("contract_activity_log", {
   id:           varchar("id", { length: 255 }).primaryKey(),
@@ -321,7 +395,15 @@ export const contractActivityLog = pgTable("contract_activity_log", {
   metadata:     jsonb("metadata").default({}),
   performedBy:  varchar("performed_by", { length: 255 }),
   performedAt:  timestamp("performed_at").defaultNow(),
-});
+}, (t) => ({
+  contractFk: foreignKey({
+    name: "contract_activity_log_contract_id_fkey",
+    columns: [t.contractId],
+    foreignColumns: [contracts.id],
+  }).onDelete("cascade"),
+  contractIdx: index("contract_activity_log_contract_idx")
+    .on(t.contractId, t.performedAt.desc()),
+}));
 
 export const hearings = pgTable("hearings", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -535,7 +617,15 @@ export const memoActivityLog = pgTable("memo_activity_log", {
   metadata: jsonb("metadata").default({}),
   performedBy: varchar("performed_by", { length: 255 }),
   performedAt: timestamp("performed_at").defaultNow(),
-});
+}, (t) => ({
+  memoFk: foreignKey({
+    name: "memo_activity_log_memo_id_fkey",
+    columns: [t.memoId],
+    foreignColumns: [memos.id],
+  }).onDelete("cascade"),
+  memoIdx: index("memo_activity_log_memo_idx").on(t.memoId),
+  performedAtIdx: index("memo_activity_log_performed_at_idx").on(t.performedAt),
+}));
 
 // Phase-9 — review-workflow helper tables. One row per peer-review
 // decision, committee decision, and take-notes outcome on a memo.
@@ -552,7 +642,14 @@ export const memoReviews = pgTable("memo_reviews", {
   decision: varchar("decision", { length: 50 }).notNull(),
   notes: text("notes").notNull().default(""),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => ({
+  memoFk: foreignKey({
+    name: "memo_reviews_memo_id_fkey",
+    columns: [t.memoId],
+    foreignColumns: [memos.id],
+  }).onDelete("cascade"),
+  memoIdx: index("memo_reviews_memo_idx").on(t.memoId),
+}));
 
 export const memoCommitteeDecisions = pgTable("memo_committee_decisions", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -561,7 +658,14 @@ export const memoCommitteeDecisions = pgTable("memo_committee_decisions", {
   notes: text("notes").notNull().default(""),
   decidedBy: varchar("decided_by", { length: 255 }).notNull(),
   decidedAt: timestamp("decided_at").defaultNow(),
-});
+}, (t) => ({
+  memoFk: foreignKey({
+    name: "memo_committee_decisions_memo_id_fkey",
+    columns: [t.memoId],
+    foreignColumns: [memos.id],
+  }).onDelete("cascade"),
+  memoIdx: index("memo_committee_decisions_memo_idx").on(t.memoId),
+}));
 
 export const memoNoteOutcomes = pgTable("memo_note_outcomes", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -570,7 +674,14 @@ export const memoNoteOutcomes = pgTable("memo_note_outcomes", {
   notes: text("notes").notNull().default(""),
   recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
   recordedAt: timestamp("recorded_at").defaultNow(),
-});
+}, (t) => ({
+  memoFk: foreignKey({
+    name: "memo_note_outcomes_memo_id_fkey",
+    columns: [t.memoId],
+    foreignColumns: [memos.id],
+  }).onDelete("cascade"),
+  memoIdx: index("memo_note_outcomes_memo_idx").on(t.memoId),
+}));
 
 export const caseNotes = pgTable("case_notes", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -635,7 +746,9 @@ export const savedFilters = pgTable("saved_filters", {
   filterConfig: jsonb("filter_config").notNull(),
   pageType: varchar("page_type", { length: 50 }).notNull().default("cases"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => ({
+  userPageIdx: index("saved_filters_user_page_idx").on(t.userId, t.pageType),
+}));
 
 // Tracks the last time each user opened a given sidebar section
 // (cases / consultations / hearings / memos). Drives the
@@ -647,7 +760,8 @@ export const userSectionViews = pgTable("user_section_views", {
   section: varchar("section", { length: 50 }).notNull(),
   lastViewedAt: timestamp("last_viewed_at").notNull().defaultNow(),
 }, (t) => ({
-  pk: primaryKey({ columns: [t.userId, t.section] }),
+  pk: primaryKey({ name: "user_section_views_pkey", columns: [t.userId, t.section] }),
+  userIdx: index("user_section_views_user_idx").on(t.userId),
 }));
 
 export const supportTickets = pgTable("support_tickets", {
