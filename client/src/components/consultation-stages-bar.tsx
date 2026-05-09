@@ -4,28 +4,41 @@ import {
   ConsultationStageLabels,
   ConsultationStagesAll,
   ConsultationStagesOrder,
+  ConsultationStagesOrderPhone,
+  ConsultationStagesOrderProcedural,
+  ConsultationType,
+  resolveConsultationType,
   type ConsultationStageValue,
 } from "@shared/schema";
 
 interface ConsultationStagesBarProps {
   currentStage: ConsultationStageValue;
+  // Workflow discriminator — picks the stage list to render. Defaults to
+  // WRITTEN when omitted so existing callers (and rows with legacy
+  // free-text consultation_type values) keep the full 7+1 bar.
+  consultationType?: string | null;
   // True when this consultation has already gone through the
   // الأخذ_بالملاحظات branch (committee returned يوجد_ملاحظات previously).
   // The page can't infer this from currentStage once the consultation has
   // moved on to جاهزة_للتسليم / منجزة, so callers compute it from server
-  // data (committee-decision history) and pass it in.
+  // data (committee-decision history) and pass it in. Ignored for the
+  // simple PHONE / PROCEDURAL flows (which have no taking-notes branch).
   hasTakingNotesHistory?: boolean;
 }
 
 export function ConsultationStagesBar({
   currentStage,
+  consultationType,
   hasTakingNotesHistory = false,
 }: ConsultationStagesBarProps) {
-  const showTakingNotes =
-    currentStage === ConsultationStage.TAKING_NOTES || hasTakingNotesHistory;
-  const stages: ConsultationStageValue[] = showTakingNotes
-    ? ConsultationStagesAll
-    : ConsultationStagesOrder;
+  const resolved = resolveConsultationType(consultationType);
+  const stages: ConsultationStageValue[] = (() => {
+    if (resolved === ConsultationType.PHONE) return [...ConsultationStagesOrderPhone];
+    if (resolved === ConsultationType.PROCEDURAL) return [...ConsultationStagesOrderProcedural];
+    const showTakingNotes =
+      currentStage === ConsultationStage.TAKING_NOTES || hasTakingNotesHistory;
+    return showTakingNotes ? [...ConsultationStagesAll] : [...ConsultationStagesOrder];
+  })();
 
   const rawIndex = stages.indexOf(currentStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;

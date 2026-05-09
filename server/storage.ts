@@ -14,6 +14,7 @@ import {
   type ConsultationDeliveryExtension, type ConsultationActivity,
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
+  ConsultationType, resolveConsultationType,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
@@ -1258,16 +1259,23 @@ export class DatabaseStorage implements IStorage {
       const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
       if (!existing) return undefined;
       const now = new Date();
+      // Procedural workflow lands on IN_PROGRESS instead of STUDY — its
+      // stage-3 token. WRITTEN and PHONE both use STUDY (دراسة).
+      const resolvedType = resolveConsultationType(existing.consultationType);
+      const targetStage = resolvedType === ConsultationType.PROCEDURAL
+        ? ConsultationStage.IN_PROGRESS
+        : ConsultationStage.STUDY;
       await tx.update(consultations).set({
-        currentStage: ConsultationStage.STUDY,
+        currentStage: targetStage,
         updatedAt: now,
       } as any).where(eq(consultations.id, id));
+      const targetLabel = targetStage === ConsultationStage.IN_PROGRESS ? "جاري العمل" : "دراسة";
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
         consultationId: id,
         activityType: ConsultationActivityType.COMPLETION_SKIPPED,
-        description: "تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى دراسة",
-        metadata: {},
+        description: `تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى ${targetLabel}`,
+        metadata: { targetStage },
         performedBy: input.performedBy,
         performedAt: now,
       } as any);

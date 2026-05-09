@@ -29,6 +29,9 @@ import {
   ConsultationStage,
   ConsultationStagesAll,
   ConsultationStageLabels,
+  ConsultationType,
+  resolveConsultationType,
+  getConsultationStagesForType,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
@@ -286,6 +289,35 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   { from: ConsultationStage.READY,           to: ConsultationStage.COMPLETED,         allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 ];
 
+// Phone (هاتفية) workflow — 5-stage simple flow. Same structure as the
+// procedural workflow; only the stage-3 token differs (STUDY vs IN_PROGRESS).
+// 1→2 is the assign action (only branch_manager / dept_head); 2→3 is the
+// generic advance (assigned_lawyer included so the lawyer can move it
+// forward themselves once they pick it up). 4→5 is the explicit final
+// closure (admin_support / branch_manager only).
+const ALLOWED_CONSULTATION_TRANSITIONS_PHONE: StageTransitionRule[] = [
+  { from: ConsultationStage.RECEIVED,                    to: ConsultationStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["department_head", "branch_manager"] },
+  { from: ConsultationStage.RECEIVED_PENDING_COMPLETION, to: ConsultationStage.STUDY,                       allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  { from: ConsultationStage.STUDY,                       to: ConsultationStage.COMPLETED,                   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.COMPLETED,                   to: ConsultationStage.CLOSED_FINAL,                allowedRoles: ["admin_support", "branch_manager"] },
+];
+
+// Procedural (إجرائية) workflow — same shape as PHONE except stage 3 is
+// IN_PROGRESS ("جاري_العمل") instead of STUDY ("دراسة").
+const ALLOWED_CONSULTATION_TRANSITIONS_PROCEDURAL: StageTransitionRule[] = [
+  { from: ConsultationStage.RECEIVED,                    to: ConsultationStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["department_head", "branch_manager"] },
+  { from: ConsultationStage.RECEIVED_PENDING_COMPLETION, to: ConsultationStage.IN_PROGRESS,                 allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  { from: ConsultationStage.IN_PROGRESS,                 to: ConsultationStage.COMPLETED,                   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.COMPLETED,                   to: ConsultationStage.CLOSED_FINAL,                allowedRoles: ["admin_support", "branch_manager"] },
+];
+
+function getConsultationTransitionsForType(type: string): StageTransitionRule[] {
+  const resolved = resolveConsultationType(type);
+  if (resolved === ConsultationType.PHONE) return ALLOWED_CONSULTATION_TRANSITIONS_PHONE;
+  if (resolved === ConsultationType.PROCEDURAL) return ALLOWED_CONSULTATION_TRANSITIONS_PROCEDURAL;
+  return ALLOWED_CONSULTATION_TRANSITIONS;
+}
+
 // Memos canonical 6+1 stage workflow (Phase-9). Mirrors consultations
 // but with memo-specific terminal labels (جاهزة_للرفع / مرفوعة) and no
 // STUDY / RECEIVED_PENDING_COMPLETION stages — memos go straight from
@@ -438,10 +470,13 @@ function validateStageTransition(
   // Consultation rollback (per consultations-rebuild-spec.md §3.2.1):
   //   department_head / branch_manager can return to any prior stage;
   //   assigned_lawyer can return one step.
-  // Uses ConsultationStagesAll which includes the conditional TAKING_NOTES
-  // stage in canonical order so rollback works from there too.
+  // The stages list is type-aware: WRITTEN keeps the 7+1 path (incl.
+  // conditional TAKING_NOTES); PHONE / PROCEDURAL use their own 5-stage
+  // lists. Anything not in the resolved list still uses WRITTEN — see
+  // resolveConsultationType for the legacy-value fallback.
   if (entityType === "consultation" && entityData) {
-    const stages = ConsultationStagesAll as readonly string[];
+    const consultationType = resolveConsultationType(entityData.consultationType);
+    const stages = getConsultationStagesForType(consultationType) as readonly string[];
     const currentIdx = stages.indexOf(currentStage);
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
@@ -475,12 +510,16 @@ function validateStageTransition(
   }
 
   // Forward transitions: route to the entity-specific table.
+  // Consultation table is selected per workflow type — WRITTEN keeps
+  // the existing 7+1 table; PHONE / PROCEDURAL use their own 5-stage
+  // tables (RECEIVED → PENDING_COMPLETION → STUDY|IN_PROGRESS →
+  // COMPLETED → CLOSED_FINAL).
   const rules =
     entityType === "case"
       ? ALLOWED_CASE_TRANSITIONS
       : entityType === "memo"
         ? ALLOWED_MEMO_TRANSITIONS
-        : ALLOWED_CONSULTATION_TRANSITIONS;
+        : getConsultationTransitionsForType(entityData?.consultationType);
   const rule = rules.find(r => r.from === currentStage && r.to === targetStage);
 
   if (!rule) {
@@ -2573,16 +2612,14 @@ export async function registerRoutes(
 
   // POST /api/consultations/:id/assign
   // Body: { assignedTo, notes? }. Sets assignedTo. If currentStage is RECEIVED,
-  // advances to STUDY in the same write. Allowed roles: admin_support,
-  // department_head, branch_manager.
+  // advances in the same write — WRITTEN jumps to STUDY (legacy behavior),
+  // PHONE / PROCEDURAL jump to PENDING_COMPLETION per their 5-stage flow.
+  // Allowed roles: WRITTEN — admin_support, department_head, branch_manager;
+  // PHONE / PROCEDURAL — department_head, branch_manager only.
   app.post("/api/consultations/:id/assign", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-
-      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
-      }
 
       const { assignedTo } = req.body || {};
       if (!assignedTo || typeof assignedTo !== "string") {
@@ -2591,6 +2628,14 @@ export async function registerRoutes(
 
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      const resolvedType = resolveConsultationType(consultation.consultationType);
+      const allowedRoles = resolvedType === ConsultationType.WRITTEN
+        ? ["admin_support", "department_head", "branch_manager"]
+        : ["department_head", "branch_manager"];
+      if (!allowedRoles.includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
+      }
 
       if (consultation.status !== "active") {
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
@@ -2603,15 +2648,19 @@ export async function registerRoutes(
       const lawyerName = lawyer?.name || assignedTo;
 
       const updates: any = { assignedTo };
-      const autoAdvancedToStudy = consultation.currentStage === ConsultationStage.RECEIVED;
-      if (autoAdvancedToStudy) {
-        updates.currentStage = ConsultationStage.STUDY;
+      const autoAdvanceFromReceived = consultation.currentStage === ConsultationStage.RECEIVED;
+      if (autoAdvanceFromReceived) {
+        // WRITTEN keeps the legacy direct-to-STUDY skip; PHONE / PROCEDURAL
+        // step to PENDING_COMPLETION (the next stage on their 5-stage flow).
+        updates.currentStage = resolvedType === ConsultationType.WRITTEN
+          ? ConsultationStage.STUDY
+          : ConsultationStage.RECEIVED_PENDING_COMPLETION;
       }
 
       const updated = await storage.updateConsultationAndLog(consultation.id, updates, {
         activityType: ConsultationActivityType.ASSIGNED,
         description: `تم إسناد الاستشارة لـ ${lawyerName}`,
-        metadata: { assignedTo, lawyerName, autoAdvancedToStudy },
+        metadata: { assignedTo, lawyerName, autoAdvancedToStage: autoAdvanceFromReceived ? updates.currentStage : null },
         performedBy: reqUser.id,
       });
       if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
@@ -2653,13 +2702,25 @@ export async function registerRoutes(
 
       const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
       const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
+      // PHONE / PROCEDURAL workflows have an explicit CLOSED_FINAL stage —
+      // reaching it is the canonical close action (not the early-close
+      // shortcut). Flip status='closed' and stamp closedAt in the same
+      // write so the row drops out of "active" lists. WRITTEN never
+      // reaches this branch because its forward table tops out at
+      // COMPLETED — closure on WRITTEN is via /early-close instead.
+      const reachedFinalClosure = targetStage === ConsultationStage.CLOSED_FINAL;
+      const stageUpdate: any = { currentStage: targetStage };
+      if (reachedFinalClosure) {
+        stageUpdate.status = "closed";
+        stageUpdate.closedAt = new Date();
+      }
       const updated = await storage.updateConsultationAndLog(
         consultation.id,
-        { currentStage: targetStage } as any,
+        stageUpdate,
         {
           activityType: ConsultationActivityType.STAGE_ADVANCED,
           description: `انتقال من ${fromLabel} إلى ${toLabel}`,
-          metadata: { fromStage: consultation.currentStage, toStage: targetStage },
+          metadata: { fromStage: consultation.currentStage, toStage: targetStage, ...(reachedFinalClosure ? { closedViaFinalStage: true } : {}) },
           performedBy: reqUser.id,
         },
       );
@@ -2943,8 +3004,10 @@ export async function registerRoutes(
   // persists closure_reason (and closure_reason_other when reason='other').
   // Validation matches the cases early-close pattern: reason required, and
   // otherText required iff reason === 'other'.
-  // Allowed roles: assigned_lawyer (synthetic), admin_support, department_head,
-  // branch_manager (per spec §3.2.4).
+  // Allowed roles: WRITTEN keeps the legacy wider gate (assigned_lawyer +
+  // admin_support / department_head / branch_manager, per spec §3.2.4);
+  // PHONE / PROCEDURAL narrow to admin_support / branch_manager only
+  // per the new-types common-features list.
   app.post("/api/consultations/:id/early-close", requireAuth, async (req, res) => {
     try {
       const reqUser = (req as any).user;
@@ -2953,9 +3016,16 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
+      const resolvedType = resolveConsultationType(consultation.consultationType);
       const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const adminLike = ["admin_support", "department_head", "branch_manager"];
-      if (!adminLike.includes(reqUser.role) && !isLawyer) {
+      let permitted: boolean;
+      if (resolvedType === ConsultationType.WRITTEN) {
+        const adminLike = ["admin_support", "department_head", "branch_manager"];
+        permitted = adminLike.includes(reqUser.role) || isLawyer;
+      } else {
+        permitted = ["admin_support", "branch_manager"].includes(reqUser.role);
+      }
+      if (!permitted) {
         return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
       }
 

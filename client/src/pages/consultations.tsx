@@ -71,6 +71,10 @@ import {
   ConsultationStageLabels,
   ConsultationStagesAll,
   ConsultationStagesOrder,
+  ConsultationType,
+  ConsultationTypeLabels,
+  resolveConsultationType,
+  getConsultationStagesForType,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
@@ -112,7 +116,9 @@ const LAWYER_FILTER_EXCLUDED_ROLES = new Set([
 // endpoint serves. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES outcomes are
 // decision-based and routed through the dedicated endpoints, so they're
 // intentionally absent here — those dialogs land in subsequent commits.
-const LINEAR_ADVANCE: Partial<Record<ConsultationStageValue, { target: ConsultationStageValue; roles: string[] }>> = {
+type LinearAdvanceTable = Partial<Record<ConsultationStageValue, { target: ConsultationStageValue; roles: string[] }>>;
+
+const LINEAR_ADVANCE_WRITTEN: LinearAdvanceTable = {
   // Phase-8 — RECEIVED now advances to RECEIVED_PENDING_COMPLETION (the new
   // stage), and RECEIVED_PENDING_COMPLETION advances to STUDY. The "تجاوز"
   // (skip) button on the new stage hits a separate /skip-completion
@@ -125,6 +131,31 @@ const LINEAR_ADVANCE: Partial<Record<ConsultationStageValue, { target: Consultat
   [ConsultationStage.READY]:    { target: ConsultationStage.COMPLETED,       roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 };
 
+// Mirrors ALLOWED_CONSULTATION_TRANSITIONS_PHONE on the server. 1→2 is the
+// assign action (rendered as the "إسناد" button, not "المرحلة التالية"),
+// so the table starts at PENDING_COMPLETION.
+const LINEAR_ADVANCE_PHONE: LinearAdvanceTable = {
+  [ConsultationStage.RECEIVED]:                    { target: ConsultationStage.RECEIVED_PENDING_COMPLETION, roles: ["department_head", "branch_manager"] },
+  [ConsultationStage.RECEIVED_PENDING_COMPLETION]: { target: ConsultationStage.STUDY,                       roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  [ConsultationStage.STUDY]:                       { target: ConsultationStage.COMPLETED,                   roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  [ConsultationStage.COMPLETED]:                   { target: ConsultationStage.CLOSED_FINAL,                roles: ["admin_support", "branch_manager"] },
+};
+
+// Procedural — same as PHONE but stage 3 is IN_PROGRESS instead of STUDY.
+const LINEAR_ADVANCE_PROCEDURAL: LinearAdvanceTable = {
+  [ConsultationStage.RECEIVED]:                    { target: ConsultationStage.RECEIVED_PENDING_COMPLETION, roles: ["department_head", "branch_manager"] },
+  [ConsultationStage.RECEIVED_PENDING_COMPLETION]: { target: ConsultationStage.IN_PROGRESS,                 roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  [ConsultationStage.IN_PROGRESS]:                 { target: ConsultationStage.COMPLETED,                   roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  [ConsultationStage.COMPLETED]:                   { target: ConsultationStage.CLOSED_FINAL,                roles: ["admin_support", "branch_manager"] },
+};
+
+function getLinearAdvanceTable(consultationType: string | null | undefined): LinearAdvanceTable {
+  const resolved = resolveConsultationType(consultationType);
+  if (resolved === ConsultationType.PHONE) return LINEAR_ADVANCE_PHONE;
+  if (resolved === ConsultationType.PROCEDURAL) return LINEAR_ADVANCE_PROCEDURAL;
+  return LINEAR_ADVANCE_WRITTEN;
+}
+
 function getAdvanceTarget(
   consultation: Consultation,
   userRole: string,
@@ -135,7 +166,7 @@ function getAdvanceTarget(
   // Phase-8 — awaiting-completion rows are NEVER advanced via the normal
   // mechanism (the resume action is what restores the saved stage).
   if (consultation.awaitingCompletion) return null;
-  const rule = LINEAR_ADVANCE[consultation.currentStage];
+  const rule = getLinearAdvanceTable(consultation.consultationType)[consultation.currentStage];
   if (!rule) return null;
   // Department head can only act inside their own department
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return null;
@@ -147,9 +178,10 @@ function getAdvanceTarget(
 
 // Mirrors the consultation-rollback block in server/routes.ts
 // validateStageTransition: dept_head / branch_manager → any prior stage,
-// assigned_lawyer → one step back. Uses ConsultationStagesAll when the
-// consultation is currently in TAKING_NOTES so the conditional stage is
-// reachable for rollback; otherwise the linear order is sufficient.
+// assigned_lawyer → one step back. Picks the per-type stages list (phone
+// / procedural have their own 5-stage lists); WRITTEN swaps in
+// ConsultationStagesAll when currently in TAKING_NOTES so the conditional
+// stage is reachable for rollback.
 function getReturnTargets(
   consultation: Consultation,
   userRole: string,
@@ -160,13 +192,19 @@ function getReturnTargets(
   // Phase-8 — awaiting-completion rows are parked: hide return like advance.
   if (consultation.awaitingCompletion) return [];
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return [];
-  const stages = consultation.currentStage === ConsultationStage.TAKING_NOTES
-    ? ConsultationStagesAll
-    : ConsultationStagesOrder;
+  const resolvedType = resolveConsultationType(consultation.consultationType);
+  let stages: readonly ConsultationStageValue[];
+  if (resolvedType === ConsultationType.WRITTEN) {
+    stages = consultation.currentStage === ConsultationStage.TAKING_NOTES
+      ? ConsultationStagesAll
+      : ConsultationStagesOrder;
+  } else {
+    stages = getConsultationStagesForType(resolvedType);
+  }
   const currentIdx = stages.indexOf(consultation.currentStage);
   if (currentIdx <= 0) return [];
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
-  if (isHeadOrManager) return stages.slice(0, currentIdx);
+  if (isHeadOrManager) return [...stages.slice(0, currentIdx)];
   const isAssignedLawyer = !!consultation.assignedTo && consultation.assignedTo === userId;
   if (isAssignedLawyer) return [stages[currentIdx - 1]];
   return [];
@@ -279,6 +317,7 @@ function getStageBadgeColor(stage: ConsultationStageValue): string {
     case ConsultationStage.RECEIVED:
       return "bg-primary/20 text-primary border-primary/30";
     case ConsultationStage.STUDY:
+    case ConsultationStage.IN_PROGRESS:
       return "bg-accent/20 text-accent border-accent/30";
     case ConsultationStage.DRAFTING:
       return "bg-blue-500/20 text-blue-600 border-blue-500/30";
@@ -291,6 +330,7 @@ function getStageBadgeColor(stage: ConsultationStageValue): string {
     case ConsultationStage.READY:
       return "bg-green-500/20 text-green-600 border-green-500/30";
     case ConsultationStage.COMPLETED:
+    case ConsultationStage.CLOSED_FINAL:
       return "bg-muted text-muted-foreground border-muted";
     default:
       return "bg-muted text-muted-foreground";
@@ -1257,7 +1297,10 @@ export default function ConsultationsPage() {
 
   const [formData, setFormData] = useState({
     clientId: "",
-    consultationType: "عام" as CaseTypeValue,
+    // Workflow discriminator — picks the stage flow at creation time.
+    // مكتوبة keeps the full 7+1 review/committee path; هاتفية and
+    // إجرائية are simple 5-stage flows.
+    consultationType: ConsultationType.WRITTEN as string,
     departmentId: "",
     questionSummary: "",
     // Phase-4: SLA category. Defaults to "عادية" (3-day SLA). Set once
@@ -1268,7 +1311,7 @@ export default function ConsultationsPage() {
   const resetForm = () => {
     setFormData({
       clientId: "",
-      consultationType: "عام",
+      consultationType: ConsultationType.WRITTEN,
       departmentId: "",
       questionSummary: "",
       category: ConsultationCategory.STANDARD,
@@ -1448,12 +1491,21 @@ export default function ConsultationsPage() {
                 </div>
                 <div>
                   <Label>نوع الاستشارة</Label>
-                  <Input
-                    data-testid="input-consultation-type"
+                  <Select
                     value={formData.consultationType}
-                    onChange={(e) => setFormData({ ...formData, consultationType: e.target.value as CaseTypeValue })}
-                    placeholder="أدخل نوع الاستشارة..."
-                  />
+                    onValueChange={(value) => setFormData({ ...formData, consultationType: value })}
+                  >
+                    <SelectTrigger data-testid="select-consultation-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.values(ConsultationType) as string[]).map((t) => (
+                        <SelectItem key={t} value={t} data-testid={`option-consultation-type-${t}`}>
+                          {ConsultationTypeLabels[t as keyof typeof ConsultationTypeLabels] || t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>القسم</Label>
@@ -1598,7 +1650,14 @@ export default function ConsultationsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل المراحل</SelectItem>
-                  {ConsultationStagesAll.map((s) => (
+                  {/* Includes the PHONE / PROCEDURAL exclusive stages
+                      (IN_PROGRESS, CLOSED_FINAL) so the new flows are
+                      filterable too. */}
+                  {[
+                    ...ConsultationStagesAll,
+                    ConsultationStage.IN_PROGRESS,
+                    ConsultationStage.CLOSED_FINAL,
+                  ].map((s) => (
                     <SelectItem key={s} value={s}>
                       {ConsultationStageLabels[s] || s}
                     </SelectItem>
@@ -1993,7 +2052,10 @@ export default function ConsultationsPage() {
               )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل الاستشارة</h4>
-                <ConsultationStagesBar currentStage={selectedConsultation.currentStage} />
+                <ConsultationStagesBar
+                  currentStage={selectedConsultation.currentStage}
+                  consultationType={selectedConsultation.consultationType}
+                />
                 {/* Phase-4 dev-feedback: surface the same workflow actions
                     that live in the row's ⋯ dropdown right under the stages
                     bar, so the user doesn't have to close the dialog to

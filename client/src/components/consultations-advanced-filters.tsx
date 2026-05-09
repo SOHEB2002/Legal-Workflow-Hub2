@@ -36,6 +36,16 @@ import {
 } from "@shared/schema";
 import type { ConsultationStageValue, PriorityType } from "@shared/schema";
 
+// Filter axis must include the PHONE / PROCEDURAL exclusive stages too —
+// ConsultationStagesAll only lists the WRITTEN flow's stages. Order: keep
+// WRITTEN's full path, then append IN_PROGRESS (procedural-only) and
+// CLOSED_FINAL (phone + procedural) so the dropdown stays readable.
+const CONSULTATION_FILTER_STAGES: ConsultationStageValue[] = [
+  ...ConsultationStagesAll,
+  ConsultationStage.IN_PROGRESS,
+  ConsultationStage.CLOSED_FINAL,
+];
+
 export type ConsultationStatusFilter = "all" | "active" | "converted" | "closed";
 
 export type AdvancedConsultationsFilters = {
@@ -98,7 +108,7 @@ const STATUS_LABELS: Record<ConsultationStatusFilter, string> = {
 // spec, and (b) give a single place to add per-dept divergence later
 // without rewiring the component.
 export function getConsultationFilterStages(_departmentId: string): ConsultationStageValue[] {
-  return [...ConsultationStagesAll];
+  return [...CONSULTATION_FILTER_STAGES];
 }
 
 type SavedFilterRow = {
