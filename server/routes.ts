@@ -342,22 +342,35 @@ function getConsultationTransitionsForType(type: string): StageTransitionRule[] 
 // is consultations_review_head (per spec). Closure stage transition
 // (READY → CLOSED) is restricted to admin_support / branch_manager.
 const ALLOWED_CONTRACT_TRANSITIONS: StageTransitionRule[] = [
-  // Reception → data-completion (assign action; admin_support also allowed
-  // to mirror the WRITTEN consultation gate).
-  { from: ContractStage.RECEIVED,                    to: ContractStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: ContractStage.RECEIVED_PENDING_COMPLETION, to: ContractStage.DRAFTING,                    allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  // Drafting → internal review (assigned lawyer also allowed).
+  // Intake → data-completion. Per spec: dept_head + branch_manager +
+  // admin_support + assigned. The assigned_lawyer was missing from
+  // earlier revisions, blocking employees from advancing files
+  // routed to them — fixed.
+  { from: ContractStage.RECEIVED,                    to: ContractStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  // Data-completion → drafting (also reachable via /skip-completion
+  // which uses the same allowed-roles set).
+  { from: ContractStage.RECEIVED_PENDING_COMPLETION, to: ContractStage.DRAFTING,                    allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  // Drafting → internal review.
   { from: ContractStage.DRAFTING,                    to: ContractStage.INTERNAL_REVIEW,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  // Internal-review outcomes — endpoint enforces "actor must be the
-  // designated reviewer or dept_head/branch_manager" finely.
-  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.DRAFTING,                    allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.COMMITTEE,                   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // Internal-review outcomes — locked to the DESIGNATED reviewer
+  // (synthetic role "internal_reviewer", set when
+  // entityData.internalReviewerId === user.id) plus dept_head and
+  // branch_manager. Earlier revisions used "assigned_lawyer" here,
+  // which let the assigned employee approve their own file —
+  // fixed.
+  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.DRAFTING,                    allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.COMMITTEE,                   allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   // Committee decisions — chair = consultations_review_head.
+  // department_head is INTENTIONALLY NOT in this set: heads don't
+  // override committee decisions. Their override channel is the
+  // backward-rollback path (returns the file to a prior stage),
+  // not a forward approve/reject.
   { from: ContractStage.COMMITTEE,                   to: ContractStage.READY,                       allowedRoles: ["consultations_review_head", "branch_manager"] },
   { from: ContractStage.COMMITTEE,                   to: ContractStage.TAKING_NOTES,                allowedRoles: ["consultations_review_head", "branch_manager"] },
   // Take-notes outcomes (تم | لم_يتم | جزئياً) all advance to READY.
   { from: ContractStage.TAKING_NOTES,                to: ContractStage.READY,                       allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   // Final closure — admin_support / branch_manager only.
+  // department_head intentionally excluded per spec.
   { from: ContractStage.READY,                       to: ContractStage.CLOSED,                      allowedRoles: ["admin_support", "branch_manager"] },
 ];
 
@@ -455,8 +468,13 @@ function validateStageTransition(
     // early-close shortcut).
   }
 
+  // Designated-reviewer synthetic role. Recognized for cases / memos /
+  // contracts (consultations have no internal_reviewer column; their
+  // INTERNAL_REVIEW stage exit is gated through a dedicated endpoint).
+  // Picked up by both the locked-stage check below and the effectiveRoles
+  // expansion that feeds the per-transition allowed-roles match.
   const isInternalReviewer =
-    (entityType === "case" || entityType === "memo")
+    (entityType === "case" || entityType === "memo" || entityType === "contract")
     && !!user && !!entityData && entityData.internalReviewerId === user.id;
 
   // Internal review stages are locked: only the designated internal reviewer,
@@ -480,6 +498,21 @@ function validateStageTransition(
   // endpoint already enforces this; this is belt-and-braces for the
   // generic stage-transition routes.
   if (entityType === "memo" && currentStage === "مراجعة_داخلية") {
+    const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
+    if (!isInternalReviewer && !isHeadOrManager) {
+      return {
+        allowed: false,
+        reason: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية",
+      };
+    }
+  }
+
+  // Contract INTERNAL_REVIEW lock — mirror cases/memos. The dedicated
+  // /internal-review endpoint also enforces this, but the generic
+  // /advance-stage and /return-stage routes need the same gate so a
+  // non-reviewer employee can't approve their own draft by calling the
+  // generic endpoint directly.
+  if (entityType === "contract" && currentStage === ContractStage.INTERNAL_REVIEW) {
     const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
     if (!isInternalReviewer && !isHeadOrManager) {
       return {
@@ -3943,8 +3976,18 @@ export async function registerRoutes(
 
   app.post("/api/contracts", requireAuth, async (req, res) => {
     try {
-      const validated = insertContractSchema.parse(req.body);
       const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // Per spec: only branch_manager / admin_support / department_head
+      // can create contracts. Employees / lawyers / review committee
+      // chairs are NOT allowed to open new files. Server is the source
+      // of truth — the UI hides the button but a hand-rolled POST would
+      // bypass that gate.
+      const allowedCreators = ["branch_manager", "admin_support", "department_head"];
+      if (!allowedCreators.includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء عقود" });
+      }
+      const validated = insertContractSchema.parse(req.body);
       const createdBy = reqUser?.id || "unknown";
       const created = await storage.createContract(validated, createdBy);
       res.status(201).json(created);
@@ -4158,6 +4201,15 @@ export async function registerRoutes(
       }
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      // Department-head scope check: a dept_head may only assign on
+      // contracts in their OWN department. branch_manager and
+      // admin_support are global.
+      if (
+        reqUser.role === "department_head"
+        && contract.departmentId !== reqUser.departmentId
+      ) {
+        return res.status(403).json({ error: "رئيس القسم يمكنه إسناد عقود قسمه فقط" });
+      }
       if (contract.status !== "active") {
         return res.status(400).json({ error: "العقد ليس نشطاً" });
       }
@@ -4511,9 +4563,15 @@ export async function registerRoutes(
       if (contract.currentStage !== ContractStage.TAKING_NOTES) {
         return res.status(400).json({ error: "العقد ليس في مرحلة الأخذ بالملاحظات" });
       }
+      // Per spec: assigned + dept_head (own dept) + branch_manager.
+      // admin_support is intentionally NOT in this set — bouncing a
+      // file back to committee is a workflow action, not an admin one.
       const isLawyer = isAssignedLawyer(reqUser, contract);
-      const allowedRoles = ["admin_support", "department_head", "branch_manager"];
-      if (!isLawyer && !allowedRoles.includes(reqUser.role)) {
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && contract.departmentId === reqUser.departmentId;
+      const isBranchManager = reqUser.role === "branch_manager";
+      if (!isLawyer && !isOwnDeptHead && !isBranchManager) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإعادة العقد للجنة" });
       }
       const updated = await storage.returnContractToCommittee(contract.id, { notes, performedBy: reqUser.id });

@@ -47,10 +47,14 @@ import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest } from "@/lib/queryClient";
 
-// Mirror of consultations.tsx LINEAR_ADVANCE — single 8-stage flow.
+// FE mirror of ALLOWED_CONTRACT_TRANSITIONS for the linear-forward
+// path. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES exits are handled
+// by dedicated dialogs (canDoInternalReview / canDoCommitteeDecision
+// / canDoTakeNotes) and intentionally absent from this table — the
+// generic "next stage" button doesn't fire on those stages.
 const LINEAR_ADVANCE: Partial<Record<ContractStageValue, { target: ContractStageValue; roles: string[] }>> = {
-  [ContractStage.RECEIVED]:                    { target: ContractStage.RECEIVED_PENDING_COMPLETION, roles: ["admin_support", "department_head", "branch_manager"] },
-  [ContractStage.RECEIVED_PENDING_COMPLETION]: { target: ContractStage.DRAFTING,                    roles: ["admin_support", "department_head", "branch_manager"] },
+  [ContractStage.RECEIVED]:                    { target: ContractStage.RECEIVED_PENDING_COMPLETION, roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  [ContractStage.RECEIVED_PENDING_COMPLETION]: { target: ContractStage.DRAFTING,                    roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   [ContractStage.DRAFTING]:                    { target: ContractStage.INTERNAL_REVIEW,             roles: ["assigned_lawyer", "department_head", "branch_manager"] },
   [ContractStage.READY]:                       { target: ContractStage.CLOSED,                      roles: ["admin_support", "branch_manager"] },
 };
@@ -100,6 +104,16 @@ function canChangeContractType(
   if (userRole === "branch_manager" || userRole === "admin_support") return true;
   if (userRole === "department_head" && c.departmentId === userDeptId) return true;
   return false;
+}
+
+// Per spec: only branch_manager / admin_support / department_head
+// can create new contracts. Employees / lawyers / committee chairs
+// must NOT see the create button. Server enforces the same gate.
+function canCreateContract(userRole: string | null | undefined): boolean {
+  if (!userRole) return false;
+  return userRole === "branch_manager"
+    || userRole === "admin_support"
+    || userRole === "department_head";
 }
 
 function canPause(c: Contract, user: { id: string; role: string; departmentId: string | null } | null): boolean {
@@ -664,6 +678,7 @@ export default function ContractsPage() {
           <h1 className="text-2xl font-bold text-foreground">العقود والمشاريع</h1>
           <p className="text-muted-foreground">إدارة عقود المراجعة والصياغة والمشاريع</p>
         </div>
+        {canCreateContract(user?.role) && (
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-contract" onClick={resetForm}>
@@ -787,6 +802,7 @@ export default function ContractsPage() {
             </Button>
           </DialogContent>
         </Dialog>
+        )}
       </div>
 
       <Card>
