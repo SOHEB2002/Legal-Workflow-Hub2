@@ -13,6 +13,7 @@ import {
   CalendarPlus,
   ScrollText,
   ClipboardCheck,
+  FileSignature,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,8 +26,9 @@ import {
 import { StatCardWidget, ListWidget, QuickActionsWidget, widgetIcons, widgetVariants } from "@/components/dashboard-widgets";
 import { useCases } from "@/lib/cases-context";
 import { CaseClassification, CaseClassificationLabels } from "@shared/schema";
-import type { CaseClassificationValue, LawCase, Consultation, Memo } from "@shared/schema";
+import type { CaseClassificationValue, LawCase, Consultation, Memo, Contract } from "@shared/schema";
 import { useConsultations } from "@/lib/consultations-context";
+import { useContracts } from "@/lib/contracts-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useClients } from "@/lib/clients-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
@@ -34,7 +36,7 @@ import { useContacts } from "@/lib/contacts-context";
 import { useMemos } from "@/lib/memos-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDashboard, type WidgetSize } from "@/lib/dashboard-context";
-import { CaseStatus, CaseStageLabels, CaseStage, ConsultationStage, MemoStage } from "@shared/schema";
+import { CaseStatus, CaseStageLabels, CaseStage, ConsultationStage, ContractStage, MemoStage } from "@shared/schema";
 
 const getSizeClass = (size: WidgetSize, type: string): string => {
   if (type === "stat_card") {
@@ -59,6 +61,7 @@ const getSizeClass = (size: WidgetSize, type: string): string => {
 export default function DashboardPage() {
   const { cases, getActiveCases, getReviewCases, getReadyCases } = useCases();
   const { consultations, getActiveConsultations, getReviewConsultations } = useConsultations();
+  const { contracts } = useContracts();
   const { hearings, getUpcomingHearings } = useHearings();
   const { clients, getClientName } = useClients();
   const { fieldTasks } = useFieldTasks();
@@ -81,8 +84,8 @@ export default function DashboardPage() {
   // Returns the filtered arrays so the popup buttons can show counts
   // AND the navigation can pass the appropriate URL params.
   const pendingReview = useMemo(() => {
-    if (!user) return { cases: [], memos: [], consultations: [], total: 0 };
-    // Both committee chairs are "see all" across ALL three target
+    if (!user) return { cases: [], memos: [], consultations: [], contracts: [], total: 0 };
+    // Both committee chairs are "see all" across ALL four target
     // sections — the popup is a single cross-entity overview, so a chair
     // that walks past their own section (e.g. consultations chair
     // glancing at cases) shouldn't be silently downgraded to "items
@@ -115,6 +118,17 @@ export default function DashboardPage() {
       }
       return m.assignedTo === user.id;
     });
+    // Contracts use the consultations committee — chair =
+    // consultations_review_head, who's already in the seesAll branch
+    // above. Everyone else: dept_head sees their own dept's contracts;
+    // assigned lawyer + internal reviewer see their own files (the
+    // reviewer needs to see the file at لجنة_مراجعة since they may be
+    // pulled in for the committee discussion).
+    const filterContracts = (rows: Contract[]) => rows.filter((c) => {
+      if (seesAll) return true;
+      if (isDeptHead) return c.departmentId === user.departmentId;
+      return c.assignedTo === user.id || c.internalReviewerId === user.id;
+    });
 
     // Cases: check BOTH currentStage AND the legacy status column.
     // Older flows (and getReviewCases in the cases context) wrote only
@@ -131,12 +145,22 @@ export default function DashboardPage() {
       (c) => c.status === "active" && c.currentStage === ConsultationStage.COMMITTEE,
     );
     const memosAtCommittee = memos.filter((m) => m.currentStage === MemoStage.COMMITTEE);
+    const contractsAtCommittee = contracts.filter(
+      (c) => c.status === "active" && c.currentStage === ContractStage.COMMITTEE,
+    );
 
     const fc = filterCases(casesAtCommittee);
     const fcons = filterConsultations(consAtCommittee);
     const fm = filterMemos(memosAtCommittee);
-    return { cases: fc, memos: fm, consultations: fcons, total: fc.length + fm.length + fcons.length };
-  }, [user, cases, consultations, memos]);
+    const fctr = filterContracts(contractsAtCommittee);
+    return {
+      cases: fc,
+      memos: fm,
+      consultations: fcons,
+      contracts: fctr,
+      total: fc.length + fm.length + fcons.length + fctr.length,
+    };
+  }, [user, cases, consultations, memos, contracts]);
 
   const caseStats = useMemo(() => {
     const activeCases = getActiveCases();
@@ -487,6 +511,24 @@ export default function DashboardPage() {
                 </span>
               </span>
               <span className="font-bold text-lg">{pendingReview.consultations.length}</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full justify-between h-auto py-3"
+              data-testid="button-pending-review-contracts"
+              onClick={() => {
+                setPendingReviewPopupOpen(false);
+                setLocation(`/contracts?${buildPendingReviewQuery()}`);
+              }}
+            >
+              <span className="flex items-center gap-2">
+                <FileSignature className="w-4 h-4" />
+                <span className="text-right">
+                  <div className="font-medium">العقود والمشاريع</div>
+                  <div className="text-xs text-muted-foreground">في مرحلة لجنة المراجعة</div>
+                </span>
+              </span>
+              <span className="font-bold text-lg">{pendingReview.contracts.length}</span>
             </Button>
           </div>
         </DialogContent>

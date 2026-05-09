@@ -4191,9 +4191,43 @@ export class DatabaseStorage implements IStorage {
         { id: "2", name: "تجاري", headId: null },
         { id: "3", name: "عمالي", headId: null },
         { id: "4", name: "إداري", headId: null },
+        // العقود والمشاريع — owns the contracts module by default. Brand-new
+        // installs create it as id "5"; existing installs get the same row
+        // via script/add-contracts-department.sql (idempotent insert by name).
+        { id: "5", name: "العقود_والمشاريع", headId: null },
       ];
       for (const dept of defaultDepartments) {
         await db.insert(departments).values({ ...dept, createdAt: new Date() });
+      }
+    } else {
+      // Existing installs: ensure the contracts dept row exists too. Match
+      // by name to avoid id collisions (some deployments hand-edited ids
+      // away from the seed values). This is a no-op once the dept exists.
+      const hasContractsDept = existingDepartments.some(
+        (d) => d.name === "العقود_والمشاريع",
+      );
+      if (!hasContractsDept) {
+        // Pick the next free numeric id ≥ 5 so we don't collide with
+        // anything already in the table.
+        const nextId = (() => {
+          const numericIds = existingDepartments
+            .map((d) => Number(d.id))
+            .filter((n) => Number.isFinite(n));
+          const max = numericIds.length > 0 ? Math.max(...numericIds) : 4;
+          return String(Math.max(5, max + 1));
+        })();
+        try {
+          await db.insert(departments).values({
+            id: nextId,
+            name: "العقود_والمشاريع",
+            headId: null,
+            createdAt: new Date(),
+          });
+          console.log(`[INIT] Inserted contracts department with id ${nextId}`);
+        } catch (e) {
+          // Race / unique-constraint — another startup beat us to it.
+          console.warn("[INIT] Contracts dept insert skipped (likely already inserted by another worker)");
+        }
       }
     }
 

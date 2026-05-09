@@ -766,6 +766,10 @@ export const Department = {
   COMMERCIAL: "تجاري",
   LABOR: "عمالي",
   ADMINISTRATIVE: "إداري",
+  // System-managed dept that owns the contracts module by default. The
+  // contracts create form pre-selects this department; users can still
+  // route a contract to any other department before saving.
+  CONTRACTS_AND_PROJECTS: "العقود_والمشاريع",
 } as const;
 
 export type DepartmentType = typeof Department[keyof typeof Department];

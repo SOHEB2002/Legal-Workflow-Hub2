@@ -205,6 +205,21 @@ export default function ContractsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [stageFilter, setStageFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [deptFilter, setDeptFilter] = useState<string>("");
+  const [assignedToFilter, setAssignedToFilter] = useState<string>("");
+
+  // Dashboard "بانتظار المراجعة" deep-link. Pre-selects the COMMITTEE
+  // stage and (for non-manager roles) scopes by dept / assignedTo so
+  // the page reflects what the popup counted. Single-shot on mount.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+    const dept = params.get("dept");
+    const assignedTo = params.get("assignedTo");
+    if (status === "pending_review") setStageFilter(ContractStage.COMMITTEE);
+    if (dept) setDeptFilter(dept);
+    if (assignedTo) setAssignedToFilter(assignedTo);
+  }, []);
 
   const filteredContracts = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
@@ -216,9 +231,11 @@ export default function ContractsPage() {
       }
       if (stageFilter !== "all" && c.currentStage !== stageFilter) return false;
       if (typeFilter !== "all" && c.contractType !== typeFilter) return false;
+      if (deptFilter && c.departmentId !== deptFilter) return false;
+      if (assignedToFilter && c.assignedTo !== assignedToFilter) return false;
       return true;
     });
-  }, [contracts, searchTerm, stageFilter, typeFilter, getClientName]);
+  }, [contracts, searchTerm, stageFilter, typeFilter, deptFilter, assignedToFilter, getClientName]);
 
   const sortedContracts = useMemo(
     () => [...filteredContracts].sort((a, b) =>
@@ -228,6 +245,13 @@ export default function ContractsPage() {
 
   // ---- Create dialog ----
   const [isAddOpen, setIsAddOpen] = useState(false);
+  // Look up the contracts department id by canonical name so the
+  // create form pre-selects it. Re-runs when departments load.
+  const contractsDeptId = useMemo(
+    () => departments.find((d) => d.name === "العقود_والمشاريع")?.id || "",
+    [departments],
+  );
+
   const [formData, setFormData] = useState({
     title: "",
     clientId: "",
@@ -236,8 +260,21 @@ export default function ContractsPage() {
     description: "",
   });
   const resetForm = () => setFormData({
-    title: "", clientId: "", contractType: ContractType.REVIEW, departmentId: "", description: "",
+    title: "", clientId: "", contractType: ContractType.REVIEW,
+    // Default to the contracts dept; user can route elsewhere before save.
+    departmentId: contractsDeptId,
+    description: "",
   });
+
+  // Sync the default into formData once departments load — covers the
+  // first render where contractsDeptId resolves later than the initial
+  // useState. Doesn't overwrite a user-picked value (only fills "").
+  useEffect(() => {
+    if (!formData.departmentId && contractsDeptId) {
+      setFormData((prev) => prev.departmentId ? prev : { ...prev, departmentId: contractsDeptId });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractsDeptId]);
 
   const handleAdd = async () => {
     if (!formData.title.trim() || !formData.clientId || !formData.departmentId) return;
