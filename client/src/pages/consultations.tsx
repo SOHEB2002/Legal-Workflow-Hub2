@@ -1338,6 +1338,38 @@ export default function ConsultationsPage() {
     }
   };
 
+  // Generic committee-referral field updater. Used for priority,
+  // priorityReason, internalReviewerId — server gates per-field, the
+  // client just fires the PATCH. Reason-on-blur and reviewer-on-change
+  // both go through here.
+  const [committeeFieldSaving, setCommitteeFieldSaving] = useState(false);
+  const handleCommitteeFieldUpdate = async (
+    consultation: Consultation,
+    patch: Partial<Pick<Consultation, "priority" | "priorityReason" | "internalReviewerId">>,
+  ) => {
+    setCommitteeFieldSaving(true);
+    try {
+      await updateConsultation(consultation.id, patch);
+      await refreshConsultations();
+    } catch (err) {
+      toast({
+        title: "فشل حفظ التعديل",
+        description: extractApiError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setCommitteeFieldSaving(false);
+    }
+  };
+
+  // Local draft for the priorityReason textarea so typing isn't a
+  // PATCH-per-keystroke. Synced to the selected consultation when its
+  // id changes (or the row arrives via refresh).
+  const [priorityReasonDraft, setPriorityReasonDraft] = useState("");
+  useEffect(() => {
+    setPriorityReasonDraft(selectedConsultation?.priorityReason ?? "");
+  }, [selectedConsultation?.id, selectedConsultation?.priorityReason]);
+
   const [formData, setFormData] = useState({
     clientId: "",
     // Workflow discriminator — picks the stage flow at creation time.
@@ -1349,6 +1381,12 @@ export default function ConsultationsPage() {
     // Phase-4: SLA category. Defaults to "عادية" (3-day SLA). Set once
     // at creation; not editable afterward per spec.
     category: ConsultationCategory.STANDARD as ConsultationCategoryValue,
+    // Committee-referral fields. Optional at create — usually filled in
+    // later, just before the consultation hits لجنة_مراجعة. priority is
+    // empty by default (no implicit "متوسط") so the reason textarea
+    // stays hidden until the user explicitly picks a level.
+    priority: "" as "" | "عاجل" | "عالي" | "متوسط" | "منخفض",
+    priorityReason: "",
   });
 
   const resetForm = () => {
@@ -1358,6 +1396,8 @@ export default function ConsultationsPage() {
       departmentId: "",
       questionSummary: "",
       category: ConsultationCategory.STANDARD,
+      priority: "",
+      priorityReason: "",
     });
   };
 
@@ -1601,6 +1641,51 @@ export default function ConsultationsPage() {
                     rows={4}
                   />
                 </div>
+                {/* Committee-referral fields. Optional at create time —
+                    typically the committee form is filled in later, but
+                    pre-populating priority + reason here saves a round
+                    trip when the level is already obvious from intake.
+                    The reason textarea is conditional on a chosen level
+                    so the form stays compact for the common no-priority
+                    case. */}
+                <div>
+                  <Label>الأولوية</Label>
+                  <Select
+                    value={formData.priority || "none"}
+                    onValueChange={(value) =>
+                      setFormData({
+                        ...formData,
+                        priority: value === "none" ? "" : (value as typeof formData.priority),
+                        // Drop the reason if priority is cleared so a
+                        // stale justification doesn't ride along.
+                        priorityReason: value === "none" ? "" : formData.priorityReason,
+                      })
+                    }
+                  >
+                    <SelectTrigger data-testid="select-consultation-priority">
+                      <SelectValue placeholder="بدون تحديد" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">بدون تحديد</SelectItem>
+                      <SelectItem value="عاجل">عاجل</SelectItem>
+                      <SelectItem value="عالي">عالي</SelectItem>
+                      <SelectItem value="متوسط">متوسط</SelectItem>
+                      <SelectItem value="منخفض">منخفض</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {formData.priority && (
+                  <div>
+                    <Label>سبب الأولوية</Label>
+                    <Textarea
+                      data-testid="input-consultation-priority-reason"
+                      value={formData.priorityReason}
+                      onChange={(e) => setFormData({ ...formData, priorityReason: e.target.value })}
+                      placeholder="اختياري — اشرح سبب اختيار هذه الأولوية..."
+                      rows={2}
+                    />
+                  </div>
+                )}
               </div>
               <Button
                 data-testid="button-submit-consultation"
@@ -2289,11 +2374,173 @@ export default function ConsultationsPage() {
                     })()}
                   </p>
                 </div>
+                {/* Priority editor — anyone with canModifyConsultation can
+                    set/change the level, and the reason textarea below
+                    appears only after a level is picked. Server enforces
+                    the same rule. Spans both grid columns so the reason
+                    has room to breathe. */}
+                <div className="col-span-2">
+                  <Label className="text-muted-foreground">الأولوية</Label>
+                  <Select
+                    value={selectedConsultation.priority || "none"}
+                    onValueChange={(value) =>
+                      handleCommitteeFieldUpdate(selectedConsultation, {
+                        priority: value === "none" ? null : value,
+                        // Drop the reason on clear so a stale justification
+                        // doesn't ride along after the level is removed.
+                        ...(value === "none" ? { priorityReason: null } : {}),
+                      })
+                    }
+                    disabled={committeeFieldSaving}
+                  >
+                    <SelectTrigger
+                      className="mt-1"
+                      data-testid="dialog-consultation-priority-select"
+                    >
+                      <SelectValue placeholder="بدون تحديد" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">بدون تحديد</SelectItem>
+                      <SelectItem value="عاجل">عاجل</SelectItem>
+                      <SelectItem value="عالي">عالي</SelectItem>
+                      <SelectItem value="متوسط">متوسط</SelectItem>
+                      <SelectItem value="منخفض">منخفض</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {selectedConsultation.priority && (
+                  <div className="col-span-2">
+                    <Label className="text-muted-foreground">سبب الأولوية</Label>
+                    <Textarea
+                      data-testid="dialog-consultation-priority-reason"
+                      value={priorityReasonDraft}
+                      onChange={(e) => setPriorityReasonDraft(e.target.value)}
+                      onBlur={() => {
+                        const next = priorityReasonDraft.trim();
+                        const current = selectedConsultation.priorityReason ?? "";
+                        if (next === current) return;
+                        handleCommitteeFieldUpdate(selectedConsultation, {
+                          priorityReason: next || null,
+                        });
+                      }}
+                      placeholder="اختياري — اشرح سبب اختيار هذه الأولوية..."
+                      rows={2}
+                      disabled={committeeFieldSaving}
+                    />
+                  </div>
+                )}
               </div>
               <div className="text-right">
                 <Label className="text-muted-foreground">ملخص السؤال</Label>
                 <p className="p-3 bg-muted rounded-md">{selectedConsultation.questionSummary}</p>
               </div>
+
+              {/* Committee referral form (نموذج الإحالة للجنة المراجعة).
+                  Surfaces only once the consultation reaches لجنة_مراجعة —
+                  before that the same fields remain editable inline above
+                  but aren't formatted as a referral form. The internal
+                  reviewer is editable here for branch_manager / admin_support
+                  / department_head (own dept); other roles see the value
+                  read-only. The remaining fields are read-only displays of
+                  data already captured elsewhere on the row (assignedTo,
+                  client, intake date, priority + reason). */}
+              {selectedConsultation.currentStage === ConsultationStage.COMMITTEE && (
+                <div
+                  className="text-right border rounded-lg p-4 bg-secondary/10 space-y-3"
+                  data-testid="committee-referral-card"
+                >
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold flex items-center gap-2">
+                      <ClipboardCheck className="w-4 h-4" />
+                      نموذج الإحالة للجنة المراجعة
+                    </h4>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <Label className="text-muted-foreground text-xs">المحرر</Label>
+                      <p className="font-medium" data-testid="committee-form-editor">
+                        <BidiText>{getLawyerName(selectedConsultation.assignedTo)}</BidiText>
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground text-xs">المراجع</Label>
+                      {user
+                        && (
+                          user.role === "branch_manager"
+                          || user.role === "admin_support"
+                          || (user.role === "department_head" && selectedConsultation.departmentId === user.departmentId)
+                        ) ? (
+                        <Select
+                          value={selectedConsultation.internalReviewerId || "none"}
+                          onValueChange={(value) =>
+                            handleCommitteeFieldUpdate(selectedConsultation, {
+                              internalReviewerId: value === "none" ? null : value,
+                            })
+                          }
+                          disabled={committeeFieldSaving}
+                        >
+                          <SelectTrigger
+                            className="mt-1"
+                            data-testid="committee-form-reviewer-select"
+                          >
+                            <SelectValue placeholder="—" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">—</SelectItem>
+                            {filterLawyers.map((l) => (
+                              <SelectItem key={l.id} value={l.id}>
+                                {l.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <p className="font-medium" data-testid="committee-form-reviewer">
+                          <BidiText>{getLawyerName(selectedConsultation.internalReviewerId)}</BidiText>
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground text-xs">مركز العميل</Label>
+                      <p className="font-medium" data-testid="committee-form-client">
+                        <BidiText>{getClientName(selectedConsultation.clientId)}</BidiText>
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground text-xs">تاريخ دخول الاستشارة للقسم</Label>
+                      <p data-testid="committee-form-intake-date">
+                        <LtrInline>{formatExpectedDate(selectedConsultation.createdAt)}</LtrInline>
+                      </p>
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-muted-foreground text-xs">طلب العميل</Label>
+                      <p
+                        className="p-2 bg-background/60 rounded whitespace-pre-wrap"
+                        data-testid="committee-form-request"
+                      >
+                        {selectedConsultation.questionSummary}
+                      </p>
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-muted-foreground text-xs">الأولوية</Label>
+                      <p data-testid="committee-form-priority">
+                        {selectedConsultation.priority ? (
+                          <>
+                            <Badge variant="outline">{selectedConsultation.priority}</Badge>
+                            {selectedConsultation.priorityReason && (
+                              <span className="mr-2 text-muted-foreground">
+                                — {selectedConsultation.priorityReason}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Phase-6 — consultation activity timeline. Default expanded.
                   Newest first. Re-fetched on dialog open and on every
