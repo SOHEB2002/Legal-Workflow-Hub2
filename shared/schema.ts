@@ -1144,6 +1144,11 @@ export const ConsultationStage = {
   TAKING_NOTES:                "الأخذ_بالملاحظات",
   READY:                       "جاهزة_للتسليم",
   COMPLETED:                   "منجزة",
+  // Phone/procedural-only — "in-progress" replaces دراسة on procedural
+  // path; "مغلقة" is the explicit terminal stage on both new types
+  // (مكتوبة has no مغلقة stage; closure is a status-flip via early-close).
+  IN_PROGRESS:                 "جاري_العمل",
+  CLOSED_FINAL:                "مغلقة",
 } as const;
 
 export type ConsultationStageValue = typeof ConsultationStage[keyof typeof ConsultationStage];
@@ -1158,9 +1163,11 @@ export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
   "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
   "جاهزة_للتسليم": "جاهزة للتسليم",
   "منجزة": "منجزة",
+  "جاري_العمل": "جاري العمل",
+  "مغلقة": "مغلقة",
 };
 
-// Linear happy-path order (excludes TAKING_NOTES, which is conditional).
+// Linear happy-path order for the WRITTEN (مكتوبة) workflow.
 // Phase-8 — RECEIVED_PENDING_COMPLETION sits between RECEIVED and STUDY.
 // On entering this stage the FE shows a "تجاوز" button alongside the
 // normal advance, which jumps directly to STUDY without requiring any
@@ -1176,11 +1183,12 @@ export const ConsultationStagesOrder: ConsultationStageValue[] = [
   ConsultationStage.COMPLETED,
 ];
 
-// All consultation stages in canonical order, including the conditional
-// TAKING_NOTES branch (entered only when committee returns يوجد_ملاحظات).
-// Used for rollback validation; the linear-path Order excludes TAKING_NOTES.
-// TAKING_NOTES branches off ONLY from COMMITTEE and always returns to
-// READY after the outcome — it's not in the linear path on purpose.
+// All WRITTEN consultation stages in canonical order, including the
+// conditional TAKING_NOTES branch (entered only when committee returns
+// يوجد_ملاحظات). Used for rollback validation; the linear-path Order
+// excludes TAKING_NOTES. TAKING_NOTES branches off ONLY from COMMITTEE
+// and always returns to READY after the outcome — it's not in the
+// linear path on purpose.
 export const ConsultationStagesAll: ConsultationStageValue[] = [
   ConsultationStage.RECEIVED,
   ConsultationStage.RECEIVED_PENDING_COMPLETION,
@@ -1192,6 +1200,67 @@ export const ConsultationStagesAll: ConsultationStageValue[] = [
   ConsultationStage.READY,
   ConsultationStage.COMPLETED,
 ];
+
+// PHONE (هاتفية) workflow — 5-stage simple flow. No internal review /
+// committee / taking-notes branch. Terminal CLOSED_FINAL stage is its
+// own value (distinct from WRITTEN, which has no closed-stage concept).
+export const ConsultationStagesOrderPhone: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.STUDY,
+  ConsultationStage.COMPLETED,
+  ConsultationStage.CLOSED_FINAL,
+];
+
+// PROCEDURAL (إجرائية) workflow — same shape as phone but stage 3 is
+// IN_PROGRESS ("جاري_العمل") instead of STUDY ("دراسة").
+export const ConsultationStagesOrderProcedural: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.IN_PROGRESS,
+  ConsultationStage.COMPLETED,
+  ConsultationStage.CLOSED_FINAL,
+];
+
+// ==================== Consultation Type (workflow discriminator) ====================
+// Picks the workflow flavor at creation time. Stored on the existing
+// consultations.consultation_type column — historic rows that hold
+// free-text values ("عام" / "تجاري" / etc.) still resolve via
+// resolveConsultationType() which falls back to WRITTEN, so existing
+// rows keep the full workflow without a backfill.
+export const ConsultationType = {
+  WRITTEN:    "مكتوبة",
+  PHONE:      "هاتفية",
+  PROCEDURAL: "إجرائية",
+} as const;
+
+export type ConsultationTypeValue = typeof ConsultationType[keyof typeof ConsultationType];
+
+export const ConsultationTypeLabels: Record<ConsultationTypeValue, string> = {
+  "مكتوبة":  "مكتوبة",
+  "هاتفية":  "هاتفية",
+  "إجرائية": "إجرائية",
+};
+
+// Maps any stored consultation_type value (including legacy free-text)
+// to a canonical workflow type. Anything that isn't an explicit phone/
+// procedural value resolves to WRITTEN — the original full workflow.
+export function resolveConsultationType(raw: string | null | undefined): ConsultationTypeValue {
+  if (raw === ConsultationType.PHONE) return ConsultationType.PHONE;
+  if (raw === ConsultationType.PROCEDURAL) return ConsultationType.PROCEDURAL;
+  return ConsultationType.WRITTEN;
+}
+
+// Returns the canonical stages list (forward order, includes conditional
+// branches) for a given workflow type. Used by rollback validation and
+// the stages-bar component so each type renders its own progress.
+export function getConsultationStagesForType(
+  type: ConsultationTypeValue,
+): readonly ConsultationStageValue[] {
+  if (type === ConsultationType.PHONE) return ConsultationStagesOrderPhone;
+  if (type === ConsultationType.PROCEDURAL) return ConsultationStagesOrderProcedural;
+  return ConsultationStagesAll;
+}
 
 // ==================== Consultation Category (Phase 4 — SLA categories) ====================
 // Category is set once at consultation creation (no manual override) and
@@ -1670,7 +1739,12 @@ export interface Consultation {
   id: string;
   consultationNumber: string;
   clientId: string;
-  consultationType: CaseTypeValue;
+  // Stored as plain varchar — holds the workflow discriminator
+  // (ConsultationTypeValue: مكتوبة / هاتفية / إجرائية) for new rows, and
+  // legacy free-text values ("عام" / "تجاري" / etc.) for pre-rollout
+  // rows. Read via resolveConsultationType() which collapses anything
+  // outside the new enum down to WRITTEN.
+  consultationType: string;
   deliveryType: DeliveryTypeValue;
   currentStage: ConsultationStageValue;
   status: ConsultationStatusValue;

@@ -91,7 +91,7 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     const consultationData = {
       consultationNumber: generateConsultationNumber(),
       clientId: data.clientId || "",
-      consultationType: data.consultationType || "عام",
+      consultationType: data.consultationType || "مكتوبة",
       departmentId: data.departmentId || "",
       assignedTo: null,
       questionSummary: data.questionSummary || "",
