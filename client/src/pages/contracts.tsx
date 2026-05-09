@@ -25,7 +25,7 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, MessageSquare,
-  Upload, Download, FileIcon, Paperclip,
+  Upload, Download, FileIcon, Paperclip, Eye,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -248,7 +248,7 @@ export default function ContractsPage() {
   // Look up the contracts department id by canonical name so the
   // create form pre-selects it. Re-runs when departments load.
   const contractsDeptId = useMemo(
-    () => departments.find((d) => d.name === "العقود_والمشاريع")?.id || "",
+    () => departments.find((d) => d.name === "العقود والمشاريع")?.id || "",
     [departments],
   );
 
@@ -276,16 +276,47 @@ export default function ContractsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractsDeptId]);
 
+  // For مراجعة_عقد contracts the "العقد محل المراجعة" file is required
+  // at create time — we capture it on the form and upload it
+  // immediately after the contract row is created. Other types skip
+  // this entirely.
+  const [intakeFile, setIntakeFile] = useState<File | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const requiresIntakeFile = formData.contractType === ContractType.REVIEW;
+
   const handleAdd = async () => {
     if (!formData.title.trim() || !formData.clientId || !formData.departmentId) return;
+    if (requiresIntakeFile && !intakeFile) return;
+    setCreating(true);
+    let created: Contract | null = null;
     try {
-      await addContract(formData);
+      created = await addContract(formData);
       toast({ title: "تم إنشاء العقد بنجاح" });
-      setIsAddOpen(false);
-      resetForm();
     } catch (err) {
       toast({ title: "فشل إنشاء العقد", description: extractApiError(err), variant: "destructive" });
+      setCreating(false);
+      return;
     }
+    // Contract is now committed. Upload the intake file in a separate
+    // step — keeping the two writes independent means a failed upload
+    // doesn't lose the contract row, and the user can retry from the
+    // details dialog without re-typing the form.
+    if (created && requiresIntakeFile && intakeFile) {
+      try {
+        await uploadAttachment(created.id, intakeFile, ContractAttachmentSlot.CONTRACT_UNDER_REVIEW);
+      } catch (err) {
+        toast({
+          title: "تم إنشاء العقد لكن فشل رفع الملف",
+          description: "افتح تفاصيل العقد لإعادة المحاولة من تبويب المرفقات.",
+          variant: "destructive",
+        });
+      }
+    }
+    setIsAddOpen(false);
+    setIntakeFile(null);
+    resetForm();
+    setCreating(false);
   };
 
   // ---- Details dialog state ----
@@ -434,6 +465,50 @@ export default function ContractsPage() {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   };
 
+  // Browser-native preview is reliable for PDFs and images. Office
+  // formats (.doc/.docx/.xls/.xlsx) need an external viewer; we
+  // disable the button with a tooltip in those cases rather than
+  // shipping a half-broken Google-Docs-Viewer fallback that would
+  // require public file URLs.
+  const PREVIEWABLE_MIMES = new Set([
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+  ]);
+  const canPreview = (mime: string): boolean => PREVIEWABLE_MIMES.has(mime);
+
+  // Fetches the file as a blob (so we can attach the auth + CSRF
+  // headers — window.open can't), creates a blob URL, and opens it
+  // in a new tab. The blob URL's lack of Content-Disposition lets
+  // the browser inline-render PDFs and images even though the
+  // download endpoint streams with `attachment`. We deliberately
+  // don't revoke the URL — there's no reliable "tab closed" signal,
+  // and the blob is freed when the tab unloads anyway.
+  const previewAttachment = async (contractId: string, attachmentId: string, mimeType: string) => {
+    if (!canPreview(mimeType)) return;
+    try {
+      const token = localStorage.getItem("lawfirm_token");
+      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+      const res = await fetch(
+        `/api/contracts/${contractId}/attachments/${attachmentId}/download`,
+        { headers, credentials: "same-origin" },
+      );
+      if (!res.ok) throw new Error("فشل تحميل المعاينة");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+    } catch (err: any) {
+      toast({
+        title: "فشل عرض الملف",
+        description: err?.message || String(err),
+        variant: "destructive",
+      });
+    }
+  };
+
   const canDeleteAttachment = (a: ContractAttachment, contract: Contract): boolean => {
     if (!user) return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
@@ -571,7 +646,14 @@ export default function ContractsPage() {
                 <Label>نوع العقد</Label>
                 <Select
                   value={formData.contractType}
-                  onValueChange={(value) => setFormData({ ...formData, contractType: value })}
+                  onValueChange={(value) => {
+                    setFormData({ ...formData, contractType: value });
+                    // Clear the staged intake file when switching away
+                    // from مراجعة_عقد — the slot only applies to that
+                    // type, and re-staging a file for a different type
+                    // would silently use the wrong slotKey.
+                    if (value !== ContractType.REVIEW) setIntakeFile(null);
+                  }}
                 >
                   <SelectTrigger data-testid="select-contract-type">
                     <SelectValue />
@@ -611,14 +693,47 @@ export default function ContractsPage() {
                   rows={4}
                 />
               </div>
+              {/* مراجعة_عقد intake file — required at create time. The
+                  picker is hidden for the other two contract types since
+                  they have no required intake slot. The file is uploaded
+                  in a second request after the contract is committed
+                  (see handleAdd) so a failed upload doesn't lose the
+                  contract row. */}
+              {requiresIntakeFile && (
+                <div>
+                  <Label>
+                    العقد محل المراجعة <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    type="file"
+                    data-testid="input-contract-intake-file"
+                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                    onChange={(e) => setIntakeFile(e.target.files?.[0] ?? null)}
+                  />
+                  {intakeFile && (
+                    <p className="text-xs text-muted-foreground mt-1 truncate">
+                      <BidiText>{intakeFile.name}</BidiText>
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    يلزم رفع نسخة العقد قبل إنشاء طلب المراجعة. يمكن استبداله لاحقاً من تبويب المرفقات.
+                  </p>
+                </div>
+              )}
             </div>
             <Button
               data-testid="button-submit-contract"
               onClick={handleAdd}
               className="w-full"
-              disabled={!formData.title.trim() || !formData.clientId || !formData.departmentId}
+              disabled={
+                creating
+                || !formData.title.trim()
+                || !formData.clientId
+                || !formData.departmentId
+                || (requiresIntakeFile && !intakeFile)
+              }
             >
-              إضافة العقد
+              {creating ? "جاري الإنشاء..." : "إضافة العقد"}
             </Button>
           </DialogContent>
         </Dialog>
@@ -1062,6 +1177,22 @@ export default function ContractsPage() {
                                   <Button
                                     size="icon"
                                     variant="ghost"
+                                    disabled={!canPreview(att.mimeType)}
+                                    title={
+                                      canPreview(att.mimeType)
+                                        ? "معاينة"
+                                        : "المعاينة غير متاحة لهذا النوع من الملفات"
+                                    }
+                                    onClick={() => previewAttachment(selected.id, att.id, att.mimeType)}
+                                    data-testid={`preview-slot-${rule.slotKey}`}
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </Button>
+                                )}
+                                {att && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
                                     onClick={() => downloadAttachment(selected.id, att.id)}
                                     data-testid={`download-slot-${rule.slotKey}`}
                                   >
@@ -1149,6 +1280,20 @@ export default function ContractsPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          disabled={!canPreview(a.mimeType)}
+                          title={
+                            canPreview(a.mimeType)
+                              ? "معاينة"
+                              : "المعاينة غير متاحة لهذا النوع من الملفات"
+                          }
+                          onClick={() => previewAttachment(selected.id, a.id, a.mimeType)}
+                          data-testid={`preview-additional-${a.id}`}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </Button>
                         <Button
                           size="icon"
                           variant="ghost"

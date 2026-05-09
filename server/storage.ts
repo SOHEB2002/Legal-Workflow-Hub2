@@ -4236,17 +4236,39 @@ export class DatabaseStorage implements IStorage {
         // العقود والمشاريع — owns the contracts module by default. Brand-new
         // installs create it as id "5"; existing installs get the same row
         // via script/add-contracts-department.sql (idempotent insert by name).
-        { id: "5", name: "العقود_والمشاريع", headId: null },
+        { id: "5", name: "العقود والمشاريع", headId: null },
       ];
       for (const dept of defaultDepartments) {
         await db.insert(departments).values({ ...dept, createdAt: new Date() });
       }
     } else {
+      // Defensive rename — earlier versions of the seed used the
+      // underscore-named "العقود_والمشاريع" (matched the design doc
+      // verbatim). The canonical name is now space-separated. This
+      // UPDATE folds any legacy row in place so its id (and every
+      // user_section_views / user.department_id reference pointing
+      // at it) stays valid. No-op when no legacy row exists.
+      try {
+        const legacyName = "العقود" + "_" + "والمشاريع";
+        const legacy = existingDepartments.find((d) => d.name === legacyName);
+        if (legacy) {
+          await db.update(departments)
+            .set({ name: "العقود والمشاريع" })
+            .where(eq(departments.id, legacy.id));
+          console.log(`[INIT] Renamed legacy contracts department '${legacyName}' → 'العقود والمشاريع' (id ${legacy.id})`);
+          // Reflect the rename in our local snapshot so the existence
+          // check below sees the new name and skips the insert branch.
+          legacy.name = "العقود والمشاريع";
+        }
+      } catch (e) {
+        console.warn("[INIT] Contracts dept rename skipped:", (e as any)?.message || e);
+      }
+
       // Existing installs: ensure the contracts dept row exists too. Match
       // by name to avoid id collisions (some deployments hand-edited ids
       // away from the seed values). This is a no-op once the dept exists.
       const hasContractsDept = existingDepartments.some(
-        (d) => d.name === "العقود_والمشاريع",
+        (d) => d.name === "العقود والمشاريع",
       );
       if (!hasContractsDept) {
         // Pick the next free numeric id ≥ 5 so we don't collide with
@@ -4261,7 +4283,7 @@ export class DatabaseStorage implements IStorage {
         try {
           await db.insert(departments).values({
             id: nextId,
-            name: "العقود_والمشاريع",
+            name: "العقود والمشاريع",
             headId: null,
             createdAt: new Date(),
           });
