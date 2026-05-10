@@ -174,11 +174,11 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
+  { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
-  { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer"] },
+  { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "branch_manager"] },
 
@@ -204,13 +204,13 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "دراسة", to: "توجيه_العميل_بالتسوية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "توجيه_العميل_بالتسوية", to: "بانتظار_رفع_العميل_للتسوية", allowedRoles: ["department_head", "assigned_lawyer"] },
   { from: "بانتظار_رفع_العميل_للتسوية", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "أغلق_طلب_الصلح", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer"] },
+  { from: "أغلق_طلب_الصلح", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   // ==================== ADMIN PATH (prescription date + grievance) ====================
   { from: "استلام", to: "تحديد_تاريخ_التقادم", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer"] },
+  { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
@@ -223,7 +223,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // استلام → استكمال_البيانات is shared with the common section.
   { from: "استلام", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
+  { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "تحرير_مذكرة_جوابية", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
 
   // ==================== IN-COURT PATH: plaintiff + memo ====================
@@ -251,15 +251,15 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "الأخذ_بالملاحظات", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
   // ==================== POST-TRIAL TRANSITIONS ====================
-  { from: "منظورة", to: "محكوم_حكم_ابتدائي", allowedRoles: ["assigned_lawyer"] },
-  { from: "منظورة", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer"] },
-  { from: "منظورة", to: "مشطوبة", allowedRoles: ["assigned_lawyer"] },
+  { from: "منظورة", to: "محكوم_حكم_ابتدائي", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "منظورة", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "منظورة", to: "مشطوبة", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   { from: "محكوم_حكم_ابتدائي", to: "منظورة_استئناف", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "محكوم_حكم_ابتدائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
 
-  { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer"] },
-  { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer"] },
+  { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   { from: "محكوم_حكم_نهائي", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "محكوم_حكم_نهائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
