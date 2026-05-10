@@ -123,11 +123,15 @@ export const lawCases = pgTable("law_cases", {
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
 }, (t) => ({
-  convertedFromConsultationFk: foreignKey({
-    name: "law_cases_converted_from_consultation_id_fkey",
-    columns: [t.convertedFromConsultationId],
-    foreignColumns: [consultations.id],
-  }).onDelete("set null"),
+  // Phase-2 deploy split — FK temporarily declared application-side only.
+  // Apply via script/apply-fk-constraints.sql with statement_timeout
+  // protection; the validating ADD CONSTRAINT was timing out the Replit
+  // production deploy on tables with existing rows.
+  // convertedFromConsultationFk: foreignKey({
+  //   name: "law_cases_converted_from_consultation_id_fkey",
+  //   columns: [t.convertedFromConsultationId],
+  //   foreignColumns: [consultations.id],
+  // }).onDelete("set null"),
 }));
 
 export const consultations = pgTable("consultations", {
@@ -194,11 +198,12 @@ export const consultationStudies = pgTable("consultation_studies", {
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => ({
-  consultationFk: foreignKey({
-    name: "consultation_studies_consultation_id_fkey",
-    columns: [t.consultationId],
-    foreignColumns: [consultations.id],
-  }).onDelete("cascade"),
+  // Phase-2 deploy split — see script/apply-fk-constraints.sql.
+  // consultationFk: foreignKey({
+  //   name: "consultation_studies_consultation_id_fkey",
+  //   columns: [t.consultationId],
+  //   foreignColumns: [consultations.id],
+  // }).onDelete("cascade"),
   consultationIdx: index("consultation_studies_consultation_idx").on(t.consultationId),
 }));
 
@@ -209,11 +214,12 @@ export const consultationDrafts = pgTable("consultation_drafts", {
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => ({
-  consultationFk: foreignKey({
-    name: "consultation_drafts_consultation_id_fkey",
-    columns: [t.consultationId],
-    foreignColumns: [consultations.id],
-  }).onDelete("cascade"),
+  // Phase-2 deploy split — see script/apply-fk-constraints.sql.
+  // consultationFk: foreignKey({
+  //   name: "consultation_drafts_consultation_id_fkey",
+  //   columns: [t.consultationId],
+  //   foreignColumns: [consultations.id],
+  // }).onDelete("cascade"),
   consultationIdx: index("consultation_drafts_consultation_idx").on(t.consultationId),
 }));
 
@@ -225,11 +231,12 @@ export const consultationReviews = pgTable("consultation_reviews", {
   notes: text("notes").notNull().default(""),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => ({
-  consultationFk: foreignKey({
-    name: "consultation_reviews_consultation_id_fkey",
-    columns: [t.consultationId],
-    foreignColumns: [consultations.id],
-  }).onDelete("cascade"),
+  // Phase-2 deploy split — see script/apply-fk-constraints.sql.
+  // consultationFk: foreignKey({
+  //   name: "consultation_reviews_consultation_id_fkey",
+  //   columns: [t.consultationId],
+  //   foreignColumns: [consultations.id],
+  // }).onDelete("cascade"),
   consultationIdx: index("consultation_reviews_consultation_idx").on(t.consultationId),
 }));
 
@@ -241,11 +248,12 @@ export const consultationCommitteeDecisions = pgTable("consultation_committee_de
   decidedBy: varchar("decided_by", { length: 255 }).notNull(),
   decidedAt: timestamp("decided_at").defaultNow(),
 }, (t) => ({
-  consultationFk: foreignKey({
-    name: "consultation_committee_decisions_consultation_id_fkey",
-    columns: [t.consultationId],
-    foreignColumns: [consultations.id],
-  }).onDelete("cascade"),
+  // Phase-2 deploy split — see script/apply-fk-constraints.sql.
+  // consultationFk: foreignKey({
+  //   name: "consultation_committee_decisions_consultation_id_fkey",
+  //   columns: [t.consultationId],
+  //   foreignColumns: [consultations.id],
+  // }).onDelete("cascade"),
   consultationIdx: index("consultation_committee_decisions_consultation_idx").on(t.consultationId),
 }));
 
@@ -257,11 +265,12 @@ export const consultationNoteOutcomes = pgTable("consultation_note_outcomes", {
   recordedBy: varchar("recorded_by", { length: 255 }).notNull(),
   recordedAt: timestamp("recorded_at").defaultNow(),
 }, (t) => ({
-  consultationFk: foreignKey({
-    name: "consultation_note_outcomes_consultation_id_fkey",
-    columns: [t.consultationId],
-    foreignColumns: [consultations.id],
-  }).onDelete("cascade"),
+  // Phase-2 deploy split — see script/apply-fk-constraints.sql.
+  // consultationFk: foreignKey({
+  //   name: "consultation_note_outcomes_consultation_id_fkey",
+  //   columns: [t.consultationId],
+  //   foreignColumns: [consultations.id],
+  // }).onDelete("cascade"),
   consultationIdx: index("consultation_note_outcomes_consultation_idx").on(t.consultationId),
 }));
 
