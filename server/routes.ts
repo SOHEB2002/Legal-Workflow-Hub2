@@ -74,6 +74,36 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { sendToUser, broadcastToAdmins } from "./websocket";
+import { Client as ObjectStorageClient } from "@replit/object-storage";
+
+// Contract attachments live in Replit Object Storage now — the
+// previous ./uploads/contracts/<id>/<file> layout was on the
+// container's ephemeral disk, and every Autoscale restart / scale
+// event / republish wiped the lot while leaving the DB rows pointing
+// at vanished paths. The client constructor itself doesn't talk to
+// the bucket; getBucket() runs lazily on first request, so this is
+// safe even if REPLIT_OBJECT_STORAGE_BUCKET_ID isn't wired up at
+// module load (the request handler surfaces a 500 with the actual
+// error message in that case).
+const contractObjectStore = new ObjectStorageClient();
+
+const CONTRACT_OBJECT_KEY_PREFIX = "contracts/";
+
+// Single source of truth for "is this row pointing at a fresh
+// Object-Storage upload or a legacy disk path?". New rows store the
+// object key ("contracts/<contractId>/<uuid>.pdf") in filePath;
+// pre-migration rows still hold the disk path
+// ("./uploads/contracts/..." or "uploads/contracts/...") whose
+// underlying file is gone. The download handler returns 410 for
+// legacy paths and the list response flags them as missing.
+function isContractObjectKey(filePath: string): boolean {
+  return typeof filePath === "string" && filePath.startsWith(CONTRACT_OBJECT_KEY_PREFIX);
+}
+
+function makeContractObjectKey(contractId: string, originalName: string): string {
+  const ext = path.extname(originalName).replace(/[^a-zA-Z0-9.]/g, "");
+  return `${CONTRACT_OBJECT_KEY_PREFIX}${contractId}/${randomUUID()}${ext}`;
+}
 
 interface AuthRequest extends Request {
   user?: {
@@ -4286,18 +4316,18 @@ export async function registerRoutes(
       const attachments = await storage.getContractAttachments(id);
       const ok = await storage.deleteContract(id);
       if (!ok) return res.status(404).json({ error: "العقد غير موجود" });
+      // Drop each blob from Object Storage. The DB FK cascade has
+      // already removed the contract_attachments rows; this cleanup
+      // is best-effort — orphans in the bucket only cost storage,
+      // not correctness. Legacy disk-path rows (pre-migration) have
+      // nothing left to delete and are skipped.
       for (const att of attachments) {
-        if (att.filePath) {
-          fs.unlink(att.filePath, (err) => {
-            if (err) console.warn(`[contracts/delete] failed to unlink ${att.filePath}:`, err.message);
+        if (att.filePath && isContractObjectKey(att.filePath)) {
+          contractObjectStore.delete(att.filePath, { ignoreNotFound: true }).catch((e) => {
+            console.warn(`[contracts/delete] failed to delete object ${att.filePath}:`, e?.message || e);
           });
         }
       }
-      // Remove the contract's directory if it's now empty. rmdir
-      // fails silently when non-empty (some unlinks may have
-      // failed); that's the safe behavior.
-      const contractDir = path.join(contractsUploadsDir, id);
-      fs.rmdir(contractDir, () => {});
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -4910,32 +4940,12 @@ export async function registerRoutes(
   });
 
   // ==================== Contract attachments ====================
-  // Per-contract upload directory: ./uploads/contracts/{contractId}/.
-  // Multer writes the file to disk first; the route handler then
-  // inserts the metadata row + activity log entry. Failed inserts
-  // unlink the orphan file so a retry succeeds without manual
-  // cleanup.
-  const contractsUploadsDir = path.join(uploadsDir, "contracts");
-  if (!fs.existsSync(contractsUploadsDir)) fs.mkdirSync(contractsUploadsDir, { recursive: true });
-
+  // Files are buffered in memory and forwarded to Replit Object
+  // Storage by the route handler — no per-contract upload dir, no
+  // disk persistence, nothing to clean up between requests. 50MB max
+  // (same as before) keeps the per-request memory bounded.
   const contractUpload = multer({
-    storage: multer.diskStorage({
-      destination: (req, _file, cb) => {
-        const contractId = String(req.params?.id || "");
-        if (!contractId) return cb(new Error("contractId مطلوب") as any, "");
-        const dir = path.join(contractsUploadsDir, contractId);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-      },
-      filename: (_req, file, cb) => {
-        // Strip everything but [a-zA-Z0-9.] from the original name's
-        // extension to defang path traversal / shell injection. The
-        // human-readable original name still lives on the row's
-        // file_name column for display + Content-Disposition.
-        const ext = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, '');
-        cb(null, `${Date.now()}-${randomUUID()}${ext}`);
-      },
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: 50 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       const allowed = [
@@ -5007,14 +5017,14 @@ export async function registerRoutes(
         if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
         const contract = await storage.getContractById(String(req.params.id));
         if (!contract) {
-          if ((req as any).file) fs.unlink((req as any).file.path, () => {});
           return res.status(404).json({ error: "العقد غير موجود" });
         }
         if (!canModifyContract(reqUser, contract)) {
-          if ((req as any).file) fs.unlink((req as any).file.path, () => {});
           return res.status(403).json({ error: "لا تملك صلاحية رفع مرفقات لهذا العقد" });
         }
-        const file = (req as any).file as { originalname: string; filename: string; path: string; size: number; mimetype: string } | undefined;
+        // memoryStorage → file.buffer holds the bytes; no disk path to
+        // unlink on the failure paths below.
+        const file = (req as any).file as { originalname: string; buffer: Buffer; size: number; mimetype: string } | undefined;
         if (!file) {
           // No file = fileFilter rejected the mimetype (silently — multer
           // skips rejected files instead of erroring). Log the rejected
@@ -5047,27 +5057,24 @@ export async function registerRoutes(
         if (rawSlot && rawSlot !== "null" && rawSlot !== "additional") {
           const validSlots = Object.values(ContractAttachmentSlot) as string[];
           if (!validSlots.includes(rawSlot)) {
-            fs.unlink(file.path, () => {});
             return res.status(400).json({ error: "خانة المرفق غير صحيحة" });
           }
           // Slot must be allowed for this contract type (per ContractSlotsByType).
           const resolved = resolveContractType(contract.contractType);
           const allowedSlotsForType = ((ContractSlotsByType as any)[resolved] || []).map((r: any) => r.slotKey);
           if (!allowedSlotsForType.includes(rawSlot)) {
-            fs.unlink(file.path, () => {});
             return res.status(400).json({ error: "هذه الخانة غير متاحة لنوع العقد الحالي" });
           }
-          // "العقد محل المراجعة" is the immutable source document for
-          // مراجعة_عقد contracts — replacing it is conceptually wrong
-          // (the lawyer's review modifies review_study, not this slot).
-          // If a file already exists in this slot, reject the upload
-          // with 409 Conflict and unlink the just-uploaded blob so we
-          // don't accumulate orphans on disk. Re-uploads of OTHER slots
-          // (review_study, drafted_contract, mou) still replace freely.
+          // "العقد محل المراجعة" is immutable once a REAL file lives
+          // there. We only block the replace if the existing row is a
+          // fresh Object-Storage upload — legacy disk-path rows whose
+          // underlying file vanished with the last ephemeral redeploy
+          // are stubs we WANT users to overwrite (no other recovery
+          // path). Other slots (review_study, drafted_contract, mou)
+          // still replace freely regardless.
           if (rawSlot === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW) {
             const existing = await storage.getContractAttachmentBySlot(contract.id, rawSlot);
-            if (existing) {
-              fs.unlink(file.path, () => {});
+            if (existing && isContractObjectKey(existing.filePath)) {
               return res.status(409).json({
                 error: "العقد محل المراجعة لا يمكن استبداله بعد رفعه. احذفه أولاً إذا كان لديك الصلاحية.",
               });
@@ -5076,21 +5083,50 @@ export async function registerRoutes(
           slotKey = rawSlot;
         }
 
+        // Upload to Object Storage BEFORE inserting the DB row so a
+        // failed upload doesn't leave an orphan row pointing at
+        // nothing. If the bucket is unreachable (env not configured,
+        // network blip), surface a 500 with the SDK error so support
+        // sees the real cause.
+        const objectKey = makeContractObjectKey(contract.id, file.originalname);
+        const uploadResult = await contractObjectStore.uploadFromBytes(objectKey, file.buffer);
+        if (!uploadResult.ok) {
+          console.error("[contracts/attachments POST] object storage upload failed:", {
+            objectKey,
+            error: uploadResult.error,
+          });
+          return res.status(500).json({
+            error: `فشل رفع الملف إلى التخزين السحابي: ${uploadResult.error?.message || "خطأ غير معروف"}`,
+          });
+        }
+
         const { attachment, replaced } = await storage.createContractAttachment({
           contractId: contract.id,
           slotKey,
           fileName: file.originalname,
-          filePath: file.path,
+          filePath: objectKey,
           fileSize: file.size,
           mimeType: file.mimetype,
           description,
           uploadedBy: reqUser.id,
         });
 
-        // Unlink the displaced file after the DB transaction has
-        // committed — best-effort, swallow errors.
+        // Delete the displaced blob from Object Storage after the DB
+        // transaction commits — only if the prior row was itself an
+        // Object-Storage upload. Legacy disk paths point at nothing
+        // (the file vanished on the redeploy that triggered this whole
+        // migration), so there's nothing to clean up. Best-effort —
+        // a failed delete just leaves a billable orphan, not a
+        // correctness issue.
         if (replaced && replaced.filePath && replaced.filePath !== attachment.filePath) {
-          fs.unlink(replaced.filePath, () => {});
+          if (isContractObjectKey(replaced.filePath)) {
+            contractObjectStore.delete(replaced.filePath, { ignoreNotFound: true }).catch((e) => {
+              console.error("[contracts/attachments POST] failed to delete replaced object:", {
+                key: replaced.filePath,
+                error: e,
+              });
+            });
+          }
         }
 
         // Activity log entry — replaced vs added paths differ in
@@ -5117,9 +5153,11 @@ export async function registerRoutes(
         }
         res.status(201).json({ attachment, replaced });
       } catch (error: any) {
-        // On any unexpected failure unlink the just-uploaded file so a
-        // retry doesn't accumulate orphans on disk.
-        if ((req as any).file) fs.unlink((req as any).file.path, () => {});
+        // memoryStorage holds the file in req.file.buffer — no disk
+        // path to unlink, GC reclaims the buffer when the request ends.
+        // If the SDK upload already succeeded but the DB insert failed
+        // we'll have a billable orphan in Object Storage; rare enough
+        // that a periodic GC sweep is the right place to handle it.
         console.error("[contracts/attachments POST] error:", error);
         res.status(500).json({ error: error.message || "فشل رفع المرفق" });
       }
@@ -5137,11 +5175,16 @@ export async function registerRoutes(
       }
       const all = await storage.getContractAttachments(contract.id);
       // Group by slot vs additional so the FE doesn't have to bucket.
+      // Each row gets a `missing` flag derived from the filePath shape:
+      // legacy disk paths reference files that were wiped by the last
+      // ephemeral redeploy. The client renders a "missing — please
+      // re-upload" badge for these and disables preview/download.
       const slots: Record<string, any> = {};
       const additional: any[] = [];
       for (const a of all) {
-        if (a.slotKey) slots[a.slotKey] = a;
-        else additional.push(a);
+        const enriched = { ...a, missing: !isContractObjectKey(a.filePath) };
+        if (a.slotKey) slots[a.slotKey] = enriched;
+        else additional.push(enriched);
       }
       res.json({ slots, additional });
     } catch (error: any) {
@@ -5162,15 +5205,30 @@ export async function registerRoutes(
       if (!att || att.contractId !== contract.id) {
         return res.status(404).json({ error: "المرفق غير موجود" });
       }
-      // Path-traversal guard: resolved file must live under the
-      // contracts/{contractId}/ directory.
-      const expectedRoot = path.resolve(contractsUploadsDir, contract.id);
-      const resolved = path.resolve(att.filePath);
-      if (!resolved.startsWith(expectedRoot)) {
-        return res.status(403).json({ error: "وصول مرفوض" });
+      // Legacy disk-path rows from before the Object-Storage migration:
+      // the underlying file is gone from the ephemeral container and
+      // is not recoverable. Return 410 Gone with the recovery copy the
+      // UI knows how to render (re-upload affordance) — don't bother
+      // hitting Object Storage with a key that was never there.
+      if (!isContractObjectKey(att.filePath)) {
+        return res.status(410).json({
+          error: "الملف مفقود — يرجى إعادة الرفع من جديد",
+        });
       }
-      if (!fs.existsSync(resolved)) {
-        return res.status(404).json({ error: "ملف غير موجود على القرص" });
+      const downloaded = await contractObjectStore.downloadAsBytes(att.filePath);
+      if (!downloaded.ok) {
+        const status = downloaded.error?.statusCode === 404 ? 410 : 500;
+        console.error("[contracts download] object storage fetch failed:", {
+          attachmentId: att.id,
+          key: att.filePath,
+          status: downloaded.error?.statusCode,
+          message: downloaded.error?.message,
+        });
+        return res.status(status).json({
+          error: status === 410
+            ? "الملف مفقود — يرجى إعادة الرفع من جديد"
+            : `فشل تحميل الملف من التخزين السحابي: ${downloaded.error?.message || "خطأ غير معروف"}`,
+        });
       }
       // RFC 5987 filename* for the Arabic original name; ASCII fallback
       // for older clients.
@@ -5180,7 +5238,10 @@ export async function registerRoutes(
         `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(att.fileName)}`,
       );
       res.setHeader("Content-Type", att.mimeType || "application/octet-stream");
-      res.sendFile(resolved);
+      // downloadAsBytes returns a tuple [Buffer] — first element holds
+      // the bytes for the whole object. 50MB upload limit keeps this
+      // memory-bounded; streaming is overkill at this size.
+      res.send(downloaded.value[0]);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -5219,8 +5280,20 @@ export async function registerRoutes(
       }
       const deleted = await storage.deleteContractAttachment(att.id);
       if (!deleted) return res.status(404).json({ error: "المرفق غير موجود" });
-      // Remove from disk after the DB row is gone — best effort.
-      if (deleted.filePath) fs.unlink(deleted.filePath, () => {});
+      // Drop the blob from Object Storage after the DB row is gone.
+      // Legacy disk-path rows (pre-migration) reference files that
+      // were already wiped by the redeploy that prompted this whole
+      // change — no-op for those. ignoreNotFound:true so a missing
+      // object doesn't fail the response after the row is already
+      // deleted; best-effort either way.
+      if (deleted.filePath && isContractObjectKey(deleted.filePath)) {
+        contractObjectStore.delete(deleted.filePath, { ignoreNotFound: true }).catch((e) => {
+          console.error("[contracts/attachments DELETE] failed to delete object:", {
+            key: deleted.filePath,
+            error: e,
+          });
+        });
+      }
       await storage.createContractActivity({
         contractId: contract.id,
         activityType: ContractActivityType.ATTACHMENT_DELETED,

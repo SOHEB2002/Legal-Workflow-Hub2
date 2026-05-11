@@ -702,11 +702,14 @@ export default function ContractsPage() {
   };
 
   // Whether the upload/replace control should render at all for a slot
-  // card. contract_under_review is write-once: once a file lives there,
-  // no replace ever — even branch_manager has to delete-then-reupload
-  // (which leaves a clear audit trail). Every other slot replaces freely.
-  const canUploadToSlot = (slotKey: string, hasExisting: boolean): boolean => {
-    if (slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW && hasExisting) return false;
+  // card. contract_under_review is write-once: once a REAL file lives
+  // there, no replace ever — even branch_manager has to delete-then-
+  // reupload (which leaves a clear audit trail). Missing legacy stubs
+  // (pre-Object-Storage rows whose file vanished on redeploy) are
+  // exempt — the user can overwrite them in one step. Every other slot
+  // replaces freely.
+  const canUploadToSlot = (slotKey: string, hasExisting: boolean, isMissing: boolean): boolean => {
+    if (slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW && hasExisting && !isMissing) return false;
     return true;
   };
 
@@ -1503,15 +1506,25 @@ export default function ContractsPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="font-medium text-sm">{rule.label}</div>
                                 {att ? (
-                                  <div className="text-xs text-muted-foreground mt-1">
-                                    <BidiText>{att.fileName}</BidiText>
-                                    {" • "}
-                                    {formatFileSize(att.fileSize)}
-                                    {" • "}
-                                    <BidiText>{getLawyerName(att.uploadedBy)}</BidiText>
-                                    {" • "}
-                                    <LtrInline>{att.uploadedAt.slice(0, 10)}</LtrInline>
-                                  </div>
+                                  att.missing ? (
+                                    <div
+                                      className="text-xs text-destructive mt-1 flex items-center gap-1"
+                                      data-testid={`slot-missing-${rule.slotKey}`}
+                                    >
+                                      <AlertTriangle className="w-3 h-3" />
+                                      هذا المرفق مفقود — يرجى إعادة الرفع
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-muted-foreground mt-1">
+                                      <BidiText>{att.fileName}</BidiText>
+                                      {" • "}
+                                      {formatFileSize(att.fileSize)}
+                                      {" • "}
+                                      <BidiText>{getLawyerName(att.uploadedBy)}</BidiText>
+                                      {" • "}
+                                      <LtrInline>{att.uploadedAt.slice(0, 10)}</LtrInline>
+                                    </div>
+                                  )
                                 ) : (
                                   <div className="text-xs text-amber-700 mt-1 flex items-center gap-1">
                                     <AlertTriangle className="w-3 h-3" />
@@ -1520,7 +1533,7 @@ export default function ContractsPage() {
                                 )}
                               </div>
                               <div className="flex items-center gap-1 shrink-0">
-                                {att && (
+                                {att && !att.missing && (
                                   <Button
                                     size="icon"
                                     variant="ghost"
@@ -1536,7 +1549,7 @@ export default function ContractsPage() {
                                     <Eye className="w-4 h-4" />
                                   </Button>
                                 )}
-                                {att && (
+                                {att && !att.missing && (
                                   <Button
                                     size="icon"
                                     variant="ghost"
@@ -1546,7 +1559,7 @@ export default function ContractsPage() {
                                     <Download className="w-4 h-4" />
                                   </Button>
                                 )}
-                                {canUploadToSlot(rule.slotKey, !!att) && (
+                                {canUploadToSlot(rule.slotKey, !!att, !!att?.missing) && (
                                   <label className="cursor-pointer">
                                     <input
                                       type="file"
@@ -1561,7 +1574,7 @@ export default function ContractsPage() {
                                     />
                                     <span className="inline-flex items-center justify-center h-8 px-3 rounded-md text-xs border bg-background hover:bg-accent">
                                       <Upload className="w-3.5 h-3.5 ml-1" />
-                                      {att ? "استبدال" : "رفع"}
+                                      {att && !att.missing ? "استبدال" : "رفع"}
                                     </span>
                                   </label>
                                 )}
@@ -1619,37 +1632,51 @@ export default function ContractsPage() {
                         <FileIcon className="w-4 h-4 text-muted-foreground shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm truncate"><BidiText>{a.fileName}</BidiText></div>
-                          <div className="text-xs text-muted-foreground">
-                            {formatFileSize(a.fileSize)}
-                            {" • "}
-                            <BidiText>{getLawyerName(a.uploadedBy)}</BidiText>
-                            {" • "}
-                            <LtrInline>{a.uploadedAt.slice(0, 10)}</LtrInline>
-                          </div>
+                          {a.missing ? (
+                            <div
+                              className="text-xs text-destructive flex items-center gap-1"
+                              data-testid={`additional-missing-${a.id}`}
+                            >
+                              <AlertTriangle className="w-3 h-3" />
+                              هذا المرفق مفقود — يرجى حذفه وإعادة الرفع
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">
+                              {formatFileSize(a.fileSize)}
+                              {" • "}
+                              <BidiText>{getLawyerName(a.uploadedBy)}</BidiText>
+                              {" • "}
+                              <LtrInline>{a.uploadedAt.slice(0, 10)}</LtrInline>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          disabled={!canPreview(a.mimeType)}
-                          title={
-                            canPreview(a.mimeType)
-                              ? "معاينة"
-                              : "المعاينة غير متاحة لهذا النوع من الملفات"
-                          }
-                          onClick={() => previewAttachment(selected.id, a.id, a.mimeType)}
-                          data-testid={`preview-additional-${a.id}`}
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => downloadAttachment(selected.id, a.id)}
-                        >
-                          <Download className="w-4 h-4" />
-                        </Button>
+                        {!a.missing && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            disabled={!canPreview(a.mimeType)}
+                            title={
+                              canPreview(a.mimeType)
+                                ? "معاينة"
+                                : "المعاينة غير متاحة لهذا النوع من الملفات"
+                            }
+                            onClick={() => previewAttachment(selected.id, a.id, a.mimeType)}
+                            data-testid={`preview-additional-${a.id}`}
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {!a.missing && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => downloadAttachment(selected.id, a.id)}
+                          >
+                            <Download className="w-4 h-4" />
+                          </Button>
+                        )}
                         {canDeleteAttachment(a, selected) && (
                           <Button
                             size="icon"
