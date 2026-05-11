@@ -273,12 +273,42 @@ export default function ContractsPage() {
     departmentId: "",
     description: "",
   });
-  const resetForm = () => setFormData({
-    title: "", clientId: "", contractType: ContractType.REVIEW,
-    // Default to the contracts dept; user can route elsewhere before save.
-    departmentId: contractsDeptId,
+
+  // For مراجعة_عقد contracts the "العقد محل المراجعة" file is required
+  // at create time — we capture it on the form and upload it
+  // immediately after the contract row is created. Other types skip
+  // this entirely.
+  const [intakeFile, setIntakeFile] = useState<File | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  // Optional create-time attachments — usable for ALL contract types.
+  // Each row carries its own file + free-text description; the user can
+  // add up to ADDITIONAL_LIMIT rows and they all upload with
+  // slotKey=null after the contract row commits.
+  type PendingAdditional = { id: string; file: File | null; description: string };
+  const ADDITIONAL_LIMIT = 5;
+  const [pendingAdditionals, setPendingAdditionals] = useState<PendingAdditional[]>([]);
+  const newPendingAdditional = (): PendingAdditional => ({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    file: null,
     description: "",
   });
+  // Drives the "uploading X of N" line shown below the submit button
+  // while the attachment uploads run in parallel after the contract is
+  // created. Null between flows.
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const resetForm = () => {
+    setFormData({
+      title: "", clientId: "", contractType: ContractType.REVIEW,
+      // Default to the contracts dept; user can route elsewhere before save.
+      departmentId: contractsDeptId,
+      description: "",
+    });
+    setIntakeFile(null);
+    setPendingAdditionals([]);
+    setUploadProgress(null);
+  };
 
   // Sync the default into formData once departments load — covers the
   // first render where contractsDeptId resolves later than the initial
@@ -290,13 +320,6 @@ export default function ContractsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractsDeptId]);
 
-  // For مراجعة_عقد contracts the "العقد محل المراجعة" file is required
-  // at create time — we capture it on the form and upload it
-  // immediately after the contract row is created. Other types skip
-  // this entirely.
-  const [intakeFile, setIntakeFile] = useState<File | null>(null);
-  const [creating, setCreating] = useState(false);
-
   const requiresIntakeFile = formData.contractType === ContractType.REVIEW;
 
   const handleAdd = async () => {
@@ -306,29 +329,78 @@ export default function ContractsPage() {
     let created: Contract | null = null;
     try {
       created = await addContract(formData);
-      toast({ title: "تم إنشاء العقد بنجاح" });
     } catch (err) {
       toast({ title: "فشل إنشاء العقد", description: extractApiError(err), variant: "destructive" });
       setCreating(false);
       return;
     }
-    // Contract is now committed. Upload the intake file in a separate
-    // step — keeping the two writes independent means a failed upload
-    // doesn't lose the contract row, and the user can retry from the
-    // details dialog without re-typing the form.
-    if (created && requiresIntakeFile && intakeFile) {
-      try {
-        await uploadAttachment(created.id, intakeFile, ContractAttachmentSlot.CONTRACT_UNDER_REVIEW);
-      } catch (err) {
-        toast({
-          title: "تم إنشاء العقد لكن فشل رفع الملف",
-          description: "افتح تفاصيل العقد لإعادة المحاولة من تبويب المرفقات.",
-          variant: "destructive",
+    // Contract is now committed. Build the upload queue (required
+    // intake slot for مراجعة_عقد + every staged additional) and run them
+    // in parallel — keeping the contract create and the uploads as
+    // separate writes means a failed upload doesn't lose the contract
+    // row, and the user can retry the failed ones from the details
+    // dialog without re-typing the form.
+    type PendingUpload = {
+      file: File;
+      slotKey: string | null;
+      description: string | null;
+      label: string;
+    };
+    const uploads: PendingUpload[] = [];
+    if (requiresIntakeFile && intakeFile) {
+      uploads.push({
+        file: intakeFile,
+        slotKey: ContractAttachmentSlot.CONTRACT_UNDER_REVIEW,
+        description: null,
+        label: intakeFile.name,
+      });
+    }
+    for (const row of pendingAdditionals) {
+      if (row.file) {
+        uploads.push({
+          file: row.file,
+          slotKey: null,
+          description: row.description.trim() || null,
+          label: row.file.name,
         });
       }
     }
+
+    if (created && uploads.length > 0) {
+      setUploadProgress({ done: 0, total: uploads.length });
+      let done = 0;
+      const results = await Promise.all(uploads.map(async (u) => {
+        try {
+          await uploadAttachmentRaw(created!.id, u.file, u.slotKey, u.description);
+          return { ok: true as const, label: u.label };
+        } catch (err: any) {
+          return { ok: false as const, label: u.label, error: err?.message || String(err) };
+        } finally {
+          done++;
+          setUploadProgress({ done, total: uploads.length });
+        }
+      }));
+      const failures = results.filter((r) => !r.ok);
+      if (failures.length === 0) {
+        toast({ title: "تم إنشاء العقد ورفع المرفقات بنجاح" });
+      } else if (failures.length === uploads.length) {
+        toast({
+          title: "تم إنشاء العقد لكن فشل رفع جميع المرفقات",
+          description: "افتح تفاصيل العقد لإعادة الرفع من تبويب المرفقات.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: `تم إنشاء العقد، فشل رفع ${failures.length} من ${uploads.length} مرفق`,
+          description: `الملفات الفاشلة: ${failures.map((f) => f.label).join("، ")}`,
+          variant: "destructive",
+        });
+      }
+    } else {
+      toast({ title: "تم إنشاء العقد بنجاح" });
+    }
+
     setIsAddOpen(false);
-    setIntakeFile(null);
     resetForm();
     setCreating(false);
   };
@@ -387,6 +459,44 @@ export default function ContractsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
+  // Low-level POST — throws on failure, no UI side effects. Used by the
+  // create-dialog flow (which batches multiple uploads in parallel and
+  // wants to aggregate failures itself) and wrapped by uploadAttachment
+  // below for the details-dialog flow.
+  //
+  // Multipart uploads can't go through apiRequest (which sets a
+  // JSON Content-Type); we hand-roll the fetch but still need the
+  // bearer token AND the CSRF token — same protection that the
+  // shared queryClient.apiRequest applies. Letting the browser
+  // pick the multipart Content-Type (with its boundary) is
+  // critical: setting it manually breaks parsing on the server.
+  const uploadAttachmentRaw = async (
+    contractId: string,
+    file: File,
+    slotKey: string | null,
+    description: string | null = null,
+  ): Promise<void> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (slotKey) fd.append("slotKey", slotKey);
+    if (description) fd.append("description", description);
+    const token = localStorage.getItem("lawfirm_token");
+    const csrfToken = localStorage.getItem("lawfirm_csrf_token");
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+    const res = await fetch(`/api/contracts/${contractId}/attachments`, {
+      method: "POST",
+      headers,
+      body: fd,
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || "فشل رفع الملف");
+    }
+  };
+
   const uploadAttachment = async (
     contractId: string,
     file: File,
@@ -394,30 +504,7 @@ export default function ContractsPage() {
   ) => {
     setUploadingSlot(slotKey || "additional");
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      if (slotKey) fd.append("slotKey", slotKey);
-      // Multipart uploads can't go through apiRequest (which sets a
-      // JSON Content-Type); we hand-roll the fetch but still need the
-      // bearer token AND the CSRF token — same protection that the
-      // shared queryClient.apiRequest applies. Letting the browser
-      // pick the multipart Content-Type (with its boundary) is
-      // critical: setting it manually breaks parsing on the server.
-      const token = localStorage.getItem("lawfirm_token");
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      const headers: Record<string, string> = {};
-      if (token) headers.Authorization = `Bearer ${token}`;
-      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-      const res = await fetch(`/api/contracts/${contractId}/attachments`, {
-        method: "POST",
-        headers,
-        body: fd,
-        credentials: "same-origin",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err?.error || "فشل رفع الملف");
-      }
+      await uploadAttachmentRaw(contractId, file, slotKey);
       await fetchAttachments(contractId);
       await fetchActivities(contractId);
       toast({ title: "تم رفع الملف بنجاح" });
@@ -785,6 +872,84 @@ export default function ContractsPage() {
                   </p>
                 </div>
               )}
+              {/* Optional additional attachments — available for ALL
+                  contract types (including صياغة_عقد / مشروع which have
+                  no required intake slot). Each row uploads with
+                  slotKey=null after the contract row commits. */}
+              <div className="space-y-2 border-t pt-3">
+                <Label className="text-sm">مرفقات إضافية (اختياري)</Label>
+                {pendingAdditionals.map((row, idx) => (
+                  <div
+                    key={row.id}
+                    className="rounded-md border p-3 bg-muted/30 space-y-2"
+                    data-testid={`additional-row-${idx}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 space-y-2">
+                        <Input
+                          type="file"
+                          data-testid={`input-contract-additional-file-${idx}`}
+                          accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0] ?? null;
+                            setPendingAdditionals((prev) =>
+                              prev.map((p) => (p.id === row.id ? { ...p, file: f } : p)),
+                            );
+                          }}
+                        />
+                        {row.file && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            <BidiText>{row.file.name}</BidiText>
+                          </p>
+                        )}
+                        <Textarea
+                          data-testid={`input-contract-additional-description-${idx}`}
+                          value={row.description}
+                          placeholder="وصف اختياري للمرفق..."
+                          rows={2}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setPendingAdditionals((prev) =>
+                              prev.map((p) => (p.id === row.id ? { ...p, description: v } : p)),
+                            );
+                          }}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        data-testid={`button-remove-additional-${idx}`}
+                        aria-label="حذف المرفق"
+                        onClick={() =>
+                          setPendingAdditionals((prev) => prev.filter((p) => p.id !== row.id))
+                        }
+                      >
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {pendingAdditionals.length < ADDITIONAL_LIMIT ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    data-testid="button-add-additional"
+                    onClick={() =>
+                      setPendingAdditionals((prev) => [...prev, newPendingAdditional()])
+                    }
+                    className="w-full"
+                  >
+                    <Plus className="w-4 h-4 ml-2" />
+                    إضافة مرفق إضافي
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    تم بلوغ الحد الأقصى ({ADDITIONAL_LIMIT}) للمرفقات الإضافية.
+                  </p>
+                )}
+              </div>
             </div>
             <Button
               data-testid="button-submit-contract"
@@ -798,7 +963,11 @@ export default function ContractsPage() {
                 || (requiresIntakeFile && !intakeFile)
               }
             >
-              {creating ? "جاري الإنشاء..." : "إضافة العقد"}
+              {creating
+                ? uploadProgress
+                  ? `جاري رفع المرفقات ${uploadProgress.done} / ${uploadProgress.total}...`
+                  : "جاري الإنشاء..."
+                : "إضافة العقد"}
             </Button>
           </DialogContent>
         </Dialog>
