@@ -593,7 +593,17 @@ export default function ContractsPage() {
       // Bearer-token fetch + blob download.
       fetch(url, { headers: { Authorization: `Bearer ${token}` } })
         .then(async (r) => {
-          if (!r.ok) throw new Error("فشل التحميل");
+          if (!r.ok) {
+            // Surface the actual server error (404 "ملف غير موجود على
+            // القرص" vs 404 "المرفق غير موجود" vs 403 "صلاحية" etc.)
+            // rather than a useless generic "فشل التحميل".
+            const errBody = await r.json().catch(() => ({}));
+            console.error(
+              "[contracts download] failed",
+              { status: r.status, contractId, attachmentId, body: errBody },
+            );
+            throw new Error(errBody?.error || `فشل التحميل (${r.status})`);
+          }
           const blob = await r.blob();
           const cd = r.headers.get("Content-Disposition") || "";
           const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="([^"]+)"/);
@@ -606,7 +616,11 @@ export default function ContractsPage() {
           a.remove();
           URL.revokeObjectURL(a.href);
         })
-        .catch((err) => toast({ title: "فشل التحميل", description: String(err), variant: "destructive" }));
+        .catch((err) => toast({
+          title: "فشل التحميل",
+          description: err?.message || String(err),
+          variant: "destructive",
+        }));
     } else {
       window.open(url, "_blank");
     }
@@ -649,7 +663,19 @@ export default function ContractsPage() {
         `/api/contracts/${contractId}/attachments/${attachmentId}/download`,
         { headers, credentials: "same-origin" },
       );
-      if (!res.ok) throw new Error("فشل تحميل المعاينة");
+      if (!res.ok) {
+        // The 404s users were hitting after deploy were "ملف غير موجود
+        // على القرص" — ephemeral storage drops uploaded files on
+        // redeploy. Surface the server's actual message so the user
+        // (and support) can tell that from "attachment row missing" or
+        // a permission failure.
+        const errBody = await res.json().catch(() => ({}));
+        console.error(
+          "[contracts preview] failed",
+          { status: res.status, contractId, attachmentId, mimeType, body: errBody },
+        );
+        throw new Error(errBody?.error || `فشل تحميل المعاينة (${res.status})`);
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
