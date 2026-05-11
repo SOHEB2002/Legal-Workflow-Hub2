@@ -362,6 +362,56 @@ function getConsultationDisplayBadge(c: Consultation): { label: string; classNam
   };
 }
 
+// Priority-group sort, mirroring the cases page. Surface rows that need
+// attention; sink terminated rows. Type-aware because each workflow
+// (WRITTEN / PHONE / PROCEDURAL) has its own action-required stage set.
+//   1 = unassigned (no assigned lawyer)
+//   2 = action required from us (study / drafting / review / awaiting closure)
+//   3 = waiting on external (paused or awaiting-completion)
+//   4 = terminated (closed/converted/CLOSED_FINAL/WRITTEN-COMPLETED-via-status)
+// Within each group rows order by updatedAt DESC.
+const ACTION_REQUIRED_CONSULTATION_STAGES_WRITTEN = new Set<ConsultationStageValue>([
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.STUDY,
+  ConsultationStage.DRAFTING,
+  ConsultationStage.INTERNAL_REVIEW,
+  ConsultationStage.COMMITTEE,
+  ConsultationStage.TAKING_NOTES,
+  ConsultationStage.READY,
+]);
+const ACTION_REQUIRED_CONSULTATION_STAGES_PHONE = new Set<ConsultationStageValue>([
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.STUDY,
+  ConsultationStage.COMPLETED,
+]);
+const ACTION_REQUIRED_CONSULTATION_STAGES_PROCEDURAL = new Set<ConsultationStageValue>([
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.IN_PROGRESS,
+  ConsultationStage.COMPLETED,
+]);
+
+function getConsultationPriorityGroup(c: Consultation): 1 | 2 | 3 | 4 {
+  const resolvedType = resolveConsultationType(c.consultationType);
+  // Terminal first — overrides everything (including unassigned).
+  if (c.status === "closed" || c.status === "converted") return 4;
+  if (c.currentStage === ConsultationStage.CLOSED_FINAL) return 4;
+  // WRITTEN has no مغلقة stage; COMPLETED is its terminal-ish state.
+  if (resolvedType === ConsultationType.WRITTEN && c.currentStage === ConsultationStage.COMPLETED) return 4;
+  if (!c.assignedTo) return 1;
+  if (c.status === "paused" || c.pausedAt || c.awaitingCompletion) return 3;
+  const actionSet =
+    resolvedType === ConsultationType.PHONE
+      ? ACTION_REQUIRED_CONSULTATION_STAGES_PHONE
+      : resolvedType === ConsultationType.PROCEDURAL
+        ? ACTION_REQUIRED_CONSULTATION_STAGES_PROCEDURAL
+        : ACTION_REQUIRED_CONSULTATION_STAGES_WRITTEN;
+  if (c.currentStage && actionSet.has(c.currentStage)) return 2;
+  return 3;
+}
+
 // Phase-8 — pause permission gate. Mirrors the server check in
 // /api/consultations/:id/pause and /unpause. Narrower than
 // canModifyConsultation: branch_manager / admin_support / dept_head
@@ -396,15 +446,6 @@ function formatExpectedDate(iso: string | null): string {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toISOString().slice(0, 10);
 }
-
-// Phase-7 default sort: order by SLA urgency (سريعة → عادية → طويلة), then
-// newest-first within a category. Lives at module scope so the comparator
-// closure stays referentially stable across renders.
-const CATEGORY_SORT_RANK: Record<ConsultationCategoryValue, number> = {
-  [ConsultationCategory.QUICK]:    0,
-  [ConsultationCategory.STANDARD]: 1,
-  [ConsultationCategory.LONG]:     2,
-};
 
 // Per-category badge palette. Quick = amber (urgent), standard = neutral,
 // long = blue (low-pressure). Keeps the table readable at a glance without
@@ -1532,15 +1573,17 @@ export default function ConsultationsPage() {
     return true;
   });
 
-  // Phase-7 default ordering: SLA category (سريعة → عادية → طويلة), then
-  // createdAt DESC within a category. No click-to-sort exists yet, so the
-  // ordering is enforced here in the derivation step.
+  // Default ordering: priority group ASC, then updatedAt DESC within
+  // each group. Mirrors the cases page sort so the three tables read
+  // consistently. SLA category is still surfaced via the per-row badge,
+  // but the group sort now drives ordering so unassigned / action-needed
+  // consultations land on top.
   const sortedConsultations = [...filteredConsultations].sort((a, b) => {
-    const ra = CATEGORY_SORT_RANK[a.category] ?? 99;
-    const rb = CATEGORY_SORT_RANK[b.category] ?? 99;
-    if (ra !== rb) return ra - rb;
-    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    const ga = getConsultationPriorityGroup(a);
+    const gb = getConsultationPriorityGroup(b);
+    if (ga !== gb) return ga - gb;
+    const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
     return tb - ta;
   });
 
@@ -1767,10 +1810,33 @@ export default function ConsultationsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedConsultations.map((consultation) => (
-                <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`}>
+              {sortedConsultations.map((consultation) => {
+                const priorityGroup = getConsultationPriorityGroup(consultation);
+                const rowClass =
+                  priorityGroup === 1
+                    ? "bg-amber-50/60 dark:bg-amber-950/20"
+                    : priorityGroup === 4
+                      ? "opacity-60"
+                      : priorityGroup === 3
+                        ? "opacity-80"
+                        : "";
+                return (
+                <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`} className={rowClass}>
                   <TableCell className="text-center font-medium">
-                    <LtrInline>{consultation.consultationNumber}</LtrInline>
+                    <div className="flex flex-col items-center gap-1">
+                      <LtrInline>{consultation.consultationNumber}</LtrInline>
+                      {priorityGroup === 1 && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-consultation-unassigned-${consultation.id}`}
+                          title="الاستشارة لم تُسنَد لمحامٍ بعد"
+                        >
+                          <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                          غير مسندة
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-center">
                     <BidiText>{getClientName(consultation.clientId)}</BidiText>
@@ -2058,7 +2124,8 @@ export default function ConsultationsPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>
