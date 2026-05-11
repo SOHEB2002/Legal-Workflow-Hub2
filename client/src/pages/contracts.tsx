@@ -470,30 +470,82 @@ export default function ContractsPage() {
   // shared queryClient.apiRequest applies. Letting the browser
   // pick the multipart Content-Type (with its boundary) is
   // critical: setting it manually breaks parsing on the server.
+  //
+  // 401 + 403 are recovered transparently: a stale JWT (401) or a
+  // stale CSRF token (403 — 4h TTL while sessions are typically
+  // longer) was the silent cause of "uploads suddenly stop working
+  // until I refresh the page". We hit /api/auth/refresh, swap both
+  // tokens in localStorage, and replay the upload once. After that
+  // one retry, any non-2xx surfaces with the server's error message
+  // AND the HTTP status logged to console for support triage.
   const uploadAttachmentRaw = async (
     contractId: string,
     file: File,
     slotKey: string | null,
     description: string | null = null,
   ): Promise<void> => {
-    const fd = new FormData();
-    fd.append("file", file);
-    if (slotKey) fd.append("slotKey", slotKey);
-    if (description) fd.append("description", description);
-    const token = localStorage.getItem("lawfirm_token");
-    const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-    const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-    const res = await fetch(`/api/contracts/${contractId}/attachments`, {
+    const buildHeaders = (): Record<string, string> => {
+      const token = localStorage.getItem("lawfirm_token");
+      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+      return headers;
+    };
+    const buildFormData = (): FormData => {
+      // Re-create per attempt — a consumed FormData can't be safely
+      // re-sent. File objects survive multiple reads, so this is cheap.
+      const fd = new FormData();
+      fd.append("file", file);
+      if (slotKey) fd.append("slotKey", slotKey);
+      if (description) fd.append("description", description);
+      return fd;
+    };
+    const tryRefreshTokens = async (): Promise<boolean> => {
+      const oldToken = localStorage.getItem("lawfirm_token");
+      if (!oldToken) return false;
+      try {
+        const refreshRes = await fetch("/api/auth/refresh", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${oldToken}`,
+            "Content-Type": "application/json",
+          },
+        });
+        if (!refreshRes.ok) return false;
+        const data = await refreshRes.json();
+        if (data?.token) localStorage.setItem("lawfirm_token", data.token);
+        if (data?.csrfToken) localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
+        return !!data?.token;
+      } catch {
+        return false;
+      }
+    };
+
+    let res = await fetch(`/api/contracts/${contractId}/attachments`, {
       method: "POST",
-      headers,
-      body: fd,
+      headers: buildHeaders(),
+      body: buildFormData(),
       credentials: "same-origin",
     });
+    if ((res.status === 401 || res.status === 403) && await tryRefreshTokens()) {
+      res = await fetch(`/api/contracts/${contractId}/attachments`, {
+        method: "POST",
+        headers: buildHeaders(),
+        body: buildFormData(),
+        credentials: "same-origin",
+      });
+    }
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error || "فشل رفع الملف");
+      const errBody = await res.json().catch(() => ({}));
+      // Surface to console so the user can hand a real diagnostic to
+      // support instead of just "فشل الرفع". Includes the HTTP status,
+      // contract id, slot key, and the server's Arabic error message.
+      console.error(
+        "[contracts upload] failed",
+        { status: res.status, contractId, slotKey, fileName: file.name, body: errBody },
+      );
+      throw new Error(errBody?.error || `فشل رفع الملف (${res.status})`);
     }
   };
 
@@ -612,9 +664,24 @@ export default function ContractsPage() {
 
   const canDeleteAttachment = (a: ContractAttachment, contract: Contract): boolean => {
     if (!user) return false;
+    // contract_under_review is the immutable source document — only
+    // branch_manager + admin_support can delete it (mis-upload recovery).
+    // Server enforces the same rule; this just hides the button.
+    if (a.slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW) {
+      return user.role === "branch_manager" || user.role === "admin_support";
+    }
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
     if (user.role === "department_head" && contract.departmentId === user.departmentId) return true;
     return a.uploadedBy === user.id;
+  };
+
+  // Whether the upload/replace control should render at all for a slot
+  // card. contract_under_review is write-once: once a file lives there,
+  // no replace ever — even branch_manager has to delete-then-reupload
+  // (which leaves a clear audit trail). Every other slot replaces freely.
+  const canUploadToSlot = (slotKey: string, hasExisting: boolean): boolean => {
+    if (slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW && hasExisting) return false;
+    return true;
   };
 
   // ---- Action dialogs ----
@@ -1453,23 +1520,25 @@ export default function ContractsPage() {
                                     <Download className="w-4 h-4" />
                                   </Button>
                                 )}
-                                <label className="cursor-pointer">
-                                  <input
-                                    type="file"
-                                    className="hidden"
-                                    disabled={isUploading}
-                                    onChange={(e) => {
-                                      const f = e.target.files?.[0];
-                                      e.target.value = "";
-                                      if (f) uploadAttachment(selected.id, f, rule.slotKey);
-                                    }}
-                                    data-testid={`upload-slot-${rule.slotKey}`}
-                                  />
-                                  <span className="inline-flex items-center justify-center h-8 px-3 rounded-md text-xs border bg-background hover:bg-accent">
-                                    <Upload className="w-3.5 h-3.5 ml-1" />
-                                    {att ? "استبدال" : "رفع"}
-                                  </span>
-                                </label>
+                                {canUploadToSlot(rule.slotKey, !!att) && (
+                                  <label className="cursor-pointer">
+                                    <input
+                                      type="file"
+                                      className="hidden"
+                                      disabled={isUploading}
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0];
+                                        e.target.value = "";
+                                        if (f) uploadAttachment(selected.id, f, rule.slotKey);
+                                      }}
+                                      data-testid={`upload-slot-${rule.slotKey}`}
+                                    />
+                                    <span className="inline-flex items-center justify-center h-8 px-3 rounded-md text-xs border bg-background hover:bg-accent">
+                                      <Upload className="w-3.5 h-3.5 ml-1" />
+                                      {att ? "استبدال" : "رفع"}
+                                    </span>
+                                  </label>
+                                )}
                                 {att && canDeleteAttachment(att, selected) && (
                                   <Button
                                     size="icon"
