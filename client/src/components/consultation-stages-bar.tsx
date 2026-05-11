@@ -20,7 +20,7 @@ interface ConsultationStagesBarProps {
   // True when this consultation has already gone through the
   // الأخذ_بالملاحظات branch (committee returned يوجد_ملاحظات previously).
   // The page can't infer this from currentStage once the consultation has
-  // moved on to جاهزة_للتسليم / منجزة, so callers compute it from server
+  // moved on to جاهزة_للإرسال / منجزة, so callers compute it from server
   // data (committee-decision history) and pass it in. Ignored for the
   // simple PHONE / PROCEDURAL flows (which have no taking-notes branch).
   hasTakingNotesHistory?: boolean;
