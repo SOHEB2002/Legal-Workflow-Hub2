@@ -578,7 +578,7 @@ export const memos = pgTable("memos", {
   savedStage:         varchar("saved_stage", { length: 50 }),
   // Phase-9 — review-workflow stage column. Mirrors the consultations
   // currentStage axis but with memo-specific labels (جاهزة_للرفع /
-  // مرفوعة instead of جاهزة_للتسليم / منجزة). Nullable because legacy
+  // مرفوعة instead of جاهزة_للإرسال / منجزة). Nullable because legacy
   // rows pre-Phase-9 don't have a stage; the backfill in
   // script/backfill-memo-stages.sql maps the old `status` enum to a
   // stage. The legacy `status` column above stays as-is — cancellation
@@ -1374,7 +1374,7 @@ export const ConsultationStage = {
   INTERNAL_REVIEW:             "مراجعة_داخلية",
   COMMITTEE:                   "لجنة_مراجعة",
   TAKING_NOTES:                "الأخذ_بالملاحظات",
-  READY:                       "جاهزة_للتسليم",
+  READY:                       "جاهزة_للإرسال",
   COMPLETED:                   "منجزة",
   // Phone/procedural-only — "in-progress" replaces دراسة on procedural
   // path; "مغلقة" is the explicit terminal stage on both new types
@@ -1393,7 +1393,7 @@ export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
   "مراجعة_داخلية": "مراجعة داخلية",
   "لجنة_مراجعة": "لجنة مراجعة",
   "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
-  "جاهزة_للتسليم": "جاهزة للتسليم",
+  "جاهزة_للإرسال": "جاهزة للإرسال",
   "منجزة": "منجزة",
   "جاري_العمل": "جاري العمل",
   "مغلقة": "مغلقة",
@@ -1812,7 +1812,7 @@ export const MemoStatusLabels: Record<MemoStatusValue, string> = {
 // ==================== Memo Stage (Phase-9 review workflow) ====================
 // Mirrors the consultations 7+1-stage workflow but with memo-specific
 // terminal labels: جاهزة_للرفع / مرفوعة (filing) instead of
-// جاهزة_للتسليم / منجزة (delivery). TAKING_NOTES is conditional, only
+// جاهزة_للإرسال / منجزة (delivery). TAKING_NOTES is conditional, only
 // reached when committee returns "يوجد_ملاحظات".
 //
 // Stored on memos.current_stage (added in Phase-9). The legacy `status`
@@ -2232,7 +2232,7 @@ export const ContractStage = {
   INTERNAL_REVIEW:             "مراجعة_داخلية",
   COMMITTEE:                   "لجنة_مراجعة",
   TAKING_NOTES:                "الأخذ_بالملاحظات",
-  READY:                       "جاهزة_للتسليم",
+  READY:                       "جاهزة_للإرسال",
   CLOSED:                      "مغلقة",
 } as const;
 
@@ -2245,7 +2245,7 @@ export const ContractStageLabels: Record<ContractStageValue, string> = {
   "مراجعة_داخلية":               "مراجعة داخلية",
   "لجنة_مراجعة":                  "لجنة مراجعة",
   "الأخذ_بالملاحظات":             "الأخذ بالملاحظات",
-  "جاهزة_للتسليم":                "جاهزة للتسليم",
+  "جاهزة_للإرسال":                "جاهزة للإرسال",
   "مغلقة":                        "مغلقة",
 };
 

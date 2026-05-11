@@ -1148,18 +1148,28 @@ export default function CasesPage() {
         matchesAdvLawyer
       );
     });
-    // Default ordering: priority group ASC, then updatedAt DESC
-    // within each group. The user can layer filters/search on top —
-    // those run before this sort. A future column-header sort would
-    // replace this default; for now there's no header sort to honor.
+    // Default ordering: priority group ASC, then workflow-stage order
+    // ASC within a group (earlier stages bubble up), then updatedAt
+    // DESC within the same stage. The user can layer filters/search
+    // on top — those run before this sort. A future column-header
+    // sort would replace this default; for now there's no header
+    // sort to honor. Unknown stages fall to 999 so they sink to the
+    // bottom of their group rather than disrupting known-stage order.
     const updatedAtMs = (c: LawCase): number => {
       const t = c.updatedAt ? new Date(c.updatedAt).getTime() : 0;
       return Number.isFinite(t) ? t : 0;
+    };
+    const stageOrderIndex = (c: LawCase): number => {
+      const i = CaseStagesOrder.indexOf(c.currentStage as CaseStageValue);
+      return i === -1 ? 999 : i;
     };
     return matched.slice().sort((a, b) => {
       const ga = getCasePriorityGroup(a, !!caseHasActiveMemoMap.get(a.id));
       const gb = getCasePriorityGroup(b, !!caseHasActiveMemoMap.get(b.id));
       if (ga !== gb) return ga - gb;
+      const sa = stageOrderIndex(a);
+      const sb = stageOrderIndex(b);
+      if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap]);
