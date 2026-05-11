@@ -147,6 +147,31 @@ function canDoTakeNotes(c: Contract, user: { id: string; role: string; departmen
   return !!c.assignedTo && c.assignedTo === user.id;
 }
 
+// Priority-group sort, mirroring the cases / consultations pages so the
+// four tables read consistently.
+//   1 = unassigned (no assigned lawyer)
+//   2 = action required from us (drafting / reviewing / awaiting closure)
+//   3 = waiting on external (paused or awaiting-completion)
+//   4 = terminated (status === 'closed' or currentStage === CLOSED)
+// Within each group: stage-order ASC, then updatedAt DESC.
+const ACTION_REQUIRED_CONTRACT_STAGES = new Set<ContractStageValue>([
+  ContractStage.RECEIVED,
+  ContractStage.RECEIVED_PENDING_COMPLETION,
+  ContractStage.DRAFTING,
+  ContractStage.INTERNAL_REVIEW,
+  ContractStage.COMMITTEE,
+  ContractStage.TAKING_NOTES,
+  ContractStage.READY,
+]);
+
+function getContractPriorityGroup(c: Contract): 1 | 2 | 3 | 4 {
+  if (c.status === "closed" || c.currentStage === ContractStage.CLOSED) return 4;
+  if (!c.assignedTo) return 1;
+  if (c.status === "paused" || c.pausedAt || c.awaitingCompletion) return 3;
+  if (ACTION_REQUIRED_CONTRACT_STAGES.has(c.currentStage)) return 2;
+  return 3;
+}
+
 function getStageBadgeColor(stage: ContractStageValue): string {
   switch (stage) {
     case ContractStage.RECEIVED:
@@ -251,9 +276,31 @@ export default function ContractsPage() {
     });
   }, [contracts, searchTerm, stageFilter, typeFilter, deptFilter, assignedToFilter, getClientName]);
 
+  // Default ordering: priority group ASC, then workflow-stage order
+  // ASC within a group (earlier stages bubble up), then updatedAt DESC
+  // within the same stage. Mirrors cases / memos / consultations so the
+  // four tables read consistently. ContractStagesAll covers the
+  // conditional TAKING_NOTES branch; unknown stages fall to 999.
   const sortedContracts = useMemo(
-    () => [...filteredContracts].sort((a, b) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    () => {
+      const updatedAtMs = (c: Contract): number => {
+        const t = c.updatedAt ? new Date(c.updatedAt).getTime() : 0;
+        return Number.isFinite(t) ? t : 0;
+      };
+      const stageOrderIndex = (c: Contract): number => {
+        const i = ContractStagesAll.indexOf(c.currentStage);
+        return i === -1 ? 999 : i;
+      };
+      return [...filteredContracts].sort((a, b) => {
+        const ga = getContractPriorityGroup(a);
+        const gb = getContractPriorityGroup(b);
+        if (ga !== gb) return ga - gb;
+        const sa = stageOrderIndex(a);
+        const sb = stageOrderIndex(b);
+        if (sa !== sb) return sa - sb;
+        return updatedAtMs(b) - updatedAtMs(a);
+      });
+    },
     [filteredContracts],
   );
 
@@ -1127,10 +1174,33 @@ export default function ContractsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedContracts.map((c) => (
-                <TableRow key={c.id} data-testid={`row-contract-${c.id}`}>
+              {sortedContracts.map((c) => {
+                const priorityGroup = getContractPriorityGroup(c);
+                const rowClass =
+                  priorityGroup === 1
+                    ? "bg-amber-50/60 dark:bg-amber-950/20"
+                    : priorityGroup === 4
+                      ? "opacity-60"
+                      : priorityGroup === 3
+                        ? "opacity-80"
+                        : "";
+                return (
+                <TableRow key={c.id} data-testid={`row-contract-${c.id}`} className={rowClass}>
                   <TableCell className="text-center font-medium">
-                    <LtrInline>{c.contractNumber}</LtrInline>
+                    <div className="flex flex-col items-center gap-1">
+                      <LtrInline>{c.contractNumber}</LtrInline>
+                      {priorityGroup === 1 && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-contract-unassigned-${c.id}`}
+                          title="العقد لم يُسنَد لمحامٍ بعد"
+                        >
+                          <AlertTriangle className="w-2.5 h-2.5 ml-1" />
+                          غير مسند
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-center"><BidiText>{c.title}</BidiText></TableCell>
                   <TableCell className="text-center">
@@ -1285,7 +1355,8 @@ export default function ContractsPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
               {sortedContracts.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center text-muted-foreground py-8">

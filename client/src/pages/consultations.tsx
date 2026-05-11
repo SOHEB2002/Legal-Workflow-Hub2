@@ -72,6 +72,8 @@ import {
   ConsultationStageLabels,
   ConsultationStagesAll,
   ConsultationStagesOrder,
+  ConsultationStagesOrderPhone,
+  ConsultationStagesOrderProcedural,
   ConsultationType,
   ConsultationTypeLabels,
   ConsultationPriority,
@@ -1573,15 +1575,29 @@ export default function ConsultationsPage() {
     return true;
   });
 
-  // Default ordering: priority group ASC, then updatedAt DESC within
-  // each group. Mirrors the cases page sort so the three tables read
-  // consistently. SLA category is still surfaced via the per-row badge,
-  // but the group sort now drives ordering so unassigned / action-needed
-  // consultations land on top.
+  // Default ordering: priority group ASC, then workflow-stage order
+  // ASC within a group (earlier stages bubble up), then updatedAt DESC
+  // within the same stage. Stage-order array is type-aware — each
+  // workflow flavor (WRITTEN / PHONE / PROCEDURAL) has its own canonical
+  // order. Unknown stages fall to 999 so they sink within their group.
+  const consultationStageOrderIndex = (c: Consultation): number => {
+    const resolvedType = resolveConsultationType(c.consultationType);
+    const order =
+      resolvedType === ConsultationType.PHONE
+        ? ConsultationStagesOrderPhone
+        : resolvedType === ConsultationType.PROCEDURAL
+          ? ConsultationStagesOrderProcedural
+          : ConsultationStagesAll;
+    const i = order.indexOf(c.currentStage);
+    return i === -1 ? 999 : i;
+  };
   const sortedConsultations = [...filteredConsultations].sort((a, b) => {
     const ga = getConsultationPriorityGroup(a);
     const gb = getConsultationPriorityGroup(b);
     if (ga !== gb) return ga - gb;
+    const sa = consultationStageOrderIndex(a);
+    const sb = consultationStageOrderIndex(b);
+    if (sa !== sb) return sa - sb;
     const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
     const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
     return tb - ta;
