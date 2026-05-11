@@ -19,6 +19,12 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface AuthContextType {
   user: User | null;
+  // Single derived flag every page reads to hide write affordances —
+  // "+ إضافة" buttons, edit/delete dropdowns, stage transitions,
+  // upload zones, comment forms, etc. The server-side viewer guard
+  // in server/index.ts is the real enforcement; this flag just keeps
+  // the UI honest so viewers don't see buttons that would 403.
+  isViewer: boolean;
   login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
@@ -376,8 +382,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     canSendReminders: user ? canSendReminders(user.role) : false,
   };
 
+  const isViewer = user?.role === "viewer";
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
+    <AuthContext.Provider value={{ user, isViewer, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
       {children}
     </AuthContext.Provider>
   );

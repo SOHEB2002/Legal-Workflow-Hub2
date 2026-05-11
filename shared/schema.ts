@@ -868,6 +868,11 @@ export const UserRole = {
   EMPLOYEE: "employee",                       // موظف قسم
   HR: "hr",                                   // موظف الموارد البشرية
   TECHNICAL_SUPPORT: "technical_support",      // دعم فني
+  // Read-only role with global visibility — sees every module like
+  // branch_manager but is blocked from any mutating endpoint by the
+  // viewerWriteGuard middleware in server/index.ts. Used for
+  // auditors / observers who need data access without modification.
+  VIEWER: "viewer",                            // مشاهد
 } as const;
 
 export type UserRoleType = typeof UserRole[keyof typeof UserRole];
@@ -881,6 +886,7 @@ export const UserRoleLabels: Record<UserRoleType, string> = {
   employee: "موظف",
   hr: "الموارد البشرية",
   technical_support: "دعم فني",
+  viewer: "مشاهد",
 };
 
 // ==================== الأقسام (Departments) ====================
@@ -4197,6 +4203,15 @@ export const RolePermissions: Record<UserRoleType, PermissionType[]> = {
     "view_consultations",
     "view_clients",
     "view_users",
+  ],
+  // Read-only across the board — only view_* permissions, no
+  // create/edit/delete/assign. Server-side viewerWriteGuard
+  // middleware is the actual enforcement; this list keeps the
+  // permission registry honest and shapes any per-permission UI
+  // gates that consult it.
+  viewer: [
+    "view_cases", "view_consultations", "view_clients", "view_users",
+    "view_activity_log", "view_reports",
   ],
 };
 

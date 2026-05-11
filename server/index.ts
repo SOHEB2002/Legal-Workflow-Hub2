@@ -43,6 +43,24 @@ app.use(express.urlencoded({ extended: false }));
 app.use(authMiddleware);
 app.use(csrfProtection);
 
+// ==================== Viewer read-only guard ====================
+// Single chokepoint for the "viewer" role: any non-GET API call from a
+// viewer is rejected with 403 before the route handler runs. Reads
+// (GET/HEAD/OPTIONS) and the auth endpoints (login/refresh/logout/
+// password-change) stay open — viewers still need to sign in, refresh
+// their session, and change their own password. Putting the gate here
+// instead of on every individual write handler means we cannot
+// accidentally ship a new mutating route that forgets the check.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const user = (req as any).user;
+  if (!user || user.role !== "viewer") return next();
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  if (req.path.startsWith("/api/auth/")) return next();
+  return res.status(403).json({
+    error: "ليس لديك صلاحية لتنفيذ هذا الإجراء — حساب مشاهد للقراءة فقط",
+  });
+});
+
 app.use(async (req: Request, res: Response, next: NextFunction) => {
   const user = (req as any).user;
   if (!user || !req.path.startsWith("/api/")) return next();
