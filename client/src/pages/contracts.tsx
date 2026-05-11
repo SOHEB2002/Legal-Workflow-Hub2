@@ -207,7 +207,7 @@ export default function ContractsPage() {
   } = useContracts();
   const { clients, getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, users } = useAuth();
+  const { user, users, isViewer } = useAuth();
   const { toast } = useToast();
 
   const lawyers = users.filter((u) => u.canBeAssignedConsultations);
@@ -690,6 +690,7 @@ export default function ContractsPage() {
 
   const canDeleteAttachment = (a: ContractAttachment, contract: Contract): boolean => {
     if (!user) return false;
+    if (isViewer) return false;
     // contract_under_review is the immutable source document — only
     // branch_manager + admin_support can delete it (mis-upload recovery).
     // Server enforces the same rule; this just hides the button.
@@ -707,8 +708,9 @@ export default function ContractsPage() {
   // reupload (which leaves a clear audit trail). Missing legacy stubs
   // (pre-Object-Storage rows whose file vanished on redeploy) are
   // exempt — the user can overwrite them in one step. Every other slot
-  // replaces freely.
+  // replaces freely. Viewers never see the upload control regardless.
   const canUploadToSlot = (slotKey: string, hasExisting: boolean, isMissing: boolean): boolean => {
+    if (isViewer) return false;
     if (slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW && hasExisting && !isMissing) return false;
     return true;
   };
@@ -1601,6 +1603,7 @@ export default function ContractsPage() {
                 <div className="space-y-2 pt-2 border-t">
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground">مرفقات إضافية ({additionalAttachments.length})</p>
+                    {!isViewer && (
                     <label className="cursor-pointer">
                       <input
                         type="file"
@@ -1618,6 +1621,7 @@ export default function ContractsPage() {
                         إضافة مرفق
                       </span>
                     </label>
+                    )}
                   </div>
                   {additionalAttachments.length === 0 && (
                     <p className="text-xs text-muted-foreground py-2">لا توجد مرفقات إضافية بعد</p>

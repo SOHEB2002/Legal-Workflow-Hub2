@@ -157,7 +157,7 @@ export default function HearingsPage() {
   const { getMemosByCase, getMemosByHearing } = useMemos();
   const { getTasksByCase } = useFieldTasks();
   const { getClientName } = useClients();
-  const { user, users } = useAuth();
+  const { user, users, isViewer } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { toast } = useToast();
 
@@ -675,12 +675,14 @@ export default function HearingsPage() {
           <p className="text-muted-foreground">جدول الجلسات والمواعيد مع نظام سير العمل المتقدم</p>
         </div>
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-hearing" onClick={resetForm}>
-              <Plus className="w-4 h-4 ml-2" />
-              إضافة جلسة
-            </Button>
-          </DialogTrigger>
+          {!isViewer && (
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-hearing" onClick={resetForm}>
+                <Plus className="w-4 h-4 ml-2" />
+                إضافة جلسة
+              </Button>
+            </DialogTrigger>
+          )}
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle>إضافة جلسة جديدة</DialogTitle>

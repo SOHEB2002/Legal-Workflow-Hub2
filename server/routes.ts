@@ -138,8 +138,15 @@ function sanitizeUser(user: any) {
   return safe;
 }
 
+// "viewer" is intentionally folded into every can*/admin-role gate
+// below. These functions guard BOTH read and write paths in the
+// route handlers, and viewer needs global read access. The
+// viewerWriteGuard middleware in server/index.ts rejects every
+// non-GET request from a viewer before the handler runs, so
+// granting "admin-like" pass-throughs here can never enable a
+// mutation — the write path is unreachable.
 function canModifyCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(user.role)) return true;
   if (user.role === "department_head" && caseData.departmentId === user.departmentId) return true;
   if (caseData.primaryLawyerId === user.id || caseData.responsibleLawyerId === user.id) return true;
@@ -149,7 +156,7 @@ function canModifyCase(user: { id: string; role: string; departmentId: string | 
 }
 
 function canViewCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(user.role)) return true;
   if (user.role === "department_head") return caseData.departmentId === user.departmentId;
   if (user.role === "employee") {
@@ -166,7 +173,7 @@ function canEditCaseData(user: { id: string; role: string; departmentId: string 
 }
 
 function canModifyConsultation(user: { id: string; role: string; departmentId: string | null }, consultation: any): boolean {
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(user.role)) return true;
   if (user.role === "department_head" && consultation.departmentId === user.departmentId) return true;
   if (consultation.assignedTo === user.id || consultation.createdBy === user.id) return true;
@@ -174,7 +181,7 @@ function canModifyConsultation(user: { id: string; role: string; departmentId: s
 }
 
 function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
-  if (["branch_manager", "admin_support", "department_head"].includes(user.role)) return true;
+  if (["branch_manager", "admin_support", "department_head", "viewer"].includes(user.role)) return true;
   if (hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
   return false;
 }
@@ -420,7 +427,7 @@ function canModifyContract(
   // EXCLUDED — they chair the cases committee, which has nothing to
   // do with the contracts module. They can still see a contract if
   // they're personally on it (assigned / creator / internal reviewer).
-  const adminRoles = ["branch_manager", "admin_support", "consultations_review_head"];
+  const adminRoles = ["branch_manager", "admin_support", "consultations_review_head", "viewer"];
   if (adminRoles.includes(user.role)) return true;
   if (user.role === "department_head" && contract.departmentId === user.departmentId) return true;
   if (contract.assignedTo === user.id || contract.createdBy === user.id) return true;
@@ -1004,7 +1011,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/users/:id/dependencies", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
+  app.get("/api/users/:id/dependencies", requireAuth, requireRole("branch_manager", "admin_support", "viewer"), async (req, res) => {
     try {
       const userId = String(req.params.id);
       const targetUser = await storage.getUser(userId);
@@ -2658,7 +2665,7 @@ export async function registerRoutes(
       const allConsultations = await storage.getAllConsultations();
       const { role, id: userId, departmentId } = user;
 
-      if (["branch_manager", "admin_support", "consultations_review_head", "cases_review_head"].includes(role)) {
+      if (["branch_manager", "admin_support", "consultations_review_head", "cases_review_head", "viewer"].includes(role)) {
         return res.json(allConsultations);
       }
 
@@ -7318,11 +7325,12 @@ export async function registerRoutes(
   app.get("/api/notifications", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;
-      const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+      const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
       // Admin roles previously fetched the entire notifications table with getAllNotifications(),
       // which grows unboundedly (scheduler + workflow actions create many rows). The default
       // is now the 200 most recent. Pass ?all=true only when the full history is needed
-      // (e.g., the notification management dashboard).
+      // (e.g., the notification management dashboard). Viewer reads the
+      // same global list as branch_manager but cannot mark/dismiss.
       const notificationList = adminRoles.includes(user.role)
         ? req.query.all === "true"
           ? await storage.getAllNotifications()
@@ -7762,7 +7770,7 @@ export async function registerRoutes(
 
   // ==================== Lawyer Performance Stats ====================
 
-  app.get("/api/stats/lawyer-performance", requireAuth, requireRole("branch_manager", "cases_review_head", "consultations_review_head", "department_head", "admin_support"), async (req: AuthRequest, res) => {
+  app.get("/api/stats/lawyer-performance", requireAuth, requireRole("branch_manager", "cases_review_head", "consultations_review_head", "department_head", "admin_support", "viewer"), async (req: AuthRequest, res) => {
     try {
     const user = req.user!;
     let departmentFilter = req.query.departmentId as string | undefined;
@@ -8250,7 +8258,7 @@ export async function registerRoutes(
 
   // ==================== Court Analytics ====================
 
-  app.get("/api/stats/court-analytics", requireAuth, requireRole("branch_manager", "cases_review_head", "consultations_review_head"), async (req: AuthRequest, res) => {
+  app.get("/api/stats/court-analytics", requireAuth, requireRole("branch_manager", "cases_review_head", "consultations_review_head", "viewer"), async (req: AuthRequest, res) => {
     const cases = await storage.getAllCases();
     const hearingsList = await storage.getAllHearings();
 

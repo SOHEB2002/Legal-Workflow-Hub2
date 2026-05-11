@@ -64,6 +64,8 @@ function getRoleBadgeColor(role: UserRoleType) {
       return "bg-muted text-muted-foreground";
     case UserRole.HR:
       return "bg-purple-500/20 text-purple-600 border-purple-500/30";
+    case UserRole.VIEWER:
+      return "bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30";
     default:
       return "bg-muted text-muted-foreground";
   }
