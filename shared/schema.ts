@@ -2470,6 +2470,13 @@ export interface ContractAttachment {
   description: string | null;
   uploadedBy: string;
   uploadedAt: string;
+  // Runtime-derived on the GET /api/contracts/:id/attachments
+  // response (not stored). True for rows whose filePath is a legacy
+  // local-disk path from before the Object-Storage migration — the
+  // underlying file is gone and the UI surfaces a re-upload prompt
+  // instead of preview/download buttons. New rows from the
+  // Object-Storage path always report missing=false.
+  missing?: boolean;
 }
 
 export interface ContractActivity {
