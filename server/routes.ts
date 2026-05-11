@@ -174,11 +174,11 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استلام", to: "استكمال_البيانات", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
+  { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
-  { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer"] },
+  { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "branch_manager"] },
 
@@ -204,13 +204,13 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "دراسة", to: "توجيه_العميل_بالتسوية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "توجيه_العميل_بالتسوية", to: "بانتظار_رفع_العميل_للتسوية", allowedRoles: ["department_head", "assigned_lawyer"] },
   { from: "بانتظار_رفع_العميل_للتسوية", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: "أغلق_طلب_الصلح", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer"] },
+  { from: "أغلق_طلب_الصلح", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   // ==================== ADMIN PATH (prescription date + grievance) ====================
   { from: "استلام", to: "تحديد_تاريخ_التقادم", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer"] },
+  { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
   { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
@@ -223,7 +223,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // استلام → استكمال_البيانات is shared with the common section.
   { from: "استلام", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer"] },
+  { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "تحرير_مذكرة_جوابية", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
 
   // ==================== IN-COURT PATH: plaintiff + memo ====================
@@ -251,15 +251,15 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "الأخذ_بالملاحظات", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
   // ==================== POST-TRIAL TRANSITIONS ====================
-  { from: "منظورة", to: "محكوم_حكم_ابتدائي", allowedRoles: ["assigned_lawyer"] },
-  { from: "منظورة", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer"] },
-  { from: "منظورة", to: "مشطوبة", allowedRoles: ["assigned_lawyer"] },
+  { from: "منظورة", to: "محكوم_حكم_ابتدائي", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "منظورة", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "منظورة", to: "مشطوبة", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   { from: "محكوم_حكم_ابتدائي", to: "منظورة_استئناف", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "محكوم_حكم_ابتدائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
 
-  { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer"] },
-  { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer"] },
+  { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   { from: "محكوم_حكم_نهائي", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "محكوم_حكم_نهائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
@@ -4988,6 +4988,14 @@ export async function registerRoutes(
     requireAuth,
     (req, res, next) => contractUpload.single("file")(req, res, (err) => {
       if (!err) return next();
+      // Always log: silent multer failures (path traversal in dest cb,
+      // disk full, fs perms) were impossible to debug without this.
+      console.error("[contracts/attachments POST] multer error:", {
+        code: (err as any)?.code,
+        message: (err as any)?.message,
+        field: (err as any)?.field,
+        contractId: req.params?.id,
+      });
       if (err.code === "LIMIT_FILE_SIZE") {
         return res.status(400).json({ error: "حجم الملف يتجاوز الحد المسموح (50MB)" });
       }
@@ -5008,6 +5016,14 @@ export async function registerRoutes(
         }
         const file = (req as any).file as { originalname: string; filename: string; path: string; size: number; mimetype: string } | undefined;
         if (!file) {
+          // No file = fileFilter rejected the mimetype (silently — multer
+          // skips rejected files instead of erroring). Log the rejected
+          // mimetype so we can tell "they forgot to attach a file" from
+          // "they uploaded a .heic / .zip".
+          console.error("[contracts/attachments POST] no file in request", {
+            contractId: req.params?.id,
+            multipartFields: Object.keys(req.body || {}),
+          });
           return res.status(400).json({ error: "الملف مطلوب أو نوعه غير مسموح" });
         }
         // Multer reads the multipart `filename` field as latin1 by
@@ -5040,6 +5056,22 @@ export async function registerRoutes(
           if (!allowedSlotsForType.includes(rawSlot)) {
             fs.unlink(file.path, () => {});
             return res.status(400).json({ error: "هذه الخانة غير متاحة لنوع العقد الحالي" });
+          }
+          // "العقد محل المراجعة" is the immutable source document for
+          // مراجعة_عقد contracts — replacing it is conceptually wrong
+          // (the lawyer's review modifies review_study, not this slot).
+          // If a file already exists in this slot, reject the upload
+          // with 409 Conflict and unlink the just-uploaded blob so we
+          // don't accumulate orphans on disk. Re-uploads of OTHER slots
+          // (review_study, drafted_contract, mou) still replace freely.
+          if (rawSlot === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW) {
+            const existing = await storage.getContractAttachmentBySlot(contract.id, rawSlot);
+            if (existing) {
+              fs.unlink(file.path, () => {});
+              return res.status(409).json({
+                error: "العقد محل المراجعة لا يمكن استبداله بعد رفعه. احذفه أولاً إذا كان لديك الصلاحية.",
+              });
+            }
           }
           slotKey = rawSlot;
         }
@@ -5165,13 +5197,25 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المرفق غير موجود" });
       }
       // Per spec: uploader / dept_head (own dept) / branch_manager / admin_support.
-      const allowed =
-        att.uploadedBy === reqUser.id
-        || reqUser.role === "branch_manager"
-        || reqUser.role === "admin_support"
-        || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId);
+      // EXCEPTION: contract_under_review is the immutable source
+      // document — only branch_manager + admin_support can delete it
+      // (for mis-upload recovery). Assigned lawyers and dept_heads can
+      // delete every OTHER attachment, but not this slot.
+      const isContractUnderReview = att.slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW;
+      const allowed = isContractUnderReview
+        ? (reqUser.role === "branch_manager" || reqUser.role === "admin_support")
+        : (
+            att.uploadedBy === reqUser.id
+            || reqUser.role === "branch_manager"
+            || reqUser.role === "admin_support"
+            || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId)
+          );
       if (!allowed) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لحذف هذا المرفق" });
+        return res.status(403).json({
+          error: isContractUnderReview
+            ? "حذف العقد محل المراجعة مسموح فقط لمدير الفرع والدعم الإداري"
+            : "ليس لديك صلاحية لحذف هذا المرفق",
+        });
       }
       const deleted = await storage.deleteContractAttachment(att.id);
       if (!deleted) return res.status(404).json({ error: "المرفق غير موجود" });

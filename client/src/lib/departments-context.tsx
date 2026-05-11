@@ -16,14 +16,19 @@ const DepartmentsContext = createContext<DepartmentsContextType | undefined>(und
 // the server's initializeDefaultData seed in storage.ts — department_head
 // users are assigned to these ids and the routing / notifications filter
 // on an exact id match.
+//
+// "العقود والمشاريع" (id "5") MUST stay in this list — it's the contracts
+// module owner and disappears from every dept dropdown if the fetch races
+// or fails and we fall back to defaults without it.
 const DEFAULT_DEPARTMENTS: DepartmentInfo[] = [
   { id: "1", name: "عام", headId: null, createdAt: new Date().toISOString() },
   { id: "2", name: "تجاري", headId: null, createdAt: new Date().toISOString() },
   { id: "3", name: "عمالي", headId: null, createdAt: new Date().toISOString() },
   { id: "4", name: "إداري", headId: null, createdAt: new Date().toISOString() },
+  { id: "5", name: "العقود والمشاريع", headId: null, createdAt: new Date().toISOString() },
 ];
 
-const KNOWN_DEPARTMENT_NAMES = ["عام", "تجاري", "عمالي", "إداري"] as const;
+const KNOWN_DEPARTMENT_NAMES = ["عام", "تجاري", "عمالي", "إداري", "العقود والمشاريع"] as const;
 
 export function DepartmentsProvider({ children }: { children: React.ReactNode }) {
   // Start with defaults so the UI is never empty while /api/departments
