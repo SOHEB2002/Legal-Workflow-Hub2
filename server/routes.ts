@@ -4947,12 +4947,31 @@ export async function registerRoutes(
   });
 
   // ==================== Contract attachments ====================
-  // Files are buffered in memory and forwarded to Replit Object
-  // Storage by the route handler — no per-contract upload dir, no
-  // disk persistence, nothing to clean up between requests. 50MB max
-  // (same as before) keeps the per-request memory bounded.
+  // Multer writes the multipart payload to ./uploads (50MB cap), the
+  // handler then hands the temp file off to the SDK's
+  // uploadFromFilename, then unlinks it. Keeps per-upload heap
+  // bounded — 5 concurrent 50MB uploads were ~500MB on the old
+  // memoryStorage path.
+  function unlinkContractTemp(filePath: string | undefined, ctx: string) {
+    if (!filePath) return;
+    fs.unlink(filePath, (err) => {
+      if (err && (err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`[${ctx}] temp file cleanup failed:`, {
+          filePath,
+          error: err.message,
+        });
+      }
+    });
+  }
+
   const contractUpload = multer({
-    storage: multer.memoryStorage(),
+    storage: multer.diskStorage({
+      destination: uploadsDir,
+      filename: (_req, file, cb) => {
+        const ext = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, "");
+        cb(null, `${Date.now()}-${randomUUID()}${ext}`);
+      },
+    }),
     limits: { fileSize: 50 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       const allowed = [
@@ -5013,12 +5032,23 @@ export async function registerRoutes(
         field: (err as any)?.field,
         contractId: req.params?.id,
       });
+      // If multer started writing the body to disk before failing
+      // (e.g. LIMIT_FILE_SIZE trips midway), the partial temp file is
+      // sitting in ./uploads — unlink it so we don't leak the disk.
+      unlinkContractTemp((req as any).file?.path, "contracts/attachments POST (multer error)");
       if (err.code === "LIMIT_FILE_SIZE") {
         return res.status(400).json({ error: "حجم الملف يتجاوز الحد المسموح (50MB)" });
       }
       return res.status(400).json({ error: "فشل تحميل الملف" });
     }),
     async (req, res) => {
+      // diskStorage → file.path is the temp file on disk; file.buffer
+      // does not exist. Capture path up front so the finally block
+      // can unlink regardless of which early-return we hit.
+      const file = (req as any).file as
+        | { originalname: string; path: string; filename: string; size: number; mimetype: string }
+        | undefined;
+      const tempPath = file?.path;
       try {
         const reqUser = (req as any).user;
         if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
@@ -5029,9 +5059,6 @@ export async function registerRoutes(
         if (!canModifyContract(reqUser, contract)) {
           return res.status(403).json({ error: "لا تملك صلاحية رفع مرفقات لهذا العقد" });
         }
-        // memoryStorage → file.buffer holds the bytes; no disk path to
-        // unlink on the failure paths below.
-        const file = (req as any).file as { originalname: string; buffer: Buffer; size: number; mimetype: string } | undefined;
         if (!file) {
           // No file = fileFilter rejected the mimetype (silently — multer
           // skips rejected files instead of erroring). Log the rejected
@@ -5049,8 +5076,9 @@ export async function registerRoutes(
         // ("اÙØ¹Ù‚د..."). Re-decode the latin1-as-bytes back into
         // UTF-8 here, BEFORE we persist the row, so the DB / API
         // response / Content-Disposition all carry the real Arabic
-        // string. Safe for ASCII-only names — the round-trip is
-        // identity for codepoints below 0x80.
+        // string. Safe for ASCII-only names. Note: only the display
+        // name (file.originalname) is corrected — file.filename /
+        // file.path are already ASCII-only (UUID + sanitized ext).
         try {
           file.originalname = Buffer.from(file.originalname, "latin1").toString("utf8");
         } catch {
@@ -5096,7 +5124,11 @@ export async function registerRoutes(
         // network blip), surface a 500 with the SDK error so support
         // sees the real cause.
         const objectKey = makeContractObjectKey(contract.id, file.originalname);
-        const uploadResult = await contractObjectStore.uploadFromBytes(objectKey, file.buffer);
+        // Stream from the on-disk temp file straight to the bucket.
+        // uploadFromFilename uses @google-cloud/storage's resumable
+        // upload internally, so the bytes never sit in Node's heap —
+        // unlike the previous uploadFromBytes(file.buffer) call.
+        const uploadResult = await contractObjectStore.uploadFromFilename(objectKey, file.path);
         if (!uploadResult.ok) {
           console.error("[contracts/attachments POST] object storage upload failed:", {
             objectKey,
@@ -5160,13 +5192,18 @@ export async function registerRoutes(
         }
         res.status(201).json({ attachment, replaced });
       } catch (error: any) {
-        // memoryStorage holds the file in req.file.buffer — no disk
-        // path to unlink, GC reclaims the buffer when the request ends.
-        // If the SDK upload already succeeded but the DB insert failed
-        // we'll have a billable orphan in Object Storage; rare enough
-        // that a periodic GC sweep is the right place to handle it.
+        // Temp file is unlinked by the finally block below. If the
+        // SDK upload already succeeded but the DB insert failed we'll
+        // have a billable orphan in Object Storage; rare enough that
+        // a periodic GC sweep is the right place to handle it.
         console.error("[contracts/attachments POST] error:", error);
         res.status(500).json({ error: error.message || "فشل رفع المرفق" });
+      } finally {
+        // Every code path (success, validation reject, upload fail,
+        // unexpected throw) flows through here. ENOENT is swallowed
+        // so the second cleanup after a multer-level failure is a
+        // no-op.
+        unlinkContractTemp(tempPath, "contracts/attachments POST");
       }
     },
   );
@@ -5222,21 +5259,6 @@ export async function registerRoutes(
           error: "الملف مفقود — يرجى إعادة الرفع من جديد",
         });
       }
-      const downloaded = await contractObjectStore.downloadAsBytes(att.filePath);
-      if (!downloaded.ok) {
-        const status = downloaded.error?.statusCode === 404 ? 410 : 500;
-        console.error("[contracts download] object storage fetch failed:", {
-          attachmentId: att.id,
-          key: att.filePath,
-          status: downloaded.error?.statusCode,
-          message: downloaded.error?.message,
-        });
-        return res.status(status).json({
-          error: status === 410
-            ? "الملف مفقود — يرجى إعادة الرفع من جديد"
-            : `فشل تحميل الملف من التخزين السحابي: ${downloaded.error?.message || "خطأ غير معروف"}`,
-        });
-      }
       // RFC 5987 filename* for the Arabic original name; ASCII fallback
       // for older clients.
       const safeAscii = att.fileName.replace(/[^\x20-\x7E]/g, "_");
@@ -5245,10 +5267,44 @@ export async function registerRoutes(
         `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(att.fileName)}`,
       );
       res.setHeader("Content-Type", att.mimeType || "application/octet-stream");
-      // downloadAsBytes returns a tuple [Buffer] — first element holds
-      // the bytes for the whole object. 50MB upload limit keeps this
-      // memory-bounded; streaming is overkill at this size.
-      res.send(downloaded.value[0]);
+      if (att.fileSize) {
+        res.setHeader("Content-Length", String(att.fileSize));
+      }
+      // Stream from Object Storage straight to the client. Errors are
+      // emitted on the readable as StreamRequestError; we translate
+      // them to a JSON error iff no bytes (and therefore no headers)
+      // have gone out yet, otherwise we just end the response — once
+      // the body has started we can't switch to a JSON envelope.
+      const stream = contractObjectStore.downloadAsStream(att.filePath);
+      stream.on("error", (err: any) => {
+        const requestError = typeof err?.getRequestError === "function" ? err.getRequestError() : null;
+        const statusCode = requestError?.statusCode;
+        console.error("[contracts download] object storage stream failed:", {
+          attachmentId: att.id,
+          key: att.filePath,
+          status: statusCode,
+          message: err?.message,
+        });
+        if (!res.headersSent) {
+          const status = statusCode === 404 ? 410 : 500;
+          res.status(status).json({
+            error: status === 410
+              ? "الملف مفقود — يرجى إعادة الرفع من جديد"
+              : `فشل تحميل الملف من التخزين السحابي: ${err?.message || "خطأ غير معروف"}`,
+          });
+        } else {
+          // Headers already flushed (some bytes shipped) — best we can
+          // do is terminate the response so the client sees a short read.
+          res.end();
+        }
+      });
+      // If the client disconnects mid-download, tear the upstream
+      // stream down so we don't keep paging bytes from Object Storage
+      // for a dead socket.
+      res.on("close", () => {
+        if (!res.writableEnded) stream.destroy();
+      });
+      stream.pipe(res);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
