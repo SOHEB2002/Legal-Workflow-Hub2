@@ -1999,10 +1999,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Phase-8 — memo activity log readers. Mirrors getConsultationActivities.
+  // TODO: replace with cursor pagination once frontend supports it.
+  // 200-row cap prevents unbounded memory growth on long-lived entities.
   async getMemoActivities(memoId: string): Promise<MemoActivity[]> {
     const rows = await db.select().from(memoActivityLog)
       .where(eq(memoActivityLog.memoId, memoId))
-      .orderBy(asc(memoActivityLog.performedAt));
+      .orderBy(desc(memoActivityLog.performedAt))
+      .limit(200);
     return rows.map((row) => ({
       id: row.id,
       memoId: row.memoId,
@@ -3163,10 +3166,13 @@ export class DatabaseStorage implements IStorage {
     return mapDbConsultationActivity(row);
   }
 
+  // TODO: replace with cursor pagination once frontend supports it.
+  // 200-row cap prevents unbounded memory growth on long-lived entities.
   async getConsultationActivities(consultationId: string): Promise<ConsultationActivity[]> {
     const rows = await db.select().from(consultationActivityLog)
       .where(eq(consultationActivityLog.consultationId, consultationId))
-      .orderBy(desc(consultationActivityLog.performedAt));
+      .orderBy(desc(consultationActivityLog.performedAt))
+      .limit(200);
     return rows.map(mapDbConsultationActivity);
   }
 
@@ -3325,10 +3331,13 @@ export class DatabaseStorage implements IStorage {
     return activity;
   }
 
+  // TODO: replace with cursor pagination once frontend supports it.
+  // 200-row cap prevents unbounded memory growth on long-lived entities.
   async getCaseActivities(caseId: string): Promise<CaseActivity[]> {
     return await db.select().from(caseActivityLog)
       .where(eq(caseActivityLog.caseId, caseId))
-      .orderBy(desc(caseActivityLog.createdAt));
+      .orderBy(desc(caseActivityLog.createdAt))
+      .limit(200);
   }
 
   async returnCaseToCommittee(
