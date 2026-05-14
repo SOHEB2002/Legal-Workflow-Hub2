@@ -212,8 +212,7 @@ export function CaseProgressBar({
   const canActOnSettlement =
     isAtSettlement && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
-  const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
-  const canActOnInternalReview = isReviewerActor || isHeadOrManager;
+  const canActOnInternalReview = isReviewerActor || userRole === "branch_manager";
 
   const handleMoveNext = () => {
     // For the internal-review transition the dropdown is pre-filled from the

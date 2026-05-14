@@ -488,12 +488,17 @@ export function validateCaseForward(
   currentStage: CaseStageValue,
   _userRole: UserRoleType,
   _userId?: string,
-  _caseData?: any,
+  caseData?: any,
   classification?: CaseClassificationValue,
   departmentName?: string,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
-  const stagesOrder = classification ? getStagesForClassification(classification, departmentName) : CaseStagesOrder;
+  const clientRole = caseData?.clientRole as string | undefined;
+  const memoRequired = !!caseData?.memoRequired;
+  const isSettlementCase = !!caseData?.isSettlementCase;
+  const stagesOrder = classification
+    ? getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase)
+    : CaseStagesOrder;
   const currentIndex = stagesOrder.indexOf(normalizedCurrent);
 
   if (currentIndex === -1 || currentIndex >= stagesOrder.length - 1) {
