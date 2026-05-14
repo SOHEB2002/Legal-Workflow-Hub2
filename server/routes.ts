@@ -212,11 +212,11 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+  { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
   { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+  { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "branch_manager"] },
 
   // Skip data completion
@@ -248,8 +248,8 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
-  { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+  { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["internal_reviewer", "branch_manager"] },
+  { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "انتظار_رد_التظلم", to: "تحصيل", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "انتظار_رد_التظلم", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
@@ -261,7 +261,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استلام", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "مراجعة_داخلية", to: "تحرير_مذكرة_جوابية", allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+  { from: "مراجعة_داخلية", to: "تحرير_مذكرة_جوابية", allowedRoles: ["internal_reviewer", "branch_manager"] },
 
   // ==================== IN-COURT PATH: plaintiff + memo ====================
   // Drafting the lawsuit pleading after the case is already filed. The
@@ -395,8 +395,8 @@ const ALLOWED_CONTRACT_TRANSITIONS: StageTransitionRule[] = [
   // branch_manager. Earlier revisions used "assigned_lawyer" here,
   // which let the assigned employee approve their own file —
   // fixed.
-  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.DRAFTING,                    allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
-  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.COMMITTEE,                   allowedRoles: ["internal_reviewer", "department_head", "branch_manager"] },
+  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.DRAFTING,                    allowedRoles: ["internal_reviewer", "branch_manager"] },
+  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.COMMITTEE,                   allowedRoles: ["internal_reviewer", "branch_manager"] },
   // Committee decisions — chair = consultations_review_head.
   // department_head is INTENTIONALLY NOT in this set: heads don't
   // override committee decisions. Their override channel is the
@@ -451,8 +451,8 @@ const ALLOWED_MEMO_TRANSITIONS: StageTransitionRule[] = [
   // Drafting → peer review
   { from: MemoStage.DRAFTING,        to: MemoStage.INTERNAL_REVIEW, allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   // Internal-review outcomes (the dedicated endpoint enforces decision-vs-actor).
-  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.DRAFTING,        allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.COMMITTEE,       allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.DRAFTING,        allowedRoles: ["internal_reviewer", "branch_manager"] },
+  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.COMMITTEE,       allowedRoles: ["internal_reviewer", "branch_manager"] },
   // Committee decisions (cases_review_head is the committee chair for memos).
   { from: MemoStage.COMMITTEE,       to: MemoStage.READY,           allowedRoles: ["cases_review_head", "branch_manager"] },
   { from: MemoStage.COMMITTEE,       to: MemoStage.TAKING_NOTES,    allowedRoles: ["cases_review_head", "branch_manager"] },
@@ -515,17 +515,16 @@ function validateStageTransition(
     (entityType === "case" || entityType === "memo" || entityType === "contract")
     && !!user && !!entityData && entityData.internalReviewerId === user.id;
 
-  // Internal review stages are locked: only the designated internal reviewer,
-  // the department head, or the branch manager can transition out of them.
+  // Internal review stages are locked: only the designated internal reviewer
+  // or the branch manager can transition out of them.
   if (
     entityType === "case" &&
     (currentStage === "مراجعة_داخلية" || currentStage === "مراجعة_داخلية_للتظلم")
   ) {
-    const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
-    if (!isInternalReviewer && !isHeadOrManager) {
+    if (!isInternalReviewer && userRole !== "branch_manager") {
       return {
         allowed: false,
-        reason: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية",
+        reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
       };
     }
   }
@@ -536,11 +535,10 @@ function validateStageTransition(
   // endpoint already enforces this; this is belt-and-braces for the
   // generic stage-transition routes.
   if (entityType === "memo" && currentStage === "مراجعة_داخلية") {
-    const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
-    if (!isInternalReviewer && !isHeadOrManager) {
+    if (!isInternalReviewer && userRole !== "branch_manager") {
       return {
         allowed: false,
-        reason: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية",
+        reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
       };
     }
   }
@@ -551,11 +549,10 @@ function validateStageTransition(
   // non-reviewer employee can't approve their own draft by calling the
   // generic endpoint directly.
   if (entityType === "contract" && currentStage === ContractStage.INTERNAL_REVIEW) {
-    const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
-    if (!isInternalReviewer && !isHeadOrManager) {
+    if (!isInternalReviewer && userRole !== "branch_manager") {
       return {
         allowed: false,
-        reason: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية",
+        reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
       };
     }
   }
@@ -4601,13 +4598,11 @@ export async function registerRoutes(
       if (contract.currentStage !== ContractStage.INTERNAL_REVIEW) {
         return res.status(400).json({ error: "العقد ليس في مرحلة المراجعة الداخلية" });
       }
-      // Locked: only the designated internal reviewer + dept_head /
-      // branch_manager can act. Same shape as the cases / consultation
-      // internal-review gate.
+      // Locked: only the designated internal reviewer or branch_manager
+      // can act. Same shape as the cases internal-review gate.
       const isReviewer = contract.internalReviewerId === reqUser.id;
-      const isHeadOrManager = ["department_head", "branch_manager"].includes(reqUser.role);
-      if (!isReviewer && !isHeadOrManager) {
-        return res.status(403).json({ error: "فقط المراجع الداخلي المعين أو رئيس القسم يمكنهم التصرف في مرحلة المراجعة الداخلية" });
+      if (!isReviewer && reqUser.role !== "branch_manager") {
+        return res.status(403).json({ error: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية" });
       }
       const nextStage = decision === InternalReviewDecision.PASSED
         ? ContractStage.COMMITTEE
