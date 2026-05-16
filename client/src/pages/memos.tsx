@@ -305,6 +305,23 @@ export default function MemosPage() {
   const [detailMemoId, setDetailMemoId] = useState<string | null>(null);
   const detailMemo = detailMemoId ? memos.find(m => m.id === detailMemoId) || null : null;
 
+  // Earliest upcoming hearing for the memo's parent case. Mirrors the
+  // filter/sort already used when auto-linking a memo to a hearing
+  // (handleAddMemo, ~line 412): exclude completed/cancelled, keep
+  // hearings from ~now onward, take the earliest.
+  const detailMemoNextHearingDate = (() => {
+    if (!detailMemo?.caseId) return null;
+    const now = Date.now();
+    const next = getHearingsByCase(detailMemo.caseId)
+      .filter((h) => {
+        if (h.status === "تمت" || h.status === "ملغية") return false;
+        const ts = h.hearingDate ? new Date(h.hearingDate).getTime() : NaN;
+        return !isNaN(ts) && ts >= now - 24 * 60 * 60 * 1000;
+      })
+      .sort((a, b) => new Date(a.hearingDate).getTime() - new Date(b.hearingDate).getTime())[0];
+    return next?.hearingDate ?? null;
+  })();
+
   // Phase-9.2 — surface the cancellation reason / who / when in the
   // detail dialog. The reason lives on memos.cancellation_reason but
   // the actor + timestamp live in memo_activity_log; we fetch the log
@@ -1835,6 +1852,16 @@ export default function MemosPage() {
                     <div className={`font-medium ${getDeadlineColor(detailMemo.deadline)}`}>
                       <DualDateDisplay date={detailMemo.deadline} />
                     </div>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">موعد الجلسة القادمة</p>
+                    {detailMemoNextHearingDate ? (
+                      <div className="font-medium">
+                        <DualDateDisplay date={detailMemoNextHearingDate} />
+                      </div>
+                    ) : (
+                      <p className="font-medium text-muted-foreground">لا توجد جلسة قادمة</p>
+                    )}
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">الأولوية</p>
