@@ -198,6 +198,11 @@ async function validateAssignedUsersActive(userIds: string[]): Promise<{ valid: 
   return { valid: inactiveUsers.length === 0, inactiveUsers };
 }
 
+// Settlement-link-missing pause: the exact pause_reason text written by
+// the hearing-result handler and matched (exact equality) by the
+// auto-unpause hook in POST /api/hearings and the scheduler auto-close.
+const SETTLEMENT_LINK_MISSING_PAUSE_REASON = "بانتظار رابط جلسة الصلح من العميل";
+
 // ==================== Server-Side Stage Transition Validation ====================
 
 interface StageTransitionRule {
@@ -6055,6 +6060,29 @@ export async function registerRoutes(
       const user = (req as any).user;
       const createdMemos: any[] = [];
 
+      // Auto-unpause: adding any new session to a case that was paused
+      // for a missing settlement link clears the pause (and resets state
+      // so the scheduler won't auto-close it). Exact string equality —
+      // we control the pause text. Never block hearing creation on this.
+      if (validatedData.caseId && validatedData.caseId !== "none") {
+        try {
+          const linkedCase = await storage.getCaseById(validatedData.caseId);
+          if (
+            linkedCase &&
+            linkedCase.pausedAt &&
+            linkedCase.pauseReason === SETTLEMENT_LINK_MISSING_PAUSE_REASON
+          ) {
+            await storage.unpauseCase(validatedData.caseId, {
+              performedBy: "system",
+              performerName: "النظام",
+              notes: "إلغاء تعليق تلقائي — تمت إضافة جلسة جديدة",
+            });
+          }
+        } catch (e) {
+          console.error("[POST hearings] auto-unpause (settlement link) failed", e);
+        }
+      }
+
       // Auto-stage transition based on hearing type
       if (validatedData.caseId && validatedData.caseId !== "none") {
         try {
@@ -6340,6 +6368,7 @@ export async function registerRoutes(
           HearingResult.NEW_SESSION,
           HearingResult.SETTLEMENT_REACHED,
           HearingResult.SETTLEMENT_FAILED,
+          HearingResult.SETTLEMENT_LINK_MISSING,
         ];
         if (!allowedSettlementResults.includes(data.result)) {
           return res.status(400).json({
@@ -6806,6 +6835,36 @@ export async function registerRoutes(
               caseUpdate.currentStage = "أغلق_طلب_الصلح";
               await storage.updateCase(effectiveCaseId, caseUpdate);
             }
+          }
+        }
+
+        // ==================== CONCILIATION: SETTLEMENT LINK MISSING (لم_يصلنا_رابط_الصلح) ====================
+        // Client never sent the conciliation-session link. Case STAYS on
+        // مداولة_الصلح; we just pause it via the existing pause mechanism.
+        // storage.pauseCase has no "already paused" guard (that lives in
+        // the /pause route, which we bypass here), so calling it
+        // unconditionally resets pausedAt → now and overwrites
+        // pauseReason on repeat — implementing the "reset 15-day clock"
+        // requirement — and writes the paused case_activity_log row in
+        // the same transaction. The scheduler auto-closes after 15 days;
+        // POST /api/hearings auto-unpauses when a new session is added.
+        else if (data.result === HearingResult.SETTLEMENT_LINK_MISSING) {
+          await storage.updateCase(effectiveCaseId, caseUpdate);
+          try {
+            await storage.pauseCase(effectiveCaseId, {
+              reason: SETTLEMENT_LINK_MISSING_PAUSE_REASON,
+              performedBy: reqUser.id,
+              performerName: reqUser.name || reqUser.id,
+            });
+            await storage.logCaseActivity({
+              caseId: effectiveCaseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: "settlement_link_missing",
+              title: "تم تعليق القضية تلقائياً بانتظار رابط جلسة الصلح",
+            });
+          } catch (e) {
+            console.error("[hearing-result/settlement-link-missing] pause failed", e);
           }
         }
 

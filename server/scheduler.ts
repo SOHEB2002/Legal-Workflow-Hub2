@@ -23,6 +23,7 @@ export function startScheduler() {
     await checkContactFollowUps();
     await recalculateCasePriorities();
     await checkStruckOffExpiry();
+    await checkSettlementLinkMissingTimeout();
   });
 
   cron.schedule("0 7 * * 0", async () => {
@@ -724,6 +725,80 @@ async function checkStruckOffExpiry() {
     }
   } catch (error) {
     console.error("Error checking struck-off expiry:", error);
+  }
+}
+
+// Auto-close cases paused for a missing settlement link after 15 calendar
+// days with no new session. Mirrors checkStruckOffExpiry's cleanup, but
+// SILENT — no notifications, per the owner's directive. Match key is the
+// exact pause_reason text written by the hearing-result handler.
+const SETTLEMENT_LINK_MISSING_PAUSE_REASON = "بانتظار رابط جلسة الصلح من العميل";
+const SETTLEMENT_LINK_MISSING_CLOSURE_REASON =
+  "لم نُزود برابط جلسة الصلح، ومر 15 يوم دون تحديث من العميل";
+
+async function checkSettlementLinkMissingTimeout() {
+  try {
+    console.log("Checking settlement-link-missing paused cases for auto-closure...");
+    const allCases = await storage.getAllCases();
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000);
+    let closed = 0;
+
+    for (const caseItem of allCases) {
+      if (caseItem.isArchived) continue;
+      if ((caseItem.currentStage as string) === "مقفلة") continue;
+      if ((caseItem as any).status === "مغلق") continue;
+      if (!caseItem.pausedAt) continue;
+      if (caseItem.pauseReason !== SETTLEMENT_LINK_MISSING_PAUSE_REASON) continue;
+
+      const pausedAt = new Date(caseItem.pausedAt);
+      if (isNaN(pausedAt.getTime()) || pausedAt.getTime() >= cutoff.getTime()) continue;
+
+      const stageHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
+      await storage.updateCase(caseItem.id, {
+        currentStage: "مقفلة",
+        status: "مغلق",
+        closureReason: SETTLEMENT_LINK_MISSING_CLOSURE_REASON,
+        closedAt: new Date().toISOString(),
+        stageHistory: [
+          ...stageHistory,
+          { stage: "مقفلة", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "إغلاق تلقائي — مر 15 يوم دون رابط جلسة الصلح" },
+        ],
+      } as any);
+
+      // Cancel pending hearings, memos, field tasks (copied from checkStruckOffExpiry)
+      try {
+        const hearings = await storage.getHearingsByCase(caseItem.id);
+        for (const h of hearings) {
+          if (h.status === "قادمة") {
+            await storage.updateHearing(h.id, { status: "ملغية" });
+          }
+        }
+        const memos = await storage.getMemosByCase(caseItem.id);
+        for (const m of memos) {
+          if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
+            await storage.updateMemo(m.id, { status: "ملغاة" } as any);
+          }
+        }
+        const tasks = await storage.getFieldTasksByCase(caseItem.id);
+        for (const t of tasks) {
+          if (t.status === "قيد_التنفيذ" || t.status === "قيد_الانتظار") {
+            await storage.updateFieldTask(t.id, { status: "ملغي" } as any);
+          }
+        }
+      } catch (e) {
+        console.error(`Error cleaning up entities for settlement-link-missing case ${caseItem.id}:`, e);
+      }
+
+      // SILENT — no notifications, per owner directive.
+      console.log(`Settlement-link-missing auto-closure: case ${caseItem.id} closed.`);
+      closed++;
+    }
+    if (closed > 0) {
+      console.log(`Settlement-link-missing auto-closure: ${closed} cases closed.`);
+    }
+  } catch (error) {
+    console.error("Error checking settlement-link-missing timeout:", error);
   }
 }
 

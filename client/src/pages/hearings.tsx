@@ -1371,6 +1371,7 @@ export default function HearingsPage() {
                           <SelectItem value="موعد_جديد">موعد جديد</SelectItem>
                           <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
                           <SelectItem value="لم_يتم_الصلح">لم يتم الصلح</SelectItem>
+                          <SelectItem value="لم_يصلنا_رابط_الصلح">لم يصلنا رابط الصلح</SelectItem>
                         </>
                       );
                     }

@@ -1640,6 +1640,10 @@ export const HearingResult = {
   SETTLEMENT: "صلح",
   SETTLEMENT_REACHED: "تم_الصلح",
   SETTLEMENT_FAILED: "لم_يتم_الصلح",
+  // Settlement-only case: client never sent us the conciliation-session
+  // link. Pauses the case (15-day clock) via the existing pauseCase
+  // mechanism; auto-closed by scheduler if no new session is added.
+  SETTLEMENT_LINK_MISSING: "لم_يصلنا_رابط_الصلح",
   DISMISSAL: "شطب",
   // Court ruling: lack of jurisdiction. Triggers a department transfer
   // on the linked case (same flow as the manual transfer button on
@@ -1665,6 +1669,7 @@ export const HearingResultLabels: Record<HearingResultValue, string> = {
   "صلح": "صلح",
   "تم_الصلح": "تم الصلح",
   "لم_يتم_الصلح": "لم يتم الصلح",
+  "لم_يصلنا_رابط_الصلح": "لم يصلنا رابط الصلح",
   "شطب": "شطب",
   "عدم_الاختصاص": "عدم الاختصاص",
   "أخرى": "أخرى",
@@ -2958,7 +2963,7 @@ export const insertHearingSchema = z.object({
 export type InsertHearing = z.infer<typeof insertHearingSchema>;
 
 export const hearingResultSchema = z.object({
-  result: z.enum(["موعد_جديد", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "شطب", "عدم_الاختصاص", "أخرى"]),
+  result: z.enum(["موعد_جديد", "حكم", "صلح", "تم_الصلح", "لم_يتم_الصلح", "لم_يصلنا_رابط_الصلح", "شطب", "عدم_الاختصاص", "أخرى"]),
   resultDetails: z.string().optional().default(""),
   // Jurisdiction-declined transfer payload. Required iff result===عدم_الاختصاص.
   // Applied server-side to the linked case (departmentId, stage reset, lawyers cleared).
