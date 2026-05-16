@@ -1183,11 +1183,22 @@ export default function CasesPage() {
     return getFilterStages(cls, deptNames);
   }, [classificationFilter, deptFilter, departments]);
 
+  const departmentFilteredLawyers = useMemo(() => {
+    if (deptFilter === "all") return filterLawyers;
+    return filterLawyers.filter(u => String(u.departmentId) === deptFilter);
+  }, [filterLawyers, deptFilter]);
+
   useEffect(() => {
     if (statusFilter !== "all" && !basicAllowedStages.includes(statusFilter)) {
       setStatusFilter("all");
     }
   }, [basicAllowedStages, statusFilter]);
+
+  useEffect(() => {
+    if (lawyerFilter !== "all" && !departmentFilteredLawyers.some(u => u.id === lawyerFilter)) {
+      setLawyerFilter("all");
+    }
+  }, [departmentFilteredLawyers, lawyerFilter]);
 
   const PAGE_SIZE = 15;
   const [casePage, setCasePage] = useState(1);
@@ -1376,19 +1387,6 @@ export default function CasesPage() {
                 className="pr-10"
               />
             </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[180px]" data-testid="select-status-filter">
-                <SelectValue placeholder="الحالة" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">جميع المراحل</SelectItem>
-                {basicAllowedStages.map((stage) => (
-                  <SelectItem key={stage} value={stage}>
-                    {CaseStageLabels[stage as keyof typeof CaseStageLabels] || stage}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
             <Select value={deptFilter} onValueChange={setDeptFilter}>
               <SelectTrigger className="w-[150px]" data-testid="select-dept-filter">
                 <SelectValue placeholder="القسم" />
@@ -1397,6 +1395,17 @@ export default function CasesPage() {
                 <SelectItem value="all">جميع الأقسام</SelectItem>
                 {departments.map((dept) => (
                   <SelectItem key={String(dept.id)} value={String(dept.id)}>{dept.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={lawyerFilter} onValueChange={setLawyerFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-lawyer-filter">
+                <SelectValue placeholder="المحامي" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">جميع المحامين</SelectItem>
+                {departmentFilteredLawyers.map((u) => (
+                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -1410,14 +1419,16 @@ export default function CasesPage() {
                 <SelectItem value="منظورة_بالمحكمة">منظورة بالمحكمة</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={lawyerFilter} onValueChange={setLawyerFilter}>
-              <SelectTrigger className="w-[180px]" data-testid="select-lawyer-filter">
-                <SelectValue placeholder="المحامي" />
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-status-filter">
+                <SelectValue placeholder="الحالة" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">جميع المحامين</SelectItem>
-                {filterLawyers.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                <SelectItem value="all">جميع المراحل</SelectItem>
+                {basicAllowedStages.map((stage) => (
+                  <SelectItem key={stage} value={stage}>
+                    {CaseStageLabels[stage as keyof typeof CaseStageLabels] || stage}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -1425,7 +1436,7 @@ export default function CasesPage() {
               filters={advFilters}
               onChange={setAdvFilters}
               departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
-              lawyers={filterLawyers.map((l) => ({ id: l.id, name: l.name }))}
+              lawyers={departmentFilteredLawyers.map((l) => ({ id: l.id, name: l.name }))}
             />
           </div>
         </CardHeader>
