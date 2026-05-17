@@ -2320,63 +2320,6 @@ export async function registerRoutes(
         }
       }
 
-      // Sync the case's active pre-trial memo status with the new stage so
-      // the memos page reflects what's actually happening on the IN_COURT
-      // case. Only runs on actual stage transitions, only for IN_COURT cases,
-      // and only touches non-terminal pre-trial memos (hearing-linked memos
-      // and معتمدة/مرفوعة/ملغاة are left alone).
-      if (
-        updated &&
-        req.body.currentStage &&
-        req.body.currentStage !== existing.currentStage &&
-        ((updated as any).caseClassification === "منظورة_بالمحكمة" ||
-          (existing as any).caseClassification === "منظورة_بالمحكمة")
-      ) {
-        try {
-          const caseMemos = await storage.getMemosByCase(String(req.params.id));
-          const activeMemo = caseMemos.find(
-            (m: any) =>
-              !m.hearingId &&
-              !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status),
-          );
-          if (activeMemo) {
-            let nextMemoStatus: string | null = null;
-            switch (req.body.currentStage) {
-              case "تحرير_مذكرة_جوابية":
-              case "تحرير_صحيفة_الدعوى":
-                nextMemoStatus = "قيد_التحرير";
-                break;
-              case "مراجعة_داخلية":
-                nextMemoStatus = "قيد_المراجعة";
-                break;
-              case "إحالة_للجنة_المراجعة":
-                nextMemoStatus = "بانتظار_الاعتماد";
-                break;
-              case "منظورة":
-                nextMemoStatus = "معتمدة";
-                break;
-            }
-            if (nextMemoStatus && nextMemoStatus !== activeMemo.status) {
-              const memoUpdate: any = { status: nextMemoStatus };
-              const now = new Date().toISOString();
-              if (nextMemoStatus === "قيد_التحرير" && !(activeMemo as any).startedAt) {
-                memoUpdate.startedAt = now;
-              }
-              if (nextMemoStatus === "قيد_المراجعة") {
-                memoUpdate.completedAt = now;
-              }
-              if (nextMemoStatus === "معتمدة") {
-                memoUpdate.reviewerId = user.id;
-                memoUpdate.reviewedAt = now;
-              }
-              await storage.updateMemo(activeMemo.id, memoUpdate);
-            }
-          }
-        } catch (e) {
-          console.error("Failed to sync memo status with case stage:", e);
-        }
-      }
-
       if (user && existing) {
         try {
           if (isDeptTransfer) {
