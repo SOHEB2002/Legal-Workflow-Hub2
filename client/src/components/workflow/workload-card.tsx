@@ -84,7 +84,7 @@ export function WorkloadCard({ workload, compact = false }: WorkloadCardProps) {
             <div className="text-xs space-y-0.5">
               <p>القضايا: {workload.activeCases}</p>
               <p>الاستشارات: {workload.activeConsultations}</p>
-              <p>قيد المراجعة: {workload.inReviewItems}</p>
+              <p>لجنة مراجعة: {workload.inReviewItems}</p>
               <p className="text-red-400">متأخرة: {workload.overdueItems}</p>
             </div>
           </div>
@@ -133,7 +133,7 @@ export function WorkloadCard({ workload, compact = false }: WorkloadCardProps) {
         <div className="flex items-center justify-between text-sm">
           <div className="flex items-center gap-1 text-muted-foreground">
             <Clock className="h-3.5 w-3.5" />
-            <span>قيد المراجعة: {workload.inReviewItems}</span>
+            <span>لجنة مراجعة: {workload.inReviewItems}</span>
           </div>
           {workload.overdueItems > 0 && (
             <div className="flex items-center gap-1 text-red-500">
