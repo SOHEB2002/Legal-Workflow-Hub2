@@ -40,6 +40,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   ScrollText,
   Plus,
   Search,
@@ -57,6 +63,7 @@ import {
   UserCog,
   Pause,
   Play,
+  MoreVertical,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -1244,7 +1251,6 @@ export default function MemosPage() {
                     <TableHead className="text-center">المحامي المكلف</TableHead>
                     <TableHead className="text-center">الموعد النهائي</TableHead>
                     <TableHead className="text-center">الحالة</TableHead>
-                    <TableHead className="text-center">الأولوية</TableHead>
                     <TableHead className="text-center">الإجراءات</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1389,106 +1395,95 @@ export default function MemosPage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Badge className={getPriorityBadgeClass(memo.priority)}>
-                            {memo.priority}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              data-testid={`button-view-memo-${memo.id}`}
-                              onClick={() => {
-                                setDetailMemoId(memo.id);
-                                setReviewNotes("");
-                              }}
-                            >
-                              <Eye className="w-4 h-4" />
-                            </Button>
-                            {user?.role === "department_head" && !["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && (
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                title="إسناد لمحامي"
-                                data-testid={`button-reassign-memo-${memo.id}`}
-                                onClick={() => openReassignMemoDialog(memo)}
-                              >
-                                <UserCog className="w-4 h-4" />
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button size="icon" variant="ghost" data-testid={`button-memo-actions-${memo.id}`}>
+                                <MoreVertical className="w-4 h-4" />
                               </Button>
-                            )}
-                            {!["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && canUserChangeStatus(memo) && (
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                data-testid={`button-no-memo-needed-${memo.id}`}
-                                onClick={() => openCancelMemoDialog(memo)}
-                                title="لا يحتاج مذكرة"
-                                className="text-muted-foreground hover:text-destructive"
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                data-testid={`button-view-memo-${memo.id}`}
+                                onClick={() => {
+                                  setDetailMemoId(memo.id);
+                                  setReviewNotes("");
+                                }}
                               >
-                                <Ban className="w-4 h-4" />
-                              </Button>
-                            )}
-                            {/* Phase-8 — await-completion / resume action.
-                                Mirrors the pause/unpause pair. Hidden when
-                                paused (server requires unpause first) and
-                                when in a terminal status. */}
-                            {!isMemoPaused(memo) && memo.awaitingCompletion
-                              ? canPauseMemo(memo) && (
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    className="text-green-600 hover:text-green-700"
-                                    title="تم الاستكمال"
-                                    data-testid={`button-resume-memo-${memo.id}`}
-                                    onClick={() => openResumeMemoDialog(memo)}
-                                  >
-                                    <CheckCircle className="w-4 h-4" />
-                                  </Button>
-                                )
-                              : !isMemoPaused(memo)
-                                && !TERMINAL_MEMO_STATUSES.has(memo.status)
-                                && canPauseMemo(memo) && (
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    className="text-amber-600 hover:text-amber-700"
-                                    title="بانتظار استكمال البيانات"
-                                    data-testid={`button-await-memo-${memo.id}`}
-                                    onClick={() => openAwaitMemoDialog(memo)}
-                                  >
-                                    <AlertTriangle className="w-4 h-4" />
-                                  </Button>
-                                )}
-                            {/* Phase-8 — pause / unpause action. Pause shown
-                                when not paused, not in a terminal status, and
-                                user has permission. Unpause replaces it
-                                (Play icon) when paused. */}
-                            {isMemoPaused(memo)
-                              ? canPauseMemo(memo) && (
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    title="إلغاء التعليق"
-                                    data-testid={`button-unpause-memo-${memo.id}`}
-                                    onClick={() => openUnpauseMemoDialog(memo)}
-                                  >
-                                    <Play className="w-4 h-4" />
-                                  </Button>
-                                )
-                              : !TERMINAL_MEMO_STATUSES.has(memo.status) && canPauseMemo(memo) && (
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    className="text-amber-600 hover:text-amber-700"
-                                    title="تعليق المذكرة"
-                                    data-testid={`button-pause-memo-${memo.id}`}
-                                    onClick={() => openPauseMemoDialog(memo)}
-                                  >
-                                    <Pause className="w-4 h-4" />
-                                  </Button>
-                                )}
-                          </div>
+                                <Eye className="w-4 h-4 ml-2" />
+                                عرض التفاصيل
+                              </DropdownMenuItem>
+                              {user?.role === "department_head" && !["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && (
+                                <DropdownMenuItem
+                                  data-testid={`button-reassign-memo-${memo.id}`}
+                                  onClick={() => openReassignMemoDialog(memo)}
+                                >
+                                  <UserCog className="w-4 h-4 ml-2" />
+                                  إسناد لمحامي
+                                </DropdownMenuItem>
+                              )}
+                              {!["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && canUserChangeStatus(memo) && (
+                                <DropdownMenuItem
+                                  data-testid={`button-no-memo-needed-${memo.id}`}
+                                  onClick={() => openCancelMemoDialog(memo)}
+                                  className="text-muted-foreground hover:text-destructive"
+                                >
+                                  <Ban className="w-4 h-4 ml-2" />
+                                  لا يحتاج مذكرة
+                                </DropdownMenuItem>
+                              )}
+                              {/* Phase-8 — await-completion / resume action.
+                                  Mirrors the pause/unpause pair. Hidden when
+                                  paused (server requires unpause first) and
+                                  when in a terminal status. */}
+                              {!isMemoPaused(memo) && memo.awaitingCompletion
+                                ? canPauseMemo(memo) && (
+                                    <DropdownMenuItem
+                                      className="text-green-600 hover:text-green-700"
+                                      data-testid={`button-resume-memo-${memo.id}`}
+                                      onClick={() => openResumeMemoDialog(memo)}
+                                    >
+                                      <CheckCircle className="w-4 h-4 ml-2" />
+                                      تم الاستكمال
+                                    </DropdownMenuItem>
+                                  )
+                                : !isMemoPaused(memo)
+                                  && !TERMINAL_MEMO_STATUSES.has(memo.status)
+                                  && canPauseMemo(memo) && (
+                                    <DropdownMenuItem
+                                      className="text-amber-600 hover:text-amber-700"
+                                      data-testid={`button-await-memo-${memo.id}`}
+                                      onClick={() => openAwaitMemoDialog(memo)}
+                                    >
+                                      <AlertTriangle className="w-4 h-4 ml-2" />
+                                      بانتظار البيانات
+                                    </DropdownMenuItem>
+                                  )}
+                              {/* Phase-8 — pause / unpause action. Pause shown
+                                  when not paused, not in a terminal status, and
+                                  user has permission. Unpause replaces it
+                                  (Play icon) when paused. */}
+                              {isMemoPaused(memo)
+                                ? canPauseMemo(memo) && (
+                                    <DropdownMenuItem
+                                      data-testid={`button-unpause-memo-${memo.id}`}
+                                      onClick={() => openUnpauseMemoDialog(memo)}
+                                    >
+                                      <Play className="w-4 h-4 ml-2" />
+                                      إلغاء التعليق
+                                    </DropdownMenuItem>
+                                  )
+                                : !TERMINAL_MEMO_STATUSES.has(memo.status) && canPauseMemo(memo) && (
+                                    <DropdownMenuItem
+                                      className="text-amber-600 hover:text-amber-700"
+                                      data-testid={`button-pause-memo-${memo.id}`}
+                                      onClick={() => openPauseMemoDialog(memo)}
+                                    >
+                                      <Pause className="w-4 h-4 ml-2" />
+                                      تعليق المذكرة
+                                    </DropdownMenuItem>
+                                  )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </TableCell>
                       </TableRow>
                       );

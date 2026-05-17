@@ -1806,7 +1806,7 @@ export type MemoStatusValue = typeof MemoStatus[keyof typeof MemoStatus];
 export const MemoStatusLabels: Record<MemoStatusValue, string> = {
   "لم_تبدأ": "لم تبدأ",
   "قيد_التحرير": "قيد التحرير",
-  "قيد_المراجعة": "قيد المراجعة",
+  "قيد_المراجعة": "تحت المراجعة",
   "بانتظار_الاعتماد": "بانتظار الاعتماد",
   "تحتاج_تعديل": "تحتاج تعديل",
   "معتمدة": "معتمدة",
