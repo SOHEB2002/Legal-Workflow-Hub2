@@ -86,6 +86,9 @@ import {
   ConsultationClosureReason,
   ConsultationCategory,
   ConsultationCategoryLabels,
+  ConsultationSource,
+  ConsultationSourceLabels,
+  ConsultationSourceValue,
   ConsultationActivityType,
   ConsultationActivityTypeLabels,
   CaseStage,
@@ -1430,6 +1433,7 @@ export default function ConsultationsPage() {
     // Phase-4: SLA category. Defaults to "عادية" (3-day SLA). Set once
     // at creation; not editable afterward per spec.
     category: ConsultationCategory.STANDARD as ConsultationCategoryValue,
+    source: ConsultationSource.PRIVATE as ConsultationSourceValue,
   });
 
   const resetForm = () => {
@@ -1439,6 +1443,7 @@ export default function ConsultationsPage() {
       departmentId: "",
       questionSummary: "",
       category: ConsultationCategory.STANDARD,
+      source: ConsultationSource.PRIVATE,
     });
   };
 
@@ -1688,6 +1693,26 @@ export default function ConsultationsPage() {
                   <p className="text-xs text-muted-foreground mt-1">
                     يحدّد التصنيف تاريخ التسليم المتوقع تلقائياً (يوم / 3 أيام / 14 يوم).
                   </p>
+                </div>
+                <div>
+                  <Label>وصلتنا عبر</Label>
+                  <Select
+                    value={formData.source}
+                    onValueChange={(value: ConsultationSourceValue) =>
+                      setFormData({ ...formData, source: value })
+                    }
+                  >
+                    <SelectTrigger data-testid="select-consultation-source">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.values(ConsultationSource) as string[]).map((s) => (
+                        <SelectItem key={s} value={s} data-testid={`option-consultation-source-${s}`}>
+                          {ConsultationSourceLabels[s as keyof typeof ConsultationSourceLabels] || s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>ملخص السؤال</Label>
@@ -2394,6 +2419,13 @@ export default function ConsultationsPage() {
                     >
                       {selectedConsultation.category}
                     </Badge>
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">وصلتنا عبر</Label>
+                  <p data-testid="dialog-source">
+                    {ConsultationSourceLabels[selectedConsultation.source as keyof typeof ConsultationSourceLabels]
+                      || selectedConsultation.source}
                   </p>
                 </div>
                 <div>
