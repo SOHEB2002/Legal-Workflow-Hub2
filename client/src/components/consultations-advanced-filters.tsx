@@ -33,8 +33,15 @@ import {
   ConsultationStage,
   ConsultationStageLabels,
   ConsultationStagesAll,
+  ConsultationType,
+  ConsultationTypeLabels,
+  getConsultationStagesForType,
 } from "@shared/schema";
-import type { ConsultationStageValue, PriorityType } from "@shared/schema";
+import type {
+  ConsultationStageValue,
+  ConsultationTypeValue,
+  PriorityType,
+} from "@shared/schema";
 
 // Filter axis must include the PHONE / PROCEDURAL exclusive stages too —
 // ConsultationStagesAll only lists the WRITTEN flow's stages. Order: keep
@@ -52,6 +59,7 @@ export type AdvancedConsultationsFilters = {
   search: string;
   status: ConsultationStatusFilter;
   departmentId: string; // "" means any
+  consultationTypes: string[];
   stages: string[];
   lawyers: string[];
   priorities: string[];
@@ -68,6 +76,7 @@ export const EMPTY_CONSULTATIONS_FILTERS: AdvancedConsultationsFilters = {
   search: "",
   status: "all",
   departmentId: "",
+  consultationTypes: [],
   stages: [],
   lawyers: [],
   priorities: [],
@@ -82,6 +91,7 @@ export function countActiveConsultationFilters(f: AdvancedConsultationsFilters):
   return (
     (f.status !== "all" ? 1 : 0) +
     (f.departmentId ? 1 : 0) +
+    (f.consultationTypes.length > 0 ? 1 : 0) +
     (f.stages.length > 0 ? 1 : 0) +
     (f.lawyers.length > 0 ? 1 : 0) +
     (f.priorities.length > 0 ? 1 : 0) +
@@ -153,6 +163,8 @@ function describeFilters(
   if (f.search.trim()) parts.push(`بحث: ${f.search.trim()}`);
   if (f.status !== "all") parts.push(`الحالة: ${STATUS_LABELS[f.status]}`);
   if (f.departmentId) parts.push(`القسم: ${deptName(f.departmentId)}`);
+  if (f.consultationTypes.length)
+    parts.push(`نوع الاستشارة: ${f.consultationTypes.map((t) => ConsultationTypeLabels[t as ConsultationTypeValue] || t).join("، ")}`);
   if (f.stages.length)
     parts.push(`المرحلة: ${f.stages.map((s) => ConsultationStageLabels[s as ConsultationStageValue] || s).join("، ")}`);
   if (f.lawyers.length) parts.push(`المحامي: ${f.lawyers.map(lawyerName).join("، ")}`);
@@ -293,13 +305,29 @@ export function ConsultationsAdvancedFilters({ filters, onChange, departments, l
     () => Object.values(Priority).map((p) => ({ value: p, label: p })),
     [],
   );
+  const typeOptions = useMemo(
+    () =>
+      Object.values(ConsultationType).map((t) => ({
+        value: t,
+        label: ConsultationTypeLabels[t as ConsultationTypeValue] || t,
+      })),
+    [],
+  );
+  // When exactly one consultation type is selected, narrow the stage
+  // axis to that type's flow (getConsultationStagesForType). With zero or
+  // multiple types selected we can't pick a single flow, so fall back to
+  // the full cross-type list. The stale-selection prune effect below
+  // keeps draft.stages consistent when this list narrows.
   const stageOptions = useMemo(() => {
-    const allowed = getConsultationFilterStages(draft.departmentId);
+    const allowed =
+      draft.consultationTypes.length === 1
+        ? getConsultationStagesForType(draft.consultationTypes[0] as ConsultationTypeValue)
+        : getConsultationFilterStages(draft.departmentId);
     return allowed.map((s) => ({
       value: s,
       label: ConsultationStageLabels[s] || s,
     }));
-  }, [draft.departmentId]);
+  }, [draft.departmentId, draft.consultationTypes]);
 
   // When the allowed stages list narrows (e.g. once per-dept divergence
   // is added), prune stale stage selections so the user doesn't end up
@@ -480,6 +508,15 @@ export function ConsultationsAdvancedFilters({ filters, onChange, departments, l
               </div>
 
               <MultiSelectCombo
+                label="نوع الاستشارة"
+                values={draft.consultationTypes}
+                onChange={(v) => setDraft({ ...draft, consultationTypes: v })}
+                options={typeOptions}
+                placeholder="كل الأنواع"
+                searchable={false}
+                testIdPrefix="adv-type"
+              />
+              <MultiSelectCombo
                 label="المرحلة"
                 values={draft.stages}
                 onChange={(v) => setDraft({ ...draft, stages: v })}
@@ -636,9 +673,9 @@ export function ConsultationsAdvancedFilters({ filters, onChange, departments, l
                           <button
                             type="button"
                             className="flex-1 text-right truncate"
-                            onClick={() => apply(row.filterConfig || EMPTY_CONSULTATIONS_FILTERS)}
+                            onClick={() => apply({ ...EMPTY_CONSULTATIONS_FILTERS, ...row.filterConfig })}
                             title={describeFilters(
-                              row.filterConfig || EMPTY_CONSULTATIONS_FILTERS,
+                              { ...EMPTY_CONSULTATIONS_FILTERS, ...row.filterConfig },
                               deptNameById,
                               lawyerNameById,
                             )}
@@ -646,7 +683,7 @@ export function ConsultationsAdvancedFilters({ filters, onChange, departments, l
                             <div className="text-sm font-medium truncate">{row.name}</div>
                             <div className="text-xs text-muted-foreground truncate">
                               {describeFilters(
-                                row.filterConfig || EMPTY_CONSULTATIONS_FILTERS,
+                                { ...EMPTY_CONSULTATIONS_FILTERS, ...row.filterConfig },
                                 deptNameById,
                                 lawyerNameById,
                               )}
@@ -688,20 +725,23 @@ export function ConsultationsAdvancedFilters({ filters, onChange, departments, l
                   الأخيرة
                 </div>
                 <ul className="space-y-1">
-                  {recents.map((r, idx) => (
+                  {recents.map((r, idx) => {
+                    const safeR = { ...EMPTY_CONSULTATIONS_FILTERS, ...r };
+                    return (
                     <li key={idx}>
                       <button
                         type="button"
                         className="w-full text-right rounded border px-2 py-1.5 hover-elevate"
-                        onClick={() => apply(r)}
+                        onClick={() => apply(safeR)}
                         data-testid={`recent-filter-${idx}`}
                       >
                         <div className="text-xs text-muted-foreground truncate">
-                          {describeFilters(r, deptNameById, lawyerNameById)}
+                          {describeFilters(safeR, deptNameById, lawyerNameById)}
                         </div>
                       </button>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               </div>
             )}

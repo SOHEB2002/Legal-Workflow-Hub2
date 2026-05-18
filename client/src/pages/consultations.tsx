@@ -57,6 +57,7 @@ import { useDepartments } from "@/lib/departments-context";
 import type {
   Consultation,
   ConsultationStageValue,
+  ConsultationTypeValue,
   CaseTypeValue,
   InternalReviewDecisionValue,
   CommitteeDecisionValue,
@@ -665,6 +666,30 @@ export default function ConsultationsPage() {
       }));
     }
   }, []);
+
+  // Quick-bar stale-stage prune. When the type filter narrows the
+  // allowed stage set (e.g. switching to هاتفية, which has no
+  // لجنة_مراجعة), drop any selected stages that are no longer valid so
+  // an invisible filter doesn't keep constraining results. Mirrors the
+  // advanced-filter prune effect in consultations-advanced-filters.tsx.
+  useEffect(() => {
+    const allowed = new Set<string>(
+      advFilters.consultationTypes.length === 1
+        ? getConsultationStagesForType(advFilters.consultationTypes[0] as ConsultationTypeValue)
+        : [
+            ...ConsultationStagesAll,
+            ConsultationStage.IN_PROGRESS,
+            ConsultationStage.CLOSED_FINAL,
+          ],
+    );
+    if (advFilters.stages.some((s) => !allowed.has(s))) {
+      setAdvFilters((prev) => ({
+        ...prev,
+        stages: prev.stages.filter((s) => allowed.has(s)),
+      }));
+    }
+  }, [advFilters.consultationTypes, advFilters.stages]);
+
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
 
   const [showAssignDialog, setShowAssignDialog] = useState(false);
@@ -1545,6 +1570,14 @@ export default function ConsultationsPage() {
       const assignedTo = consultation.assignedTo;
       if (!assignedTo || !advFilters.lawyers.includes(assignedTo)) return false;
     }
+    // Type filter uses resolveConsultationType so legacy free-text rows
+    // ("عام"/"تجاري"/…) collapse to WRITTEN and match "مكتوبة" correctly.
+    if (
+      advFilters.consultationTypes.length > 0 &&
+      !advFilters.consultationTypes.includes(resolveConsultationType(consultation.consultationType))
+    ) {
+      return false;
+    }
     // Priority is forward-compat: the consultations table doesn't carry
     // a priority column yet (per shared/schema.ts §consultations table).
     // When a priority filter is active and the consultation has no
@@ -1808,6 +1841,23 @@ export default function ConsultationsPage() {
               </Select>
             </div>
             <div className="min-w-[180px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">نوع الاستشارة</Label>
+              <Select
+                value={advFilters.consultationTypes.length === 1 ? advFilters.consultationTypes[0] : "all"}
+                onValueChange={(v) =>
+                  setAdvFilters({ ...advFilters, consultationTypes: v === "all" ? [] : [v] })
+                }
+              >
+                <SelectTrigger data-testid="quick-filter-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">جميع الأنواع</SelectItem>
+                  {Object.values(ConsultationType).map((t) => (
+                    <SelectItem key={t} value={t}>{ConsultationTypeLabels[t] || t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-[180px]">
               <Label className="text-xs text-muted-foreground mb-1 block">المرحلة</Label>
               <Select
                 value={advFilters.stages.length === 1 ? advFilters.stages[0] : "all"}
@@ -1820,14 +1870,18 @@ export default function ConsultationsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل المراحل</SelectItem>
-                  {/* Includes the PHONE / PROCEDURAL exclusive stages
-                      (IN_PROGRESS, CLOSED_FINAL) so the new flows are
-                      filterable too. */}
-                  {[
-                    ...ConsultationStagesAll,
-                    ConsultationStage.IN_PROGRESS,
-                    ConsultationStage.CLOSED_FINAL,
-                  ].map((s) => (
+                  {/* When exactly one type is selected, scope the stage
+                      list to that type's flow. Otherwise show the full
+                      cross-type list including the PHONE / PROCEDURAL
+                      exclusive stages (IN_PROGRESS, CLOSED_FINAL). */}
+                  {(advFilters.consultationTypes.length === 1
+                    ? getConsultationStagesForType(advFilters.consultationTypes[0] as ConsultationTypeValue)
+                    : [
+                        ...ConsultationStagesAll,
+                        ConsultationStage.IN_PROGRESS,
+                        ConsultationStage.CLOSED_FINAL,
+                      ]
+                  ).map((s) => (
                     <SelectItem key={s} value={s}>
                       {ConsultationStageLabels[s] || s}
                     </SelectItem>
