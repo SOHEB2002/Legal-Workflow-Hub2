@@ -4698,12 +4698,21 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      // Per spec: admin_support + branch_manager only. Earlier
-      // revisions also allowed assigned_lawyer + department_head,
-      // which was wider than the FE button (which gates to the same
-      // two roles) and looser than the spec calls for.
-      const allowedClosers = ["admin_support", "branch_manager"];
-      if (!allowedClosers.includes(reqUser.role)) {
+      // Per spec: branch_manager + admin_support (global), department_head
+      // (own dept only), and the assigned lawyer may early-close. Mirrors
+      // the cases-side early-close gate (routes.ts validateStageTransition)
+      // and canEarlyCloseCase on the FE. The dept-scope check requires both
+      // sides to carry a non-empty departmentId so a dept_head with a null
+      // department can't match a legacy/"أخرى" contract that is also null.
+      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
+      const allowed =
+        ["admin_support", "branch_manager"].includes(reqUser.role) ||
+        (reqUser.role === "department_head"
+          && !!reqUser.departmentId
+          && !!contract.departmentId
+          && contract.departmentId === reqUser.departmentId) ||
+        isAssigned;
+      if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
       }
       if (contract.status !== "active") {
