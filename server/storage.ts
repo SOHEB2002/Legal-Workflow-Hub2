@@ -602,6 +602,9 @@ function mapDbConsultation(dbCon: any): Consultation {
     // when the row predates the migration.
     category: dbCon.category ?? "عادية",
     expectedDeliveryDate: toISOStringOrNull(dbCon.expectedDeliveryDate),
+    // Falls back so rows created before the column existed still present
+    // a valid value to the UI.
+    source: dbCon.source ?? "على_الخاص",
     createdBy: dbCon.createdBy,
     createdAt: toISOString(dbCon.createdAt),
     updatedAt: toISOString(dbCon.updatedAt),
@@ -1203,6 +1206,9 @@ export class DatabaseStorage implements IStorage {
       reviewDecision: null,
       category,
       expectedDeliveryDate,
+      // Intake channel. Literal fallback mirrors mapDbConsultation's
+      // "عادية" style; column default also guards manual inserts.
+      source: (data as any).source || "على_الخاص",
       // Committee-referral fields. Optional at create — the committee
       // form is typically filled in later, just before the consultation
       // moves into لجنة_مراجعة. Pass-through any values the create

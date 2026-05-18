@@ -165,6 +165,10 @@ export const consultations = pgTable("consultations", {
   // Migration: script/add-consultation-category-and-due-date.sql.
   category: varchar("category", { length: 50 }).notNull().default("عادية"),
   expectedDeliveryDate: timestamp("expected_delivery_date"),
+  // How the consultation reached us — group chat vs. private DM. NOT NULL
+  // + default so `drizzle-kit push` backfills existing rows in one DDL
+  // (same pattern as `category`). See ConsultationSource enum.
+  source: varchar("source", { length: 50 }).notNull().default("على_الخاص"),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -1578,6 +1582,21 @@ export const ConsultationStatusLabels: Record<ConsultationStatusValue, string> =
   converted: "converted",
   closed:    "closed",
 };
+// ==================== Consultation Source (how the consultation reached us) ====================
+// Set at creation. Stored on consultations.source (varchar 50). Underscore
+// tokens as the stored value, spaced Arabic as the display label — same
+// convention as ConsultationStage.
+export const ConsultationSource = {
+  GROUP:   "عبر_المجموعة",
+  PRIVATE: "على_الخاص",
+} as const;
+
+export type ConsultationSourceValue = typeof ConsultationSource[keyof typeof ConsultationSource];
+
+export const ConsultationSourceLabels: Record<ConsultationSourceValue, string> = {
+  "عبر_المجموعة": "عبر المجموعة",
+  "على_الخاص":   "على الخاص",
+};
 // ==================== Consultation review/committee/outcome decision values ====================
 // Per consultations-rebuild-spec.md §3.1.3 / §3.2.1. Used by the dedicated
 // /internal-review, /committee-decision, /take-notes-outcome endpoints.
@@ -2035,6 +2054,9 @@ export interface Consultation {
   closureReasonOther: string | null;
   category: ConsultationCategoryValue;
   expectedDeliveryDate: string | null;
+  // How the consultation reached us (ConsultationSourceValue). NOT NULL +
+  // DB default so legacy rows surface as "على_الخاص" after the backfill.
+  source: ConsultationSourceValue;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -2910,6 +2932,9 @@ export const insertConsultationSchema = z.object({
   // that don't send the field get the standard SLA. The server uses this
   // to compute expectedDeliveryDate at insert time.
   category: z.enum(["سريعة", "عادية", "طويلة"]).optional().default("عادية"),
+  // Optional + default to match the category/deliveryType convention so
+  // older / mobile clients that omit it still validate.
+  source: z.enum(["عبر_المجموعة", "على_الخاص"]).optional().default("على_الخاص"),
   // Committee-referral fields are NOT accepted at create — per user
   // feedback (Phase-9.1) the committee form is the only place priority,
   // priority_reason, and internal_reviewer_id can be set/changed. PATCH
