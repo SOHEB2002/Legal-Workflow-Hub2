@@ -300,6 +300,7 @@ export default function DashboardPage() {
     { label: "استشارة جديدة", icon: MessageSquare, onClick: () => setLocation("/consultations"), variant: "outline" as const },
     { label: "إضافة عميل", icon: Users, onClick: () => setLocation("/clients"), variant: "outline" as const },
     { label: "إضافة جلسة", icon: CalendarPlus, onClick: () => setLocation("/hearings"), variant: "outline" as const },
+    { label: "إضافة عقد أو مشروع", icon: FileSignature, onClick: () => setLocation("/contracts"), variant: "outline" as const },
   ];
 
   const visibleWidgets = widgets.filter(w => w.isVisible).sort((a, b) => a.position - b.position);
