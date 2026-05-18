@@ -168,7 +168,7 @@ export const consultations = pgTable("consultations", {
   // How the consultation reached us — group chat vs. private DM. NOT NULL
   // + default so `drizzle-kit push` backfills existing rows in one DDL
   // (same pattern as `category`). See ConsultationSource enum.
-  source: varchar("source", { length: 50 }).notNull().default("على_الخاص"),
+  source: varchar("source", { length: 50 }).notNull().default("عبر_المجموعة"),
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -2934,7 +2934,7 @@ export const insertConsultationSchema = z.object({
   category: z.enum(["سريعة", "عادية", "طويلة"]).optional().default("عادية"),
   // Optional + default to match the category/deliveryType convention so
   // older / mobile clients that omit it still validate.
-  source: z.enum(["عبر_المجموعة", "على_الخاص"]).optional().default("على_الخاص"),
+  source: z.enum(["عبر_المجموعة", "على_الخاص"]).optional().default("عبر_المجموعة"),
   // Committee-referral fields are NOT accepted at create — per user
   // feedback (Phase-9.1) the committee form is the only place priority,
   // priority_reason, and internal_reviewer_id can be set/changed. PATCH

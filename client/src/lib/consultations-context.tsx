@@ -107,7 +107,7 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
       category: data.category || "عادية",
       // Intake channel — defaulted here so the create dialog and the
       // inserted row stay in lockstep (same as category).
-      source: data.source || "على_الخاص",
+      source: data.source || "عبر_المجموعة",
       // Committee-referral fields (priority / priorityReason /
       // internalReviewerId) are intentionally NOT forwarded at create —
       // they're committee-form-only per Phase-9.1. New rows start with

@@ -1433,7 +1433,7 @@ export default function ConsultationsPage() {
     // Phase-4: SLA category. Defaults to "عادية" (3-day SLA). Set once
     // at creation; not editable afterward per spec.
     category: ConsultationCategory.STANDARD as ConsultationCategoryValue,
-    source: ConsultationSource.PRIVATE as ConsultationSourceValue,
+    source: ConsultationSource.GROUP as ConsultationSourceValue,
   });
 
   const resetForm = () => {
@@ -1443,7 +1443,7 @@ export default function ConsultationsPage() {
       departmentId: "",
       questionSummary: "",
       category: ConsultationCategory.STANDARD,
-      source: ConsultationSource.PRIVATE,
+      source: ConsultationSource.GROUP,
     });
   };
 
