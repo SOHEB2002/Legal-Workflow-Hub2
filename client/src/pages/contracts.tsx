@@ -865,10 +865,21 @@ export default function ContractsPage() {
 
   const canDeleteContract = (): boolean => !!user && user.role === "branch_manager";
 
+  // Early-close gate. Mirrors canEarlyCloseCase in cases.tsx and the
+  // server gate in /api/contracts/:id/early-close: branch_manager /
+  // admin_support (global), department_head (own dept), assigned lawyer.
+  // Dept-scope check requires both departmentIds non-empty so a null
+  // dept_head can't match a legacy/"أخرى" contract that is also null.
   const canEarlyClose = (c: Contract): boolean => {
     if (!user) return false;
     if (c.status !== "active") return false;
-    return user.role === "admin_support" || user.role === "branch_manager";
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head"
+      && !!user.departmentId
+      && !!c.departmentId
+      && user.departmentId === c.departmentId) return true;
+    if (!!c.assignedTo && c.assignedTo === user.id) return true;
+    return false;
   };
 
   const [busy, setBusy] = useState(false);
@@ -1795,7 +1806,7 @@ export default function ContractsPage() {
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="none">—</SelectItem>
-                            {lawyers.map((l) => (
+                            {eligibleReviewers(selected).map((l) => (
                               <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
                             ))}
                           </SelectContent>
@@ -1910,9 +1921,14 @@ export default function ContractsPage() {
             <Select value={assignLawyerId} onValueChange={setAssignLawyerId}>
               <SelectTrigger><SelectValue placeholder="اختر المحامي" /></SelectTrigger>
               <SelectContent>
-                {lawyers.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
-                ))}
+                {(assignTarget?.departmentId
+                  ? lawyers.filter((l) => l.departmentId === assignTarget.departmentId)
+                  : lawyers
+                )
+                  .filter((l) => l.id !== assignTarget?.assignedTo)
+                  .map((l) => (
+                    <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>
