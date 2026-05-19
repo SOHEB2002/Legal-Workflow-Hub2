@@ -1408,6 +1408,10 @@ export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
 // On entering this stage the FE shows a "تجاوز" button alongside the
 // normal advance, which jumps directly to STUDY without requiring any
 // document upload (handled in the await-completion route layer).
+// NOTE: WRITTEN's terminal is CLOSED_FINAL ("مغلقة"). The old COMPLETED
+// ("منجزة" → relabeled "جاهزة للإغلاق") stage was removed from the
+// WRITTEN flow — written consultations now go READY → CLOSED_FINAL
+// directly. COMPLETED remains a real stage only for PHONE/PROCEDURAL.
 export const ConsultationStagesOrder: ConsultationStageValue[] = [
   ConsultationStage.RECEIVED,
   ConsultationStage.RECEIVED_PENDING_COMPLETION,
@@ -1416,7 +1420,7 @@ export const ConsultationStagesOrder: ConsultationStageValue[] = [
   ConsultationStage.INTERNAL_REVIEW,
   ConsultationStage.COMMITTEE,
   ConsultationStage.READY,
-  ConsultationStage.COMPLETED,
+  ConsultationStage.CLOSED_FINAL,
 ];
 
 // All WRITTEN consultation stages in canonical order, including the
@@ -1434,7 +1438,7 @@ export const ConsultationStagesAll: ConsultationStageValue[] = [
   ConsultationStage.COMMITTEE,
   ConsultationStage.TAKING_NOTES,
   ConsultationStage.READY,
-  ConsultationStage.COMPLETED,
+  ConsultationStage.CLOSED_FINAL,
 ];
 
 // PHONE (هاتفية) workflow — 5-stage simple flow. No internal review /
@@ -1502,14 +1506,26 @@ export function getConsultationStagesForType(
 // the existing stage is already valid in the new type's stages list,
 // keep it. Otherwise apply a small heuristic for stages that semantically
 // "match" (intake stays intake, data-completion stays data-completion,
-// study↔in-progress, terminal stages collapse to منجزة), and fall back
-// to RECEIVED for anything unmapped — the canonical safe restart point.
+// study↔in-progress, terminal stages collapse to the target's
+// pre-closure / terminal stage), and fall back to RECEIVED for anything
+// unmapped — the canonical safe restart point.
+//
+// Terminal model: WRITTEN's terminal is CLOSED_FINAL (no COMPLETED in
+// its list anymore); PHONE/PROCEDURAL keep COMPLETED → CLOSED_FINAL.
+// targetPreClose is COMPLETED when the target type still has it
+// (PHONE/PROCEDURAL) and CLOSED_FINAL otherwise (WRITTEN), so a
+// "done/ready-to-close" source stage lands on the right place per type.
 export function remapConsultationStageForType(
   fromStage: ConsultationStageValue,
   toType: ConsultationTypeValue,
 ): ConsultationStageValue {
   const targetStages = getConsultationStagesForType(toType);
   if (targetStages.includes(fromStage)) return fromStage;
+
+  const targetTerminal = targetStages[targetStages.length - 1] as ConsultationStageValue;
+  const targetPreClose = targetStages.includes(ConsultationStage.COMPLETED)
+    ? ConsultationStage.COMPLETED
+    : targetTerminal;
 
   // Heuristic mapping by semantic equivalence. Only applied when the
   // raw stage isn't already valid for the target type.
@@ -1524,10 +1540,13 @@ export function remapConsultationStageForType(
     [ConsultationStage.INTERNAL_REVIEW]:             targetStages[2] as ConsultationStageValue,
     [ConsultationStage.COMMITTEE]:                   targetStages[2] as ConsultationStageValue,
     [ConsultationStage.TAKING_NOTES]:                targetStages[2] as ConsultationStageValue,
-    [ConsultationStage.READY]:                       ConsultationStage.COMPLETED,
-    [ConsultationStage.COMPLETED]:                   ConsultationStage.COMPLETED,
+    // "Ready to deliver" / "done" / closed → the target's pre-closure
+    // stage (COMPLETED for PHONE/PROCEDURAL) or its terminal
+    // (CLOSED_FINAL for WRITTEN, which no longer has COMPLETED).
+    [ConsultationStage.READY]:                       targetPreClose,
+    [ConsultationStage.COMPLETED]:                   targetPreClose,
     [ConsultationStage.IN_PROGRESS]:                 targetStages[2] as ConsultationStageValue,
-    [ConsultationStage.CLOSED_FINAL]:                ConsultationStage.COMPLETED,
+    [ConsultationStage.CLOSED_FINAL]:                targetTerminal,
   };
 
   const mapped = semanticMap[fromStage];

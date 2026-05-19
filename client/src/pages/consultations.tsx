@@ -137,7 +137,10 @@ const LINEAR_ADVANCE_WRITTEN: LinearAdvanceTable = {
   [ConsultationStage.RECEIVED_PENDING_COMPLETION]: { target: ConsultationStage.STUDY,                       roles: ["admin_support", "department_head", "branch_manager"] },
   [ConsultationStage.STUDY]:    { target: ConsultationStage.DRAFTING,        roles: ["assigned_lawyer", "department_head", "branch_manager"] },
   [ConsultationStage.DRAFTING]: { target: ConsultationStage.INTERNAL_REVIEW, roles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  [ConsultationStage.READY]:    { target: ConsultationStage.COMPLETED,       roles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  // WRITTEN closes READY → CLOSED_FINAL directly (COMPLETED removed from
+  // the WRITTEN flow). Mirrors ALLOWED_CONSULTATION_TRANSITIONS on the
+  // server; admin-gated like the PHONE/PROCEDURAL final-closure step.
+  [ConsultationStage.READY]:    { target: ConsultationStage.CLOSED_FINAL,    roles: ["admin_support", "branch_manager"] },
 };
 
 // Mirrors ALLOWED_CONSULTATION_TRANSITIONS_PHONE on the server. 1→2 is the
@@ -403,9 +406,12 @@ function getConsultationPriorityGroup(c: Consultation): 1 | 2 | 3 | 4 {
   const resolvedType = resolveConsultationType(c.consultationType);
   // Terminal first — overrides everything (including unassigned).
   if (c.status === "closed" || c.status === "converted") return 4;
+  // CLOSED_FINAL is the terminal stage for ALL types now, including
+  // WRITTEN (it goes READY → CLOSED_FINAL directly — COMPLETED was
+  // removed from the WRITTEN flow, so the old WRITTEN+COMPLETED terminal
+  // branch is gone). COMPLETED is a non-terminal working stage for
+  // PHONE/PROCEDURAL only and is handled by the action-required sets.
   if (c.currentStage === ConsultationStage.CLOSED_FINAL) return 4;
-  // WRITTEN has no مغلقة stage; COMPLETED is its terminal-ish state.
-  if (resolvedType === ConsultationType.WRITTEN && c.currentStage === ConsultationStage.COMPLETED) return 4;
   if (!c.assignedTo) return 1;
   if (c.status === "paused" || c.pausedAt || c.awaitingCompletion) return 3;
   const actionSet =
@@ -577,6 +583,22 @@ function ConsultationActivityTimeline({
           {activities.map((a) => {
             const Icon = getActivityIcon(a.activityType);
             const typeLabel = (ConsultationActivityTypeLabels as any)[a.activityType] || a.activityType;
+            // Issue-1 — early_closed rows stored the raw English reason
+            // token inside `description` (the server never localised it).
+            // Rebuild the line from metadata.reason via the FE label map
+            // so existing rows render Arabic; fall back to the stored
+            // description when metadata is missing/unknown.
+            let displayDescription = a.description;
+            if (a.activityType === ConsultationActivityType.EARLY_CLOSED) {
+              const rawReason = String(a.metadata?.reason ?? "");
+              const reasonLabel = (ConsultationClosureReasonLabels as any)[rawReason];
+              if (reasonLabel) {
+                const otherText = String(a.metadata?.closureReasonOther ?? "").trim();
+                displayDescription = otherText
+                  ? `إغلاق مبكر: ${reasonLabel} - ${otherText}`
+                  : `إغلاق مبكر: ${reasonLabel}`;
+              }
+            }
             return (
               <li
                 key={a.id}
@@ -589,7 +611,7 @@ function ConsultationActivityTimeline({
                 <div className="flex-1 min-w-0">
                   <div className="text-xs text-muted-foreground">{typeLabel}</div>
                   <div className="text-sm font-medium break-words">
-                    <BidiText>{a.description}</BidiText>
+                    <BidiText>{displayDescription}</BidiText>
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5">
                     بواسطة <BidiText>{getUserName(a.performedBy)}</BidiText>
@@ -1872,14 +1894,19 @@ export default function ConsultationsPage() {
                   <SelectItem value="all">كل المراحل</SelectItem>
                   {/* When exactly one type is selected, scope the stage
                       list to that type's flow. Otherwise show the full
-                      cross-type list including the PHONE / PROCEDURAL
-                      exclusive stages (IN_PROGRESS, CLOSED_FINAL). */}
+                      cross-type list: ConsultationStagesAll already ends
+                      with CLOSED_FINAL (WRITTEN's terminal), so we only
+                      append the PHONE/PROCEDURAL-exclusive stages not in
+                      it — IN_PROGRESS (procedural) and COMPLETED
+                      ("جاهزة للإغلاق", phone/procedural pre-closure).
+                      CLOSED_FINAL is NOT re-appended (would duplicate the
+                      React key). */}
                   {(advFilters.consultationTypes.length === 1
                     ? getConsultationStagesForType(advFilters.consultationTypes[0] as ConsultationTypeValue)
                     : [
                         ...ConsultationStagesAll,
                         ConsultationStage.IN_PROGRESS,
-                        ConsultationStage.CLOSED_FINAL,
+                        ConsultationStage.COMPLETED,
                       ]
                   ).map((s) => (
                     <SelectItem key={s} value={s}>
@@ -1941,7 +1968,14 @@ export default function ConsultationsPage() {
                   </TableCell>
                   <TableCell className="text-center">
                     <div className="inline-flex items-center gap-1 flex-wrap justify-center">
-                      {(() => {
+                      {/* Issue-2 — only active rows show the stage badge.
+                          For closed/converted rows the virtual-stage map
+                          (closed→COMPLETED→"جاهزة للإغلاق") would otherwise
+                          render a second, misleading badge alongside the
+                          "مقفلة"/"محولة لقضية" lifecycle pill below.
+                          getConsultationDisplayStage is left untouched so
+                          the stage filter axis still groups these rows. */}
+                      {consultation.status === "active" && (() => {
                         const b = getConsultationDisplayBadge(consultation);
                         return <Badge className={b.className}>{b.label}</Badge>;
                       })()}

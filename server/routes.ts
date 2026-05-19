@@ -343,8 +343,12 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.TAKING_NOTES,      allowedRoles: ["consultations_review_head", "branch_manager"] },
   // Take-notes outcome (any of تم | لم_يتم | جزئياً all advance to READY)
   { from: ConsultationStage.TAKING_NOTES,    to: ConsultationStage.READY,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  // Delivery
-  { from: ConsultationStage.READY,           to: ConsultationStage.COMPLETED,         allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  // Final closure — WRITTEN goes READY → CLOSED_FINAL directly (the old
+  // intermediate COMPLETED "جاهزة للإغلاق" stage was removed from the
+  // WRITTEN flow). Admin-gated to match the PHONE/PROCEDURAL
+  // COMPLETED → CLOSED_FINAL closure pattern. The /advance-stage route
+  // flips status='closed' + closedAt when CLOSED_FINAL is reached.
+  { from: ConsultationStage.READY,           to: ConsultationStage.CLOSED_FINAL,      allowedRoles: ["admin_support", "branch_manager"] },
 ];
 
 // Phone (هاتفية) workflow — 5-stage simple flow. Same structure as the
@@ -3285,6 +3289,10 @@ export async function registerRoutes(
       if (consultation.status !== "active") {
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
       }
+      // COMPLETED is PHONE/PROCEDURAL-only now (WRITTEN no longer passes
+      // through it — it closes READY → CLOSED_FINAL). Guard is inert for
+      // WRITTEN; still blocks PHONE/PROCEDURAL at COMPLETED. Storage
+      // re-checks this inside the transaction for race-safety.
       if (consultation.currentStage === ConsultationStage.COMPLETED) {
         return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
       }

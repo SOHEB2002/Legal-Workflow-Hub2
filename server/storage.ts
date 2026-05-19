@@ -3234,6 +3234,11 @@ export class DatabaseStorage implements IStorage {
       const [existingCon] = await tx.select().from(consultations).where(eq(consultations.id, consultationId));
       if (!existingCon) throw new Error("CONSULTATION_NOT_FOUND");
       if (existingCon.status !== "active") throw new Error("CONSULTATION_NOT_ACTIVE");
+      // COMPLETED is now a PHONE/PROCEDURAL-only stage (removed from the
+      // WRITTEN flow — WRITTEN goes READY → CLOSED_FINAL directly). This
+      // guard is therefore inert for WRITTEN but still blocks converting
+      // a PHONE/PROCEDURAL consultation that's reached COMPLETED. Closed/
+      // converted rows are already rejected by the status check above.
       if (existingCon.currentStage === ConsultationStage.COMPLETED) throw new Error("CONSULTATION_COMPLETED");
 
       // 2. Build and insert the new case row
