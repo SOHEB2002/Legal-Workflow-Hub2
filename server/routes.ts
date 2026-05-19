@@ -3324,6 +3324,14 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يمكن بدء التعقيبية فقط من استشارة مقفلة" });
       }
 
+      // The cycle question is the customer's new follow-up inquiry. Stored
+      // in the activity-log metadata only (no new column) — the UI reads
+      // the latest FOLLOW_UP_STARTED entry to surface it during the cycle.
+      const question = String(req.body?.question ?? "").trim();
+      if (!question) {
+        return res.status(400).json({ error: "السؤال مطلوب لبدء استشارة تعقيبية" });
+      }
+
       const nextCount = (consultation.followUpCount ?? 0) + 1;
       // Recompute SLA window for the new cycle. Falls back to STANDARD
       // (3 days) when the row's category is legacy/unrecognised — same
@@ -3360,8 +3368,15 @@ export async function registerRoutes(
         } as any,
         {
           activityType: ConsultationActivityType.FOLLOW_UP_STARTED,
-          description: `بدء استشارة تعقيبية #${nextCount}`,
-          metadata: { followUpCount: nextCount, expectedDeliveryDate: newExpectedDeliveryDate.toISOString() },
+          // Description carries a truncated preview so the timeline reads
+          // naturally without expanding; the full question lives in
+          // metadata.followUpQuestion and is surfaced in the detail dialog.
+          description: `بدء استشارة تعقيبية #${nextCount}: ${question.slice(0, 80)}${question.length > 80 ? "..." : ""}`,
+          metadata: {
+            followUpCount: nextCount,
+            expectedDeliveryDate: newExpectedDeliveryDate.toISOString(),
+            followUpQuestion: question,
+          },
           performedBy: reqUser.id,
         },
       );

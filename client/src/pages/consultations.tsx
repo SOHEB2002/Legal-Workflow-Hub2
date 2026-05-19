@@ -803,6 +803,14 @@ export default function ConsultationsPage() {
   const [earlyCloseOtherText, setEarlyCloseOtherText] = useState("");
   const [earlyCloseNotes, setEarlyCloseNotes] = useState("");
 
+  // Start-follow-up dialog. Mirrors the pause dialog shape: AlertDialog
+  // with a required Textarea (the customer's new question). The textarea
+  // content is sent to /start-follow-up and stored in the activity-log
+  // metadata of the FOLLOW_UP_STARTED entry — no new DB column.
+  const [showFollowUpDialog, setShowFollowUpDialog] = useState(false);
+  const [followUpTarget, setFollowUpTarget] = useState<Consultation | null>(null);
+  const [followUpQuestion, setFollowUpQuestion] = useState("");
+
   // Phase-5 — extend-delivery dialog + history list state. extensions are
   // fetched once when the details dialog opens (see useEffect below);
   // refreshed after a successful extension so the list reflects the new
@@ -1309,19 +1317,51 @@ export default function ConsultationsPage() {
     }
   };
 
-  // Start a follow-up cycle ("استشارة تعقيبية") on a closed consultation.
-  // Confirms first because the action re-opens the record (status flips
-  // back to active, currentStage → RECEIVED, followUpCount++, fresh SLA
-  // window). The server enforces the same status='closed' + admin gate;
-  // this client check is the cosmetic confirm-and-fire.
-  const handleStartFollowUp = async (c: Consultation) => {
-    const nextNum = (c.followUpCount ?? 0) + 1;
-    if (!window.confirm(`بدء استشارة تعقيبية #${nextNum}؟ سيتم فتح الاستشارة من جديد في مرحلة الاستلام.`)) return;
+  // Start-follow-up dialog open/close + submit. Replaces the previous
+  // browser-native window.confirm with a shadcn AlertDialog carrying a
+  // required Textarea — the customer's new question. Submit captures the
+  // POST response and feeds it back into selectedConsultation directly:
+  // the [consultations, selectedConsultation] sync useEffect (≈l1594) is
+  // the page-wide safety net, but on this action the user was seeing the
+  // dialog body render the stale row (5-stage bar, no cycle badge, button
+  // still showing) before the useEffect re-resolved — so we close the
+  // gap here with an explicit set against the freshest server payload.
+  const openFollowUpDialog = (c: Consultation) => {
+    setFollowUpTarget(c);
+    setFollowUpQuestion("");
+    setShowFollowUpDialog(true);
+  };
+  const closeFollowUpDialog = () => {
+    setShowFollowUpDialog(false);
+    setFollowUpTarget(null);
+    setFollowUpQuestion("");
+  };
+  const handleStartFollowUp = async () => {
+    if (!followUpTarget) return;
+    const question = followUpQuestion.trim();
+    if (!question) {
+      toast({ title: "اكتب السؤال أو الاستفسار الجديد", variant: "destructive" });
+      return;
+    }
+    const nextNum = (followUpTarget.followUpCount ?? 0) + 1;
+    const targetId = followUpTarget.id;
     setActionInProgress(true);
     try {
-      await apiRequest("POST", `/api/consultations/${c.id}/start-follow-up`, {});
+      const res = await apiRequest("POST", `/api/consultations/${targetId}/start-follow-up`, {
+        question,
+      });
+      // The endpoint returns the authoritative updated row. Parse once
+      // and use both as the direct dialog sync (BUG-2 fix) and to keep
+      // any other consumer that reads selectedConsultation in step.
+      const updated = (await res.json()) as Consultation;
       await refreshConsultations();
+      // Guard against a stale fire — the user could have switched
+      // dialogs mid-flight. Only sync if it's still the same row.
+      if (selectedConsultation?.id === targetId) {
+        setSelectedConsultation(updated);
+      }
       toast({ title: `تم بدء التعقيبية #${nextNum}` });
+      closeFollowUpDialog();
     } catch (err) {
       toast({ title: "فشل بدء التعقيبية", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -2404,6 +2444,39 @@ export default function ConsultationsPage() {
                   اذهب للقضية
                 </button>
               )}
+              {/* Cycle question card. Visible only on an active cycle —
+                  reads the freshest FOLLOW_UP_STARTED entry from the
+                  timeline (the entries are sorted DESC by performedAt
+                  server-side; we re-pick here to stay decoupled from
+                  ordering). metadata.followUpQuestion is set by the
+                  /start-follow-up endpoint. Falls back to the entry's
+                  description if for some reason metadata is missing. */}
+              {isInFollowUpCycle(selectedConsultation) && (() => {
+                const latest = activityLog.find(
+                  (a) => a.activityType === ConsultationActivityType.FOLLOW_UP_STARTED,
+                );
+                const question = (latest?.metadata as any)?.followUpQuestion;
+                if (!question) return null;
+                return (
+                  <div
+                    className="rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-900"
+                    data-testid="banner-follow-up-question"
+                  >
+                    <div className="flex items-center gap-2 font-medium text-blue-800">
+                      <RotateCw className="w-4 h-4" />
+                      السؤال التعقيبي الحالي
+                      {(selectedConsultation.followUpCount ?? 0) > 0 && (
+                        <span className="text-xs opacity-80">
+                          (تعقيبية #{selectedConsultation.followUpCount})
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap break-words">
+                      <BidiText>{String(question)}</BidiText>
+                    </p>
+                  </div>
+                );
+              })()}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل الاستشارة</h4>
                 <ConsultationStagesBar
@@ -2514,7 +2587,7 @@ export default function ConsultationsPage() {
                         variant="outline"
                         className="border-blue-500 text-blue-600 hover:bg-blue-50"
                         data-testid={`dialog-button-start-follow-up-${selectedConsultation.id}`}
-                        onClick={() => handleStartFollowUp(selectedConsultation)}
+                        onClick={() => openFollowUpDialog(selectedConsultation)}
                       >
                         <RotateCw className="w-4 h-4 ml-1" />
                         استشارة تعقيبية
@@ -2625,7 +2698,13 @@ export default function ConsultationsPage() {
                     longer surfaced inline in the dialog grid. */}
               </div>
               <div className="text-right">
-                <Label className="text-muted-foreground">ملخص السؤال</Label>
+                {/* Relabel as "السؤال الأصلي" while inside a follow-up
+                    cycle so the user sees the distinction from the
+                    cycle-question card above. The stored value is
+                    unchanged — it's still consultation.questionSummary. */}
+                <Label className="text-muted-foreground">
+                  {(selectedConsultation.followUpCount ?? 0) > 0 ? "السؤال الأصلي" : "ملخص السؤال"}
+                </Label>
                 <p className="p-3 bg-muted rounded-md">{selectedConsultation.questionSummary}</p>
               </div>
 
@@ -3626,6 +3705,47 @@ export default function ConsultationsPage() {
 
       {/* Phase-8 — pause dialog. Reason is required; the server also
           enforces the trim/min-1 check. */}
+      {/* Start-follow-up dialog. Required Textarea — the customer's new
+          follow-up question. The body is sent to /start-follow-up and the
+          server stores it in the FOLLOW_UP_STARTED activity metadata; the
+          dialog body surfaces it in a highlighted "السؤال التعقيبي الحالي"
+          card during an active cycle. */}
+      <AlertDialog open={showFollowUpDialog} onOpenChange={(open) => { if (!open) closeFollowUpDialog(); }}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RotateCw className="w-5 h-5 text-blue-600" />
+              بدء استشارة تعقيبية #{(followUpTarget?.followUpCount ?? 0) + 1}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم فتح الاستشارة من جديد في مرحلة الاستلام مع تجديد مهلة التسليم.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>السؤال أو الاستفسار الجديد <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-follow-up-question"
+              value={followUpQuestion}
+              onChange={(e) => setFollowUpQuestion(e.target.value)}
+              placeholder="اكتب السؤال الذي طرحه العميل..."
+              rows={4}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel onClick={closeFollowUpDialog}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-start-follow-up"
+              onClick={handleStartFollowUp}
+              disabled={actionInProgress || !followUpQuestion.trim()}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <RotateCw className="w-4 h-4 ml-2" />
+              بدء
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={showPauseDialog} onOpenChange={(open) => { if (!open) closePauseDialog(); }}>
         <AlertDialogContent dir="rtl">
           <AlertDialogHeader>
