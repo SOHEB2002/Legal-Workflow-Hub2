@@ -7,6 +7,7 @@ import {
   ConsultationStagesOrderPhone,
   ConsultationStagesOrderProcedural,
   ConsultationType,
+  getStagesForConsultationCycle,
   resolveConsultationType,
   type ConsultationStageValue,
 } from "@shared/schema";
@@ -24,15 +25,24 @@ interface ConsultationStagesBarProps {
   // data (committee-decision history) and pass it in. Ignored for the
   // simple PHONE / PROCEDURAL flows (which have no taking-notes branch).
   hasTakingNotesHistory?: boolean;
+  // When > 0, the consultation is (or was last) in a follow-up cycle —
+  // render the 3-stage cycle bar instead of the full type stages.
+  // Status-agnostic on purpose: a closed cycle still shows the cycle bar
+  // with CLOSED_FINAL highlighted, not the original 8-stage path.
+  followUpCount?: number | null;
 }
 
 export function ConsultationStagesBar({
   currentStage,
   consultationType,
   hasTakingNotesHistory = false,
+  followUpCount,
 }: ConsultationStagesBarProps) {
   const resolved = resolveConsultationType(consultationType);
   const stages: ConsultationStageValue[] = (() => {
+    if ((followUpCount ?? 0) > 0) {
+      return [...getStagesForConsultationCycle({ consultationType, followUpCount })];
+    }
     if (resolved === ConsultationType.PHONE) return [...ConsultationStagesOrderPhone];
     if (resolved === ConsultationType.PROCEDURAL) return [...ConsultationStagesOrderProcedural];
     const showTakingNotes =

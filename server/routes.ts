@@ -34,6 +34,10 @@ import {
   resolveConsultationType,
   getConsultationStagesForType,
   remapConsultationStageForType,
+  isInFollowUpCycle,
+  getStagesForConsultationCycle,
+  ConsultationCategorySLADays,
+  ConsultationCategory,
   ContractStage,
   ContractStagesAll,
   ContractStageLabels,
@@ -380,6 +384,28 @@ function getConsultationTransitionsForType(type: string): StageTransitionRule[] 
   return ALLOWED_CONSULTATION_TRANSITIONS;
 }
 
+// Follow-up cycle transitions ("استشارة تعقيبية"). 2 rules per type —
+// RECEIVED → working stage (assigned/dept/branch), working → CLOSED_FINAL
+// (admin-gated, matching the main-flow closure pattern). /advance-stage
+// already flips status='closed' on CLOSED_FINAL — no extra branch needed.
+const ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_WRITTEN: StageTransitionRule[] = [
+  { from: ConsultationStage.RECEIVED, to: ConsultationStage.READY,        allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.READY,    to: ConsultationStage.CLOSED_FINAL, allowedRoles: ["admin_support", "branch_manager"] },
+];
+const ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_PHONE: StageTransitionRule[] = [
+  { from: ConsultationStage.RECEIVED,  to: ConsultationStage.COMPLETED,    allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ConsultationStage.COMPLETED, to: ConsultationStage.CLOSED_FINAL, allowedRoles: ["admin_support", "branch_manager"] },
+];
+// PROCEDURAL shares the PHONE cycle shape (RECEIVED → COMPLETED → CLOSED_FINAL).
+const ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_PROCEDURAL = ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_PHONE;
+
+function getConsultationCycleTransitionsForType(type: string): StageTransitionRule[] {
+  const resolved = resolveConsultationType(type);
+  if (resolved === ConsultationType.PHONE) return ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_PHONE;
+  if (resolved === ConsultationType.PROCEDURAL) return ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_PROCEDURAL;
+  return ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_WRITTEN;
+}
+
 // Contracts (العقود والمشاريع) — single 8-stage flow regardless of
 // contract type. Mirrors the WRITTEN consultation workflow: assign
 // from RECEIVED, optional data-completion stage with skip, drafting,
@@ -618,8 +644,14 @@ function validateStageTransition(
   // lists. Anything not in the resolved list still uses WRITTEN — see
   // resolveConsultationType for the legacy-value fallback.
   if (entityType === "consultation" && entityData) {
-    const consultationType = resolveConsultationType(entityData.consultationType);
-    const stages = getConsultationStagesForType(consultationType) as readonly string[];
+    // Cycle-aware: a follow-up cycle uses its own 3-stage list for
+    // rollback validation (1-step-back rule still applies, just on the
+    // shorter list). isInFollowUpCycle includes the active-status check;
+    // outside a cycle we fall back to the type's full stages list.
+    const stages = (isInFollowUpCycle(entityData)
+      ? getStagesForConsultationCycle(entityData)
+      : getConsultationStagesForType(resolveConsultationType(entityData.consultationType))
+    ) as readonly string[];
     const currentIdx = stages.indexOf(currentStage);
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
@@ -690,7 +722,9 @@ function validateStageTransition(
         ? ALLOWED_MEMO_TRANSITIONS
         : entityType === "contract"
           ? getContractTransitionsForType(entityData?.contractType)
-          : getConsultationTransitionsForType(entityData?.consultationType);
+          : (isInFollowUpCycle(entityData)
+              ? getConsultationCycleTransitionsForType(entityData?.consultationType)
+              : getConsultationTransitionsForType(entityData?.consultationType));
   const rule = rules.find(r => r.from === currentStage && r.to === targetStage);
 
   if (!rule) {
@@ -2897,12 +2931,11 @@ export async function registerRoutes(
 
       const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
       const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
-      // PHONE / PROCEDURAL workflows have an explicit CLOSED_FINAL stage —
-      // reaching it is the canonical close action (not the early-close
-      // shortcut). Flip status='closed' and stamp closedAt in the same
-      // write so the row drops out of "active" lists. WRITTEN never
-      // reaches this branch because its forward table tops out at
-      // COMPLETED — closure on WRITTEN is via /early-close instead.
+      // All three types reach CLOSED_FINAL via /advance-stage now:
+      // WRITTEN via READY → CLOSED_FINAL (Issue-3 fix), PHONE/PROCEDURAL
+      // via COMPLETED → CLOSED_FINAL, and any type via its follow-up
+      // cycle's terminal step. Flip status='closed' + stamp closedAt
+      // here so the row drops out of "active" lists uniformly.
       const reachedFinalClosure = targetStage === ConsultationStage.CLOSED_FINAL;
       const stageUpdate: any = { currentStage: targetStage };
       if (reachedFinalClosure) {
@@ -3267,6 +3300,78 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/consultations/:id/start-follow-up
+  // Re-opens a closed consultation into a follow-up cycle ("استشارة
+  // تعقيبية"). Same row: status flips back to active, currentStage
+  // resets to RECEIVED, followUpCount increments, followUpStartedAt is
+  // stamped, and the previous closure metadata (closedAt /
+  // closureReason*) plus stale pause/await fields are cleared so the
+  // row doesn't carry forward into the new cycle. expectedDeliveryDate
+  // is recomputed as now + SLA_DAYS[category] so the cycle gets a
+  // fresh SLA window. The activity log preserves the full history.
+  // Permission: admin_support / branch_manager.
+  app.post("/api/consultations/:id/start-follow-up", requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      if (!["admin_support", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لبدء استشارة تعقيبية" });
+      }
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (consultation.status !== "closed") {
+        return res.status(400).json({ error: "يمكن بدء التعقيبية فقط من استشارة مقفلة" });
+      }
+
+      const nextCount = (consultation.followUpCount ?? 0) + 1;
+      // Recompute SLA window for the new cycle. Falls back to STANDARD
+      // (3 days) when the row's category is legacy/unrecognised — same
+      // safe fallback used at creation in storage.createConsultation.
+      const category = (Object.values(ConsultationCategory) as string[])
+        .includes(consultation.category as string)
+        ? (consultation.category as keyof typeof ConsultationCategorySLADays)
+        : ConsultationCategory.STANDARD;
+      const slaDays = ConsultationCategorySLADays[category];
+      const newExpectedDeliveryDate = new Date(Date.now() + slaDays * 24 * 60 * 60 * 1000);
+
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        {
+          status: "active",
+          currentStage: ConsultationStage.RECEIVED,
+          followUpCount: nextCount,
+          followUpStartedAt: new Date() as any,
+          // Clear previous closure metadata — it described the prior
+          // lifecycle, not the new cycle.
+          closedAt: null,
+          closureReason: null,
+          closureReasonOther: null,
+          // Fresh SLA window for the cycle (R6).
+          expectedDeliveryDate: newExpectedDeliveryDate as any,
+          // Defensive cleanup (R10) — clear any stale pause/await state
+          // the row might carry from before its original closure so the
+          // new cycle starts cleanly.
+          pausedAt: null,
+          pausedBy: null,
+          pauseReason: null,
+          awaitingCompletion: false,
+          savedStage: null,
+        } as any,
+        {
+          activityType: ConsultationActivityType.FOLLOW_UP_STARTED,
+          description: `بدء استشارة تعقيبية #${nextCount}`,
+          metadata: { followUpCount: nextCount, expectedDeliveryDate: newExpectedDeliveryDate.toISOString() },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل بدء التعقيبية" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // POST /api/consultations/:id/convert-to-case
   // Body: { targetCaseStage, caseDepartmentId, ...any other case fields }.
   // Per spec §3.2.3: single DB transaction. Steps 3-5 (helper-table copies)
@@ -3295,6 +3400,13 @@ export async function registerRoutes(
       // re-checks this inside the transaction for race-safety.
       if (consultation.currentStage === ConsultationStage.COMPLETED) {
         return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
+      }
+      // Follow-up cycle: don't allow converting a cycle to a case. The
+      // original consultation is already done; cycles are post-closure
+      // customer follow-ups, not new-case material. Storage re-checks
+      // this inside the transaction.
+      if ((consultation.followUpCount ?? 0) > 0) {
+        return res.status(400).json({ error: "لا يمكن تحويل استشارة تعقيبية لقضية" });
       }
 
       const { targetCaseStage, caseDepartmentId, ...rest } = req.body || {};
@@ -3338,6 +3450,7 @@ export async function registerRoutes(
         if (msg === "CONSULTATION_NOT_FOUND") return res.status(404).json({ error: "الاستشارة غير موجودة" });
         if (msg === "CONSULTATION_NOT_ACTIVE") return res.status(400).json({ error: "الاستشارة ليست نشطة" });
         if (msg === "CONSULTATION_COMPLETED") return res.status(400).json({ error: "لا يمكن تحويل استشارة منجزة" });
+        if (msg === "CONSULTATION_IN_FOLLOW_UP_CYCLE") return res.status(400).json({ error: "لا يمكن تحويل استشارة تعقيبية لقضية" });
         if (msg === "DUPLICATE_CASE_NUMBER") {
           return res.status(400).json({ error: "تعذّر توليد رقم قضية فريد، يرجى المحاولة مرة أخرى" });
         }
