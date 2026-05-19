@@ -623,6 +623,11 @@ function mapDbConsultation(dbCon: any): Consultation {
     internalReviewerId: dbCon.internalReviewerId ?? null,
     priority: dbCon.priority ?? null,
     priorityReason: dbCon.priorityReason ?? null,
+    // Follow-up cycle. Defaults so rows that pre-date the migration (a
+    // stale running server's view) still emit a valid count and the
+    // FE's "in cycle" checks never see undefined.
+    followUpCount: dbCon.followUpCount ?? 0,
+    followUpStartedAt: toISOStringOrNull(dbCon.followUpStartedAt),
   };
 }
 
@@ -3282,6 +3287,11 @@ export class DatabaseStorage implements IStorage {
       // a PHONE/PROCEDURAL consultation that's reached COMPLETED. Closed/
       // converted rows are already rejected by the status check above.
       if (existingCon.currentStage === ConsultationStage.COMPLETED) throw new Error("CONSULTATION_COMPLETED");
+      // Follow-up cycle: blocking conversion while inside a cycle. The
+      // original consultation is already done; cycles are post-closure
+      // customer follow-ups, not new-case material. Cycle rows are
+      // status='active' so they'd otherwise pass the active check above.
+      if ((existingCon.followUpCount ?? 0) > 0) throw new Error("CONSULTATION_IN_FOLLOW_UP_CYCLE");
 
       // 2. Build and insert the new case row
       const newCaseId = randomUUID();

@@ -193,6 +193,14 @@ export const consultations = pgTable("consultations", {
   internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
   priority:           varchar("priority", { length: 50 }),
   priorityReason:     text("priority_reason"),
+  // Follow-up cycles ("استشارة تعقيبية"). When a closed consultation is
+  // re-opened for a customer follow-up, the row stays the same — only
+  // status/currentStage flip and followUpCount increments. A row with
+  // followUpCount > 0 renders a 3-stage mini-flow instead of the full
+  // type stages (see getStagesForConsultationCycle). NOT NULL + default
+  // so drizzle-kit push backfills existing rows cleanly.
+  followUpCount:     integer("follow_up_count").notNull().default(0),
+  followUpStartedAt: timestamp("follow_up_started_at"),
 });
 
 export const consultationStudies = pgTable("consultation_studies", {
@@ -1502,6 +1510,55 @@ export function getConsultationStagesForType(
   return ConsultationStagesAll;
 }
 
+// ==================== Follow-up cycle ("استشارة تعقيبية") ====================
+// A closed consultation can be re-opened into a short 3-stage mini-flow
+// on the SAME record (followUpCount bumps, status flips to active,
+// currentStage resets to RECEIVED). Stage tokens are reused from the
+// main enum — no new labels. PHONE/PROCEDURAL share the same cycle
+// shape; WRITTEN substitutes READY for COMPLETED at stage 2.
+export const ConsultationCycleStagesWritten: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.READY,
+  ConsultationStage.CLOSED_FINAL,
+];
+export const ConsultationCycleStagesPhone: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.COMPLETED,
+  ConsultationStage.CLOSED_FINAL,
+];
+export const ConsultationCycleStagesProcedural: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.COMPLETED,
+  ConsultationStage.CLOSED_FINAL,
+];
+
+// True while the consultation is actively inside a follow-up cycle.
+// Status-gated so a CLOSED-with-followUpCount>0 row (cycle finished)
+// reports false — gating callers (transition validation, action buttons)
+// use this to decide whether to apply cycle rules.
+export function isInFollowUpCycle(
+  c: { followUpCount?: number | null; status?: string | null } | null | undefined,
+): boolean {
+  if (!c) return false;
+  return (c.followUpCount ?? 0) > 0 && c.status === "active";
+}
+
+// Stages list for the stage-bar / rollback validator. Returns the cycle
+// 3-stage list whenever followUpCount > 0 (status-agnostic — a closed
+// cycle still renders the cycle bar with CLOSED_FINAL highlighted, not
+// the original 8-stage path). Falls back to the type's full stages list.
+export function getStagesForConsultationCycle(
+  c: { followUpCount?: number | null; consultationType?: string | null } | null | undefined,
+): readonly ConsultationStageValue[] {
+  if (!c || (c.followUpCount ?? 0) <= 0) {
+    return getConsultationStagesForType(resolveConsultationType(c?.consultationType));
+  }
+  const type = resolveConsultationType(c.consultationType);
+  if (type === ConsultationType.PHONE) return ConsultationCycleStagesPhone;
+  if (type === ConsultationType.PROCEDURAL) return ConsultationCycleStagesProcedural;
+  return ConsultationCycleStagesWritten;
+}
+
 // Remap currentStage when the consultation's workflow type changes. If
 // the existing stage is already valid in the new type's stages list,
 // keep it. Otherwise apply a small heuristic for stages that semantically
@@ -2099,6 +2156,11 @@ export interface Consultation {
   internalReviewerId: string | null;
   priority: string | null;
   priorityReason: string | null;
+  // Follow-up cycle counter. 0 for fresh consultations; bumped each time
+  // a closed consultation is re-opened via /start-follow-up. Renders the
+  // 3-stage cycle bar and the "تعقيبية #N" header badge.
+  followUpCount: number;
+  followUpStartedAt: string | null;
 }
 
 // Per consultations-rebuild-spec.md §3.2.2 (early-close): "match the cases
@@ -2207,6 +2269,7 @@ export const ConsultationActivityType = {
   RESUME_FROM_COMPLETION: "resume_from_completion",
   COMPLETION_SKIPPED:     "completion_skipped",
   TYPE_CHANGED:           "consultation_type_changed",
+  FOLLOW_UP_STARTED:      "follow_up_started",
 } as const;
 
 export type ConsultationActivityTypeValue =
@@ -2231,6 +2294,7 @@ export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValu
   resume_from_completion:   "العودة من الاستكمال",
   completion_skipped:       "تجاوز مرحلة الاستكمال",
   consultation_type_changed: "تغيير نوع الاستشارة",
+  follow_up_started:        "بدء استشارة تعقيبية",
 };
 
 export interface ConsultationActivity {

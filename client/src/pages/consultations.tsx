@@ -46,7 +46,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play, RotateCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -81,6 +81,8 @@ import {
   ConsultationPriorityLabels,
   resolveConsultationType,
   getConsultationStagesForType,
+  isInFollowUpCycle,
+  getStagesForConsultationCycle,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
@@ -161,8 +163,29 @@ const LINEAR_ADVANCE_PROCEDURAL: LinearAdvanceTable = {
   [ConsultationStage.COMPLETED]:                   { target: ConsultationStage.CLOSED_FINAL,                roles: ["admin_support", "branch_manager"] },
 };
 
-function getLinearAdvanceTable(consultationType: string | null | undefined): LinearAdvanceTable {
-  const resolved = resolveConsultationType(consultationType);
+// Cycle linear-advance tables — mirror ALLOWED_CONSULTATION_CYCLE_TRANSITIONS*
+// on the server. 2 forward steps per cycle (RECEIVED → working → CLOSED_FINAL).
+// PHONE and PROCEDURAL share the same shape, so one table covers both.
+const LINEAR_ADVANCE_CYCLE_WRITTEN: LinearAdvanceTable = {
+  [ConsultationStage.RECEIVED]: { target: ConsultationStage.READY,        roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  [ConsultationStage.READY]:    { target: ConsultationStage.CLOSED_FINAL, roles: ["admin_support", "branch_manager"] },
+};
+const LINEAR_ADVANCE_CYCLE_PHONE_PROCEDURAL: LinearAdvanceTable = {
+  [ConsultationStage.RECEIVED]:  { target: ConsultationStage.COMPLETED,    roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  [ConsultationStage.COMPLETED]: { target: ConsultationStage.CLOSED_FINAL, roles: ["admin_support", "branch_manager"] },
+};
+
+function getLinearAdvanceTable(
+  consultation: { consultationType?: string | null; followUpCount?: number | null; status?: string | null },
+): LinearAdvanceTable {
+  if (isInFollowUpCycle(consultation)) {
+    const resolved = resolveConsultationType(consultation.consultationType);
+    if (resolved === ConsultationType.PHONE || resolved === ConsultationType.PROCEDURAL) {
+      return LINEAR_ADVANCE_CYCLE_PHONE_PROCEDURAL;
+    }
+    return LINEAR_ADVANCE_CYCLE_WRITTEN;
+  }
+  const resolved = resolveConsultationType(consultation.consultationType);
   if (resolved === ConsultationType.PHONE) return LINEAR_ADVANCE_PHONE;
   if (resolved === ConsultationType.PROCEDURAL) return LINEAR_ADVANCE_PROCEDURAL;
   return LINEAR_ADVANCE_WRITTEN;
@@ -178,7 +201,7 @@ function getAdvanceTarget(
   // Phase-8 — awaiting-completion rows are NEVER advanced via the normal
   // mechanism (the resume action is what restores the saved stage).
   if (consultation.awaitingCompletion) return null;
-  const rule = getLinearAdvanceTable(consultation.consultationType)[consultation.currentStage];
+  const rule = getLinearAdvanceTable(consultation)[consultation.currentStage];
   if (!rule) return null;
   // Department head can only act inside their own department
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return null;
@@ -206,7 +229,10 @@ function getReturnTargets(
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return [];
   const resolvedType = resolveConsultationType(consultation.consultationType);
   let stages: readonly ConsultationStageValue[];
-  if (resolvedType === ConsultationType.WRITTEN) {
+  if (isInFollowUpCycle(consultation)) {
+    // Cycle uses its own 3-stage list; the same 1-step-back rule applies.
+    stages = getStagesForConsultationCycle(consultation);
+  } else if (resolvedType === ConsultationType.WRITTEN) {
     stages = consultation.currentStage === ConsultationStage.TAKING_NOTES
       ? ConsultationStagesAll
       : ConsultationStagesOrder;
@@ -282,6 +308,10 @@ function canConvertToCase(
 ): boolean {
   if (consultation.status !== "active") return false;
   if (consultation.currentStage === ConsultationStage.COMPLETED) return false;
+  // Mirror the server guard: a follow-up cycle isn't convertible (the
+  // original consultation is already done; cycles are post-closure
+  // follow-ups, not new-case material).
+  if ((consultation.followUpCount ?? 0) > 0) return false;
   if (userRole === "branch_manager" || userRole === "admin_support") return true;
   if (userRole === "department_head" && consultation.departmentId === userDeptId) return true;
   return false;
@@ -490,6 +520,17 @@ function canEarlyClose(
   return !!consultation.assignedTo && consultation.assignedTo === userId;
 }
 
+// FE permission gate mirroring POST /api/consultations/:id/start-follow-up.
+// Admin-only by design — opening a new cycle is an administrative action,
+// matching the gating on the WRITTEN closure step.
+function canStartFollowUp(
+  consultation: Consultation,
+  userRole: string,
+): boolean {
+  if (consultation.status !== "closed") return false;
+  return userRole === "admin_support" || userRole === "branch_manager";
+}
+
 // Mirrors the role gate on PATCH /api/consultations/:id for the
 // consultationType field: branch_manager / admin_support /
 // department_head (own dept). The PATCH endpoint silently drops the
@@ -522,6 +563,7 @@ function getActivityIcon(activityType: string) {
     case ConsultationActivityType.EARLY_CLOSED:       return XCircle;
     case ConsultationActivityType.GENERAL_NOTE:       return MessageSquare;
     case ConsultationActivityType.TYPE_CHANGED:       return ArrowLeftRight;
+    case ConsultationActivityType.FOLLOW_UP_STARTED:  return RotateCw;
     default: return Clock;
   }
 }
@@ -1262,6 +1304,26 @@ export default function ConsultationsPage() {
       closeEarlyCloseDialog();
     } catch (err) {
       toast({ title: "فشل إغلاق الاستشارة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  // Start a follow-up cycle ("استشارة تعقيبية") on a closed consultation.
+  // Confirms first because the action re-opens the record (status flips
+  // back to active, currentStage → RECEIVED, followUpCount++, fresh SLA
+  // window). The server enforces the same status='closed' + admin gate;
+  // this client check is the cosmetic confirm-and-fire.
+  const handleStartFollowUp = async (c: Consultation) => {
+    const nextNum = (c.followUpCount ?? 0) + 1;
+    if (!window.confirm(`بدء استشارة تعقيبية #${nextNum}؟ سيتم فتح الاستشارة من جديد في مرحلة الاستلام.`)) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${c.id}/start-follow-up`, {});
+      await refreshConsultations();
+      toast({ title: `تم بدء التعقيبية #${nextNum}` });
+    } catch (err) {
+      toast({ title: "فشل بدء التعقيبية", description: extractApiError(err), variant: "destructive" });
     } finally {
       setActionInProgress(false);
     }
@@ -2266,6 +2328,16 @@ export default function ConsultationsPage() {
             <DialogTitle className="flex items-center gap-2">
               <span>تفاصيل الاستشارة</span>
               <LtrInline>{selectedConsultation?.consultationNumber}</LtrInline>
+              {selectedConsultation && (selectedConsultation.followUpCount ?? 0) > 0 && (
+                <Badge
+                  variant="outline"
+                  className="border-blue-500 bg-blue-500/10 text-blue-700 text-xs"
+                  data-testid="badge-consultation-follow-up"
+                  title="استشارة تعقيبية"
+                >
+                  تعقيبية #{selectedConsultation.followUpCount}
+                </Badge>
+              )}
             </DialogTitle>
           </DialogHeader>
           {selectedConsultation && (
@@ -2337,6 +2409,7 @@ export default function ConsultationsPage() {
                 <ConsultationStagesBar
                   currentStage={selectedConsultation.currentStage}
                   consultationType={selectedConsultation.consultationType}
+                  followUpCount={selectedConsultation.followUpCount}
                 />
                 {/* Phase-4 dev-feedback: surface the same workflow actions
                     that live in the row's ⋯ dropdown right under the stages
@@ -2433,6 +2506,18 @@ export default function ConsultationsPage() {
                       >
                         <XCircle className="w-4 h-4 ml-1" />
                         إغلاق مبكر
+                      </Button>
+                    )}
+                    {canStartFollowUp(selectedConsultation, user.role) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-blue-500 text-blue-600 hover:bg-blue-50"
+                        data-testid={`dialog-button-start-follow-up-${selectedConsultation.id}`}
+                        onClick={() => handleStartFollowUp(selectedConsultation)}
+                      >
+                        <RotateCw className="w-4 h-4 ml-1" />
+                        استشارة تعقيبية
                       </Button>
                     )}
                     {canExtendDelivery(selectedConsultation) && (
