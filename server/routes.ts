@@ -1064,11 +1064,11 @@ export async function registerRoutes(
         c.primaryLawyerId === userId ||
         c.responsibleLawyerId === userId ||
         (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId))
-      ).map(c => ({ id: c.id, title: c.title, caseNumber: c.caseNumber, type: "case" as const }));
+      ).map(c => ({ id: c.id, title: c.caseNumber, caseNumber: c.caseNumber, type: "case" as const }));
 
       const allConsultations = await storage.getAllConsultations();
       const assignedConsultations = allConsultations.filter(c => c.assignedTo === userId)
-        .map(c => ({ id: c.id, title: c.title, type: "consultation" as const }));
+        .map(c => ({ id: c.id, title: c.consultationNumber, type: "consultation" as const }));
 
       const allFieldTasks = await storage.getAllFieldTasks();
       const assignedFieldTasks = allFieldTasks.filter(t => t.assignedTo === userId)
@@ -1142,7 +1142,7 @@ export async function registerRoutes(
               type: "general_alert",
               priority: "high",
               title: "قضية تحتاج إسناد",
-              message: `القضية "${c.title || c.caseNumber}" أصبحت بدون محامي مسند بعد حذف المستخدم "${targetUser.name}"`,
+              message: `القضية "${c.caseNumber}" أصبحت بدون محامي مسند بعد حذف المستخدم "${targetUser.name}"`,
               senderId: currentUser.id,
               senderName: currentUser.name,
               recipientId: mgr.id,
@@ -1164,7 +1164,7 @@ export async function registerRoutes(
               type: "general_alert",
               priority: "high",
               title: "استشارة تحتاج إسناد",
-              message: `الاستشارة "${c.title}" أصبحت بدون محامي مسند بعد حذف المستخدم "${targetUser.name}"`,
+              message: `الاستشارة "${c.consultationNumber}" أصبحت بدون محامي مسند بعد حذف المستخدم "${targetUser.name}"`,
               senderId: currentUser.id,
               senderName: currentUser.name,
               recipientId: mgr.id,
