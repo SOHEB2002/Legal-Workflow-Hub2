@@ -780,7 +780,7 @@ export function CaseProgressBar({
                 <AlertDialogTitle>اعتماد المراجعة الداخلية</AlertDialogTitle>
                 <AlertDialogDescription>
                   سيتم اعتماد القضية والانتقال إلى{" "}
-                  <strong>{getStageLabel(stagesOrder[currentIndex + 1], effectiveClassification as CaseClassificationValue)}</strong>.
+                  <strong>{getStageLabel(stagesOrder[currentIndex + 1])}</strong>.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter className="gap-2">
@@ -949,7 +949,7 @@ export function CaseProgressBar({
                 <AlertDialogTitle>نقل للمرحلة التالية</AlertDialogTitle>
                 <AlertDialogDescription>
                   هل أنت متأكد من نقل القضية للمرحلة التالية:{" "}
-                  <strong>{getStageLabel(stagesOrder[currentIndex + 1], effectiveClassification as CaseClassificationValue)}</strong>؟
+                  <strong>{getStageLabel(stagesOrder[currentIndex + 1])}</strong>؟
                 </AlertDialogDescription>
               </AlertDialogHeader>
               {nextIsInternalReview && (

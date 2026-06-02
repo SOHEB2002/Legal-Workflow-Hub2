@@ -149,6 +149,13 @@ export default function ClientsPage() {
       nextFollowUpDate: contactFormData.nextFollowUpDate || null,
       followUpStatus: contactFormData.nextFollowUpDate ? FollowUpStatus.PENDING : FollowUpStatus.COMPLETED,
       notes: contactFormData.notes,
+      communicationType: null,
+      duration: null,
+      followUpRequired: false,
+      followUpDate: null,
+      followUpNotes: null,
+      followUpCompleted: false,
+      caseId: null,
       createdBy: user.id,
     });
     setContactFormData({

@@ -606,7 +606,7 @@ export default function CasesPage() {
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [classificationGroup, setClassificationGroup] = useState<"" | "study" | "registered">("");
+  const [classificationGroup, setClassificationGroup] = useState<"" | "new" | "existing">("");
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);

@@ -114,7 +114,7 @@ export function SendNotificationDialog({
     setRelatedId("");
     setRequiresResponse(false);
     setEnableSchedule(false);
-    setScheduledDate(undefined);
+    setScheduledDate("");
     setScheduledTime("12:00");
     setEnableAutoEscalate(false);
     setAutoEscalateHours("24");

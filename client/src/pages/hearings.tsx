@@ -197,8 +197,8 @@ export default function HearingsPage() {
     caseId: "",
     hearingDate: "",
     hearingTime: "",
-    hearingType: HearingType.COURT,
-    courtName: "" as CourtTypeValue,
+    hearingType: HearingType.COURT as HearingTypeValue,
+    courtName: "" as CourtTypeValue | "",
     courtRoom: "",
     notes: "",
     responseRequired: false,
@@ -822,7 +822,7 @@ export default function HearingsPage() {
                 <Select
                   value={formData.hearingType}
                   onValueChange={(value) =>
-                    setFormData({ ...formData, hearingType: value })
+                    setFormData({ ...formData, hearingType: value as HearingTypeValue })
                   }
                 >
                   <SelectTrigger data-testid="select-hearing-type">

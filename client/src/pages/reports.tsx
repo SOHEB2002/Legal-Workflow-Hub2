@@ -455,7 +455,7 @@ function CasesSummarySection() {
 
   const overdueCases = useMemo(() => {
     return cases.filter(c => {
-      if (c.currentStage === "مقفلة" || c.currentStage === "تم_الرفع_للدائرة") return false;
+      if (c.currentStage === "مقفلة" || (c.currentStage as string) === "تم_الرفع_للدائرة") return false;
       try {
         const created = parseISO(c.createdAt);
         return differenceInDays(new Date(), created) > 30;
@@ -794,7 +794,7 @@ function EmployeePerformanceSection() {
           c.responsibleLawyerId === user.id
         );
 
-        const completedCases = userCases.filter(c => c.currentStage === "مقفلة" || c.currentStage === "تم_الرفع_للدائرة");
+        const completedCases = userCases.filter(c => c.currentStage === "مقفلة" || (c.currentStage as string) === "تم_الرفع_للدائرة");
 
         const thisMonthCases = userCases.filter(c => {
           try {
