@@ -980,24 +980,9 @@ export default function CasesPage() {
         return;
       }
     }
-    console.log("[BUG2][cases.tsx] handleAddCase formData before submit:", {
-      departmentId: formData.departmentId,
-      departmentIdType: typeof formData.departmentId,
-      caseType: formData.caseType,
-      caseClassification: formData.caseClassification,
-      departmentOther: formData.departmentOther,
-    });
     const computedClientRole = formData.caseClassification === CaseClassification.IN_COURT
       ? (formData.clientRole || "مدعي")
       : null;
-    console.log("[clientRole][cases.tsx] handleAddCase clientRole:", {
-      formDataClientRole: formData.clientRole,
-      formDataClientRoleType: typeof formData.clientRole,
-      formDataClientRoleLength: (formData.clientRole || "").length,
-      caseClassification: formData.caseClassification,
-      computedSentToContext: computedClientRole,
-      isDefendantSelection: formData.clientRole === "مدعى_عليه",
-    });
     try {
       await addCase({
         clientId: formData.clientId || "",
@@ -1527,14 +1512,6 @@ export default function CasesPage() {
                   <TableCell className="text-center">
                     {(() => {
                       const role = getClientRoleLabel(c.caseClassification, (c as any).clientRole);
-                      // DEBUG: surfaces the inputs the helper saw for each row.
-                      // Filter DevTools console by "[clientRole][cases:list]".
-                      console.log("[clientRole][cases:list]", {
-                        caseNumber: c.caseNumber,
-                        caseClassification: c.caseClassification,
-                        rawClientRole: (c as any).clientRole,
-                        rendered: role,
-                      });
                       if (role === "-") {
                         return <span className="text-xs text-muted-foreground">-</span>;
                       }
@@ -2800,12 +2777,6 @@ export default function CasesPage() {
                         <Label className="text-muted-foreground">صفة العميل</Label>
                         <p className="font-medium">{(() => {
                           const label = getClientRoleLabel(selectedCase.caseClassification, (selectedCase as any).clientRole);
-                          console.log("[clientRole][cases:details]", {
-                            caseNumber: selectedCase.caseNumber,
-                            caseClassification: selectedCase.caseClassification,
-                            rawClientRole: (selectedCase as any).clientRole,
-                            rendered: label,
-                          });
                           return label;
                         })()}</p>
                       </div>
@@ -3379,17 +3350,7 @@ export default function CasesPage() {
                       <Button
                         data-testid="button-add-comment"
                         onClick={async () => {
-                          // Diagnostic — logs to the browser console so a
-                          // "nothing happens" report has a paper trail.
-                          // eslint-disable-next-line no-console
-                          console.log("[add-comment] clicked", {
-                            caseId: selectedCase?.id,
-                            userId: user?.id,
-                            length: newComment.trim().length,
-                          });
                           if (!user || !newComment.trim()) {
-                            // eslint-disable-next-line no-console
-                            console.log("[add-comment] aborted — no user or empty body");
                             return;
                           }
                           try {

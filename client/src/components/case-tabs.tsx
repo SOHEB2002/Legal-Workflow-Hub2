@@ -229,8 +229,6 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
           </div>
           <Button
             onClick={() => {
-              // eslint-disable-next-line no-console
-              console.log("[add-note] clicked", { caseId, length: newNote.trim().length });
               addNoteMutation.mutate();
             }}
             disabled={!newNote.trim() || addNoteMutation.isPending}

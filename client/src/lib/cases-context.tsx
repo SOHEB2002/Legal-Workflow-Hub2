@@ -237,19 +237,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       startingStage: (data as any).startingStage || undefined,
     };
     
-    console.log("[BUG2][cases-context] addCase request body:", {
-      departmentId: caseData.departmentId,
-      departmentIdType: typeof caseData.departmentId,
-      caseType: caseData.caseType,
-      caseClassification: caseData.caseClassification,
-      departmentOther: caseData.departmentOther,
-    });
-    console.log("[clientRole][cases-context] addCase clientRole:", {
-      incoming: (data as any).clientRole,
-      finalSentToServer: caseData.clientRole,
-      type: typeof caseData.clientRole,
-      caseClassification: caseData.caseClassification,
-    });
     const response = await apiRequest("POST", "/api/cases", caseData);
     const newCase = await response.json();
     setCases((prev) => [migrateCase(newCase), ...prev]);
@@ -421,7 +408,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
           getDepartmentName(lawCase.departmentId || ""),
         );
         if (!validation.allowed) {
-          console.warn("انتقال مرفوض:", validation.reason);
           return false;
         }
       }
@@ -437,10 +423,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
       if (currentIndex >= stagesOrder.length - 1) {
-        console.warn("[moveToNextStage] already at last stage of its path", {
-          caseId: id,
-          currentStage: lawCase.currentStage,
-        });
         return false;
       }
       nextStage = stagesOrder[currentIndex + 1];
@@ -493,7 +475,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         getDepartmentName(lawCase.departmentId || ""),
       );
       if (!validation.allowed) {
-        console.warn("إرجاع مرفوض:", validation.reason);
         return false;
       }
     }
@@ -528,10 +509,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const skipDataCompletion = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
     try {
       const response = await apiRequest("POST", `/api/cases/${id}/skip-data-completion`, { notes });
-      console.log("[skipDataCompletion] response status:", response.status);
       try {
         const updatedCase = await response.json();
-        console.log("[skipDataCompletion] response body currentStage:", updatedCase?.currentStage);
         if (updatedCase && updatedCase.id) {
           setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
         }

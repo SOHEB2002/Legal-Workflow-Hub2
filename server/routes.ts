@@ -1273,29 +1273,7 @@ export async function registerRoutes(
       if (!["branch_manager", "admin_support"].includes(user.role)) {
         return res.status(403).json({ error: "إنشاء القضايا متاح فقط لمدير الفرع والدعم الإداري" });
       }
-      console.log("[BUG2][POST /api/cases] req.body received:", {
-        departmentId: req.body.departmentId,
-        departmentIdType: typeof req.body.departmentId,
-        caseType: req.body.caseType,
-        caseClassification: req.body.caseClassification,
-        departmentOther: req.body.departmentOther,
-      });
-      console.log("[clientRole][POST /api/cases] req.body.clientRole:", {
-        clientRole: req.body.clientRole,
-        type: typeof req.body.clientRole,
-        length: typeof req.body.clientRole === "string" ? req.body.clientRole.length : null,
-        equalsDefendant: req.body.clientRole === "مدعى_عليه",
-        caseClassification: req.body.caseClassification,
-      });
       const validatedData = insertCaseSchema.parse(req.body);
-      console.log("[BUG2][POST /api/cases] after zod parse:", {
-        departmentId: validatedData.departmentId,
-        caseType: validatedData.caseType,
-      });
-      console.log("[clientRole][POST /api/cases] after zod parse:", {
-        clientRole: (validatedData as any).clientRole,
-        type: typeof (validatedData as any).clientRole,
-      });
       // Carry clientRole forward explicitly — earlier the field wasn't in the
       // schema, so parse() stripped it and the case was inserted with null.
       (validatedData as any).clientRole = (validatedData as any).clientRole ?? req.body.clientRole ?? null;
@@ -1349,10 +1327,6 @@ export async function registerRoutes(
         const casePriority = validatedData.priority || "متوسط";
 
         if (req.body.nextHearingDate && String(req.body.nextHearingDate).trim()) {
-          console.log("[POST /api/cases] IN_COURT defendant hearing auto-create:", {
-            caseId: newCase.id,
-            nextHearingDate: req.body.nextHearingDate,
-          });
           try {
             const hearing = await storage.createHearing({
               caseId: newCase.id,
@@ -1366,7 +1340,6 @@ export async function registerRoutes(
             autoCreated.push({ type: "hearing", id: hearing.id, hearing });
             await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
             (newCase as any).nextHearingDate = req.body.nextHearingDate;
-            console.log("[POST /api/cases] Defendant hearing created:", hearing.id);
           } catch (e) {
             console.error("[POST /api/cases] Error auto-creating defendant hearing:", e);
           }
@@ -1419,13 +1392,6 @@ export async function registerRoutes(
         req.body.nextHearingDate &&
         String(req.body.nextHearingDate).trim()
       ) {
-        console.log("[POST /api/cases] IN_COURT plaintiff hearing auto-create:", {
-          caseId: newCase.id,
-          nextHearingDate: req.body.nextHearingDate,
-          nextHearingTime: req.body.nextHearingTime,
-          courtName: validatedData.courtName,
-          clientRole: req.body.clientRole,
-        });
         try {
           const hearing = await storage.createHearing({
             caseId: newCase.id,
@@ -1439,7 +1405,6 @@ export async function registerRoutes(
           autoCreated.push({ type: "hearing", id: hearing.id, hearing });
           await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
           (newCase as any).nextHearingDate = req.body.nextHearingDate;
-          console.log("[POST /api/cases] Hearing created successfully:", hearing.id);
         } catch (e) {
           console.error("[POST /api/cases] Error auto-creating hearing:", e);
         }
@@ -1925,28 +1890,6 @@ export async function registerRoutes(
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
-        // DEBUG: surface exactly what's being validated and which rules could match.
-        console.log("[PATCH cases] stage transition attempt", {
-          caseId: String(req.params.id),
-          currentStage: existing.currentStage,
-          targetStage: req.body.currentStage,
-          userRole: user?.role,
-          userId: user?.id,
-          primaryLawyerId: existing.primaryLawyerId,
-          isAssignedLawyer:
-            existing.primaryLawyerId === user?.id ||
-            existing.responsibleLawyerId === user?.id ||
-            (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(user?.id)),
-          internalReviewerId: (existing as any).internalReviewerId,
-        });
-        const matchingRules = ALLOWED_CASE_TRANSITIONS.filter(
-          (r) => r.from === existing.currentStage,
-        );
-        console.log(
-          `[PATCH cases] ALLOWED_CASE_TRANSITIONS from "${existing.currentStage}":`,
-          matchingRules,
-        );
-
         // Use merged case data for validation when classification also changes simultaneously.
         // Stash the resolved department name on the merged copy under
         // `departmentName` so validateStageTransition's rollback path —
@@ -1966,15 +1909,6 @@ export async function registerRoutes(
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
         const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase);
-        console.log("[PATCH cases] validateStageTransition result", {
-          caseId: String(req.params.id),
-          from: existing.currentStage,
-          to: req.body.currentStage,
-          userRole: user?.role,
-          mergedDepartmentName: mergedCase.departmentName,
-          allowed: stageCheck.allowed,
-          reason: stageCheck.reason,
-        });
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -6178,11 +6112,6 @@ export async function registerRoutes(
           if (caseForStage && !caseForStage.isArchived && caseForStage.currentStage !== "مقفلة") {
             const hearingType = validatedData.hearingType || "محكمة";
             const currentStage = caseForStage.currentStage as string;
-            console.log("[POST hearings] auto-stage check", {
-              caseId: caseForStage.id,
-              currentStage,
-              hearingType,
-            });
 
             if (hearingType === "تراضي" || hearingType === "تسوية_ودية") {
               const conciliationFromStages = ["قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_تراضي", "أغلق_طلب_الصلح"];
@@ -6196,7 +6125,6 @@ export async function registerRoutes(
                     { stage: "مداولة_الصلح", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة صلح" },
                   ],
                 } as any);
-                console.log("[POST hearings] auto-stage → مداولة_الصلح");
               }
             } else if (hearingType === "محكمة") {
               const courtFromStages = [
@@ -6219,7 +6147,6 @@ export async function registerRoutes(
                     { stage: "منظورة", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة محكمة" },
                   ],
                 } as any);
-                console.log("[POST hearings] auto-stage → منظورة");
               }
             }
           }

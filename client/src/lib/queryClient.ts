@@ -20,31 +20,61 @@ class RetryableAuthError extends Error {
   }
 }
 
+// Single-flight refresh. Multiple concurrent callers — apiRequest's 401
+// retry path here, the scheduled refresh in auth-context, and the
+// visibility-change handler — share one in-flight promise so they can't
+// race each other into consuming the same rotation token (which left the
+// loser logged out via localStorage.clear + reload).
+export type RefreshResult =
+  | { ok: true }
+  | { ok: false; reason: "no-token" | "network" | "rejected" };
+
+let refreshInFlight: Promise<RefreshResult> | null = null;
+
+export function refreshAuthToken(): Promise<RefreshResult> {
+  if (refreshInFlight) return refreshInFlight;
+  const p: Promise<RefreshResult> = (async () => {
+    const token = localStorage.getItem("lawfirm_token");
+    if (!token) return { ok: false, reason: "no-token" } as const;
+    try {
+      const headers: Record<string, string> = {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+      const csrf = localStorage.getItem("lawfirm_csrf_token");
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+      const res = await fetch("/api/auth/refresh", { method: "POST", headers });
+      if (!res.ok) return { ok: false, reason: "rejected" } as const;
+      const data = await res.json();
+      if (data.token) {
+        localStorage.setItem("lawfirm_token", data.token);
+        if (data.csrfToken) {
+          localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
+        }
+        return { ok: true } as const;
+      }
+      return { ok: false, reason: "rejected" } as const;
+    } catch {
+      return { ok: false, reason: "network" } as const;
+    }
+  })();
+  refreshInFlight = p;
+  void p.finally(() => {
+    if (refreshInFlight === p) refreshInFlight = null;
+  });
+  return p;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (res.status === 401) {
-    const token = localStorage.getItem("lawfirm_token");
-    if (token) {
-      try {
-        const refreshRes = await fetch("/api/auth/refresh", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        });
-        if (refreshRes.ok) {
-          const data = await refreshRes.json();
-          if (data.token) {
-            localStorage.setItem("lawfirm_token", data.token);
-            if (data.csrfToken) {
-              localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
-            }
-          }
-          throw new RetryableAuthError("Token refreshed, retry request");
-        }
-      } catch (e) {
-        if (e instanceof RetryableAuthError) throw e;
-      }
+    const result = await refreshAuthToken();
+    if (result.ok) {
+      throw new RetryableAuthError("Token refreshed, retry request");
+    }
+    // Only nuke the session when the server actually rejected the refresh.
+    // Network blips fall through — a transient failure on a 30s sidebar
+    // poll shouldn't force a logout.
+    if (result.reason === "rejected") {
       localStorage.removeItem("lawfirm_token");
       localStorage.removeItem("lawfirm_csrf_token");
       localStorage.removeItem("lawfirm_user");
@@ -140,42 +170,3 @@ export const queryClient = new QueryClient({
     },
   },
 });
-
-// ============================================================
-// API Call Counter — diagnostics
-// Call startApiCallCounter() right after login to measure how
-// many fetch('/api/...') calls are made in the first 30 seconds.
-// Results are printed to the browser console.
-// ============================================================
-let _origFetch: typeof fetch | null = null;
-let _apiCallCount = 0;
-let _apiCounterTimer: ReturnType<typeof setTimeout> | null = null;
-
-export function startApiCallCounter() {
-  if (_origFetch) return; // already running
-  _apiCallCount = 0;
-  _origFetch = window.fetch;
-  (window as any).fetch = ((...args: Parameters<typeof fetch>) => {
-    const url =
-      typeof args[0] === "string"
-        ? args[0]
-        : (args[0] as Request).url;
-    if (url.startsWith("/api/")) {
-      _apiCallCount++;
-      console.log(`[API #${_apiCallCount}] ${url}`);
-    }
-    return _origFetch!(...args);
-  }) as typeof fetch;
-
-  if (_apiCounterTimer) clearTimeout(_apiCounterTimer);
-  _apiCounterTimer = setTimeout(() => {
-    console.log(
-      `%c[API Counter] TOTAL /api/* calls in first 30s: ${_apiCallCount}`,
-      "color: red; font-size: 14px; font-weight: bold"
-    );
-    if (_origFetch) {
-      (window as any).fetch = _origFetch;
-      _origFetch = null;
-    }
-  }, 30_000);
-}

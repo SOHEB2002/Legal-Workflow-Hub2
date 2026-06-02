@@ -6,18 +6,15 @@ export function startScheduler() {
   console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
 
   cron.schedule("0 * * * *", async () => {
-    console.log("Running hourly hearing checks...");
     await checkUnupdatedHearings();
     await checkUpcomingHearingReminders();
   });
 
   cron.schedule("0 */6 * * *", async () => {
-    console.log("Running memo deadline checks...");
     await checkMemoDeadlines();
   });
 
   cron.schedule("0 8 * * *", async () => {
-    console.log("Running daily legal deadline checks...");
     await checkLegalDeadlines();
     await checkDelegationExpiry();
     await checkContactFollowUps();
@@ -27,17 +24,14 @@ export function startScheduler() {
   });
 
   cron.schedule("0 7 * * 0", async () => {
-    console.log("Running weekly report generation...");
     await generateWeeklyReport();
   });
 
   cron.schedule("0 7 1 * *", async () => {
-    console.log("Running monthly report generation...");
     await generateMonthlyReport();
   });
 
   cron.schedule("0 2 * * *", async () => {
-    console.log("Running auto-archive check...");
     await autoArchiveClosedCases();
   });
 }
@@ -646,7 +640,6 @@ async function autoArchiveClosedCases() {
 
 async function checkStruckOffExpiry() {
   try {
-    console.log("Checking struck-off cases for auto-closure...");
     const allCases = await storage.getAllCases();
     const todayStr = new Date().toISOString().split("T")[0];
     let closed = 0;
@@ -738,7 +731,6 @@ const SETTLEMENT_LINK_MISSING_CLOSURE_REASON =
 
 async function checkSettlementLinkMissingTimeout() {
   try {
-    console.log("Checking settlement-link-missing paused cases for auto-closure...");
     const allCases = await storage.getAllCases();
     const now = new Date();
     const cutoff = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000);
@@ -804,7 +796,6 @@ async function checkSettlementLinkMissingTimeout() {
 
 async function recalculateCasePriorities() {
   try {
-    console.log("Recalculating smart priorities for all active cases...");
     const allCases = await storage.getAllCases();
     let updated = 0;
     for (const c of allCases) {
@@ -822,7 +813,6 @@ async function recalculateCasePriorities() {
         updated++;
       }
     }
-    console.log(`Priority recalculation complete: ${updated} cases updated.`);
   } catch (error) {
     console.error("Error recalculating case priorities:", error);
   }

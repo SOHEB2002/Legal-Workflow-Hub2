@@ -210,8 +210,6 @@ app.use((req, res, next) => {
     }
     if (totalFixed > 0) {
       console.log(`Department backfill: corrected ${totalFixed} case(s) with mismatched department_id.`);
-    } else {
-      console.log("Department backfill: nothing to fix.");
     }
   } catch (err) {
     console.error("Failed to apply department backfill:", err);
