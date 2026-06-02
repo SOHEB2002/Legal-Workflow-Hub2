@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, getAuthHeaders } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,19 +20,6 @@ import {
 import { BidiText } from "@/components/ui/bidi-text";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
-
-function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const token = localStorage.getItem("lawfirm_token");
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-  if (csrfToken) {
-    headers["X-CSRF-Token"] = csrfToken;
-  }
-  return headers;
-}
 
 export default function DelegationsPage() {
   const { toast } = useToast();

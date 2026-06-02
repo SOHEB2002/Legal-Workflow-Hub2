@@ -8,7 +8,7 @@ import type {
   ConsultationClosureReasonValue,
 } from "@shared/schema";
 import { ConsultationStage } from "@shared/schema";
-import { apiRequest } from "./queryClient";
+import { apiRequest, getAuthHeaders } from "./queryClient";
 import { notifyConsultationAdded, notifyConsultationAssigned } from "./notification-triggers";
 import { useAuth } from "./auth-context";
 
@@ -49,11 +49,6 @@ interface ConsultationsContextType {
 const ConsultationsContext = createContext<ConsultationsContextType | undefined>(undefined);
 
 const generateConsultationNumber = () => `S-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
-
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
 
 export function ConsultationsProvider({ children }: { children: React.ReactNode }) {
   const [consultations, setConsultations] = useState<Consultation[]>([]);

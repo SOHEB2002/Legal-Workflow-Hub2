@@ -1,14 +1,9 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { FieldTask } from "@shared/schema";
 import { FieldTaskStatus } from "@shared/schema";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getAuthHeaders } from "@/lib/queryClient";
 import { notifyFieldTaskAssigned } from "@/lib/notification-triggers";
 import { useAuth } from "./auth-context";
-
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
 
 interface FieldTasksContextType {
   fieldTasks: FieldTask[];

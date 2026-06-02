@@ -1,12 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { ContactLog, FollowUpStatus } from "@shared/schema";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getAuthHeaders } from "@/lib/queryClient";
 import { useAuth } from "./auth-context";
-
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
 
 interface ContactsContextType {
   contacts: ContactLog[];

@@ -14,7 +14,7 @@ import {
   canSendNotifications,
   canSendReminders
 } from "@shared/schema";
-import { apiRequest, refreshAuthToken } from "@/lib/queryClient";
+import { apiRequest, refreshAuthToken, getAuthHeaders } from "@/lib/queryClient";
 
 interface AuthContextType {
   user: User | null;
@@ -51,19 +51,6 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const token = localStorage.getItem("lawfirm_token");
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-  if (csrfToken) {
-    headers["X-CSRF-Token"] = csrfToken;
-  }
-  return headers;
-}
 
 async function fetchUsersFromAPI(): Promise<User[]> {
   try {

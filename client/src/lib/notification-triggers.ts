@@ -1,11 +1,6 @@
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getAuthHeaders } from "@/lib/queryClient";
 import { NotificationType, NotificationPriority, NotificationStatus } from "@shared/schema";
 import type { NotificationTypeValue, NotificationPriorityValue, User } from "@shared/schema";
-
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
 
 function getCurrentUser(): { id: string; name: string; role: string } | null {
   const stored = localStorage.getItem("lawfirm_user");

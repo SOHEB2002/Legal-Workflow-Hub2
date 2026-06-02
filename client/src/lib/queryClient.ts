@@ -1,6 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-function getAuthHeaders(): Record<string, string> {
+export function getAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   const token = localStorage.getItem("lawfirm_token");
   if (token) {
@@ -137,16 +137,34 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey.join("/") as string, {
-      credentials: "include",
-      headers: getAuthHeaders(),
-    });
+    const makeRequest = () =>
+      fetch(queryKey.join("/") as string, {
+        credentials: "include",
+        headers: getAuthHeaders(),
+      });
+
+    let res = await makeRequest();
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
     }
 
-    await throwIfResNotOk(res);
+    try {
+      await throwIfResNotOk(res);
+    } catch (e) {
+      if (e instanceof RetryableAuthError) {
+        // Refresh succeeded — retry the original request once with the new
+        // token, mirroring apiRequest. Without this the rotation surfaced a
+        // one-frame error state on the query before the next refetch.
+        res = await makeRequest();
+        if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+          return null;
+        }
+        await throwIfResNotOk(res);
+      } else {
+        throw e;
+      }
+    }
     return await res.json();
   };
 

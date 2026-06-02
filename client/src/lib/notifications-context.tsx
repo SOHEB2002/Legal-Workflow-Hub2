@@ -21,11 +21,6 @@ const TEMPLATES_STORAGE_KEY = "lawfirm_notification_templates";
 const PREFERENCES_STORAGE_KEY = "lawfirm_notification_preferences";
 const RULES_STORAGE_KEY = "lawfirm_notification_rules";
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
-
 export interface WorkflowNotificationEvent {
   type: NotificationTypeValue;
   entityType: "case" | "consultation";

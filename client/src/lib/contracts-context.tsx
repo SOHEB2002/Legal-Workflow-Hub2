@@ -6,7 +6,7 @@ import type {
   CommitteeDecisionValue,
   NoteOutcomeValue,
 } from "@shared/schema";
-import { apiRequest } from "./queryClient";
+import { apiRequest, getAuthHeaders } from "./queryClient";
 import { useAuth } from "./auth-context";
 
 // Mirror of consultations-context but narrower — contracts skip the
@@ -48,11 +48,6 @@ interface ContractsContextType {
 }
 
 const ContractsContext = createContext<ContractsContextType | undefined>(undefined);
-
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
 
 export function ContractsProvider({ children }: { children: React.ReactNode }) {
   const [contracts, setContracts] = useState<Contract[]>([]);
