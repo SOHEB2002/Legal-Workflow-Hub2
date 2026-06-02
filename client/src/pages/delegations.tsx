@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, getAuthHeaders } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -37,8 +37,7 @@ export default function DelegationsPage() {
   const { data: delegations = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/delegations'],
     queryFn: async () => {
-      const res = await fetch("/api/delegations", { headers: getAuthHeaders() });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", "/api/delegations");
       return res.json();
     },
   });

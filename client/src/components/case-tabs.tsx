@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, getAuthHeaders } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,8 +41,7 @@ export function CaseActivityTab({ caseId }: { caseId: string }) {
   const { data: activities = [], isLoading, isError } = useQuery<any[]>({
     queryKey: ['/api/cases', caseId, 'activity'],
     queryFn: async () => {
-      const res = await fetch(`/api/cases/${caseId}/activity`, { headers: getAuthHeaders() });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", `/api/cases/${caseId}/activity`);
       const json = await res.json();
       // Guard: server used to return { data, total, page, limit } — normalise to array
       return Array.isArray(json) ? json : (Array.isArray(json?.data) ? json.data : []);
@@ -107,8 +106,7 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
   const { data: notes = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/cases', caseId, 'notes'],
     queryFn: async () => {
-      const res = await fetch(`/api/cases/${caseId}/notes`, { headers: getAuthHeaders() });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", `/api/cases/${caseId}/notes`);
       return res.json();
     },
     enabled: !!caseId && caseId.length > 0,
@@ -317,8 +315,7 @@ export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], fieldTasks
   const { data: deadlines = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/legal-deadlines', caseId],
     queryFn: async () => {
-      const res = await fetch(`/api/legal-deadlines?caseId=${caseId}`, { headers: getAuthHeaders() });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", `/api/legal-deadlines?caseId=${caseId}`);
       return res.json();
     },
     enabled: !!caseId && caseId.length > 0,
