@@ -108,6 +108,7 @@ import {
 } from "@/components/consultations-advanced-filters";
 import { DialogFooter } from "@/components/ui/dialog";
 import { apiRequest } from "@/lib/queryClient";
+import { extractApiError } from "@/lib/utils";
 import { sendConsultationReminder, requestConsultationTransfer } from "@/lib/notification-triggers";
 
 // Lawyer-filter source: role-based exclusion. Wider than the
@@ -315,19 +316,6 @@ function canConvertToCase(
   if (userRole === "branch_manager" || userRole === "admin_support") return true;
   if (userRole === "department_head" && consultation.departmentId === userDeptId) return true;
   return false;
-}
-
-function extractApiError(err: unknown): string {
-  const msg = (err as any)?.message || "";
-  // format from throwIfResNotOk: "400: {"error":"..."}"
-  const match = msg.match(/^\d+: (.+)$/s);
-  if (match) {
-    try {
-      const parsed = JSON.parse(match[1]);
-      if (parsed?.error) return parsed.error;
-    } catch {}
-  }
-  return msg || "حدث خطأ غير متوقع";
 }
 
 // Arabic display labels for ConsultationClosureReason. Schema keeps the

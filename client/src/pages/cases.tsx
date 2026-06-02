@@ -111,6 +111,7 @@ import {
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { extractApiError } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -385,19 +386,6 @@ export default function CasesPage() {
     return lawyer?.name || "-";
   };
   const { toast } = useToast();
-
-  const extractApiError = (err: unknown): string => {
-    const msg = (err as any)?.message || "";
-    // format from throwIfResNotOk: "400: {"error":"..."}"
-    const match = msg.match(/^\d+: (.+)$/s);
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[1]);
-        if (parsed?.error) return parsed.error;
-      } catch {}
-    }
-    return msg || "حدث خطأ غير متوقع";
-  };
 
   // Phase-8 — pause permission gate. Mirrors the server check on
   // /api/cases/:id/pause and /unpause: branch_manager / admin_support /
