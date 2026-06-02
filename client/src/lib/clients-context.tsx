@@ -28,35 +28,12 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
     if (!token) { setIsLoading(false); return; }
     try {
       setIsLoading(true);
-      const headers: Record<string, string> = { "Authorization": `Bearer ${token}` };
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-      const response = await fetch("/api/clients", { headers, credentials: "include" });
-      if (response.ok) {
-        const data = await response.json();
-        setClients(data);
-      } else if (response.status === 401) {
-        try {
-          const refreshRes = await fetch("/api/auth/refresh", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-          });
-          if (refreshRes.ok) {
-            const refreshData = await refreshRes.json();
-            if (refreshData.token) {
-              localStorage.setItem("lawfirm_token", refreshData.token);
-              if (refreshData.csrfToken) localStorage.setItem("lawfirm_csrf_token", refreshData.csrfToken);
-              const retryHeaders: Record<string, string> = { "Authorization": `Bearer ${refreshData.token}` };
-              if (refreshData.csrfToken) retryHeaders["X-CSRF-Token"] = refreshData.csrfToken;
-              const retryResponse = await fetch("/api/clients", { headers: retryHeaders, credentials: "include" });
-              if (retryResponse.ok) {
-                const data = await retryResponse.json();
-                setClients(data);
-              }
-            }
-          }
-        } catch (_) {}
-      }
+      // apiRequest carries the shared single-flight refresh + 401 retry from
+      // queryClient. The hand-rolled inline retry that used to live here raced
+      // the scheduled refresh and could leave the list empty until reload.
+      const response = await apiRequest("GET", "/api/clients");
+      const data = await response.json();
+      setClients(data);
     } catch (error) {
       console.error("Failed to fetch clients:", error);
     } finally {

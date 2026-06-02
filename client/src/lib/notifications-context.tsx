@@ -321,19 +321,17 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       return;
     }
     try {
-      const res = await fetch("/api/notifications", {
-        credentials: "include",
-        headers: { "Authorization": `Bearer ${authToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const prevCount = prevCountRef.current;
-        setNotifications(data);
-        if (prevCount > 0 && data.length > prevCount) {
-          setHasNewNotifications(true);
-        }
-        prevCountRef.current = data.length;
+      // apiRequest carries the shared single-flight refresh + 401 retry. The
+      // raw fetch here silently 401'd after a JWT rotation, freezing the badge
+      // counter until the user navigated or reloaded.
+      const res = await apiRequest("GET", "/api/notifications");
+      const data = await res.json();
+      const prevCount = prevCountRef.current;
+      setNotifications(data);
+      if (prevCount > 0 && data.length > prevCount) {
+        setHasNewNotifications(true);
       }
+      prevCountRef.current = data.length;
     } catch (err) {
       // fetch notifications failed silently
     } finally {

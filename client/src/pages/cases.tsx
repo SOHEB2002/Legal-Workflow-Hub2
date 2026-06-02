@@ -679,7 +679,7 @@ export default function CasesPage() {
   const fetchAttachments = async (caseId: string) => {
     setIsLoadingAttachments(true);
     try {
-      const res = await fetch(`/api/attachments/case/${caseId}`);
+      const res = await apiRequest("GET", `/api/attachments/case/${caseId}`);
       if (res.ok) {
         const data = await res.json();
         setCaseAttachments(data);
@@ -2868,8 +2868,14 @@ export default function CasesPage() {
                             <div className="flex items-center gap-2 mt-1">
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في تراضي (اختياري)" className="h-8 text-sm" data-testid="input-taradi-registration" autoFocus />
                               <Button size="sm" data-testid="button-confirm-taradi" onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_تراضي", taradiNumber: registrationNumberInput }) });
-                                if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { taradiStatus: "مقيدة_في_تراضي" as any, ...(registrationNumberInput ? { taradiNumber: registrationNumberInput } : {}) }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "مقيدة_في_تراضي", taradiNumber: registrationNumberInput });
+                                  if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { taradiStatus: "مقيدة_في_تراضي" as any, ...(registrationNumberInput ? { taradiNumber: registrationNumberInput } : {}) }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}>تأكيد</Button>
                               <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
                             </div>
@@ -2886,12 +2892,14 @@ export default function CasesPage() {
                               variant="default"
                               data-testid="button-taradi-reconciled"
                               onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
-                                  method: "PATCH",
-                                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                  body: JSON.stringify({ status: "تم_الصلح" }),
-                                });
-                                if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" as any }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "تم_الصلح" });
+                                  if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" as any }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}
                             >
                               تم الصلح
@@ -2901,12 +2909,14 @@ export default function CasesPage() {
                               variant="destructive"
                               data-testid="button-taradi-not-reconciled"
                               onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
-                                  method: "PATCH",
-                                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                  body: JSON.stringify({ status: "لم_يتم_صلح" }),
-                                });
-                                if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" as any }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "لم_يتم_صلح" });
+                                  if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" as any }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}
                             >
                               لم يتم صلح
@@ -2936,8 +2946,14 @@ export default function CasesPage() {
                             <div className="flex items-center gap-2 mt-1">
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في الموارد البشرية (اختياري)" className="h-8 text-sm" data-testid="input-mohr-registration" autoFocus />
                               <Button size="sm" data-testid="button-confirm-mohr" onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput }) });
-                                if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد" as any, ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput });
+                                  if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد" as any, ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}>تأكيد</Button>
                               <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
                             </div>
@@ -2956,12 +2972,14 @@ export default function CasesPage() {
                             size="sm"
                             data-testid="button-direct-settlement"
                             onClick={async () => {
-                              const res = await fetch(`/api/cases/${selectedCase.id}/direct-settlement`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                body: JSON.stringify({}),
-                              });
-                              if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية" as any, amicableSettlementDirected: true as any }); }
+                              try {
+                                const res = await apiRequest("POST", `/api/cases/${selectedCase.id}/direct-settlement`, {});
+                                if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية" as any, amicableSettlementDirected: true as any }); }
+                              } catch (e) {
+                                // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                // would otherwise surface as an unhandled promise rejection in console.
+                                // Future: surface an error toast (beyond Batch 2B scope).
+                              }
                             }}
                           >
                             توجيه العميل لرفعها في التسوية الودية
@@ -2973,12 +2991,14 @@ export default function CasesPage() {
                             variant="destructive"
                             data-testid="button-settlement-ended"
                             onClick={async () => {
-                              const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, {
-                                method: "PATCH",
-                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                body: JSON.stringify({ status: "انتهت_التسوية" }),
-                              });
-                              if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" as any }); }
+                              try {
+                                const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "انتهت_التسوية" });
+                                if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" as any }); }
+                              } catch (e) {
+                                // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                // would otherwise surface as an unhandled promise rejection in console.
+                                // Future: surface an error toast (beyond Batch 2B scope).
+                              }
                             }}
                           >
                             انتهاء مرحلة التسوية الودية
@@ -3074,6 +3094,9 @@ export default function CasesPage() {
                           <Input value={courtCaseNumberInput} onChange={e => setCourtCaseNumberInput(e.target.value)} placeholder="رقم القضية في المحكمة" className="h-8 text-sm" autoFocus data-testid="input-court-registration-number" />
                           <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {
                             if (!courtCaseNumberInput.trim()) { toast({ title: "يرجى إدخال رقم القضية", variant: "destructive" }); return; }
+                            // TODO(Batch 2C): Migrate to apiRequest. Current site reads response.json()
+                            // on non-2xx to extract err.error and surface as toast — apiRequest's
+                            // throw format requires extracting the message from the thrown error.
                             try {
                               const response = await fetch(`/api/cases/${selectedCase.id}/court-register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courtCaseNumber: courtCaseNumberInput.trim() }) });
                               if (!response.ok) { const err = await response.json(); throw new Error(err.error || "حدث خطأ"); }
