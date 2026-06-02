@@ -3094,16 +3094,12 @@ export default function CasesPage() {
                           <Input value={courtCaseNumberInput} onChange={e => setCourtCaseNumberInput(e.target.value)} placeholder="رقم القضية في المحكمة" className="h-8 text-sm" autoFocus data-testid="input-court-registration-number" />
                           <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {
                             if (!courtCaseNumberInput.trim()) { toast({ title: "يرجى إدخال رقم القضية", variant: "destructive" }); return; }
-                            // TODO(Batch 2C): Migrate to apiRequest. Current site reads response.json()
-                            // on non-2xx to extract err.error and surface as toast — apiRequest's
-                            // throw format requires extracting the message from the thrown error.
                             try {
-                              const response = await fetch(`/api/cases/${selectedCase.id}/court-register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courtCaseNumber: courtCaseNumberInput.trim() }) });
-                              if (!response.ok) { const err = await response.json(); throw new Error(err.error || "حدث خطأ"); }
+                              await apiRequest("POST", `/api/cases/${selectedCase.id}/court-register`, { courtCaseNumber: courtCaseNumberInput.trim() });
                               await refreshCases();
                               toast({ title: "تم تقييد القضية في المحكمة بنجاح" });
                               setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput("");
-                            } catch (e: any) { toast({ title: e.message || "حدث خطأ", variant: "destructive" }); }
+                            } catch (e) { toast({ title: extractApiError(e), variant: "destructive" }); }
                           }}>تأكيد</Button>
                           <Button size="sm" variant="ghost" onClick={() => { setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput(""); }}>إلغاء</Button>
                         </div>

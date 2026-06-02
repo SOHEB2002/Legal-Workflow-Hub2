@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { FieldTask } from "@shared/schema";
 import { FieldTaskStatus } from "@shared/schema";
-import { apiRequest, getAuthHeaders } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { notifyFieldTaskAssigned } from "@/lib/notification-triggers";
 import { useAuth } from "./auth-context";
 
@@ -33,14 +33,9 @@ export function FieldTasksProvider({ children }: { children: React.ReactNode }) 
     const token = localStorage.getItem("lawfirm_token");
     if (!token) { setIsLoading(false); return; }
     try {
-      const res = await fetch("/api/field-tasks", {
-        credentials: "include",
-        headers: getAuthHeaders(),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setFieldTasks(data);
-      }
+      const res = await apiRequest("GET", "/api/field-tasks");
+      const data = await res.json();
+      setFieldTasks(data);
     } catch (err) {
       // fetch field tasks failed silently
     } finally {

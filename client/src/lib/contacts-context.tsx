@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { ContactLog, FollowUpStatus } from "@shared/schema";
-import { apiRequest, getAuthHeaders } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "./auth-context";
 
 interface ContactsContextType {
@@ -28,14 +28,9 @@ export function ContactsProvider({ children }: { children: ReactNode }) {
     const token = localStorage.getItem("lawfirm_token");
     if (!token) { setIsLoading(false); return; }
     try {
-      const res = await fetch("/api/contact-logs", {
-        credentials: "include",
-        headers: getAuthHeaders(),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setContacts(data);
-      }
+      const res = await apiRequest("GET", "/api/contact-logs");
+      const data = await res.json();
+      setContacts(data);
     } catch (error) {
       // fetch contacts failed silently
     } finally {

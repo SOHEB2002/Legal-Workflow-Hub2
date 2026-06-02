@@ -6,7 +6,7 @@ import type {
   CommitteeDecisionValue,
   NoteOutcomeValue,
 } from "@shared/schema";
-import { apiRequest, getAuthHeaders } from "./queryClient";
+import { apiRequest } from "./queryClient";
 import { useAuth } from "./auth-context";
 
 // Mirror of consultations-context but narrower — contracts skip the
@@ -57,11 +57,9 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
   const fetchContracts = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("/api/contracts", { headers: getAuthHeaders() });
-      if (response.ok) {
-        const data = await response.json();
-        setContracts(data);
-      }
+      const response = await apiRequest("GET", "/api/contracts");
+      const data = await response.json();
+      setContracts(data);
     } catch {
       // best-effort
     } finally {

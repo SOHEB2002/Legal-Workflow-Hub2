@@ -8,7 +8,7 @@ import type {
   ConsultationClosureReasonValue,
 } from "@shared/schema";
 import { ConsultationStage } from "@shared/schema";
-import { apiRequest, getAuthHeaders } from "./queryClient";
+import { apiRequest } from "./queryClient";
 import { notifyConsultationAdded, notifyConsultationAssigned } from "./notification-triggers";
 import { useAuth } from "./auth-context";
 
@@ -58,11 +58,9 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
   const fetchConsultations = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("/api/consultations", { headers: getAuthHeaders() });
-      if (response.ok) {
-        const data = await response.json();
-        setConsultations(data);
-      }
+      const response = await apiRequest("GET", "/api/consultations");
+      const data = await response.json();
+      setConsultations(data);
     } catch (error) {
       // fetch consultations failed silently
     } finally {
