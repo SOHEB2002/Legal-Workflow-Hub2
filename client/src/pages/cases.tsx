@@ -114,6 +114,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
+import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
@@ -440,132 +441,11 @@ export default function CasesPage() {
     return c.currentStage;
   };
 
-  const openPauseCaseDialog = (c: LawCase) => {
-    setPauseCaseTarget(c);
-    setPauseCaseReason("");
-    setShowPauseCaseDialog(true);
-  };
-  const closePauseCaseDialog = () => {
-    setShowPauseCaseDialog(false);
-    setPauseCaseTarget(null);
-    setPauseCaseReason("");
-  };
-  const openUnpauseCaseDialog = (c: LawCase) => {
-    setUnpauseCaseTarget(c);
-    setUnpauseCaseNotes("");
-    setShowUnpauseCaseDialog(true);
-  };
-  const closeUnpauseCaseDialog = () => {
-    setShowUnpauseCaseDialog(false);
-    setUnpauseCaseTarget(null);
-    setUnpauseCaseNotes("");
-  };
-
-  const handlePauseCase = async () => {
-    if (!pauseCaseTarget) return;
-    const reason = pauseCaseReason.trim();
-    if (!reason) {
-      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
-      return;
-    }
-    setPauseActionInProgress(true);
-    try {
-      await apiRequest("POST", `/api/cases/${pauseCaseTarget.id}/pause`, { reason });
-      await refreshCases();
-      toast({ title: "تم تعليق القضية" });
-      closePauseCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
-
-  const handleUnpauseCase = async () => {
-    if (!unpauseCaseTarget) return;
-    setPauseActionInProgress(true);
-    try {
-      const body: Record<string, string> = {};
-      const notes = unpauseCaseNotes.trim();
-      if (notes) body.notes = notes;
-      await apiRequest("POST", `/api/cases/${unpauseCaseTarget.id}/unpause`, body);
-      await refreshCases();
-      toast({ title: "تم إلغاء تعليق القضية" });
-      closeUnpauseCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
-
-  // Phase-8 — await-completion / resume-from-completion dialog state.
-  // Same permission gate as pause (canPauseCase).
-  const [showAwaitCaseDialog, setShowAwaitCaseDialog] = useState(false);
-  const [awaitCaseTarget, setAwaitCaseTarget] = useState<LawCase | null>(null);
-  const [awaitCaseReason, setAwaitCaseReason] = useState("");
-  const [showResumeCaseDialog, setShowResumeCaseDialog] = useState(false);
-  const [resumeCaseTarget, setResumeCaseTarget] = useState<LawCase | null>(null);
-  const [resumeCaseNotes, setResumeCaseNotes] = useState("");
-
-  const openAwaitCaseDialog = (c: LawCase) => {
-    setAwaitCaseTarget(c);
-    setAwaitCaseReason("");
-    setShowAwaitCaseDialog(true);
-  };
-  const closeAwaitCaseDialog = () => {
-    setShowAwaitCaseDialog(false);
-    setAwaitCaseTarget(null);
-    setAwaitCaseReason("");
-  };
-  const openResumeCaseDialog = (c: LawCase) => {
-    setResumeCaseTarget(c);
-    setResumeCaseNotes("");
-    setShowResumeCaseDialog(true);
-  };
-  const closeResumeCaseDialog = () => {
-    setShowResumeCaseDialog(false);
-    setResumeCaseTarget(null);
-    setResumeCaseNotes("");
-  };
-
-  const handleAwaitCase = async () => {
-    if (!awaitCaseTarget) return;
-    const reason = awaitCaseReason.trim();
-    if (!reason) {
-      toast({ title: "أدخل السبب", variant: "destructive" });
-      return;
-    }
-    setPauseActionInProgress(true);
-    try {
-      await apiRequest("POST", `/api/cases/${awaitCaseTarget.id}/await-completion`, { reason });
-      await refreshCases();
-      toast({ title: "تم الانتقال إلى مرحلة الاستكمال" });
-      closeAwaitCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
-
-  const handleResumeCase = async () => {
-    if (!resumeCaseTarget) return;
-    setPauseActionInProgress(true);
-    try {
-      const body: Record<string, string> = {};
-      const notes = resumeCaseNotes.trim();
-      if (notes) body.notes = notes;
-      await apiRequest("POST", `/api/cases/${resumeCaseTarget.id}/resume-from-completion`, body);
-      await refreshCases();
-      toast({ title: "تم العودة من الاستكمال" });
-      closeResumeCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
+  // Phase-8 — pause / unpause / await-completion / resume-from-completion.
+  // The four mutually-exclusive lifecycle flows live in one hook +
+  // dialog; see case-lifecycle-dialog.tsx. Permission gates stay below
+  // at the row level (they decide whether each trigger button renders).
+  const lifecycle = useCaseLifecycleActions({ refreshCases, toast });
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -612,15 +492,6 @@ export default function CasesPage() {
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  // Phase-8 — pause / unpause dialog state. Mirrors the consultations
-  // page; same pattern (required reason / optional notes).
-  const [showPauseCaseDialog, setShowPauseCaseDialog] = useState(false);
-  const [pauseCaseTarget, setPauseCaseTarget] = useState<LawCase | null>(null);
-  const [pauseCaseReason, setPauseCaseReason] = useState("");
-  const [showUnpauseCaseDialog, setShowUnpauseCaseDialog] = useState(false);
-  const [unpauseCaseTarget, setUnpauseCaseTarget] = useState<LawCase | null>(null);
-  const [unpauseCaseNotes, setUnpauseCaseNotes] = useState("");
-  const [pauseActionInProgress, setPauseActionInProgress] = useState(false);
   const selectedCase = selectedCaseId ? getCaseById(selectedCaseId) || null : null;
   // Phase-8 — surface the await reason / who / when in the awaiting
   // banner. The data lives only in case_activity_log (not on the case
@@ -1673,7 +1544,7 @@ export default function CasesPage() {
                                   <DropdownMenuItem
                                     data-testid={`button-resume-case-${c.id}`}
                                     className="text-green-600 focus:text-green-700"
-                                    onClick={() => openResumeCaseDialog(c)}
+                                    onClick={() => lifecycle.openResume(c)}
                                   >
                                     <CheckCircle className="w-4 h-4 ml-2" />
                                     تم الاستكمال
@@ -1683,7 +1554,7 @@ export default function CasesPage() {
                                   <DropdownMenuItem
                                     data-testid={`button-await-case-${c.id}`}
                                     className="text-amber-600 focus:text-amber-700"
-                                    onClick={() => openAwaitCaseDialog(c)}
+                                    onClick={() => lifecycle.openAwait(c)}
                                   >
                                     <AlertTriangle className="w-4 h-4 ml-2" />
                                     بانتظار استكمال البيانات
@@ -1693,7 +1564,7 @@ export default function CasesPage() {
                                 {canUnpause && (
                                   <DropdownMenuItem
                                     data-testid={`button-unpause-case-${c.id}`}
-                                    onClick={() => openUnpauseCaseDialog(c)}
+                                    onClick={() => lifecycle.openUnpause(c)}
                                   >
                                     <Play className="w-4 h-4 ml-2" />
                                     إلغاء التعليق
@@ -1703,7 +1574,7 @@ export default function CasesPage() {
                                   <DropdownMenuItem
                                     data-testid={`button-pause-case-${c.id}`}
                                     className="text-amber-600 focus:text-amber-700"
-                                    onClick={() => openPauseCaseDialog(c)}
+                                    onClick={() => lifecycle.openPause(c)}
                                   >
                                     <Pause className="w-4 h-4 ml-2" />
                                     تعليق القضية
@@ -4583,159 +4454,9 @@ export default function CasesPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Phase-8 — await-completion case dialog. Reason required. */}
-      <AlertDialog open={showAwaitCaseDialog} onOpenChange={(open) => { if (!open) closeAwaitCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
-              بانتظار استكمال البيانات
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              ستُحفظ المرحلة الحالية وتُنقل القضية مؤقتاً إلى مرحلة "استكمال المرفقات والبيانات".
-              عند اكتمال البيانات استخدم زر "تم الاستكمال" للعودة إلى المرحلة المحفوظة.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>السبب <span className="text-red-500">*</span></Label>
-            <Textarea
-              data-testid="input-case-await-reason"
-              value={awaitCaseReason}
-              onChange={(e) => setAwaitCaseReason(e.target.value)}
-              placeholder="ما هي البيانات أو المرفقات الناقصة؟"
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closeAwaitCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-await-case"
-              onClick={handleAwaitCase}
-              disabled={pauseActionInProgress || !awaitCaseReason.trim()}
-              className="bg-amber-600 hover:bg-amber-700"
-            >
-              <AlertTriangle className="w-4 h-4 ml-2" />
-              تأكيد
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Phase-8 — resume from completion case dialog. Notes optional.
-          Server validates that saved_stage is still in the case's
-          classification stage list and rejects if path changed. */}
-      <AlertDialog open={showResumeCaseDialog} onOpenChange={(open) => { if (!open) closeResumeCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <CheckCircle className="w-5 h-5 text-green-600" />
-              تم الاستكمال
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              ستعود القضية إلى المرحلة المحفوظة قبل دخول مرحلة الاستكمال
-              {resumeCaseTarget?.savedStage && (
-                <>: <strong>{getStageLabel(resumeCaseTarget.savedStage as any)}</strong></>
-              )}
-              .
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>ملاحظات (اختياري)</Label>
-            <Textarea
-              data-testid="input-case-resume-notes"
-              value={resumeCaseNotes}
-              onChange={(e) => setResumeCaseNotes(e.target.value)}
-              placeholder="اكتب ملاحظات حول ما تم استكماله..."
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closeResumeCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-resume-case"
-              onClick={handleResumeCase}
-              disabled={pauseActionInProgress}
-            >
-              <CheckCircle className="w-4 h-4 ml-2" />
-              تأكيد العودة
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Phase-8 — pause case dialog */}
-      <AlertDialog open={showPauseCaseDialog} onOpenChange={(open) => { if (!open) closePauseCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Pause className="w-5 h-5 text-amber-600" />
-              تعليق القضية
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              سيتم إيقاف العمل على هذه القضية مؤقتاً مع الاحتفاظ بمرحلتها الحالية.
-              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
-            <Textarea
-              data-testid="input-case-pause-reason"
-              value={pauseCaseReason}
-              onChange={(e) => setPauseCaseReason(e.target.value)}
-              placeholder="اكتب سبب التعليق..."
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closePauseCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-pause-case"
-              onClick={handlePauseCase}
-              disabled={pauseActionInProgress || !pauseCaseReason.trim()}
-              className="bg-amber-600 hover:bg-amber-700"
-            >
-              <Pause className="w-4 h-4 ml-2" />
-              تأكيد التعليق
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Phase-8 — unpause case dialog */}
-      <AlertDialog open={showUnpauseCaseDialog} onOpenChange={(open) => { if (!open) closeUnpauseCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Play className="w-5 h-5" />
-              إلغاء تعليق القضية
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              ستعود القضية للعمل عند نفس مرحلتها قبل التعليق.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>ملاحظات (اختياري)</Label>
-            <Textarea
-              data-testid="input-case-unpause-notes"
-              value={unpauseCaseNotes}
-              onChange={(e) => setUnpauseCaseNotes(e.target.value)}
-              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closeUnpauseCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-unpause-case"
-              onClick={handleUnpauseCase}
-              disabled={pauseActionInProgress}
-            >
-              <Play className="w-4 h-4 ml-2" />
-              تأكيد إلغاء التعليق
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Phase-8 — pause / unpause / await-completion / resume-from-completion.
+          One dialog renders whichever flow is active; see useCaseLifecycleActions. */}
+      <CaseLifecycleDialog {...lifecycle.dialogProps} />
     </div>
   );
 }
