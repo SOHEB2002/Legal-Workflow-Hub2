@@ -50,11 +50,6 @@ const ConsultationsContext = createContext<ConsultationsContextType | undefined>
 
 const generateConsultationNumber = () => `S-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
-
 export function ConsultationsProvider({ children }: { children: React.ReactNode }) {
   const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -63,11 +58,9 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
   const fetchConsultations = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("/api/consultations", { headers: getAuthHeaders() });
-      if (response.ok) {
-        const data = await response.json();
-        setConsultations(data);
-      }
+      const response = await apiRequest("GET", "/api/consultations");
+      const data = await response.json();
+      setConsultations(data);
     } catch (error) {
       // fetch consultations failed silently
     } finally {

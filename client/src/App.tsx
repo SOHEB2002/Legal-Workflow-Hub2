@@ -28,7 +28,6 @@ import { FavoritesDropdown, RecentVisitsDropdown } from "@/components/favorites-
 import { KeyboardShortcutsProvider } from "@/components/keyboard-shortcuts";
 import { OnboardingProvider } from "@/components/onboarding-tour";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { WorkflowProvider } from "@/lib/workflow-context";
 import { UsersProvider } from "@/lib/users-context";
 import { MemosProvider } from "@/lib/memos-context";
 
@@ -195,7 +194,6 @@ function App() {
                           <StandardsProvider>
                             <NotificationsProvider>
                             <UsersProvider>
-                            <WorkflowProvider>
                             <FavoritesProvider>
                             <TooltipProvider>
                               <KeyboardShortcutsProvider>
@@ -206,7 +204,6 @@ function App() {
                               <Toaster />
                             </TooltipProvider>
                             </FavoritesProvider>
-                            </WorkflowProvider>
                             </UsersProvider>
                             </NotificationsProvider>
                           </StandardsProvider>

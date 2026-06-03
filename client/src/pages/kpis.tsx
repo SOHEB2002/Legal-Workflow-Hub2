@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { startOfMonth, endOfMonth, isWithinInterval, parseISO, subMonths, startOfYear, endOfYear } from "date-fns";
 import { formatMonthYearArabic } from "@/lib/date-utils";
 import { 
@@ -153,19 +154,7 @@ export default function KPIsPage() {
       const params = new URLSearchParams();
       if (selectedPeriod !== "all_time") params.set("period", selectedPeriod === "this_month" ? "this_month" : selectedPeriod === "last_month" ? "last_month" : selectedPeriod === "this_year" ? "this_year" : "all");
       if (selectedDepartment && selectedDepartment !== "all") params.set("departmentId", selectedDepartment);
-      const headers: Record<string, string> = {};
-      const token = localStorage.getItem("lawfirm_token");
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      }
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      if (csrfToken) {
-        headers["X-CSRF-Token"] = csrfToken;
-      }
-      const res = await fetch(`/api/stats/lawyer-performance?${params}`, {
-        headers,
-      });
-      if (!res.ok) throw new Error("Failed to fetch");
+      const res = await apiRequest("GET", `/api/stats/lawyer-performance?${params}`);
       return res.json();
     }
   });

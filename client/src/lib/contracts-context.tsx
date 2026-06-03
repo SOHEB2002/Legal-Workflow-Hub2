@@ -49,11 +49,6 @@ interface ContractsContextType {
 
 const ContractsContext = createContext<ContractsContextType | undefined>(undefined);
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
-
 export function ContractsProvider({ children }: { children: React.ReactNode }) {
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -62,11 +57,9 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
   const fetchContracts = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("/api/contracts", { headers: getAuthHeaders() });
-      if (response.ok) {
-        const data = await response.json();
-        setContracts(data);
-      }
+      const response = await apiRequest("GET", "/api/contracts");
+      const data = await response.json();
+      setContracts(data);
     } catch {
       // best-effort
     } finally {

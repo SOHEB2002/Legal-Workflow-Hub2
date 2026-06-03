@@ -2,11 +2,6 @@ import { apiRequest } from "@/lib/queryClient";
 import { NotificationType, NotificationPriority, NotificationStatus } from "@shared/schema";
 import type { NotificationTypeValue, NotificationPriorityValue, User } from "@shared/schema";
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
-
 function getCurrentUser(): { id: string; name: string; role: string } | null {
   const stored = localStorage.getItem("lawfirm_user");
   if (!stored) return null;
@@ -29,12 +24,10 @@ async function getUsers(): Promise<User[]> {
     return cachedUsers;
   }
   try {
-    const res = await fetch("/api/users", { headers: getAuthHeaders() });
-    if (res.ok) {
-      cachedUsers = await res.json();
-      cacheTimestamp = now;
-      return cachedUsers!;
-    }
+    const res = await apiRequest("GET", "/api/users");
+    cachedUsers = await res.json();
+    cacheTimestamp = now;
+    return cachedUsers!;
   } catch (err) {
     console.error("Failed to fetch users for notifications:", err);
   }

@@ -40,6 +40,8 @@ import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pen
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
+import { apiRequest } from "@/lib/queryClient";
+import { extractApiError } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import type { User as UserType, UserRoleType, UserStatusValue } from "@shared/schema";
@@ -297,16 +299,9 @@ export default function UsersPage() {
     setShowDeleteDialog(true);
     setLoadingDeps(true);
     try {
-      const token = localStorage.getItem("lawfirm_token");
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-      const res = await fetch(`/api/users/${u.id}/dependencies`, { headers });
-      if (res.ok) {
-        const data = await res.json();
-        setDeleteDeps(data);
-      }
+      const res = await apiRequest("GET", `/api/users/${u.id}/dependencies`);
+      const data = await res.json();
+      setDeleteDeps(data);
     } catch {
       setDeleteDeps({ cases: [], consultations: [], fieldTasks: [], departments: [], hasDependencies: false });
     } finally {
@@ -332,25 +327,11 @@ export default function UsersPage() {
 
     setDeletingUser(true);
     try {
-      const token = localStorage.getItem("lawfirm_token");
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-      const res = await fetch(`/api/users/${userToAction.id}`, {
-        method: "DELETE",
-        headers,
-        body: JSON.stringify({ reassignments: deleteReassignments }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        toast({ title: `تم حذف المستخدم "${userToAction.name}" بنجاح` });
-        await refetchUsers();
-      } else {
-        toast({ variant: "destructive", title: "خطأ", description: data.error || "فشل حذف المستخدم" });
-      }
-    } catch {
-      toast({ variant: "destructive", title: "خطأ", description: "حدث خطأ في حذف المستخدم" });
+      await apiRequest("DELETE", `/api/users/${userToAction.id}`, { reassignments: deleteReassignments });
+      toast({ title: `تم حذف المستخدم "${userToAction.name}" بنجاح` });
+      await refetchUsers();
+    } catch (e) {
+      toast({ variant: "destructive", title: "خطأ", description: extractApiError(e) });
     } finally {
       setDeletingUser(false);
       setShowDeleteDialog(false);

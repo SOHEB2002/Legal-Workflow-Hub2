@@ -3,11 +3,6 @@ import { ContactLog, FollowUpStatus } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "./auth-context";
 
-function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem("lawfirm_token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
-}
-
 interface ContactsContextType {
   contacts: ContactLog[];
   isLoading: boolean;
@@ -33,14 +28,9 @@ export function ContactsProvider({ children }: { children: ReactNode }) {
     const token = localStorage.getItem("lawfirm_token");
     if (!token) { setIsLoading(false); return; }
     try {
-      const res = await fetch("/api/contact-logs", {
-        credentials: "include",
-        headers: getAuthHeaders(),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setContacts(data);
-      }
+      const res = await apiRequest("GET", "/api/contact-logs");
+      const data = await res.json();
+      setContacts(data);
     } catch (error) {
       // fetch contacts failed silently
     } finally {

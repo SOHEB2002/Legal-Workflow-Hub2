@@ -1047,15 +1047,6 @@ export class DatabaseStorage implements IStorage {
       const caseNumber = userSupplied ? data.courtCaseNumber! : generateCaseNumber();
       const newCase = { ...baseCase, caseNumber };
       try {
-        if (attempt === 0) {
-          console.log("[clientRole][storage:createCase] inserting case with clientRole:", {
-            incoming: (data as any).clientRole,
-            incomingType: typeof (data as any).clientRole,
-            incomingLength: typeof (data as any).clientRole === "string" ? (data as any).clientRole.length : null,
-            finalValue: newCase.clientRole,
-            caseClassification: newCase.caseClassification,
-          });
-        }
         await db.insert(lawCases).values(newCase);
         return mapDbCase(newCase);
       } catch (err) {
@@ -4484,8 +4475,10 @@ export class DatabaseStorage implements IStorage {
             updatedAt: new Date(),
           });
           console.log(`Added missing user: ${user.username}`);
-        } catch (e) {
-          console.log(`User ${user.username} already exists, skipping`);
+        } catch {
+          // Race fallback — outer `if (!existingUsernames.includes(...))`
+          // already guards against duplicates; swallow if another worker
+          // inserted the same row in between.
         }
       }
     }

@@ -77,6 +77,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useMemos } from "@/lib/memos-context";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { extractApiError } from "@/lib/utils";
 import { useCases } from "@/lib/cases-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -620,19 +621,6 @@ export default function MemosPage() {
 
   const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
 
-  const extractApiError = (err: unknown): string => {
-    const msg = (err as any)?.message || "";
-    // format from throwIfResNotOk: "400: {"error":"..."}"
-    // No /s flag: target lib doesn't support it; the body is single-line.
-    const match = /^(\d+):\s*([\s\S]+)$/.exec(msg);
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[2]);
-        if (parsed?.error) return parsed.error;
-      } catch {}
-    }
-    return msg || "حدث خطأ غير متوقع";
-  };
 
   const openPauseMemoDialog = (memo: Memo) => {
     setPauseMemoTarget(memo);
@@ -996,12 +984,6 @@ export default function MemosPage() {
     if (!c) return { number: caseId, plaintiff: "", client: "", opponent: "", classification: "", clientRoleLabel: "-" };
     const classification = c.caseClassification || "";
     const clientRoleLabel = getClientRoleLabel(classification, (c as any).clientRole);
-    console.log("[clientRole][memos:list]", {
-      caseNumber: c.caseNumber,
-      caseClassification: classification,
-      rawClientRole: (c as any).clientRole,
-      rendered: clientRoleLabel,
-    });
     return {
       number: c.caseNumber,
       plaintiff: (c as any).plaintiffName || "",

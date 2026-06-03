@@ -46,6 +46,7 @@ import { useAuth } from "@/lib/auth-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest } from "@/lib/queryClient";
+import { extractApiError } from "@/lib/utils";
 
 // FE mirror of ALLOWED_CONTRACT_TRANSITIONS for the linear-forward
 // path. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES exits are handled
@@ -191,18 +192,6 @@ function getStageBadgeColor(stage: ContractStageValue): string {
     default:
       return "bg-muted text-muted-foreground";
   }
-}
-
-function extractApiError(err: unknown): string {
-  const msg = (err as any)?.message || "";
-  const match = msg.match(/^\d+: (.+)$/);
-  if (match) {
-    try {
-      const parsed = JSON.parse(match[1]);
-      if (parsed?.error) return parsed.error;
-    } catch {}
-  }
-  return msg || "حدث خطأ غير متوقع";
 }
 
 function formatActivityTime(iso: string): string {

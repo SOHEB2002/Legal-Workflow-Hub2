@@ -197,8 +197,8 @@ export default function HearingsPage() {
     caseId: "",
     hearingDate: "",
     hearingTime: "",
-    hearingType: HearingType.COURT,
-    courtName: "" as CourtTypeValue,
+    hearingType: HearingType.COURT as HearingTypeValue,
+    courtName: "" as CourtTypeValue | "",
     courtRoom: "",
     notes: "",
     responseRequired: false,
@@ -639,12 +639,6 @@ export default function HearingsPage() {
     const caseData = getCaseById(caseId);
     if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "", clientRole: "-" };
     const clientRole = getClientRoleLabel(caseData.caseClassification, (caseData as any).clientRole);
-    console.log("[clientRole][hearings:list]", {
-      caseNumber: caseData.caseNumber,
-      caseClassification: caseData.caseClassification,
-      rawClientRole: (caseData as any).clientRole,
-      rendered: clientRole,
-    });
     const clientName = getClientName(caseData.clientId);
     return {
       number: caseData.caseNumber,
@@ -828,7 +822,7 @@ export default function HearingsPage() {
                 <Select
                   value={formData.hearingType}
                   onValueChange={(value) =>
-                    setFormData({ ...formData, hearingType: value })
+                    setFormData({ ...formData, hearingType: value as HearingTypeValue })
                   }
                 >
                   <SelectTrigger data-testid="select-hearing-type">

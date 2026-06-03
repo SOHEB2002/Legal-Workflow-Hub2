@@ -123,39 +123,16 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchCases = useCallback(async () => {
+    const token = localStorage.getItem("lawfirm_token");
+    if (!token) { setIsLoading(false); return; }
     try {
       setIsLoading(true);
-      const token = localStorage.getItem("lawfirm_token");
-      if (!token) { setIsLoading(false); return; }
-      const headers: Record<string, string> = { "Authorization": `Bearer ${token}` };
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-      const response = await fetch("/api/cases", { headers, credentials: "include" });
-      if (response.ok) {
-        const data = await response.json();
-        setCases(data.map(migrateCase));
-      } else if (response.status === 401) {
-        try {
-          const refreshRes = await fetch("/api/auth/refresh", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-          });
-          if (refreshRes.ok) {
-            const refreshData = await refreshRes.json();
-            if (refreshData.token) {
-              localStorage.setItem("lawfirm_token", refreshData.token);
-              if (refreshData.csrfToken) localStorage.setItem("lawfirm_csrf_token", refreshData.csrfToken);
-              const retryHeaders: Record<string, string> = { "Authorization": `Bearer ${refreshData.token}` };
-              if (refreshData.csrfToken) retryHeaders["X-CSRF-Token"] = refreshData.csrfToken;
-              const retryResponse = await fetch("/api/cases", { headers: retryHeaders, credentials: "include" });
-              if (retryResponse.ok) {
-                const data = await retryResponse.json();
-                setCases(data.map(migrateCase));
-              }
-            }
-          }
-        } catch (_) {}
-      }
+      // apiRequest carries the shared single-flight refresh + 401 retry from
+      // queryClient. The hand-rolled inline retry that used to live here raced
+      // the scheduled refresh and could leave the list empty until reload.
+      const response = await apiRequest("GET", "/api/cases");
+      const data = await response.json();
+      setCases(data.map(migrateCase));
     } catch (error) {
       console.error("Failed to fetch cases:", error);
     } finally {
@@ -237,19 +214,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       startingStage: (data as any).startingStage || undefined,
     };
     
-    console.log("[BUG2][cases-context] addCase request body:", {
-      departmentId: caseData.departmentId,
-      departmentIdType: typeof caseData.departmentId,
-      caseType: caseData.caseType,
-      caseClassification: caseData.caseClassification,
-      departmentOther: caseData.departmentOther,
-    });
-    console.log("[clientRole][cases-context] addCase clientRole:", {
-      incoming: (data as any).clientRole,
-      finalSentToServer: caseData.clientRole,
-      type: typeof caseData.clientRole,
-      caseClassification: caseData.caseClassification,
-    });
     const response = await apiRequest("POST", "/api/cases", caseData);
     const newCase = await response.json();
     setCases((prev) => [migrateCase(newCase), ...prev]);
@@ -421,7 +385,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
           getDepartmentName(lawCase.departmentId || ""),
         );
         if (!validation.allowed) {
-          console.warn("انتقال مرفوض:", validation.reason);
           return false;
         }
       }
@@ -437,10 +400,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
       if (currentIndex >= stagesOrder.length - 1) {
-        console.warn("[moveToNextStage] already at last stage of its path", {
-          caseId: id,
-          currentStage: lawCase.currentStage,
-        });
         return false;
       }
       nextStage = stagesOrder[currentIndex + 1];
@@ -493,7 +452,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         getDepartmentName(lawCase.departmentId || ""),
       );
       if (!validation.allowed) {
-        console.warn("إرجاع مرفوض:", validation.reason);
         return false;
       }
     }
@@ -528,10 +486,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const skipDataCompletion = async (id: string, userId: string, userName: string, notes: string = ""): Promise<boolean> => {
     try {
       const response = await apiRequest("POST", `/api/cases/${id}/skip-data-completion`, { notes });
-      console.log("[skipDataCompletion] response status:", response.status);
       try {
         const updatedCase = await response.json();
-        console.log("[skipDataCompletion] response body currentStage:", updatedCase?.currentStage);
         if (updatedCase && updatedCase.id) {
           setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
         }

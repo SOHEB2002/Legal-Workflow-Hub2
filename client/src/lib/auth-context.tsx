@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { User, UserRoleType } from "@shared/schema";
-import { startApiCallCounter } from "@/lib/queryClient";
-import { 
+import {
   canManageAllCases, 
   canManageAllConsultations, 
   canManageDepartment,
@@ -15,7 +14,7 @@ import {
   canSendNotifications,
   canSendReminders
 } from "@shared/schema";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, refreshAuthToken, getAuthHeaders } from "@/lib/queryClient";
 
 interface AuthContextType {
   user: User | null;
@@ -52,19 +51,6 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const token = localStorage.getItem("lawfirm_token");
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-  if (csrfToken) {
-    headers["X-CSRF-Token"] = csrfToken;
-  }
-  return headers;
-}
 
 async function fetchUsersFromAPI(): Promise<User[]> {
   try {
@@ -132,38 +118,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshToken = useCallback(async (retryCount = 0) => {
-    try {
-      const res = await fetch("/api/auth/refresh", {
-        method: "POST",
-        headers: {
-          ...getAuthHeaders(),
-          "Content-Type": "application/json",
-        },
-      });
-      if (!res.ok) {
-        if (retryCount < 2) {
-          setTimeout(() => refreshToken(retryCount + 1), 30 * 1000);
-          return;
-        }
-        logout();
-        return;
-      }
-      const data = await res.json();
-      if (data.token) {
-        localStorage.setItem("lawfirm_token", data.token);
-        if (data.csrfToken) {
-          localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
-        }
-        scheduleTokenRefresh();
-      }
-    } catch (error) {
-      console.error("Token refresh failed:", error);
-      if (retryCount < 2) {
-        setTimeout(() => refreshToken(retryCount + 1), 30 * 1000);
-        return;
-      }
-      logout();
+    // Shared single-flight with apiRequest's 401-retry path — prevents the
+    // scheduled refresh and an in-flight 401-retry refresh from each
+    // calling /api/auth/refresh in parallel and racing the rotation token.
+    const result = await refreshAuthToken();
+    if (result.ok) {
+      scheduleTokenRefresh();
+      return;
     }
+    if (result.reason === "no-token") {
+      logout();
+      return;
+    }
+    if (retryCount < 2) {
+      setTimeout(() => refreshToken(retryCount + 1), 30 * 1000);
+      return;
+    }
+    logout();
   }, [logout]);
 
   const scheduleTokenRefresh = useCallback(() => {
@@ -233,7 +204,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const data = await res.json();
       if (data.user) {
-        startApiCallCounter(); // measure all /api/* calls in the next 30 seconds
         setUser(data.user);
         if (data.token) {
           localStorage.setItem("lawfirm_token", data.token);

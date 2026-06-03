@@ -111,8 +111,10 @@ import {
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { extractApiError } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
+import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
@@ -299,7 +301,7 @@ function getCasePriorityGroup(
   hasActiveMemo: boolean,
 ): 1 | 2 | 3 | 4 | 5 {
   // Closed / archived always go last regardless of stage or assignment.
-  if (c.status === CaseStatus.CLOSED || (c as any).isArchived) return 5;
+  if (c.status === CaseStatus.CLOSED || c.isArchived) return 5;
 
   const hasNoLawyer =
     !c.primaryLawyerId &&
@@ -386,19 +388,6 @@ export default function CasesPage() {
   };
   const { toast } = useToast();
 
-  const extractApiError = (err: unknown): string => {
-    const msg = (err as any)?.message || "";
-    // format from throwIfResNotOk: "400: {"error":"..."}"
-    const match = msg.match(/^\d+: (.+)$/s);
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[1]);
-        if (parsed?.error) return parsed.error;
-      } catch {}
-    }
-    return msg || "حدث خطأ غير متوقع";
-  };
-
   // Phase-8 — pause permission gate. Mirrors the server check on
   // /api/cases/:id/pause and /unpause: branch_manager / admin_support /
   // dept_head (own dept) / assigned lawyer (primary | responsible | in
@@ -448,136 +437,15 @@ export default function CasesPage() {
   // — virtualization is for filtering and the table badge only.
   const getCaseDisplayStage = (c: LawCase): CaseStageValue => {
     if (c.pausedAt) return CaseStage.DATA_COMPLETION;
-    if (c.status === CaseStatus.CLOSED || (c as any).isArchived) return CaseStage.CLOSED;
+    if (c.status === CaseStatus.CLOSED || c.isArchived) return CaseStage.CLOSED;
     return c.currentStage;
   };
 
-  const openPauseCaseDialog = (c: LawCase) => {
-    setPauseCaseTarget(c);
-    setPauseCaseReason("");
-    setShowPauseCaseDialog(true);
-  };
-  const closePauseCaseDialog = () => {
-    setShowPauseCaseDialog(false);
-    setPauseCaseTarget(null);
-    setPauseCaseReason("");
-  };
-  const openUnpauseCaseDialog = (c: LawCase) => {
-    setUnpauseCaseTarget(c);
-    setUnpauseCaseNotes("");
-    setShowUnpauseCaseDialog(true);
-  };
-  const closeUnpauseCaseDialog = () => {
-    setShowUnpauseCaseDialog(false);
-    setUnpauseCaseTarget(null);
-    setUnpauseCaseNotes("");
-  };
-
-  const handlePauseCase = async () => {
-    if (!pauseCaseTarget) return;
-    const reason = pauseCaseReason.trim();
-    if (!reason) {
-      toast({ title: "أدخل سبب التعليق", variant: "destructive" });
-      return;
-    }
-    setPauseActionInProgress(true);
-    try {
-      await apiRequest("POST", `/api/cases/${pauseCaseTarget.id}/pause`, { reason });
-      await refreshCases();
-      toast({ title: "تم تعليق القضية" });
-      closePauseCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل التعليق", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
-
-  const handleUnpauseCase = async () => {
-    if (!unpauseCaseTarget) return;
-    setPauseActionInProgress(true);
-    try {
-      const body: Record<string, string> = {};
-      const notes = unpauseCaseNotes.trim();
-      if (notes) body.notes = notes;
-      await apiRequest("POST", `/api/cases/${unpauseCaseTarget.id}/unpause`, body);
-      await refreshCases();
-      toast({ title: "تم إلغاء تعليق القضية" });
-      closeUnpauseCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل إلغاء التعليق", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
-
-  // Phase-8 — await-completion / resume-from-completion dialog state.
-  // Same permission gate as pause (canPauseCase).
-  const [showAwaitCaseDialog, setShowAwaitCaseDialog] = useState(false);
-  const [awaitCaseTarget, setAwaitCaseTarget] = useState<LawCase | null>(null);
-  const [awaitCaseReason, setAwaitCaseReason] = useState("");
-  const [showResumeCaseDialog, setShowResumeCaseDialog] = useState(false);
-  const [resumeCaseTarget, setResumeCaseTarget] = useState<LawCase | null>(null);
-  const [resumeCaseNotes, setResumeCaseNotes] = useState("");
-
-  const openAwaitCaseDialog = (c: LawCase) => {
-    setAwaitCaseTarget(c);
-    setAwaitCaseReason("");
-    setShowAwaitCaseDialog(true);
-  };
-  const closeAwaitCaseDialog = () => {
-    setShowAwaitCaseDialog(false);
-    setAwaitCaseTarget(null);
-    setAwaitCaseReason("");
-  };
-  const openResumeCaseDialog = (c: LawCase) => {
-    setResumeCaseTarget(c);
-    setResumeCaseNotes("");
-    setShowResumeCaseDialog(true);
-  };
-  const closeResumeCaseDialog = () => {
-    setShowResumeCaseDialog(false);
-    setResumeCaseTarget(null);
-    setResumeCaseNotes("");
-  };
-
-  const handleAwaitCase = async () => {
-    if (!awaitCaseTarget) return;
-    const reason = awaitCaseReason.trim();
-    if (!reason) {
-      toast({ title: "أدخل السبب", variant: "destructive" });
-      return;
-    }
-    setPauseActionInProgress(true);
-    try {
-      await apiRequest("POST", `/api/cases/${awaitCaseTarget.id}/await-completion`, { reason });
-      await refreshCases();
-      toast({ title: "تم الانتقال إلى مرحلة الاستكمال" });
-      closeAwaitCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
-
-  const handleResumeCase = async () => {
-    if (!resumeCaseTarget) return;
-    setPauseActionInProgress(true);
-    try {
-      const body: Record<string, string> = {};
-      const notes = resumeCaseNotes.trim();
-      if (notes) body.notes = notes;
-      await apiRequest("POST", `/api/cases/${resumeCaseTarget.id}/resume-from-completion`, body);
-      await refreshCases();
-      toast({ title: "تم العودة من الاستكمال" });
-      closeResumeCaseDialog();
-    } catch (err) {
-      toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setPauseActionInProgress(false);
-    }
-  };
+  // Phase-8 — pause / unpause / await-completion / resume-from-completion.
+  // The four mutually-exclusive lifecycle flows live in one hook +
+  // dialog; see case-lifecycle-dialog.tsx. Permission gates stay below
+  // at the row level (they decide whether each trigger button renders).
+  const lifecycle = useCaseLifecycleActions({ refreshCases, toast });
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -618,21 +486,12 @@ export default function CasesPage() {
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [classificationGroup, setClassificationGroup] = useState<"" | "study" | "registered">("");
+  const [classificationGroup, setClassificationGroup] = useState<"" | "new" | "existing">("");
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  // Phase-8 — pause / unpause dialog state. Mirrors the consultations
-  // page; same pattern (required reason / optional notes).
-  const [showPauseCaseDialog, setShowPauseCaseDialog] = useState(false);
-  const [pauseCaseTarget, setPauseCaseTarget] = useState<LawCase | null>(null);
-  const [pauseCaseReason, setPauseCaseReason] = useState("");
-  const [showUnpauseCaseDialog, setShowUnpauseCaseDialog] = useState(false);
-  const [unpauseCaseTarget, setUnpauseCaseTarget] = useState<LawCase | null>(null);
-  const [unpauseCaseNotes, setUnpauseCaseNotes] = useState("");
-  const [pauseActionInProgress, setPauseActionInProgress] = useState(false);
   const selectedCase = selectedCaseId ? getCaseById(selectedCaseId) || null : null;
   // Phase-8 — surface the await reason / who / when in the awaiting
   // banner. The data lives only in case_activity_log (not on the case
@@ -679,7 +538,7 @@ export default function CasesPage() {
   const fetchAttachments = async (caseId: string) => {
     setIsLoadingAttachments(true);
     try {
-      const res = await fetch(`/api/attachments/case/${caseId}`);
+      const res = await apiRequest("GET", `/api/attachments/case/${caseId}`);
       if (res.ok) {
         const data = await res.json();
         setCaseAttachments(data);
@@ -800,18 +659,18 @@ export default function CasesPage() {
       opponentPhone: caseItem.opponentPhone || "",
       opponentNotes: caseItem.opponentNotes || "",
       caseClassification: (caseItem.caseClassification || "") as CaseClassificationValue | "",
-      clientRole: ((caseItem as any).clientRole || "") as string,
+      clientRole: (caseItem.clientRole || "") as string,
       previousHearingsCount: caseItem.previousHearingsCount || 0,
       currentSituation: caseItem.currentSituation || "",
       responseDeadline: caseItem.responseDeadline || "",
       adminCaseSubType: caseItem.adminCaseSubType || "",
       prescriptionDate: caseItem.prescriptionDate || "",
-      grievanceRequired: !!(caseItem as any).grievanceRequired,
-      memoRequired: !!(caseItem as any).memoRequired,
-      isSettlementCase: !!(caseItem as any).isSettlementCase,
-      whatsappGroupLink: (caseItem as any).whatsappGroupLink || "",
-      googleDriveFolderId: (caseItem as any).googleDriveFolderId || "",
-      internalReviewerId: (caseItem as any).internalReviewerId || "",
+      grievanceRequired: !!caseItem.grievanceRequired,
+      memoRequired: !!caseItem.memoRequired,
+      isSettlementCase: !!caseItem.isSettlementCase,
+      whatsappGroupLink: caseItem.whatsappGroupLink || "",
+      googleDriveFolderId: caseItem.googleDriveFolderId || "",
+      internalReviewerId: caseItem.internalReviewerId || "",
       primaryLawyerId: caseItem.primaryLawyerId || "",
     });
     setShowEditDialog(true);
@@ -980,24 +839,9 @@ export default function CasesPage() {
         return;
       }
     }
-    console.log("[BUG2][cases.tsx] handleAddCase formData before submit:", {
-      departmentId: formData.departmentId,
-      departmentIdType: typeof formData.departmentId,
-      caseType: formData.caseType,
-      caseClassification: formData.caseClassification,
-      departmentOther: formData.departmentOther,
-    });
     const computedClientRole = formData.caseClassification === CaseClassification.IN_COURT
       ? (formData.clientRole || "مدعي")
       : null;
-    console.log("[clientRole][cases.tsx] handleAddCase clientRole:", {
-      formDataClientRole: formData.clientRole,
-      formDataClientRoleType: typeof formData.clientRole,
-      formDataClientRoleLength: (formData.clientRole || "").length,
-      caseClassification: formData.caseClassification,
-      computedSentToContext: computedClientRole,
-      isDefendantSelection: formData.clientRole === "مدعى_عليه",
-    });
     try {
       await addCase({
         clientId: formData.clientId || "",
@@ -1213,7 +1057,7 @@ export default function CasesPage() {
     setAssignData({
       lawyerId: caseItem.primaryLawyerId || "",
       departmentId: isDeptHead ? (String(user?.departmentId || "")) : (String(caseItem.departmentId || "")),
-      internalReviewerId: (caseItem as any).internalReviewerId || "",
+      internalReviewerId: caseItem.internalReviewerId || "",
     });
     setShowAssignDialog(true);
   };
@@ -1283,7 +1127,7 @@ export default function CasesPage() {
   // and would pay the cost on every list response, not just on open).
   const [sourceConsultation, setSourceConsultation] = useState<{ id: string; consultationNumber: string } | null>(null);
   useEffect(() => {
-    const sourceId = selectedCase ? ((selectedCase as any).convertedFromConsultationId as string | null) : null;
+    const sourceId = selectedCase ? (selectedCase.convertedFromConsultationId as string | null) : null;
     if (!sourceId) {
       setSourceConsultation(null);
       return;
@@ -1526,15 +1370,7 @@ export default function CasesPage() {
                   <TableCell className="text-center text-sm">{c.opponentName || "-"}</TableCell>
                   <TableCell className="text-center">
                     {(() => {
-                      const role = getClientRoleLabel(c.caseClassification, (c as any).clientRole);
-                      // DEBUG: surfaces the inputs the helper saw for each row.
-                      // Filter DevTools console by "[clientRole][cases:list]".
-                      console.log("[clientRole][cases:list]", {
-                        caseNumber: c.caseNumber,
-                        caseClassification: c.caseClassification,
-                        rawClientRole: (c as any).clientRole,
-                        rendered: role,
-                      });
+                      const role = getClientRoleLabel(c.caseClassification, c.clientRole);
                       if (role === "-") {
                         return <span className="text-xs text-muted-foreground">-</span>;
                       }
@@ -1591,8 +1427,8 @@ export default function CasesPage() {
                         {(c.currentStage === "قيد_التدقيق_في_تراضي" ||
                           c.currentStage === "قيد_التدقيق_في_ناجز" ||
                           c.currentStage === "قيد_التدقيق_في_معين") &&
-                          (c as any).platformReviewNotes &&
-                          String((c as any).platformReviewNotes).trim() && (
+                          c.platformReviewNotes &&
+                          String(c.platformReviewNotes).trim() && (
                             <span
                               className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 border border-amber-400"
                               title="يوجد ملاحظات من المنصة"
@@ -1633,8 +1469,8 @@ export default function CasesPage() {
                   </TableCell>
                   <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
                   <TableCell className="text-center text-sm">
-                    {(c as any).internalReviewerId
-                      ? (users.find(u => u.id === (c as any).internalReviewerId)?.name || "—")
+                    {c.internalReviewerId
+                      ? (users.find(u => u.id === c.internalReviewerId)?.name || "—")
                       : "—"}
                   </TableCell>
                   <TableCell className="text-center text-sm">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
@@ -1649,16 +1485,16 @@ export default function CasesPage() {
                         allowed to perform. */}
                     {(() => {
                       const canEdit = user?.role === "branch_manager" || user?.role === "admin_support";
-                      const canReassign = user?.role === "department_head" && c.currentStage !== "مقفلة" && !(c as any).isArchived;
+                      const canReassign = user?.role === "department_head" && c.currentStage !== "مقفلة" && !c.isArchived;
                       const canResumeAwait = !isCasePaused(c) && c.awaitingCompletion && canPauseCase(c);
                       const canMarkAwait = !isCasePaused(c)
                         && !c.awaitingCompletion
                         && c.status !== "مغلق"
-                        && !(c as any).isArchived
+                        && !c.isArchived
                         && c.currentStage !== "استكمال_البيانات"
                         && canPauseCase(c);
                       const canUnpause = isCasePaused(c) && canPauseCase(c);
-                      const canPause = !isCasePaused(c) && c.status !== "مغلق" && !(c as any).isArchived && canPauseCase(c);
+                      const canPause = !isCasePaused(c) && c.status !== "مغلق" && !c.isArchived && canPauseCase(c);
                       const canEarlyClose = canEarlyCloseCase(c);
                       const canDelete = user?.role === "branch_manager";
                       const hasAnyAction = canEdit || canReassign || canResumeAwait || canMarkAwait
@@ -1708,7 +1544,7 @@ export default function CasesPage() {
                                   <DropdownMenuItem
                                     data-testid={`button-resume-case-${c.id}`}
                                     className="text-green-600 focus:text-green-700"
-                                    onClick={() => openResumeCaseDialog(c)}
+                                    onClick={() => lifecycle.openResume(c)}
                                   >
                                     <CheckCircle className="w-4 h-4 ml-2" />
                                     تم الاستكمال
@@ -1718,7 +1554,7 @@ export default function CasesPage() {
                                   <DropdownMenuItem
                                     data-testid={`button-await-case-${c.id}`}
                                     className="text-amber-600 focus:text-amber-700"
-                                    onClick={() => openAwaitCaseDialog(c)}
+                                    onClick={() => lifecycle.openAwait(c)}
                                   >
                                     <AlertTriangle className="w-4 h-4 ml-2" />
                                     بانتظار استكمال البيانات
@@ -1728,7 +1564,7 @@ export default function CasesPage() {
                                 {canUnpause && (
                                   <DropdownMenuItem
                                     data-testid={`button-unpause-case-${c.id}`}
-                                    onClick={() => openUnpauseCaseDialog(c)}
+                                    onClick={() => lifecycle.openUnpause(c)}
                                   >
                                     <Play className="w-4 h-4 ml-2" />
                                     إلغاء التعليق
@@ -1738,7 +1574,7 @@ export default function CasesPage() {
                                   <DropdownMenuItem
                                     data-testid={`button-pause-case-${c.id}`}
                                     className="text-amber-600 focus:text-amber-700"
-                                    onClick={() => openPauseCaseDialog(c)}
+                                    onClick={() => lifecycle.openPause(c)}
                                   >
                                     <Pause className="w-4 h-4 ml-2" />
                                     تعليق القضية
@@ -2376,8 +2212,8 @@ export default function CasesPage() {
                           : "ملاحظات منصة معين"}
                       </h4>
                       {(() => {
-                        const notes = (selectedCase as any).platformReviewNotes;
-                        const resubmitted = !!(selectedCase as any).platformReviewResubmitted;
+                        const notes = selectedCase.platformReviewNotes;
+                        const resubmitted = !!selectedCase.platformReviewResubmitted;
                         if (notes && String(notes).trim()) {
                           return (
                             <>
@@ -2411,9 +2247,9 @@ export default function CasesPage() {
                   currentStage={selectedCase.currentStage}
                   userRole={user?.role || "employee"}
                   caseClassification={selectedCase.caseClassification as CaseClassificationValue}
-                  clientRole={(selectedCase as any).clientRole || undefined}
-                  memoRequired={!!(selectedCase as any).memoRequired}
-                  isSettlementCase={!!(selectedCase as any).isSettlementCase}
+                  clientRole={selectedCase.clientRole || undefined}
+                  memoRequired={!!selectedCase.memoRequired}
+                  isSettlementCase={!!selectedCase.isSettlementCase}
                   // Stage selection routes on the case's DEPARTMENT (a stable
                   // FK to the departments table), not on caseType. caseType
                   // is free-text user input that often holds a sub-type label
@@ -2430,7 +2266,7 @@ export default function CasesPage() {
                     || isCasePaused(selectedCase)
                   }
                   currentUserId={user?.id}
-                  caseInternalReviewerId={(selectedCase as any).internalReviewerId || null}
+                  caseInternalReviewerId={selectedCase.internalReviewerId || null}
                   isAssignedLawyer={
                     !!user && (
                       selectedCase.primaryLawyerId === user.id ||
@@ -2511,8 +2347,8 @@ export default function CasesPage() {
                     }
                   }}
                   hasPlatformNotes={
-                    !!(selectedCase as any).platformReviewNotes &&
-                    String((selectedCase as any).platformReviewNotes).trim().length > 0
+                    !!selectedCase.platformReviewNotes &&
+                    String(selectedCase.platformReviewNotes).trim().length > 0
                   }
                   onPlatformReviewAddNotes={async (platformNotes) => {
                     if (!user) return;
@@ -2716,28 +2552,28 @@ export default function CasesPage() {
                         </Badge>
                       </div>
                     )}
-                    {(selectedCase as any).taradiNumber && (
+                    {selectedCase.taradiNumber && (
                       <div>
                         <Label className="text-muted-foreground">رقم الطلب في تراضي</Label>
-                        <p className="font-medium"><LtrInline>{(selectedCase as any).taradiNumber}</LtrInline></p>
+                        <p className="font-medium"><LtrInline>{selectedCase.taradiNumber}</LtrInline></p>
                       </div>
                     )}
-                    {(selectedCase as any).najizNumber && (
+                    {selectedCase.najizNumber && (
                       <div>
                         <Label className="text-muted-foreground">رقم القيد في ناجز</Label>
-                        <p className="font-medium"><LtrInline>{(selectedCase as any).najizNumber}</LtrInline></p>
+                        <p className="font-medium"><LtrInline>{selectedCase.najizNumber}</LtrInline></p>
                       </div>
                     )}
-                    {(selectedCase as any).moeenNumber && (
+                    {selectedCase.moeenNumber && (
                       <div>
                         <Label className="text-muted-foreground">رقم القيد في معين</Label>
-                        <p className="font-medium"><LtrInline>{(selectedCase as any).moeenNumber}</LtrInline></p>
+                        <p className="font-medium"><LtrInline>{selectedCase.moeenNumber}</LtrInline></p>
                       </div>
                     )}
-                    {(selectedCase as any).mohrNumber && (
+                    {selectedCase.mohrNumber && (
                       <div>
                         <Label className="text-muted-foreground">رقم التسوية</Label>
-                        <p className="font-medium"><LtrInline>{(selectedCase as any).mohrNumber}</LtrInline></p>
+                        <p className="font-medium"><LtrInline>{selectedCase.mohrNumber}</LtrInline></p>
                       </div>
                     )}
                     {(selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
@@ -2747,8 +2583,8 @@ export default function CasesPage() {
                         <Label className="text-muted-foreground">حالة الطلب في المنصة</Label>
                         <p className="font-medium">
                           {(() => {
-                            const notes = (selectedCase as any).platformReviewNotes;
-                            const resubmitted = !!(selectedCase as any).platformReviewResubmitted;
+                            const notes = selectedCase.platformReviewNotes;
+                            const resubmitted = !!selectedCase.platformReviewResubmitted;
                             if (notes && String(notes).trim()) {
                               return <span className="text-amber-700">يوجد ملاحظات — بحاجة لاستكمال</span>;
                             }
@@ -2776,11 +2612,11 @@ export default function CasesPage() {
                     </div>
                   </div>
                   
-                  {selectedCase.currentStage === "مراجعة_داخلية" && (selectedCase as any).internalReviewerId && (
+                  {selectedCase.currentStage === "مراجعة_داخلية" && selectedCase.internalReviewerId && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-2">المراجع الداخلي</h4>
                       <p className="p-3 bg-muted rounded-md">
-                        {users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name || "غير معروف"}
+                        {users.find(u => u.id === selectedCase.internalReviewerId)?.name || "غير معروف"}
                       </p>
                     </div>
                   )}
@@ -2799,46 +2635,40 @@ export default function CasesPage() {
                       <div>
                         <Label className="text-muted-foreground">صفة العميل</Label>
                         <p className="font-medium">{(() => {
-                          const label = getClientRoleLabel(selectedCase.caseClassification, (selectedCase as any).clientRole);
-                          console.log("[clientRole][cases:details]", {
-                            caseNumber: selectedCase.caseNumber,
-                            caseClassification: selectedCase.caseClassification,
-                            rawClientRole: (selectedCase as any).clientRole,
-                            rendered: label,
-                          });
+                          const label = getClientRoleLabel(selectedCase.caseClassification, selectedCase.clientRole);
                           return label;
                         })()}</p>
                       </div>
                     </div>
                   </div>
 
-                  {selectedCase.currentStage === "مشطوبة" && (selectedCase as any).struckOffReopenDeadline && (
+                  {selectedCase.currentStage === "مشطوبة" && selectedCase.struckOffReopenDeadline && (
                     <div className="border-t pt-4">
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
                         <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
                         <div>
                           <span className="text-sm font-medium text-red-700 dark:text-red-400">القضية مشطوبة</span>
                           <p className="text-xs text-red-600 dark:text-red-400">
-                            الموعد النهائي لإعادة القيد: {(selectedCase as any).struckOffReopenDeadline}
+                            الموعد النهائي لإعادة القيد: {selectedCase.struckOffReopenDeadline}
                           </p>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {selectedCase.currentStage === "مقفلة" && (selectedCase as any).closureReason && (
+                  {selectedCase.currentStage === "مقفلة" && selectedCase.closureReason && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سبب الإغلاق</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                         <div>
                           <Label className="text-muted-foreground">السبب</Label>
-                          <p className="font-medium">{(selectedCase as any).closureReason === "أخرى" ? (selectedCase as any).closureReasonOther || "أخرى" : (selectedCase as any).closureReason?.replace(/_/g, " ")}</p>
+                          <p className="font-medium">{selectedCase.closureReason === "أخرى" ? selectedCase.closureReasonOther || "أخرى" : selectedCase.closureReason?.replace(/_/g, " ")}</p>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {(selectedCase as any).grievanceRequired && (
+                  {selectedCase.grievanceRequired && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">بيانات التظلم</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
@@ -2846,33 +2676,33 @@ export default function CasesPage() {
                           <Label className="text-muted-foreground">مطلوب تظلم</Label>
                           <p className="font-medium">نعم</p>
                         </div>
-                        {(selectedCase as any).grievanceDate && (
+                        {selectedCase.grievanceDate && (
                           <div>
                             <Label className="text-muted-foreground">تاريخ التظلم</Label>
-                            <p className="font-medium">{(selectedCase as any).grievanceDate}</p>
+                            <p className="font-medium">{selectedCase.grievanceDate}</p>
                           </div>
                         )}
-                        {(selectedCase as any).grievanceResult && (
+                        {selectedCase.grievanceResult && (
                           <div>
                             <Label className="text-muted-foreground">نتيجة التظلم</Label>
-                            <p className="font-medium">{(selectedCase as any).grievanceResult}</p>
+                            <p className="font-medium">{selectedCase.grievanceResult}</p>
                           </div>
                         )}
                       </div>
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "إداري" && (selectedCase as any).adminCaseSubType && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "إداري" && selectedCase.adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                         <div>
                           <Label className="text-muted-foreground">نوع القضية</Label>
-                          <p className="font-medium">{(selectedCase as any).adminCaseSubType === "تظلم" ? "تظلم" : "قضية"}</p>
+                          <p className="font-medium">{selectedCase.adminCaseSubType === "تظلم" ? "تظلم" : "قضية"}</p>
                         </div>
                         <div>
                           <Label className="text-muted-foreground">تاريخ التقادم</Label>
-                          <p className="font-medium">{(selectedCase as any).prescriptionDate ? <DualDateDisplay date={(selectedCase as any).prescriptionDate} compact /> : "-"}</p>
+                          <p className="font-medium">{selectedCase.prescriptionDate ? <DualDateDisplay date={selectedCase.prescriptionDate} compact /> : "-"}</p>
                         </div>
                       </div>
                     </div>
@@ -2883,22 +2713,28 @@ export default function CasesPage() {
                       <h4 className="font-semibold mb-3">سير عمل منصة تراضي</h4>
                       <div className="space-y-3">
                         <div className="flex items-center gap-3">
-                          <Badge variant={(selectedCase as any).taradiStatus === "مقيدة_في_تراضي" ? "default" : (selectedCase as any).taradiStatus === "تم_الصلح" ? "default" : (selectedCase as any).taradiStatus === "لم_يتم_صلح" ? "destructive" : "secondary"}>
-                            {(selectedCase as any).taradiStatus ? ({
+                          <Badge variant={selectedCase.taradiStatus === "مقيدة_في_تراضي" ? "default" : selectedCase.taradiStatus === "تم_الصلح" ? "default" : selectedCase.taradiStatus === "لم_يتم_صلح" ? "destructive" : "secondary"}>
+                            {selectedCase.taradiStatus ? ({
                               "مقيدة_في_تراضي": "مقيدة في تراضي",
                               "تم_الصلح": "تم الصلح",
                               "لم_يتم_صلح": "لم يتم صلح",
-                            } as any)[(selectedCase as any).taradiStatus] : "لم تقيد بعد"}
+                            } as any)[selectedCase.taradiStatus] : "لم تقيد بعد"}
                           </Badge>
-                          {(selectedCase as any).taradiNumber && <span className="text-sm text-muted-foreground">رقم: {(selectedCase as any).taradiNumber}</span>}
+                          {selectedCase.taradiNumber && <span className="text-sm text-muted-foreground">رقم: {selectedCase.taradiNumber}</span>}
                         </div>
-                        {!(selectedCase as any).taradiStatus && (
+                        {!selectedCase.taradiStatus && (
                           registrationDialogType === "taradi" ? (
                             <div className="flex items-center gap-2 mt-1">
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في تراضي (اختياري)" className="h-8 text-sm" data-testid="input-taradi-registration" autoFocus />
                               <Button size="sm" data-testid="button-confirm-taradi" onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_تراضي", taradiNumber: registrationNumberInput }) });
-                                if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { taradiStatus: "مقيدة_في_تراضي" as any, ...(registrationNumberInput ? { taradiNumber: registrationNumberInput } : {}) }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "مقيدة_في_تراضي", taradiNumber: registrationNumberInput });
+                                  if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { taradiStatus: "مقيدة_في_تراضي" as any, ...(registrationNumberInput ? { taradiNumber: registrationNumberInput } : {}) }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}>تأكيد</Button>
                               <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
                             </div>
@@ -2908,19 +2744,21 @@ export default function CasesPage() {
                             </Button>
                           )
                         )}
-                        {(selectedCase as any).taradiStatus === "مقيدة_في_تراضي" && (
+                        {selectedCase.taradiStatus === "مقيدة_في_تراضي" && (
                           <div className="flex gap-2">
                             <Button
                               size="sm"
                               variant="default"
                               data-testid="button-taradi-reconciled"
                               onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
-                                  method: "PATCH",
-                                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                  body: JSON.stringify({ status: "تم_الصلح" }),
-                                });
-                                if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" as any }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "تم_الصلح" });
+                                  if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" as any }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}
                             >
                               تم الصلح
@@ -2930,12 +2768,14 @@ export default function CasesPage() {
                               variant="destructive"
                               data-testid="button-taradi-not-reconciled"
                               onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/taradi`, {
-                                  method: "PATCH",
-                                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                  body: JSON.stringify({ status: "لم_يتم_صلح" }),
-                                });
-                                if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" as any }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "لم_يتم_صلح" });
+                                  if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" as any }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}
                             >
                               لم يتم صلح
@@ -2951,22 +2791,28 @@ export default function CasesPage() {
                       <h4 className="font-semibold mb-3">سير عمل وزارة الموارد البشرية</h4>
                       <div className="space-y-3">
                         <div className="flex items-center gap-3">
-                          <Badge variant={(selectedCase as any).mohrStatus === "انتهت_التسوية" ? "destructive" : (selectedCase as any).mohrStatus ? "default" : "secondary"}>
-                            {(selectedCase as any).mohrStatus ? ({
+                          <Badge variant={selectedCase.mohrStatus === "انتهت_التسوية" ? "destructive" : selectedCase.mohrStatus ? "default" : "secondary"}>
+                            {selectedCase.mohrStatus ? ({
                               "مقيدة_في_الموارد": "مقيدة في وزارة الموارد البشرية",
                               "توجيه_تسوية_ودية": "تم توجيه العميل للتسوية الودية",
                               "انتهت_التسوية": "انتهت التسوية - جاهزة للرفع",
-                            } as any)[(selectedCase as any).mohrStatus] : "لم تقيد بعد"}
+                            } as any)[selectedCase.mohrStatus] : "لم تقيد بعد"}
                           </Badge>
-                          {(selectedCase as any).mohrNumber && <span className="text-sm text-muted-foreground">رقم: {(selectedCase as any).mohrNumber}</span>}
+                          {selectedCase.mohrNumber && <span className="text-sm text-muted-foreground">رقم: {selectedCase.mohrNumber}</span>}
                         </div>
-                        {!(selectedCase as any).mohrStatus && (
+                        {!selectedCase.mohrStatus && (
                           registrationDialogType === "mohr" ? (
                             <div className="flex items-center gap-2 mt-1">
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في الموارد البشرية (اختياري)" className="h-8 text-sm" data-testid="input-mohr-registration" autoFocus />
                               <Button size="sm" data-testid="button-confirm-mohr" onClick={async () => {
-                                const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, { method: "PATCH", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" }, body: JSON.stringify({ status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput }) });
-                                if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد" as any, ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
+                                try {
+                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput });
+                                  if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد" as any, ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
+                                } catch (e) {
+                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                  // would otherwise surface as an unhandled promise rejection in console.
+                                  // Future: surface an error toast (beyond Batch 2B scope).
+                                }
                               }}>تأكيد</Button>
                               <Button size="sm" variant="ghost" onClick={() => { setRegistrationDialogType(""); setRegistrationNumberInput(""); }}>إلغاء</Button>
                             </div>
@@ -2980,34 +2826,38 @@ export default function CasesPage() {
                           </Button>
                           )
                         )}
-                        {(selectedCase as any).mohrStatus === "مقيدة_في_الموارد" && (
+                        {selectedCase.mohrStatus === "مقيدة_في_الموارد" && (
                           <Button
                             size="sm"
                             data-testid="button-direct-settlement"
                             onClick={async () => {
-                              const res = await fetch(`/api/cases/${selectedCase.id}/direct-settlement`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                body: JSON.stringify({}),
-                              });
-                              if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية" as any, amicableSettlementDirected: true as any }); }
+                              try {
+                                const res = await apiRequest("POST", `/api/cases/${selectedCase.id}/direct-settlement`, {});
+                                if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية" as any, amicableSettlementDirected: true as any }); }
+                              } catch (e) {
+                                // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                // would otherwise surface as an unhandled promise rejection in console.
+                                // Future: surface an error toast (beyond Batch 2B scope).
+                              }
                             }}
                           >
                             توجيه العميل لرفعها في التسوية الودية
                           </Button>
                         )}
-                        {(selectedCase as any).mohrStatus === "توجيه_تسوية_ودية" && (
+                        {selectedCase.mohrStatus === "توجيه_تسوية_ودية" && (
                           <Button
                             size="sm"
                             variant="destructive"
                             data-testid="button-settlement-ended"
                             onClick={async () => {
-                              const res = await fetch(`/api/cases/${selectedCase.id}/mohr`, {
-                                method: "PATCH",
-                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawfirm_token")}`, "X-CSRF-Token": localStorage.getItem("csrf_token") || "" },
-                                body: JSON.stringify({ status: "انتهت_التسوية" }),
-                              });
-                              if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" as any }); }
+                              try {
+                                const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "انتهت_التسوية" });
+                                if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" as any }); }
+                              } catch (e) {
+                                // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
+                                // would otherwise surface as an unhandled promise rejection in console.
+                                // Future: surface an error toast (beyond Batch 2B scope).
+                              }
                             }}
                           >
                             انتهاء مرحلة التسوية الودية
@@ -3029,8 +2879,8 @@ export default function CasesPage() {
                         {selectedCase.caseType === "تجاري" && (
                           <div className="text-right">
                             <Label className="text-muted-foreground block text-right">رقم الطلب في منصة تراضي</Label>
-                            {(selectedCase as any).taradiStatus === "تم_الصلح" || (selectedCase as any).taradiStatus === "لم_يتم_صلح" ? (
-                              <p className="font-medium mt-1">{(selectedCase as any).taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                            {selectedCase.taradiStatus === "تم_الصلح" || selectedCase.taradiStatus === "لم_يتم_صلح" ? (
+                              <p className="font-medium mt-1">{selectedCase.taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
                             ) : (
                               <div className="flex items-center gap-2 mt-1 justify-end">
                                 {inlineEditField === `taradi-${selectedCase.id}` ? (
@@ -3045,8 +2895,8 @@ export default function CasesPage() {
                                   </>
                                 ) : (
                                   <>
-                                    <p className="font-medium">{(selectedCase as any).taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
-                                    <Button variant="ghost" size="sm" data-testid="button-edit-taradi-number" onClick={() => { setInlineEditField(`taradi-${selectedCase.id}`); setInlineEditValue((selectedCase as any).taradiNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                                    <p className="font-medium">{selectedCase.taradiNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                    <Button variant="ghost" size="sm" data-testid="button-edit-taradi-number" onClick={() => { setInlineEditField(`taradi-${selectedCase.id}`); setInlineEditValue(selectedCase.taradiNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
                                   </>
                                 )}
                               </div>
@@ -3069,12 +2919,12 @@ export default function CasesPage() {
                                 </>
                               ) : (
                                 <>
-                                  <p className="font-medium">{(selectedCase as any).najizNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
-                                  <Button variant="ghost" size="sm" data-testid="button-edit-najiz-number" onClick={() => { setInlineEditField(`najiz-${selectedCase.id}`); setInlineEditValue((selectedCase as any).najizNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                                  <p className="font-medium">{selectedCase.najizNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                  <Button variant="ghost" size="sm" data-testid="button-edit-najiz-number" onClick={() => { setInlineEditField(`najiz-${selectedCase.id}`); setInlineEditValue(selectedCase.najizNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
                                 </>
                               )}
                             </div>
-                            {(selectedCase as any).mohrStatus === "انتهت_التسوية" && (
+                            {selectedCase.mohrStatus === "انتهت_التسوية" && (
                               <p className="text-xs text-amber-600 mt-1">انتهت مرحلة التسوية الودية - القضية جاهزة للرفع في المحكمة</p>
                             )}
                           </div>
@@ -3086,15 +2936,15 @@ export default function CasesPage() {
                   {selectedCase.caseClassification === CaseClassification.UNDER_STUDY &&
                     CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.READY_TO_SUBMIT) &&
                     (user?.role === "branch_manager" || user?.role === "admin_support") &&
-                    (selectedCase.caseType !== "تجاري" || (selectedCase as any).taradiStatus === "لم_يتم_صلح") &&
-                    (selectedCase.caseType !== "عمالي" || (selectedCase as any).mohrStatus === "انتهت_التسوية") && (
+                    (selectedCase.caseType !== "تجاري" || selectedCase.taradiStatus === "لم_يتم_صلح") &&
+                    (selectedCase.caseType !== "عمالي" || selectedCase.mohrStatus === "انتهت_التسوية") && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
                         <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
                         تحويل القضية إلى منظورة
                       </h4>
                       <p className="text-xs text-muted-foreground mb-3">عند تقييد القضية في المحكمة، يتم تحويل تصنيفها إلى "منظورة" وتنتقل لمرحلة "تحت النظر"</p>
-                      {selectedCase.caseType === "تجاري" && !(selectedCase as any).taradiNumber ? (
+                      {selectedCase.caseType === "تجاري" && !selectedCase.taradiNumber ? (
                         <p className="text-sm text-amber-600 font-medium" data-testid="taradi-number-required-notice">
                           يجب إدخال رقم الطلب في منصة تراضي أولاً قبل تقييد القضية في المحكمة. يرجى إدخاله في قسم "أرقام الطلبات" أعلاه.
                         </p>
@@ -3104,12 +2954,11 @@ export default function CasesPage() {
                           <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {
                             if (!courtCaseNumberInput.trim()) { toast({ title: "يرجى إدخال رقم القضية", variant: "destructive" }); return; }
                             try {
-                              const response = await fetch(`/api/cases/${selectedCase.id}/court-register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ courtCaseNumber: courtCaseNumberInput.trim() }) });
-                              if (!response.ok) { const err = await response.json(); throw new Error(err.error || "حدث خطأ"); }
+                              await apiRequest("POST", `/api/cases/${selectedCase.id}/court-register`, { courtCaseNumber: courtCaseNumberInput.trim() });
                               await refreshCases();
                               toast({ title: "تم تقييد القضية في المحكمة بنجاح" });
                               setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput("");
-                            } catch (e: any) { toast({ title: e.message || "حدث خطأ", variant: "destructive" }); }
+                            } catch (e) { toast({ title: extractApiError(e), variant: "destructive" }); }
                           }}>تأكيد</Button>
                           <Button size="sm" variant="ghost" onClick={() => { setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput(""); }}>إلغاء</Button>
                         </div>
@@ -3379,17 +3228,7 @@ export default function CasesPage() {
                       <Button
                         data-testid="button-add-comment"
                         onClick={async () => {
-                          // Diagnostic — logs to the browser console so a
-                          // "nothing happens" report has a paper trail.
-                          // eslint-disable-next-line no-console
-                          console.log("[add-comment] clicked", {
-                            caseId: selectedCase?.id,
-                            userId: user?.id,
-                            length: newComment.trim().length,
-                          });
                           if (!user || !newComment.trim()) {
-                            // eslint-disable-next-line no-console
-                            console.log("[add-comment] aborted — no user or empty body");
                             return;
                           }
                           try {
@@ -3441,8 +3280,8 @@ export default function CasesPage() {
                 </TabsContent>
 
                 <TabsContent value="notes" className="mt-4 space-y-4">
-                  {(selectedCase as any)?.platformReviewNotes &&
-                    String((selectedCase as any).platformReviewNotes).trim() && (
+                  {selectedCase?.platformReviewNotes &&
+                    String(selectedCase.platformReviewNotes).trim() && (
                       <div
                         className="border border-indigo-300 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/30 rounded-lg p-4"
                         dir="rtl"
@@ -3453,14 +3292,14 @@ export default function CasesPage() {
                           <h4 className="font-bold text-indigo-900 dark:text-indigo-200">ملاحظات المنصة</h4>
                         </div>
                         <p className="text-sm text-indigo-900 dark:text-indigo-200 whitespace-pre-wrap">
-                          {(selectedCase as any).platformReviewNotes}
+                          {selectedCase.platformReviewNotes}
                         </p>
                       </div>
                     )}
                   {selectedCase?.reviewNotes && selectedCase.reviewNotes.trim() && (() => {
                     const isCommittee = selectedCase.currentStage === "الأخذ_بالملاحظات";
                     const title = isCommittee ? "ملاحظات لجنة المراجعة" : "ملاحظات المراجعة الداخلية";
-                    const history = (selectedCase.stageHistory || []) as any[];
+                    const history = selectedCase.stageHistory || [];
                     let reviewerName: string | undefined;
                     let timestamp: string | undefined;
                     if (isCommittee) {
@@ -3468,8 +3307,8 @@ export default function CasesPage() {
                       reviewerName = entry?.userName;
                       timestamp = entry?.timestamp;
                     } else {
-                      if ((selectedCase as any).internalReviewerId) {
-                        reviewerName = users.find(u => u.id === (selectedCase as any).internalReviewerId)?.name;
+                      if (selectedCase.internalReviewerId) {
+                        reviewerName = users.find(u => u.id === selectedCase.internalReviewerId)?.name;
                       }
                       const entry = [...history].reverse().find((h: any) => h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم");
                       timestamp = entry?.timestamp;
@@ -3510,7 +3349,7 @@ export default function CasesPage() {
                 <TabsContent value="actions" className="mt-4">
                   <div className="space-y-3">
                     {(() => {
-                      const history = [...(selectedCase.stageHistory || [])].reverse() as any[];
+                      const history = [...(selectedCase.stageHistory || [])].reverse();
                       const internalEntry = history.find((h: any) =>
                         (h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم") &&
                         h.notes && String(h.notes).trim()
@@ -3620,7 +3459,7 @@ export default function CasesPage() {
                                 </Button>
                               </AlertDialogTrigger>
                               <AlertDialogContent>
-                                {(selectedCase as any).isSettlementCase ? (
+                                {selectedCase.isSettlementCase ? (
                                   <>
                                     <AlertDialogHeader>
                                       <AlertDialogTitle>لم يتم الصلح — اختر الإجراء</AlertDialogTitle>
@@ -4615,159 +4454,9 @@ export default function CasesPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Phase-8 — await-completion case dialog. Reason required. */}
-      <AlertDialog open={showAwaitCaseDialog} onOpenChange={(open) => { if (!open) closeAwaitCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
-              بانتظار استكمال البيانات
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              ستُحفظ المرحلة الحالية وتُنقل القضية مؤقتاً إلى مرحلة "استكمال المرفقات والبيانات".
-              عند اكتمال البيانات استخدم زر "تم الاستكمال" للعودة إلى المرحلة المحفوظة.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>السبب <span className="text-red-500">*</span></Label>
-            <Textarea
-              data-testid="input-case-await-reason"
-              value={awaitCaseReason}
-              onChange={(e) => setAwaitCaseReason(e.target.value)}
-              placeholder="ما هي البيانات أو المرفقات الناقصة؟"
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closeAwaitCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-await-case"
-              onClick={handleAwaitCase}
-              disabled={pauseActionInProgress || !awaitCaseReason.trim()}
-              className="bg-amber-600 hover:bg-amber-700"
-            >
-              <AlertTriangle className="w-4 h-4 ml-2" />
-              تأكيد
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Phase-8 — resume from completion case dialog. Notes optional.
-          Server validates that saved_stage is still in the case's
-          classification stage list and rejects if path changed. */}
-      <AlertDialog open={showResumeCaseDialog} onOpenChange={(open) => { if (!open) closeResumeCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <CheckCircle className="w-5 h-5 text-green-600" />
-              تم الاستكمال
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              ستعود القضية إلى المرحلة المحفوظة قبل دخول مرحلة الاستكمال
-              {resumeCaseTarget?.savedStage && (
-                <>: <strong>{getStageLabel(resumeCaseTarget.savedStage as any)}</strong></>
-              )}
-              .
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>ملاحظات (اختياري)</Label>
-            <Textarea
-              data-testid="input-case-resume-notes"
-              value={resumeCaseNotes}
-              onChange={(e) => setResumeCaseNotes(e.target.value)}
-              placeholder="اكتب ملاحظات حول ما تم استكماله..."
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closeResumeCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-resume-case"
-              onClick={handleResumeCase}
-              disabled={pauseActionInProgress}
-            >
-              <CheckCircle className="w-4 h-4 ml-2" />
-              تأكيد العودة
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Phase-8 — pause case dialog */}
-      <AlertDialog open={showPauseCaseDialog} onOpenChange={(open) => { if (!open) closePauseCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Pause className="w-5 h-5 text-amber-600" />
-              تعليق القضية
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              سيتم إيقاف العمل على هذه القضية مؤقتاً مع الاحتفاظ بمرحلتها الحالية.
-              يمكن استئنافها لاحقاً عبر "إلغاء التعليق".
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>سبب التعليق <span className="text-red-500">*</span></Label>
-            <Textarea
-              data-testid="input-case-pause-reason"
-              value={pauseCaseReason}
-              onChange={(e) => setPauseCaseReason(e.target.value)}
-              placeholder="اكتب سبب التعليق..."
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closePauseCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-pause-case"
-              onClick={handlePauseCase}
-              disabled={pauseActionInProgress || !pauseCaseReason.trim()}
-              className="bg-amber-600 hover:bg-amber-700"
-            >
-              <Pause className="w-4 h-4 ml-2" />
-              تأكيد التعليق
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Phase-8 — unpause case dialog */}
-      <AlertDialog open={showUnpauseCaseDialog} onOpenChange={(open) => { if (!open) closeUnpauseCaseDialog(); }}>
-        <AlertDialogContent dir="rtl">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Play className="w-5 h-5" />
-              إلغاء تعليق القضية
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              ستعود القضية للعمل عند نفس مرحلتها قبل التعليق.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2 text-right">
-            <Label>ملاحظات (اختياري)</Label>
-            <Textarea
-              data-testid="input-case-unpause-notes"
-              value={unpauseCaseNotes}
-              onChange={(e) => setUnpauseCaseNotes(e.target.value)}
-              placeholder="اكتب ملاحظات حول إلغاء التعليق..."
-              rows={3}
-            />
-          </div>
-          <AlertDialogFooter className="gap-2">
-            <AlertDialogCancel onClick={closeUnpauseCaseDialog}>إلغاء</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="button-confirm-unpause-case"
-              onClick={handleUnpauseCase}
-              disabled={pauseActionInProgress}
-            >
-              <Play className="w-4 h-4 ml-2" />
-              تأكيد إلغاء التعليق
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Phase-8 — pause / unpause / await-completion / resume-from-completion.
+          One dialog renders whichever flow is active; see useCaseLifecycleActions. */}
+      <CaseLifecycleDialog {...lifecycle.dialogProps} />
     </div>
   );
 }

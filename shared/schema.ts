@@ -3531,9 +3531,14 @@ export interface Notification {
   senderName: string | null;
   recipientId: string;
   recipientIds?: string[];
-  relatedType: "case" | "consultation" | "task" | "hearing" | "memo" | null;
+  relatedType: "case" | "consultation" | "task" | "field_task" | "hearing" | "memo" | null;
   relatedId: string | null;
   isRead: boolean;
+  // TODO(Phase 6 dead-code): vestigial — no DB column backs this; the only
+  // reader (getWorkflowNotifications) is exposed but never called. Optional
+  // here so the client's existing references type-check. Remove or restore
+  // (add is_automatic column + storage mapping) during the dead-code sweep.
+  isAutomatic?: boolean;
   readAt: string | null;
   response: NotificationResponse | null;
   requiresResponse: boolean;

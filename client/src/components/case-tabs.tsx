@@ -19,19 +19,6 @@ import { formatRelativeArabic } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
-function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const token = localStorage.getItem("lawfirm_token");
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-  if (csrfToken) {
-    headers["X-CSRF-Token"] = csrfToken;
-  }
-  return headers;
-}
-
 function getActionIcon(actionType: string) {
   const iconMap: Record<string, any> = {
     case_created: Scale,
@@ -54,8 +41,7 @@ export function CaseActivityTab({ caseId }: { caseId: string }) {
   const { data: activities = [], isLoading, isError } = useQuery<any[]>({
     queryKey: ['/api/cases', caseId, 'activity'],
     queryFn: async () => {
-      const res = await fetch(`/api/cases/${caseId}/activity`, { headers: getAuthHeaders() });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", `/api/cases/${caseId}/activity`);
       const json = await res.json();
       // Guard: server used to return { data, total, page, limit } — normalise to array
       return Array.isArray(json) ? json : (Array.isArray(json?.data) ? json.data : []);
@@ -120,8 +106,7 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
   const { data: notes = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/cases', caseId, 'notes'],
     queryFn: async () => {
-      const res = await fetch(`/api/cases/${caseId}/notes`, { headers: getAuthHeaders() });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", `/api/cases/${caseId}/notes`);
       return res.json();
     },
     enabled: !!caseId && caseId.length > 0,
@@ -229,8 +214,6 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
           </div>
           <Button
             onClick={() => {
-              // eslint-disable-next-line no-console
-              console.log("[add-note] clicked", { caseId, length: newNote.trim().length });
               addNoteMutation.mutate();
             }}
             disabled={!newNote.trim() || addNoteMutation.isPending}
@@ -332,8 +315,7 @@ export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], fieldTasks
   const { data: deadlines = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/legal-deadlines', caseId],
     queryFn: async () => {
-      const res = await fetch(`/api/legal-deadlines?caseId=${caseId}`, { headers: getAuthHeaders() });
-      if (!res.ok) return [];
+      const res = await apiRequest("GET", `/api/legal-deadlines?caseId=${caseId}`);
       return res.json();
     },
     enabled: !!caseId && caseId.length > 0,
