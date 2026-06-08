@@ -356,7 +356,7 @@ export default function HearingsPage() {
     const linkedCaseForSubmit = effectiveCaseId ? getCaseById(effectiveCaseId) : null;
     const isSettlementOnlyFailed =
       resultForm.result === HearingResult.SETTLEMENT_FAILED &&
-      !!(linkedCaseForSubmit as any)?.isSettlementCase;
+      !!linkedCaseForSubmit?.isSettlementCase;
     if (isSettlementOnlyFailed && !resultForm.afterFailedSettlementChoice) {
       toast({ title: "اختر إجراء الصلح: إغلاق نهائي أو استكمال الإجراءات", variant: "destructive" });
       return;
@@ -501,7 +501,7 @@ export default function HearingsPage() {
     if (!reassignDialogHearing || !reassignLawyerId) return;
     setSubmitting(true);
     try {
-      await updateHearing(reassignDialogHearing.id, { attendingLawyerId: reassignLawyerId } as any);
+      await updateHearing(reassignDialogHearing.id, { attendingLawyerId: reassignLawyerId });
       toast({ title: "تم إسناد الجلسة لمحامي جديد" });
       setReassignDialogHearing(null);
     } catch (e: any) {
@@ -638,7 +638,7 @@ export default function HearingsPage() {
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
     if (!caseData) return { number: caseId || "بدون قضية", client: "", plaintiff: "", opponent: "", classification: "", clientRole: "-" };
-    const clientRole = getClientRoleLabel(caseData.caseClassification, (caseData as any).clientRole);
+    const clientRole = getClientRoleLabel(caseData.caseClassification, caseData.clientRole);
     const clientName = getClientName(caseData.clientId);
     return {
       number: caseData.caseNumber,
@@ -646,7 +646,7 @@ export default function HearingsPage() {
       // Fall back to client name when the case has no plaintiffName recorded —
       // that happens for cases where the firm's client IS the plaintiff and
       // the operator never typed the name a second time.
-      plaintiff: ((caseData as any).plaintiffName || "").trim() || clientName || "",
+      plaintiff: (caseData.plaintiffName || "").trim() || clientName || "",
       opponent: caseData.opponentName || "",
       classification: caseData.caseClassification || "",
       clientRole,
@@ -718,7 +718,7 @@ export default function HearingsPage() {
                         <CommandEmpty>لا توجد نتائج</CommandEmpty>
                         <CommandGroup>
                           {cases
-                            .filter(c => c.status !== "مغلق" && c.currentStage !== "مقفلة" && !(c as any).isArchived)
+                            .filter(c => c.status !== "مغلق" && c.currentStage !== "مقفلة" && !c.isArchived)
                             .map(c => (
                               <CommandItem
                                 key={c.id}
@@ -1354,7 +1354,7 @@ export default function HearingsPage() {
                     // The حكم / شطب / عدم_الاختصاص results don't apply
                     // here — there's no judgment to record at this stage.
                     const isSettlementContext =
-                      (!!(linkedCase as any)?.isSettlementCase
+                      (!!linkedCase?.isSettlementCase
                         && linkedCase?.currentStage === "مداولة_الصلح")
                       || ht === HearingType.TARADI
                       || ht === HearingType.SETTLEMENT;
@@ -1612,7 +1612,7 @@ export default function HearingsPage() {
               const linked = effId ? getCaseById(effId) : null;
               const showFailedSettlementChoice =
                 resultForm.result === HearingResult.SETTLEMENT_FAILED &&
-                !!(linked as any)?.isSettlementCase;
+                !!linked?.isSettlementCase;
               if (!showFailedSettlementChoice) return null;
               return (
                 <Card className="p-4 space-y-3 border-orange-300">
@@ -1938,17 +1938,18 @@ export default function HearingsPage() {
                 {(() => {
                   const hearingTs = new Date(detailHearing.hearingDate).getTime();
                   const allCaseMemos = getMemosByCase(detailHearing.caseId);
-                  const directLinked = allCaseMemos.filter((m) => (m as any).hearingId === detailHearing.id);
+                  const directLinked = allCaseMemos.filter((m) => m.hearingId === detailHearing.id);
                   const dateLinked = allCaseMemos.filter((m) => {
                     const ts = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
                     return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
                   });
                   const linkedMemos = directLinked.length > 0 ? directLinked : dateLinked;
                   const linkedTasks = getTasksByCase(detailHearing.caseId).filter((t) => {
-                    const ts = (t as any).createdAt ? new Date((t as any).createdAt).getTime() : NaN;
+                    const ts = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
                     return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
                   });
-                  const doneMemoStatuses = new Set(["معتمدة", "مرفوعة", "منجزة"]);
+                  // "منجزة" is a consultation stage (COMPLETED), not a memo status — do not re-add.
+                  const doneMemoStatuses = new Set(["معتمدة", "مرفوعة"]);
                   return (
                     <div className="border border-border rounded-md p-3 space-y-2">
                       <p className="text-xs text-muted-foreground font-semibold">المهام المرتبطة</p>
@@ -1958,7 +1959,7 @@ export default function HearingsPage() {
                         <div className="space-y-2">
                           {linkedMemos.map((m) => {
                             const memoTypeLabel = m.memoType === MemoType.RESPONSE ? "جوابية" : "تحرير";
-                            const isDone = doneMemoStatuses.has(m.status as any);
+                            const isDone = doneMemoStatuses.has(m.status);
                             return (
                               <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
                                 <div className="flex flex-col">
@@ -2062,7 +2063,7 @@ export default function HearingsPage() {
                       if (!hearingMemoRequired && !opponentResponseRequired) return null;
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
                       const caseMemos = getMemosByCase(detailHearing.caseId);
-                      const directMatches = caseMemos.filter((m) => (m as any).hearingId === detailHearing.id);
+                      const directMatches = caseMemos.filter((m) => m.hearingId === detailHearing.id);
                       const relevantMemos = directMatches.length > 0
                         ? directMatches
                         : caseMemos.filter((m) => {
@@ -2070,7 +2071,7 @@ export default function HearingsPage() {
                             return !isNaN(createdTs) && createdTs >= hearingTs;
                           });
                       const memoDone = relevantMemos.some(
-                        (m) => m.status === "معتمدة" || m.status === "مرفوعة" || (m.status as any) === "منجزة",
+                        (m) => m.status === "معتمدة" || m.status === "مرفوعة",
                       );
                       return (
                         <div className="border border-border rounded-md p-3 space-y-2">
