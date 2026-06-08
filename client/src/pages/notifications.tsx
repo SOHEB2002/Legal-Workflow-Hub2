@@ -318,18 +318,18 @@ export default function NotificationsPage() {
                             {notification.response ? (
                               <div className="space-y-1">
                                 <Badge variant="outline" className="text-xs bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800">
-                                  {(notification.response as any).type === "text_reply"
+                                  {notification.response.type === "text_reply"
                                     ? "رد نصي"
-                                    : ResponseTypeLabels[(notification.response as any).type as ResponseTypeValue] || "تم الرد"}
+                                    : ResponseTypeLabels[notification.response.type as ResponseTypeValue] || "تم الرد"}
                                 </Badge>
-                                {(notification.response as any).message && (
-                                  <p className="text-xs text-muted-foreground truncate max-w-[200px]" title={(notification.response as any).message}>
-                                    {(notification.response as any).message}
+                                {notification.response.message && (
+                                  <p className="text-xs text-muted-foreground truncate max-w-[200px]" title={notification.response.message}>
+                                    {notification.response.message}
                                   </p>
                                 )}
-                                {(notification.response as any).responderName && (
+                                {notification.response.responderName && (
                                   <p className="text-xs text-muted-foreground">
-                                    {(notification.response as any).responderName}
+                                    {notification.response.responderName}
                                   </p>
                                 )}
                               </div>
