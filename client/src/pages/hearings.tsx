@@ -82,7 +82,7 @@ import type { CaseStageValue, ObjectionStatusValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
-import type { Hearing, HearingStatusValue, HearingResultValue, CourtTypeValue } from "@shared/schema";
+import type { Hearing, HearingStatusValue, HearingResultValue } from "@shared/schema";
 import { HearingStatus, HearingResult, CourtType, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm, formatDualDate, formatHijriDateFull } from "@/lib/date-utils";
@@ -187,7 +187,7 @@ export default function HearingsPage() {
   const [editFormData, setEditFormData] = useState({
     hearingDate: "",
     hearingTime: "",
-    courtName: "" as CourtTypeValue,
+    courtName: "",
     courtRoom: "",
     notes: "",
     attendingLawyerId: "",
@@ -198,7 +198,7 @@ export default function HearingsPage() {
     hearingDate: "",
     hearingTime: "",
     hearingType: HearingType.COURT as HearingTypeValue,
-    courtName: "" as CourtTypeValue | "",
+    courtName: "",
     courtRoom: "",
     notes: "",
     responseRequired: false,
@@ -221,7 +221,7 @@ export default function HearingsPage() {
       caseId: caseId || prev.caseId,
       hearingType: type && Object.values(HearingType).includes(type) ? type : prev.hearingType,
       attendingLawyerId: c?.primaryLawyerId || c?.responsibleLawyerId || prev.attendingLawyerId,
-      courtName: (c?.courtName as any) || prev.courtName,
+      courtName: c?.courtName || prev.courtName,
     }));
     setIsAddDialogOpen(true);
     // Strip the query so refresh/back doesn't re-open the dialog.
@@ -470,7 +470,7 @@ export default function HearingsPage() {
     setEditFormData({
       hearingDate: hearing.hearingDate || "",
       hearingTime: hearing.hearingTime || "",
-      courtName: (hearing.courtName as CourtTypeValue) || ("" as CourtTypeValue),
+      courtName: hearing.courtName || "",
       courtRoom: hearing.courtRoom || "",
       notes: hearing.notes || "",
       attendingLawyerId: hearing.attendingLawyerId || "",
@@ -736,7 +736,7 @@ export default function HearingsPage() {
                                     "قيد_التدقيق_في_تراضي",
                                     "رفع_بمنصة_تراضي",
                                   ]);
-                                  let autoType: string = HearingType.COURT;
+                                  let autoType: HearingTypeValue = HearingType.COURT;
                                   if (settlementStages.has(stage)) {
                                     autoType = HearingType.TARADI;
                                   } else if (selected.caseType === "عمالي") {
@@ -746,8 +746,8 @@ export default function HearingsPage() {
                                     ...prev,
                                     caseId: val,
                                     attendingLawyerId: autoLawyer,
-                                    hearingType: autoType as any,
-                                    courtName: (selected.courtName || prev.courtName) as any,
+                                    hearingType: autoType,
+                                    courtName: selected.courtName || prev.courtName,
                                   }));
                                   setCaseComboOpen(false);
                                   // If the case already has an upcoming future hearing,
@@ -839,8 +839,8 @@ export default function HearingsPage() {
                 <Label>المحكمة</Label>
                 <Input
                   data-testid="input-court-name"
-                  value={formData.courtName as string}
-                  onChange={(e) => setFormData({ ...formData, courtName: e.target.value as any })}
+                  value={formData.courtName}
+                  onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
                   placeholder="اسم المحكمة"
                 />
               </div>
@@ -1774,7 +1774,7 @@ export default function HearingsPage() {
                 data-testid="input-edit-court-name"
                 placeholder=""
                 value={editFormData.courtName}
-                onChange={(e) => setEditFormData({ ...editFormData, courtName: e.target.value as CourtTypeValue })}
+                onChange={(e) => setEditFormData({ ...editFormData, courtName: e.target.value })}
               />
             </div>
             <div>
