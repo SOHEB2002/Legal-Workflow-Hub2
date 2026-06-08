@@ -3515,9 +3515,14 @@ export const ResponseTypeLabels: Record<ResponseTypeValue, string> = {
 };
 
 export interface NotificationResponse {
-  type: ResponseTypeValue;
+  // "text_reply" is the sentinel written when the user sends a free-text reply
+  // without picking a structured status (respond-dialog.tsx). Kept off the
+  // ResponseType const so ResponseTypeLabels stays exhaustive over the 4 real statuses.
+  type: ResponseTypeValue | "text_reply";
   message: string;
   respondedAt: string;
+  responderId?: string;     // written by respondToNotification (notifications-context.tsx)
+  responderName?: string;
 }
 
 export interface Notification {

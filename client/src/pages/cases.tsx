@@ -109,7 +109,7 @@ import {
   CaseClassificationLabels,
   getStageLabel,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
+import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer, notifyCaseAssigned } from "@/lib/notification-triggers";
@@ -685,7 +685,7 @@ export default function CasesPage() {
       await updateCase(editCaseId, {
         clientId: editFormData.clientId,
         plaintiffName: editFormData.plaintiffName,
-        caseType: editFormData.caseType,
+        caseType: editFormData.caseType as CaseTypeValue,
         caseTypeOther: editFormData.caseTypeOther,
         departmentId: editFormData.departmentId,
         departmentOther: editFormData.departmentOther,
@@ -714,7 +714,7 @@ export default function CasesPage() {
         primaryLawyerId: editFormData.primaryLawyerId || null,
         responsibleLawyerId: editFormData.primaryLawyerId || null,
         assignedLawyers: editFormData.primaryLawyerId ? [editFormData.primaryLawyerId] : [],
-      } as any);
+      });
       // Fire the same notification the assign dialog does, so changing the
       // lawyer here doesn't silently skip the heads-up to the new lawyer.
       if (lawyerChanged && editFormData.primaryLawyerId) {
@@ -740,7 +740,7 @@ export default function CasesPage() {
   const handleReassignCase = async () => {
     if (!reassignCaseDialog || !reassignCaseLawyerId) return;
     try {
-      await updateCase(reassignCaseDialog.id, { primaryLawyerId: reassignCaseLawyerId } as any);
+      await updateCase(reassignCaseDialog.id, { primaryLawyerId: reassignCaseLawyerId });
       toast({ title: "تم إسناد القضية لمحامي جديد" });
       setReassignCaseDialog(null);
     } catch (e: any) {
@@ -846,7 +846,7 @@ export default function CasesPage() {
       await addCase({
         clientId: formData.clientId || "",
         plaintiffName: formData.plaintiffName || "",
-        caseType: formData.caseType,
+        caseType: formData.caseType as CaseTypeValue,
         caseTypeOther: formData.caseTypeOther,
         departmentId: formData.departmentId,
         departmentOther: formData.departmentOther,
@@ -869,7 +869,7 @@ export default function CasesPage() {
         startingStage: formData.caseClassification === CaseClassification.IN_COURT
           ? formData.startingStage
           : undefined,
-      } as any, user.id, user.name);
+      } as Partial<LawCase> & { startingStage?: string }, user.id, user.name);
     } catch (err) {
       toast({ title: "فشل إنشاء القضية", description: extractApiError(err), variant: "destructive" });
       return;
@@ -2357,7 +2357,7 @@ export default function CasesPage() {
                       await updateCase(selectedCase.id, {
                         platformReviewNotes: platformNotes,
                         platformReviewResubmitted: false,
-                      } as any);
+                      });
                       toast({ title: "تم حفظ ملاحظات المنصة" });
                     } catch (err) {
                       toast({ title: "تعذّر حفظ الملاحظات", description: extractApiError(err), variant: "destructive" });
@@ -2372,7 +2372,7 @@ export default function CasesPage() {
                       await updateCase(selectedCase.id, {
                         platformReviewNotes: "",
                         platformReviewResubmitted: true,
-                      } as any);
+                      });
                       toast({
                         title: "تم إعادة التقديم بنجاح",
                         description: "بانتظار رد المنصة",
@@ -2395,7 +2395,7 @@ export default function CasesPage() {
                         currentStage: targetStage,
                         reviewNotes: reviewerNotes,
                         stageChangeNotes: reviewerNotes,
-                      } as any);
+                      } as Partial<LawCase> & { stageChangeNotes?: string });
                       toast({ title: "تم إرجاع القضية بملاحظات المراجع" });
                     } catch (err) {
                       toast({ title: "تعذّر إرجاع القضية", description: extractApiError(err), variant: "destructive" });
@@ -2729,7 +2729,7 @@ export default function CasesPage() {
                               <Button size="sm" data-testid="button-confirm-taradi" onClick={async () => {
                                 try {
                                   const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "مقيدة_في_تراضي", taradiNumber: registrationNumberInput });
-                                  if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { taradiStatus: "مقيدة_في_تراضي" as any, ...(registrationNumberInput ? { taradiNumber: registrationNumberInput } : {}) }); }
+                                  if (res.ok) { toast({ title: "تم التقييد في تراضي" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { taradiStatus: "مقيدة_في_تراضي", ...(registrationNumberInput ? { taradiNumber: registrationNumberInput } : {}) }); }
                                 } catch (e) {
                                   // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                   // would otherwise surface as an unhandled promise rejection in console.
@@ -2753,7 +2753,7 @@ export default function CasesPage() {
                               onClick={async () => {
                                 try {
                                   const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "تم_الصلح" });
-                                  if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" as any }); }
+                                  if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" }); }
                                 } catch (e) {
                                   // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                   // would otherwise surface as an unhandled promise rejection in console.
@@ -2770,7 +2770,7 @@ export default function CasesPage() {
                               onClick={async () => {
                                 try {
                                   const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "لم_يتم_صلح" });
-                                  if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" as any }); }
+                                  if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" }); }
                                 } catch (e) {
                                   // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                   // would otherwise surface as an unhandled promise rejection in console.
@@ -2807,7 +2807,7 @@ export default function CasesPage() {
                               <Button size="sm" data-testid="button-confirm-mohr" onClick={async () => {
                                 try {
                                   const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput });
-                                  if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد" as any, ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
+                                  if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد", ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
                                 } catch (e) {
                                   // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                   // would otherwise surface as an unhandled promise rejection in console.
@@ -2833,7 +2833,7 @@ export default function CasesPage() {
                             onClick={async () => {
                               try {
                                 const res = await apiRequest("POST", `/api/cases/${selectedCase.id}/direct-settlement`, {});
-                                if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية" as any, amicableSettlementDirected: true as any }); }
+                                if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية", amicableSettlementDirected: true }); }
                               } catch (e) {
                                 // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                 // would otherwise surface as an unhandled promise rejection in console.
@@ -2852,7 +2852,7 @@ export default function CasesPage() {
                             onClick={async () => {
                               try {
                                 const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "انتهت_التسوية" });
-                                if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" as any }); }
+                                if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" }); }
                               } catch (e) {
                                 // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                 // would otherwise surface as an unhandled promise rejection in console.
@@ -3928,10 +3928,10 @@ export default function CasesPage() {
                 if (!earlyCloseCase) return;
                 try {
                   await updateCase(earlyCloseCase.id, {
-                    currentStage: "مقفلة" as any,
+                    currentStage: "مقفلة",
                     closureReason: earlyCloseReason,
                     closureReasonOther: earlyCloseReason === "أخرى" ? earlyCloseReasonOther.trim() : "",
-                  } as any);
+                  });
                   toast({ title: "تم إغلاق القضية بنجاح" });
                   setShowEarlyCloseDialog(false);
                   setEarlyCloseCase(null);

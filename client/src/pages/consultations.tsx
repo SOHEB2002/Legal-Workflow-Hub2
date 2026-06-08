@@ -612,7 +612,7 @@ function ConsultationActivityTimeline({
           )}
           {activities.map((a) => {
             const Icon = getActivityIcon(a.activityType);
-            const typeLabel = (ConsultationActivityTypeLabels as any)[a.activityType] || a.activityType;
+            const typeLabel = (ConsultationActivityTypeLabels as Record<string, string>)[a.activityType] || a.activityType;
             // Issue-1 — early_closed rows stored the raw English reason
             // token inside `description` (the server never localised it).
             // Rebuild the line from metadata.reason via the FE label map
@@ -621,7 +621,7 @@ function ConsultationActivityTimeline({
             let displayDescription = a.description;
             if (a.activityType === ConsultationActivityType.EARLY_CLOSED) {
               const rawReason = String(a.metadata?.reason ?? "");
-              const reasonLabel = (ConsultationClosureReasonLabels as any)[rawReason];
+              const reasonLabel = (ConsultationClosureReasonLabels as Record<string, string>)[rawReason];
               if (reasonLabel) {
                 const otherText = String(a.metadata?.closureReasonOther ?? "").trim();
                 displayDescription = otherText
@@ -1690,15 +1690,13 @@ export default function ConsultationsPage() {
     ) {
       return false;
     }
-    // Priority is forward-compat: the consultations table doesn't carry
-    // a priority column yet (per shared/schema.ts §consultations table).
-    // When a priority filter is active and the consultation has no
-    // priority field, exclude it — that's the conservative interpretation
-    // ("if you ask for high-priority consultations, don't surface ones
-    // whose priority is unknown"). This becomes naturally functional once
-    // the schema gains the column.
+    // When a priority filter is active, exclude consultations with no
+    // priority set — the conservative interpretation ("if you ask for
+    // high-priority consultations, don't surface ones whose priority is
+    // unknown"). priority is nullable on Consultation (legacy rows render
+    // as "not set").
     if (advFilters.priorities.length > 0) {
-      const p = (consultation as any).priority as string | undefined;
+      const p = consultation.priority as string | undefined;
       if (!p || !advFilters.priorities.includes(p)) return false;
     }
     if (advFilters.dateFrom || advFilters.dateTo) {
@@ -2443,7 +2441,7 @@ export default function ConsultationsPage() {
                 const latest = activityLog.find(
                   (a) => a.activityType === ConsultationActivityType.FOLLOW_UP_STARTED,
                 );
-                const question = (latest?.metadata as any)?.followUpQuestion;
+                const question = latest?.metadata?.followUpQuestion;
                 if (!question) return null;
                 return (
                   <div
