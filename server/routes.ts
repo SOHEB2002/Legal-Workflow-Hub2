@@ -70,6 +70,7 @@ import {
   SIDEBAR_SECTIONS,
   type SidebarSectionValue,
   type UserRoleType,
+  type PriorityType,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -751,7 +752,7 @@ export function calculateSmartPriority(
   nextHearingDate: string | null,
   userSetPriority: string,
   responseDeadline: string | null
-): string {
+): PriorityType {
   let score = 0;
 
   if (classification === "منظورة_بالمحكمة") score += 30;
@@ -894,7 +895,7 @@ export async function registerRoutes(
       const isSamePassword = await comparePassword(newPassword, dbUser.password);
       if (isSamePassword) return res.status(400).json({ error: "كلمة المرور الجديدة يجب أن تكون مختلفة عن الحالية" });
       const hashed = await hashPassword(newPassword);
-      await storage.updateUser(user.id, { password: hashed, mustChangePassword: false } as any);
+      await storage.updateUser(user.id, { password: hashed, mustChangePassword: false });
       const newToken = generateToken(user.id, user.role, user.departmentId, dbUser.name);
       const csrfToken = generateCsrfToken(user.id);
       res.json({ success: true, token: newToken, csrfToken });
@@ -923,7 +924,7 @@ export async function registerRoutes(
       }
       const newPassword = randomUUID().slice(0, 8);
       const hashed = await hashPassword(newPassword);
-      await storage.updateUser(user.id, { password: hashed, mustChangePassword: true } as any);
+      await storage.updateUser(user.id, { password: hashed, mustChangePassword: true });
       console.log(`[EMERGENCY-RESET] Password reset for user: ${username}`);
       res.json({ success: true, message: `تم إعادة تعيين كلمة مرور ${username}`, tempPassword: newPassword });
     } catch (error) {
@@ -948,7 +949,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
       const hashed = await hashPassword(newPassword);
-      await storage.updateUser(userId, { password: hashed } as any);
+      await storage.updateUser(userId, { password: hashed });
       res.json({ success: true, message: `تم إعادة تعيين كلمة مرور ${user.username}` });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في إعادة تعيين كلمة المرور" });
@@ -1039,7 +1040,7 @@ export async function registerRoutes(
         }
       }
 
-      const updated = await storage.updateUser(String(req.params.id), validatedData as any);
+      const updated = await storage.updateUser(String(req.params.id), validatedData);
       if (!updated) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
@@ -1316,7 +1317,7 @@ export async function registerRoutes(
         validatedData.responseDeadline || null
       );
       if (smartPriority !== newCase.priority) {
-        await storage.updateCase(newCase.id, { priority: smartPriority } as any);
+        await storage.updateCase(newCase.id, { priority: smartPriority });
         (newCase as any).priority = smartPriority;
       }
 
@@ -1339,7 +1340,7 @@ export async function registerRoutes(
             });
             autoHearingId = hearing.id;
             autoCreated.push({ type: "hearing", id: hearing.id, hearing });
-            await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+            await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate });
             (newCase as any).nextHearingDate = req.body.nextHearingDate;
           } catch (e) {
             console.error("[POST /api/cases] Error auto-creating defendant hearing:", e);
@@ -1362,7 +1363,7 @@ export async function registerRoutes(
             status: MemoStatus.NOT_STARTED,
           });
           autoCreated.push({ type: "response_memo", id: memo.id });
-          await storage.updateCase(newCase.id, { activeMemoCount: 1 } as any);
+          await storage.updateCase(newCase.id, { activeMemoCount: 1 });
         } catch (e) {
           console.error("Error auto-creating defendant memo:", e);
         }
@@ -1404,7 +1405,7 @@ export async function registerRoutes(
           });
           autoHearingId = hearing.id;
           autoCreated.push({ type: "hearing", id: hearing.id, hearing });
-          await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate } as any);
+          await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate });
           (newCase as any).nextHearingDate = req.body.nextHearingDate;
         } catch (e) {
           console.error("[POST /api/cases] Error auto-creating hearing:", e);
@@ -1431,7 +1432,7 @@ export async function registerRoutes(
           });
           autoCreated.push({ type: "memo_required", id: memo.id });
           const activeCount = await getActiveMemoCount(newCase.id);
-          await storage.updateCase(newCase.id, { activeMemoCount: activeCount } as any);
+          await storage.updateCase(newCase.id, { activeMemoCount: activeCount });
         } catch (e) {
           console.error("Error creating memoRequired memo:", e);
         }
@@ -1608,7 +1609,7 @@ export async function registerRoutes(
       await storage.updateCase(caseItem.id, { 
         amicableSettlementDirected: true,
         mohrStatus: "توجيه_تسوية_ودية",
-      } as any);
+      });
       
       const allUsers = await storage.getAllUsers();
       const adminSupports = allUsers.filter((u: any) => u.role === "admin_support" && u.isActive);
@@ -1786,7 +1787,7 @@ export async function registerRoutes(
         // that as an explicit "مدعي" — otherwise the row ends up IN_COURT
         // with null clientRole and the UI loses the role.
         ...(!(caseItem as any).clientRole ? { clientRole: "مدعي" } : {}),
-      } as any);
+      });
       await storage.logCaseActivity({
         caseId: caseItem.id,
         userId: user.id,
@@ -2154,7 +2155,7 @@ export async function registerRoutes(
           const caseHearings = await storage.getHearingsByCase(caseId);
           for (const h of caseHearings) {
             if (h.status === "قادمة") {
-              await storage.updateHearing(h.id, { attendingLawyerId: null } as any);
+              await storage.updateHearing(h.id, { attendingLawyerId: null });
             }
           }
           const caseMemos = await storage.getMemosByCase(caseId);
@@ -2285,7 +2286,7 @@ export async function registerRoutes(
               dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
                 .toISOString()
                 .split("T")[0],
-            } as any,
+            },
             user.id,
           );
         } catch (e) {
@@ -2448,7 +2449,7 @@ export async function registerRoutes(
           const caseMemos = await storage.getMemosByCase(caseId);
           for (const m of caseMemos) {
             if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
-              await storage.updateMemo(m.id, { assignedTo: newLawyerId } as any);
+              await storage.updateMemo(m.id, { assignedTo: newLawyerId });
             }
           }
         } catch (e) {
@@ -2471,19 +2472,19 @@ export async function registerRoutes(
           const memos = await storage.getMemosByCase(caseId);
           for (const m of memos) {
             if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
-              await storage.updateMemo(m.id, { status: "ملغاة" } as any);
+              await storage.updateMemo(m.id, { status: "ملغاة" });
             }
           }
           // Cancel pending/in-progress field tasks
           const caseFieldTasks = await storage.getFieldTasksByCase(caseId);
           for (const t of caseFieldTasks) {
             if (t.status === "قيد_التنفيذ" || t.status === "قيد_الانتظار") {
-              await storage.updateFieldTask(t.id, { status: "ملغي" } as any);
+              await storage.updateFieldTask(t.id, { status: "ملغي" });
             }
           }
           // Recalculate activeMemoCount after cancelling memos
           const finalActiveCount = await getActiveMemoCount(caseId);
-          await storage.updateCase(caseId, { activeMemoCount: finalActiveCount } as any);
+          await storage.updateCase(caseId, { activeMemoCount: finalActiveCount });
         } catch (e) {
           console.error("Error cleaning up related entities on case close:", e);
         }
@@ -2549,7 +2550,7 @@ export async function registerRoutes(
     try {
       const partialClientSchema = insertClientSchema.partial();
       const validatedData = partialClientSchema.parse(req.body);
-      const updated = await storage.updateClient(String(req.params.id), validatedData as any);
+      const updated = await storage.updateClient(String(req.params.id), validatedData);
       if (!updated) {
         return res.status(404).json({ error: "العميل غير موجود" });
       }
@@ -2821,7 +2822,7 @@ export async function registerRoutes(
       const lawyer = await storage.getUser(assignedTo);
       const lawyerName = lawyer?.name || assignedTo;
 
-      const updated = await storage.updateConsultationAndLog(consultation.id, { assignedTo } as any, {
+      const updated = await storage.updateConsultationAndLog(consultation.id, { assignedTo }, {
         activityType: ConsultationActivityType.ASSIGNED,
         description: `تم إسناد الاستشارة لـ ${lawyerName}`,
         metadata: { assignedTo, lawyerName },
@@ -3300,7 +3301,7 @@ export async function registerRoutes(
           pauseReason: null,
           awaitingCompletion: false,
           savedStage: null,
-        } as any,
+        },
         {
           activityType: ConsultationActivityType.FOLLOW_UP_STARTED,
           // Description carries a truncated preview so the timeline reads
@@ -4393,7 +4394,7 @@ export async function registerRoutes(
       if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
       const lawyer = await storage.getUser(assignedTo);
       const lawyerName = lawyer?.name || assignedTo;
-      const updated = await storage.updateContractAndLog(contract.id, { assignedTo } as any, {
+      const updated = await storage.updateContractAndLog(contract.id, { assignedTo }, {
         activityType: ContractActivityType.ASSIGNED,
         description: `تم إسناد العقد لـ ${lawyerName}`,
         metadata: { assignedTo, lawyerName },
@@ -4801,7 +4802,7 @@ export async function registerRoutes(
         currentStage: ContractStage.CLOSED,
         closedAt: new Date() as any,
         closureReason: reason,
-      } as any, {
+      }, {
         activityType: ContractActivityType.EARLY_CLOSED,
         description: `إغلاق مبكر — السبب: ${reason}`,
         metadata: { reason, fromStage: contract.currentStage },
@@ -6125,7 +6126,7 @@ export async function registerRoutes(
                     ...stageHistory,
                     { stage: "مداولة_الصلح", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة صلح" },
                   ],
-                } as any);
+                });
               }
             } else if (hearingType === "محكمة") {
               const courtFromStages = [
@@ -6147,7 +6148,7 @@ export async function registerRoutes(
                     ...stageHistory,
                     { stage: "منظورة", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة محكمة" },
                   ],
-                } as any);
+                });
               }
             }
           }
@@ -6169,7 +6170,7 @@ export async function registerRoutes(
               linkedCase.responseDeadline
             );
             if (smartPriority !== linkedCase.priority) {
-              await storage.updateCase(linkedCase.id, { priority: smartPriority } as any);
+              await storage.updateCase(linkedCase.id, { priority: smartPriority });
             }
           }
         } catch (e) {
@@ -6213,7 +6214,7 @@ export async function registerRoutes(
           createdMemos.push({ type: "response_memo", id: memo.id, description: "مذكرة جوابية تلقائية" });
 
           const activeCount = await getActiveMemoCount(validatedData.caseId);
-          await storage.updateCase(validatedData.caseId, { activeMemoCount: activeCount } as any);
+          await storage.updateCase(validatedData.caseId, { activeMemoCount: activeCount });
         } catch (e) {
           console.error("Error creating auto memo for hearing:", e);
         }
@@ -6251,10 +6252,10 @@ export async function registerRoutes(
                 });
                 createdMemos.push({ type: "deferred_response_memo", id: memo.id, description: "مذكرة جوابية مؤجلة" });
                 // Clear the flag on the originating hearing — handled.
-                await storage.updateHearing(pendingH.id, { memoRequired: false } as any);
+                await storage.updateHearing(pendingH.id, { memoRequired: false });
               }
               const activeCount = await getActiveMemoCount(validatedData.caseId);
-              await storage.updateCase(validatedData.caseId, { activeMemoCount: activeCount } as any);
+              await storage.updateCase(validatedData.caseId, { activeMemoCount: activeCount });
             }
           }
         } catch (e) {
@@ -6306,7 +6307,7 @@ export async function registerRoutes(
             relatedCase.responseDeadline
           );
           if (smartPriority !== relatedCase.priority) {
-            await storage.updateCase(relatedCase.id, { priority: smartPriority } as any);
+            await storage.updateCase(relatedCase.id, { priority: smartPriority });
           }
         } catch (e) {
           console.error("Error recalculating priority on hearing update:", e);
@@ -6477,7 +6478,7 @@ export async function registerRoutes(
             responsibleLawyerId: null,
             assignedLawyers: [],
             internalReviewerId: null,
-          } as any);
+          });
           if (reqUser) {
             try {
               await storage.logCaseActivity({
@@ -6530,7 +6531,7 @@ export async function registerRoutes(
               attendingLawyerId: hearing.attendingLawyerId,
               opponentResponseRequired: data.opponentResponseRequired || false,
               notes: `موعد جديد من جلسة ${hearing.hearingDate}`,
-            } as any);
+            });
             newSessionHearingId = newHearing.id;
             createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
           }
@@ -6546,7 +6547,7 @@ export async function registerRoutes(
               assignedTo: responseAssignee,
               priority: "عالي",
               dueDate: data.nextHearingDate,
-            } as any, reqUser.id);
+            }, reqUser.id);
             createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
 
             const deadlineDate = new Date(data.nextHearingDate);
@@ -6569,10 +6570,10 @@ export async function registerRoutes(
 
             // Memo has been created — clear the deferred flag so adding a
             // future hearing doesn't trigger the deferred-memo path again.
-            await storage.updateHearing(hearingId, { memoRequired: false } as any);
+            await storage.updateHearing(hearingId, { memoRequired: false });
 
             const activeCount = await getActiveMemoCount(effectiveCaseId);
-            await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
+            await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount });
           }
         }
 
@@ -6608,7 +6609,7 @@ export async function registerRoutes(
                 assignedTo: adminSupport?.id || reqUser.id,
                 priority: "عاجل",
                 dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-              } as any, reqUser.id);
+              }, reqUser.id);
               createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
 
               // Transition to collection
@@ -6620,7 +6621,7 @@ export async function registerRoutes(
                   { stage: "محكوم_حكم_نهائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: `حكم نهائي ${judgmentType}` },
                   { stage: "تحصيل", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "انتقال تلقائي بعد حكم نهائي" },
                 ],
-              } as any);
+              });
             } else if (judgmentType === "ضدنا") {
               // Case 2: final + against us → close
               caseUpdate.currentStage = "محكوم_حكم_نهائي";
@@ -6636,7 +6637,7 @@ export async function registerRoutes(
                   { stage: "محكوم_حكم_نهائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: "حكم نهائي ضدنا" },
                   { stage: "مقفلة", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "إغلاق تلقائي — حكم نهائي ضدنا" },
                 ],
-              } as any);
+              });
             }
           } else {
             // === PRIMARY (ابتدائي) JUDGMENTS ===
@@ -6691,7 +6692,7 @@ export async function registerRoutes(
 
               // Keep activeMemoCount fresh — mirrors PATH A's pattern.
               const activeCount = await getActiveMemoCount(effectiveCaseId);
-              await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount } as any);
+              await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount });
 
               await storage.logCaseActivity({
                 caseId: effectiveCaseId,
@@ -6717,7 +6718,7 @@ export async function registerRoutes(
             assignedTo: lawyerAssignee,
             priority: "عاجل",
             dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          } as any, reqUser.id);
+          }, reqUser.id);
           createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
         }
 
@@ -6776,7 +6777,7 @@ export async function registerRoutes(
             assignedTo: adminSupport?.id || reqUser.id,
             priority: "عاجل",
             dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          } as any, reqUser.id);
+          }, reqUser.id);
           createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
 
           caseUpdate.currentStage = "تحصيل";
@@ -6891,7 +6892,7 @@ export async function registerRoutes(
       }
 
       if (createdTasks.length > 0) {
-        await storage.updateHearing(hearingId, { adminTasksCreated: true } as any);
+        await storage.updateHearing(hearingId, { adminTasksCreated: true });
       }
 
       res.json({ hearing: updatedHearing, createdTasks, createdMemos });
@@ -6926,7 +6927,7 @@ export async function registerRoutes(
         nextSteps: data.nextSteps || "",
         contactCompleted: data.contactCompleted,
         reportCompleted: true,
-      } as any);
+      });
 
       res.json(updated);
     } catch (error) {
@@ -6957,7 +6958,7 @@ export async function registerRoutes(
 
       const updated = await storage.updateHearing(hearingId, {
         status: HearingStatus.COMPLETED,
-      } as any);
+      });
 
       res.json(updated);
     } catch (error) {
