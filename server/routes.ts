@@ -71,6 +71,10 @@ import {
   type SidebarSectionValue,
   type UserRoleType,
   type PriorityType,
+  type CaseClassificationValue,
+  type CaseStageValue,
+  type ConsultationTypeValue,
+  type ContractTypeValue,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -613,9 +617,9 @@ function validateStageTransition(
     const clientRole = entityData.clientRole as string | undefined;
     const memoRequired = !!entityData.memoRequired;
     const isSettlementCase = !!entityData.isSettlementCase;
-    const stages = getStagesForClassification(classification as any, departmentName, clientRole, memoRequired, isSettlementCase);
-    const currentIdx = stages.indexOf(currentStage as any);
-    const targetIdx = stages.indexOf(targetStage as any);
+    const stages = getStagesForClassification(classification as CaseClassificationValue, departmentName, clientRole, memoRequired, isSettlementCase);
+    const currentIdx = stages.indexOf(currentStage as CaseStageValue);
+    const targetIdx = stages.indexOf(targetStage as CaseStageValue);
 
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       // This is a rollback
@@ -1278,7 +1282,7 @@ export async function registerRoutes(
       const validatedData = insertCaseSchema.parse(req.body);
       // Carry clientRole forward explicitly — earlier the field wasn't in the
       // schema, so parse() stripped it and the case was inserted with null.
-      (validatedData as any).clientRole = (validatedData as any).clientRole ?? req.body.clientRole ?? null;
+      validatedData.clientRole = validatedData.clientRole ?? req.body.clientRole ?? null;
       const createdBy = req.body.createdBy || "unknown";
       const newCase = await storage.createCase(validatedData as any, createdBy);
 
@@ -1311,14 +1315,14 @@ export async function registerRoutes(
       const smartPriority = calculateSmartPriority(
         validatedData.caseType || "",
         classification,
-        !!(validatedData as any).memoRequired,
+        !!validatedData.memoRequired,
         (req.body.nextHearingDate as string | null) || null,
         validatedData.priority || "متوسط",
         validatedData.responseDeadline || null
       );
       if (smartPriority !== newCase.priority) {
         await storage.updateCase(newCase.id, { priority: smartPriority });
-        (newCase as any).priority = smartPriority;
+        newCase.priority = smartPriority;
       }
 
       // Auto-create memo for existing cases where client is defendant
@@ -1335,13 +1339,13 @@ export async function registerRoutes(
               hearingDate: req.body.nextHearingDate,
               hearingTime: req.body.nextHearingTime || "10:00",
               hearingType: "محكمة",
-              courtName: (validatedData.courtName || "") as any,
+              courtName: (validatedData.courtName || ""),
               status: "قادمة",
             });
             autoHearingId = hearing.id;
             autoCreated.push({ type: "hearing", id: hearing.id, hearing });
             await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate });
-            (newCase as any).nextHearingDate = req.body.nextHearingDate;
+            newCase.nextHearingDate = req.body.nextHearingDate;
           } catch (e) {
             console.error("[POST /api/cases] Error auto-creating defendant hearing:", e);
           }
@@ -1370,7 +1374,7 @@ export async function registerRoutes(
 
         try {
           await storage.createNotification({
-            type: "case_assigned" as any,
+            type: "case_assigned",
             priority: "urgent",
             status: "pending",
             title: "قضية جديدة - مدعى عليه",
@@ -1400,13 +1404,13 @@ export async function registerRoutes(
             hearingDate: req.body.nextHearingDate,
             hearingTime: req.body.nextHearingTime || "10:00",
             hearingType: "محكمة",
-            courtName: (validatedData.courtName || "") as any,
+            courtName: (validatedData.courtName || ""),
             status: "قادمة",
           });
           autoHearingId = hearing.id;
           autoCreated.push({ type: "hearing", id: hearing.id, hearing });
           await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate });
-          (newCase as any).nextHearingDate = req.body.nextHearingDate;
+          newCase.nextHearingDate = req.body.nextHearingDate;
         } catch (e) {
           console.error("[POST /api/cases] Error auto-creating hearing:", e);
         }
@@ -1512,7 +1516,7 @@ export async function registerRoutes(
         const recipients = deptHead ? [deptHead.id] : ["1"];
         for (const recipientId of recipients) {
           await storage.createNotification({
-            type: "stage_changed" as any,
+            type: "stage_changed",
             priority: "high",
             status: "pending",
             title: "مطلوب تقييد القضية في المحكمة",
@@ -1566,7 +1570,7 @@ export async function registerRoutes(
         const recipients = deptHead ? [deptHead.id] : ["1"];
         for (const recipientId of recipients) {
           await storage.createNotification({
-            type: "stage_changed" as any,
+            type: "stage_changed",
             priority: "high",
             status: "pending",
             title: "مطلوب استكمال دراسة القضية ورفعها للمحكمة",
@@ -1615,7 +1619,7 @@ export async function registerRoutes(
       const adminSupports = allUsers.filter((u: any) => u.role === "admin_support" && u.isActive);
       for (const admin of adminSupports) {
         await storage.createNotification({
-          type: "task_reminder" as any,
+          type: "task_reminder",
           priority: "high",
           status: "pending",
           title: "توجيه عميل لرفع التسوية الودية",
@@ -1676,15 +1680,15 @@ export async function registerRoutes(
       const { notes } = req.body;
       const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال المرفقات والبيانات - الدعوى مكتملة";
       const now = new Date().toISOString();
-      const existingHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
+      const existingHistory = Array.isArray(caseItem.stageHistory) ? caseItem.stageHistory : [];
 
       // Skip target depends on the path the case is on. UNDER_STUDY cases
       // always go to دراسة. IN_COURT cases branch on clientRole and
       // memoRequired: defendant + memo → تحرير_مذكرة_جوابية, plaintiff +
       // memo → تحرير_صحيفة_الدعوى, no memo → دراسة.
-      const isInCourt = (caseItem as any).caseClassification === "منظورة_بالمحكمة";
-      const clientRole = (caseItem as any).clientRole as string | undefined;
-      const memoRequired = !!(caseItem as any).memoRequired;
+      const isInCourt = caseItem.caseClassification === "منظورة_بالمحكمة";
+      const clientRole = caseItem.clientRole as string | undefined;
+      const memoRequired = !!caseItem.memoRequired;
       let skipTarget: string = "دراسة";
       if (isInCourt && memoRequired) {
         skipTarget = clientRole === "مدعى_عليه"
@@ -1760,14 +1764,14 @@ export async function registerRoutes(
         return res.status(400).json({ error: "القضية مقيدة في المحكمة بالفعل" });
       }
       // Prerequisite: commercial cases must have taradiStatus === "لم_يتم_صلح" and a taradi number
-      if (caseItem.caseType === "تجاري" && (caseItem as any).taradiStatus !== "لم_يتم_صلح") {
+      if (caseItem.caseType === "تجاري" && caseItem.taradiStatus !== "لم_يتم_صلح") {
         return res.status(400).json({ error: "يجب إتمام مرحلة تراضي (عدم الصلح) قبل تقييد القضية التجارية في المحكمة" });
       }
-      if (caseItem.caseType === "تجاري" && !(caseItem as any).taradiNumber) {
+      if (caseItem.caseType === "تجاري" && !caseItem.taradiNumber) {
         return res.status(400).json({ error: "يجب إدخال رقم الطلب في منصة تراضي قبل تقييد القضية في المحكمة" });
       }
       // Prerequisite: labor cases must have mohrStatus === "انتهت_التسوية"
-      if (caseItem.caseType === "عمالي" && (caseItem as any).mohrStatus !== "انتهت_التسوية") {
+      if (caseItem.caseType === "عمالي" && caseItem.mohrStatus !== "انتهت_التسوية") {
         return res.status(400).json({ error: "يجب إتمام مرحلة وزارة الموارد البشرية (انتهاء التسوية) قبل تقييد القضية العمالية في المحكمة" });
       }
       const { courtCaseNumber, najizNumber } = req.body;
@@ -1786,7 +1790,7 @@ export async function registerRoutes(
         // implicitly the plaintiff. On promotion to IN_COURT we must persist
         // that as an explicit "مدعي" — otherwise the row ends up IN_COURT
         // with null clientRole and the UI loses the role.
-        ...(!(caseItem as any).clientRole ? { clientRole: "مدعي" } : {}),
+        ...(!caseItem.clientRole ? { clientRole: "مدعي" } : {}),
       });
       await storage.logCaseActivity({
         caseId: caseItem.id,
@@ -1833,7 +1837,7 @@ export async function registerRoutes(
       // so the assigned lawyer can submit it without canEditCaseData.
       const isSettlementContinueTransition =
         existing.currentStage === "مداولة_الصلح" &&
-        (existing as any).isSettlementCase === true &&
+        existing.isSettlementCase === true &&
         req.body.currentStage === "أغلق_طلب_الصلح" &&
         req.body.isSettlementCase === false &&
         req.body.caseClassification === "قيد_الدراسة";
@@ -1901,8 +1905,8 @@ export async function registerRoutes(
         // etc.) and is NOT used for routing.
         const mergedCase: any = { ...existing, ...req.body };
         try {
-          const dept = (existing as any).departmentId
-            ? await storage.getDepartmentById((existing as any).departmentId)
+          const dept = existing.departmentId
+            ? await storage.getDepartmentById(existing.departmentId)
             : null;
           if (dept?.name) {
             mergedCase.departmentName = dept.name;
@@ -1953,16 +1957,16 @@ export async function registerRoutes(
         // The taradi number IS the case number at that platform, so on
         // entry we also replace caseNumber with it. Same for labor mohr.
         if (targetStage === "قيد_التدقيق_في_تراضي") {
-          const taradi = req.body.taradiNumber || (existing as any).taradiNumber;
+          const taradi = req.body.taradiNumber || existing.taradiNumber;
           if (!taradi) return res.status(400).json({ error: "يجب إدخال رقم الطلب في تراضي" });
           req.body.caseNumber = String(taradi).trim();
         }
         if (targetStage === "قيد_التدقيق_في_ناجز") {
-          const najiz = req.body.najizNumber || (existing as any).najizNumber;
+          const najiz = req.body.najizNumber || existing.najizNumber;
           if (!najiz) return res.status(400).json({ error: "يجب إدخال رقم القيد في ناجز" });
         }
         if (targetStage === "قيد_التدقيق_في_معين") {
-          const moeen = req.body.moeenNumber || (existing as any).moeenNumber;
+          const moeen = req.body.moeenNumber || existing.moeenNumber;
           if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
         }
 
@@ -1976,13 +1980,13 @@ export async function registerRoutes(
         ]);
         if (
           IN_COURT_STAGES.has(targetStage) &&
-          (existing as any).caseClassification === "قيد_الدراسة"
+          existing.caseClassification === "قيد_الدراسة"
         ) {
           req.body.caseClassification = "منظورة_بالمحكمة";
           // For قيد_الدراسة the firm is always the plaintiff — persist that as
           // an explicit clientRole so post-promotion UI (صفة badge, etc.)
           // doesn't lose the role once classification flips.
-          if (!(existing as any).clientRole && !req.body.clientRole) {
+          if (!existing.clientRole && !req.body.clientRole) {
             req.body.clientRole = "مدعي";
           }
         }
@@ -1995,7 +1999,7 @@ export async function registerRoutes(
             targetStage === "أغلق_طلب_الصلح") &&
           existing.currentStage !== targetStage
         ) {
-          const mohr = req.body.mohrNumber || (existing as any).mohrNumber;
+          const mohr = req.body.mohrNumber || existing.mohrNumber;
           if (mohr && String(mohr).trim()) {
             req.body.caseNumber = String(mohr).trim();
           }
@@ -2038,13 +2042,13 @@ export async function registerRoutes(
 
         // Before تقديم_التظلم: require grievanceDate
         if (targetStage === "تقديم_التظلم") {
-          const gDate = req.body.grievanceDate || (existing as any).grievanceDate;
+          const gDate = req.body.grievanceDate || existing.grievanceDate;
           if (!gDate) return res.status(400).json({ error: "يجب تحديد تاريخ التظلم" });
         }
 
         // From تحديد_تاريخ_التقادم to next: require prescriptionDate
         if (existing.currentStage === "تحديد_تاريخ_التقادم") {
-          const pDate = req.body.prescriptionDate || (existing as any).prescriptionDate;
+          const pDate = req.body.prescriptionDate || existing.prescriptionDate;
           if (!pDate) return res.status(400).json({ error: "يجب تحديد تاريخ التقادم" });
         }
 
@@ -2129,7 +2133,7 @@ export async function registerRoutes(
       // log gets the right "from" snapshot.
       const transferFromStage = existing.currentStage;
       const transferFromDeptId = existing.departmentId;
-      const transferFromInternalReviewerId = (existing as any).internalReviewerId || null;
+      const transferFromInternalReviewerId = existing.internalReviewerId || null;
       const transferReason = typeof req.body.transferReason === "string"
         ? req.body.transferReason.trim()
         : "";
@@ -2186,7 +2190,7 @@ export async function registerRoutes(
         existing.currentStage !== req.body.currentStage
       ) {
         const persistedReviewer: string | undefined =
-          (existing as any).internalReviewerId || undefined;
+          existing.internalReviewerId || undefined;
         const overrideReviewer: string | undefined =
           (typeof req.body.internalReviewerId === "string" && req.body.internalReviewerId)
             ? req.body.internalReviewerId
@@ -2330,7 +2334,7 @@ export async function registerRoutes(
             // not just a generic stage_changed entry.
             if (
               existing.currentStage === "مداولة_الصلح" &&
-              (existing as any).isSettlementCase
+              existing.isSettlementCase
             ) {
               if (req.body.currentStage === "مقفلة") {
                 await storage.logCaseActivity({
@@ -2344,7 +2348,7 @@ export async function registerRoutes(
                 req.body.currentStage === "أغلق_طلب_الصلح" &&
                 req.body.isSettlementCase === false
               ) {
-                const prevClassification = (existing as any).caseClassification || "منظورة_بالمحكمة";
+                const prevClassification = existing.caseClassification || "منظورة_بالمحكمة";
                 const newClassification = req.body.caseClassification || prevClassification;
                 await storage.logCaseActivity({
                   caseId: String(req.params.id),
@@ -2388,7 +2392,7 @@ export async function registerRoutes(
       ) {
         try {
           await storage.createNotification({
-            type: "case_assigned" as any,
+            type: "case_assigned",
             priority: "high",
             status: "pending",
             title: "إسناد مراجعة داخلية",
@@ -2417,7 +2421,7 @@ export async function registerRoutes(
           );
           if (notifyRecipient) {
             await storage.createNotification({
-              type: "case_assigned" as any,
+              type: "case_assigned",
               priority: "high",
               status: "pending",
               title: "تم تحويل قضية لقسمك",
@@ -2717,8 +2721,8 @@ export async function registerRoutes(
           return res.status(400).json({ error: "نوع الاستشارة غير صحيح" });
         } else {
           const remapped = remapConsultationStageForType(
-            existing.currentStage as any,
-            newType as any,
+            existing.currentStage,
+            newType as ConsultationTypeValue,
           );
           typeChange = {
             from: existing.consultationType,
@@ -2736,10 +2740,10 @@ export async function registerRoutes(
 
       let updated;
       if (typeChange) {
-        const fromTypeLabel = (ConsultationTypeLabels as any)[typeChange.from] || typeChange.from;
-        const toTypeLabel = (ConsultationTypeLabels as any)[typeChange.to] || typeChange.to;
-        const fromStageLabel = (ConsultationStageLabels as any)[typeChange.fromStage] || typeChange.fromStage;
-        const toStageLabel = (ConsultationStageLabels as any)[typeChange.toStage] || typeChange.toStage;
+        const fromTypeLabel = (ConsultationTypeLabels as Record<string, string>)[typeChange.from] || typeChange.from;
+        const toTypeLabel = (ConsultationTypeLabels as Record<string, string>)[typeChange.to] || typeChange.to;
+        const fromStageLabel = (ConsultationStageLabels as Record<string, string>)[typeChange.fromStage] || typeChange.fromStage;
+        const toStageLabel = (ConsultationStageLabels as Record<string, string>)[typeChange.toStage] || typeChange.toStage;
         const description = typeChange.remapped
           ? `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel} — أُعيد ضبط المرحلة من ${fromStageLabel} إلى ${toStageLabel}`
           : `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel}`;
@@ -2865,8 +2869,8 @@ export async function registerRoutes(
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
-      const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
-      const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
+      const fromLabel = ConsultationStageLabels[consultation.currentStage] || consultation.currentStage;
+      const toLabel = (ConsultationStageLabels as Record<string, string>)[targetStage] || targetStage;
       // All three types reach CLOSED_FINAL via /advance-stage now:
       // WRITTEN via READY → CLOSED_FINAL (Issue-3 fix), PHONE/PROCEDURAL
       // via COMPLETED → CLOSED_FINAL, and any type via its follow-up
@@ -2924,8 +2928,8 @@ export async function registerRoutes(
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
-      const fromLabel = (ConsultationStageLabels as any)[consultation.currentStage] || consultation.currentStage;
-      const toLabel = (ConsultationStageLabels as any)[targetStage] || targetStage;
+      const fromLabel = ConsultationStageLabels[consultation.currentStage] || consultation.currentStage;
+      const toLabel = (ConsultationStageLabels as Record<string, string>)[targetStage] || targetStage;
       const updated = await storage.updateConsultationAndLog(
         consultation.id,
         { currentStage: targetStage } as any,
@@ -3639,7 +3643,7 @@ export async function registerRoutes(
       if (lawCase.currentStage !== "الأخذ_بالملاحظات") {
         return res.status(400).json({ error: "القضية ليست في مرحلة الأخذ بالملاحظات" });
       }
-      if (lawCase.pausedAt || (lawCase as any).awaitingCompletion) {
+      if (lawCase.pausedAt || lawCase.awaitingCompletion) {
         return res.status(400).json({ error: "القضية في حالة لا تسمح بإعادتها للجنة" });
       }
 
@@ -4175,8 +4179,8 @@ export async function registerRoutes(
           return res.status(400).json({ error: "نوع العقد غير صحيح" });
         } else {
           const remapped = remapContractStageForType(
-            existing.currentStage as any,
-            newType as any,
+            existing.currentStage,
+            newType as ContractTypeValue,
           );
           typeChange = {
             from: existing.contractType,
@@ -4197,7 +4201,7 @@ export async function registerRoutes(
         // helper below if both happen — see metadata.alsoChangedType).
         const fromDeptName = await storage.getDepartmentById(deptTransfer.fromDeptId).then((d) => d?.name || deptTransfer.fromDeptId).catch(() => deptTransfer.fromDeptId);
         const toDeptName = await storage.getDepartmentById(deptTransfer.toDeptId).then((d) => d?.name || deptTransfer.toDeptId).catch(() => deptTransfer.toDeptId);
-        const fromStageLabel = (ContractStageLabels as any)[deptTransfer.fromStage] || deptTransfer.fromStage;
+        const fromStageLabel = (ContractStageLabels as Record<string, string>)[deptTransfer.fromStage] || deptTransfer.fromStage;
         const description = deptTransfer.reason
           ? `تحويل من قسم "${fromDeptName}" إلى قسم "${toDeptName}" — ${deptTransfer.reason}`
           : `تحويل من قسم "${fromDeptName}" إلى قسم "${toDeptName}"`;
@@ -4222,10 +4226,10 @@ export async function registerRoutes(
           },
         );
       } else if (typeChange) {
-        const fromTypeLabel = (ContractTypeLabels as any)[typeChange.from] || typeChange.from;
-        const toTypeLabel = (ContractTypeLabels as any)[typeChange.to] || typeChange.to;
-        const fromStageLabel = (ContractStageLabels as any)[typeChange.fromStage] || typeChange.fromStage;
-        const toStageLabel = (ContractStageLabels as any)[typeChange.toStage] || typeChange.toStage;
+        const fromTypeLabel = (ContractTypeLabels as Record<string, string>)[typeChange.from] || typeChange.from;
+        const toTypeLabel = (ContractTypeLabels as Record<string, string>)[typeChange.to] || typeChange.to;
+        const fromStageLabel = (ContractStageLabels as Record<string, string>)[typeChange.fromStage] || typeChange.fromStage;
+        const toStageLabel = (ContractStageLabels as Record<string, string>)[typeChange.toStage] || typeChange.toStage;
         const description = typeChange.remapped
           ? `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel} — أُعيد ضبط المرحلة من ${fromStageLabel} إلى ${toStageLabel}`
           : `تغيير النوع من ${fromTypeLabel} إلى ${toTypeLabel}`;
@@ -4437,7 +4441,7 @@ export async function registerRoutes(
       // ignored for this transition.
       const slotCheckErr = await checkRequiredSlotsForTransition(
         contract,
-        contract.currentStage as any,
+        contract.currentStage,
       );
       if (slotCheckErr) return res.status(400).json({ error: slotCheckErr });
 
@@ -4522,8 +4526,8 @@ export async function registerRoutes(
         }
       }
 
-      const fromLabel = (ContractStageLabels as any)[contract.currentStage] || contract.currentStage;
-      const toLabel = (ContractStageLabels as any)[targetStage] || targetStage;
+      const fromLabel = ContractStageLabels[contract.currentStage] || contract.currentStage;
+      const toLabel = (ContractStageLabels as Record<string, string>)[targetStage] || targetStage;
       const reachedClosed = targetStage === ContractStage.CLOSED;
       const updateData: any = { currentStage: targetStage };
       if (reachedClosed) {
@@ -4578,8 +4582,8 @@ export async function registerRoutes(
         contract,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
-      const fromLabel = (ContractStageLabels as any)[contract.currentStage] || contract.currentStage;
-      const toLabel = (ContractStageLabels as any)[targetStage] || targetStage;
+      const fromLabel = ContractStageLabels[contract.currentStage] || contract.currentStage;
+      const toLabel = (ContractStageLabels as Record<string, string>)[targetStage] || targetStage;
       const updated = await storage.updateContractAndLog(
         contract.id,
         { currentStage: targetStage } as any,
@@ -4943,7 +4947,7 @@ export async function registerRoutes(
       // We keep the call for symmetry / future-proofing.
       const slotCheckErr = await checkRequiredSlotsForTransition(
         contract,
-        contract.currentStage as any,
+        contract.currentStage,
       );
       if (slotCheckErr) return res.status(400).json({ error: slotCheckErr });
       const updated = await storage.skipContractCompletion(contract.id, { performedBy: reqUser.id });
@@ -5022,14 +5026,14 @@ export async function registerRoutes(
     fromStage: string,
   ): Promise<string | null> {
     const resolved = resolveContractType(contract.contractType);
-    const rules = (ContractSlotsByType as any)[resolved] || [];
+    const rules = ContractSlotsByType[resolved] || [];
     const gating = rules.filter((r: any) => r.requiredBeforeLeavingStage === fromStage);
     if (gating.length === 0) return null;
     for (const rule of gating) {
       const existing = await storage.getContractAttachmentBySlot(contract.id, rule.slotKey);
       if (!existing) {
-        const slotLabel = (ContractAttachmentSlotLabels as any)[rule.slotKey] || rule.slotKey;
-        const stageLabel = (ContractStageLabels as any)[fromStage] || fromStage;
+        const slotLabel = ContractAttachmentSlotLabels[rule.slotKey] || rule.slotKey;
+        const stageLabel = (ContractStageLabels as Record<string, string>)[fromStage] || fromStage;
         return `لا يمكن مغادرة مرحلة "${stageLabel}" قبل رفع المرفق "${slotLabel}"`;
       }
     }
@@ -5120,7 +5124,7 @@ export async function registerRoutes(
           }
           // Slot must be allowed for this contract type (per ContractSlotsByType).
           const resolved = resolveContractType(contract.contractType);
-          const allowedSlotsForType = ((ContractSlotsByType as any)[resolved] || []).map((r: any) => r.slotKey);
+          const allowedSlotsForType = (ContractSlotsByType[resolved] || []).map((r: any) => r.slotKey);
           if (!allowedSlotsForType.includes(rawSlot)) {
             return res.status(400).json({ error: "هذه الخانة غير متاحة لنوع العقد الحالي" });
           }
@@ -5194,7 +5198,7 @@ export async function registerRoutes(
 
         // Activity log entry — replaced vs added paths differ in
         // copy + metadata so the timeline is unambiguous.
-        const slotLabel = slotKey ? ((ContractAttachmentSlotLabels as any)[slotKey] || slotKey) : "مرفقات إضافية";
+        const slotLabel = slotKey ? ((ContractAttachmentSlotLabels as Record<string, string>)[slotKey] || slotKey) : "مرفقات إضافية";
         if (replaced) {
           await storage.createContractActivity({
             contractId: contract.id,
@@ -5480,15 +5484,15 @@ export async function registerRoutes(
 
       // Resolve the department name from departmentId — caseType is
       // free-text and must not drive workflow routing.
-      const dept = (lawCase as any).departmentId
-        ? await storage.getDepartmentById((lawCase as any).departmentId)
+      const dept = lawCase.departmentId
+        ? await storage.getDepartmentById(lawCase.departmentId)
         : null;
       const validStages = new Set(getStagesForClassification(
-        (lawCase as any).caseClassification,
+        lawCase.caseClassification,
         dept?.name,
-        (lawCase as any).clientRole,
-        !!(lawCase as any).memoRequired,
-        !!(lawCase as any).isSettlementCase,
+        lawCase.clientRole ?? undefined,
+        !!lawCase.memoRequired,
+        !!lawCase.isSettlementCase,
       ) as string[]);
 
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
@@ -5674,8 +5678,8 @@ export async function registerRoutes(
         activityMetadata.reviewerName = reviewer.name;
       }
 
-      const fromLabel = (MemoStageLabels as any)[memo.currentStage] || memo.currentStage;
-      const toLabel = (MemoStageLabels as any)[targetStage] || targetStage;
+      const fromLabel = MemoStageLabels[memo.currentStage] || memo.currentStage;
+      const toLabel = (MemoStageLabels as Record<string, string>)[targetStage] || targetStage;
       const description = activityMetadata.reviewerName
         ? `انتقال من ${fromLabel} إلى ${toLabel} — المراجع: ${activityMetadata.reviewerName}`
         : `انتقال من ${fromLabel} إلى ${toLabel}`;
@@ -5731,8 +5735,8 @@ export async function registerRoutes(
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
-      const fromLabel = (MemoStageLabels as any)[memo.currentStage] || memo.currentStage;
-      const toLabel = (MemoStageLabels as any)[targetStage] || targetStage;
+      const fromLabel = MemoStageLabels[memo.currentStage] || memo.currentStage;
+      const toLabel = (MemoStageLabels as Record<string, string>)[targetStage] || targetStage;
       const updated = await storage.updateMemoAndLog(
         memo.id,
         { currentStage: targetStage } as any,
@@ -6137,12 +6141,12 @@ export async function registerRoutes(
               ];
               if (courtFromStages.includes(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
-                const promoteClassification = (caseForStage as any).caseClassification === "قيد_الدراسة";
+                const promoteClassification = caseForStage.caseClassification === "قيد_الدراسة";
                 await storage.updateCase(caseForStage.id, {
                   currentStage: "منظورة",
                   ...(promoteClassification ? {
                     caseClassification: "منظورة_بالمحكمة",
-                    ...(!(caseForStage as any).clientRole ? { clientRole: "مدعي" } : {}),
+                    ...(!caseForStage.clientRole ? { clientRole: "مدعي" } : {}),
                   } : {}),
                   stageHistory: [
                     ...stageHistory,
@@ -6378,8 +6382,8 @@ export async function registerRoutes(
         ? await storage.getCaseById(settlementProbeCaseId)
         : null;
       const isSettlementHearing =
-        !!(settlementProbeCase as any)?.isSettlementCase
-        && (settlementProbeCase as any)?.currentStage === "مداولة_الصلح";
+        !!settlementProbeCase?.isSettlementCase
+        && settlementProbeCase?.currentStage === "مداولة_الصلح";
       if (isSettlementHearing) {
         const allowedSettlementResults: string[] = [
           HearingResult.NEW_SESSION,
@@ -6469,7 +6473,7 @@ export async function registerRoutes(
           // The intake-set internal reviewer belongs to the source dept's
           // roster; clear it on jurisdiction transfer so the new dept head
           // can re-assign someone valid at intake.
-          const previousInternalReviewerId = (existingCase as any).internalReviewerId || null;
+          const previousInternalReviewerId = existingCase.internalReviewerId || null;
           await storage.updateCase(effectiveCaseId, {
             ...caseUpdate,
             departmentId: toDeptId,
@@ -6749,7 +6753,7 @@ export async function registerRoutes(
 
           for (const rid of Array.from(new Set(notifyIds))) {
             await storage.createNotification({
-              type: "stage_changed" as any,
+              type: "stage_changed",
               priority: "urgent",
               status: "pending",
               title: "تم شطب قضية",
@@ -6794,10 +6798,10 @@ export async function registerRoutes(
           // Non-settlement cases ignore the param and follow the normal
           // path back to أغلق_طلب_الصلح.
           const choice = String(data.afterFailedSettlementChoice || "").toLowerCase();
-          if ((existingCase as any).isSettlementCase && choice === "close") {
+          if (existingCase.isSettlementCase && choice === "close") {
             caseUpdate.currentStage = "مقفلة";
-            (caseUpdate as any).status = "مغلق";
-            (caseUpdate as any).closedAt = new Date().toISOString();
+            caseUpdate.status = "مغلق";
+            caseUpdate.closedAt = new Date().toISOString();
             await storage.updateCase(effectiveCaseId, caseUpdate);
             await storage.logCaseActivity({
               caseId: effectiveCaseId,
@@ -6806,16 +6810,16 @@ export async function registerRoutes(
               actionType: "settlement_failed_closed",
               title: "لم يتم الصلح — تم إغلاق القضية نهائياً",
             });
-          } else if ((existingCase as any).isSettlementCase && choice === "continue") {
+          } else if (existingCase.isSettlementCase && choice === "continue") {
             // Move the case off InCourtSettlementStages onto the regular
             // UnderStudy path so the progress bar resolves correctly. The
             // current stage أغلق_طلب_الصلح exists in the UnderStudy general
             // / commercial / labor arrays, and the resolver will pick the
             // right one from the case's department.
-            const prevClassification = (existingCase as any).caseClassification || "منظورة_بالمحكمة";
+            const prevClassification = existingCase.caseClassification || "منظورة_بالمحكمة";
             caseUpdate.currentStage = "أغلق_طلب_الصلح";
-            (caseUpdate as any).isSettlementCase = false;
-            (caseUpdate as any).caseClassification = "قيد_الدراسة";
+            caseUpdate.isSettlementCase = false;
+            caseUpdate.caseClassification = "قيد_الدراسة";
             await storage.updateCase(effectiveCaseId, caseUpdate);
             await storage.logCaseActivity({
               caseId: effectiveCaseId,
@@ -6833,13 +6837,13 @@ export async function registerRoutes(
               }),
             });
           } else {
-            if ((existingCase as any).isSettlementCase) {
+            if (existingCase.isSettlementCase) {
               console.warn("[hearing-result] settlement-only case at لم_يتم_الصلح missing afterFailedSettlementChoice; defaulting to close", {
                 caseId: effectiveCaseId,
               });
               caseUpdate.currentStage = "مقفلة";
-              (caseUpdate as any).status = "مغلق";
-              (caseUpdate as any).closedAt = new Date().toISOString();
+              caseUpdate.status = "مغلق";
+              caseUpdate.closedAt = new Date().toISOString();
               await storage.updateCase(effectiveCaseId, caseUpdate);
               await storage.logCaseActivity({
                 caseId: effectiveCaseId,
@@ -7201,7 +7205,7 @@ export async function registerRoutes(
         const relatedCase = await storage.getCaseById(memo.caseId);
         if (
           relatedCase &&
-          (relatedCase as any).caseClassification === "منظورة_بالمحكمة"
+          relatedCase.caseClassification === "منظورة_بالمحكمة"
         ) {
           const EARLY_STAGES = new Set([
             "استلام",
@@ -7211,13 +7215,13 @@ export async function registerRoutes(
           const atEarlyStage = EARLY_STAGES.has(relatedCase.currentStage);
 
           if (atEarlyStage) {
-            if (!(relatedCase as any).memoRequired) {
+            if (!relatedCase.memoRequired) {
               caseUpdate.memoRequired = true;
             }
             // Seed clientRole from the memo type when the case doesn't have
             // one yet: RESPONSE ("مذكرة_جوابية") → defendant, LAWSUIT_DRAFT
             // ("تحرير_دعوى") → plaintiff. Don't override an existing role.
-            if (!(relatedCase as any).clientRole) {
+            if (!relatedCase.clientRole) {
               if (memo.memoType === "مذكرة_جوابية") {
                 caseUpdate.clientRole = "مدعى_عليه";
               } else if (memo.memoType === "تحرير_دعوى") {
@@ -7343,7 +7347,7 @@ export async function registerRoutes(
         if (
           updateData.status === MemoStatus.CANCELLED &&
           relatedCase &&
-          (relatedCase as any).caseClassification === "منظورة_بالمحكمة"
+          relatedCase.caseClassification === "منظورة_بالمحكمة"
         ) {
           const FAST_FORWARD_STAGES = new Set([
             "استلام",
@@ -7355,8 +7359,8 @@ export async function registerRoutes(
           if (FAST_FORWARD_STAGES.has(relatedCase.currentStage)) {
             caseUpdate.memoRequired = false;
             caseUpdate.currentStage = "منظورة";
-            const history = Array.isArray((relatedCase as any).stageHistory)
-              ? (relatedCase as any).stageHistory
+            const history = Array.isArray(relatedCase.stageHistory)
+              ? relatedCase.stageHistory
               : [];
             caseUpdate.stageHistory = [
               ...history,
@@ -7371,7 +7375,7 @@ export async function registerRoutes(
           } else if (
             relatedCase.currentStage !== "منظورة" &&
             relatedCase.currentStage !== "منظورة_استئناف" &&
-            (relatedCase as any).memoRequired
+            relatedCase.memoRequired
           ) {
             // Past drafting but not yet at trial: just flip the flag off.
             caseUpdate.memoRequired = false;
@@ -7418,8 +7422,8 @@ export async function registerRoutes(
         const relatedCase = await storage.getCaseById(memo.caseId);
         if (
           relatedCase &&
-          (relatedCase as any).caseClassification === "منظورة_بالمحكمة" &&
-          (relatedCase as any).memoRequired
+          relatedCase.caseClassification === "منظورة_بالمحكمة" &&
+          relatedCase.memoRequired
         ) {
           const EARLY_STAGES = new Set([
             "استلام",
@@ -7498,7 +7502,7 @@ export async function registerRoutes(
       const user = req.user!;
       const adminRoles = ["branch_manager", "admin_support"];
       if (!adminRoles.includes(user.role)) {
-        const existing = await (storage as any).getNotificationById(String(req.params.id));
+        const existing = await storage.getNotificationById(String(req.params.id));
         if (!existing) return res.status(404).json({ error: "الإشعار غير موجود" });
         if (existing.recipientId !== user.id) {
           return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا الإشعار" });
@@ -8116,7 +8120,7 @@ export async function registerRoutes(
     try {
       const user = req.user!;
       const adminRoles = ["branch_manager", "admin_support", "department_head", "cases_review_head"];
-      const existing = await (storage as any).getCaseNoteById(String(req.params.id));
+      const existing = await storage.getCaseNoteById(String(req.params.id));
       if (!existing) return res.status(404).json({ message: "ملاحظة غير موجودة" });
       if (!adminRoles.includes(user.role) && existing.userId !== user.id) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الملاحظة" });
@@ -8133,7 +8137,7 @@ export async function registerRoutes(
     try {
       const user = req.user!;
       const adminRoles = ["branch_manager", "admin_support"];
-      const existing = await (storage as any).getCaseNoteById(String(req.params.id));
+      const existing = await storage.getCaseNoteById(String(req.params.id));
       if (!existing) return res.status(404).json({ message: "ملاحظة غير موجودة" });
       if (!adminRoles.includes(user.role) && existing.userId !== user.id) {
         return res.status(403).json({ error: "لا تملك صلاحية حذف هذه الملاحظة" });
@@ -8495,7 +8499,7 @@ export async function registerRoutes(
 
     const unreadNotifications = allNotifications.filter(n => n.recipientId === user.id && !n.isRead).length;
 
-    const activeCases = userCases.filter(c => (c.currentStage as string) !== "مقفلة" && (c.currentStage as string) !== "مغلق" && !(c as any).isArchived);
+    const activeCases = userCases.filter(c => (c.currentStage as string) !== "مقفلة" && (c.currentStage as string) !== "مغلق" && !c.isArchived);
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const closedThisMonth = userCases.filter(c =>
       ((c.currentStage as string) === "مقفلة" || (c.currentStage as string) === "مغلق") &&
