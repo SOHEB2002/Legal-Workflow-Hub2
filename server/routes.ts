@@ -73,6 +73,12 @@ import {
   type PriorityType,
   type CaseClassificationValue,
   type CaseStageValue,
+  type CaseStageTransition,
+  type ConsultationStageValue,
+  type ContractStageValue,
+  type MemoStageValue,
+  type LawCase,
+  type TicketComment,
   type ConsultationTypeValue,
   type ContractTypeValue,
 } from "@shared/schema";
@@ -1284,7 +1290,7 @@ export async function registerRoutes(
       // schema, so parse() stripped it and the case was inserted with null.
       validatedData.clientRole = validatedData.clientRole ?? req.body.clientRole ?? null;
       const createdBy = req.body.createdBy || "unknown";
-      const newCase = await storage.createCase(validatedData as any, createdBy);
+      const newCase = await storage.createCase(validatedData as Partial<LawCase>, createdBy);
 
       // IN_COURT cases may begin at مداولة_الصلح instead of the default استلام.
       const requestedStartingStage = typeof req.body.startingStage === "string"
@@ -1295,7 +1301,7 @@ export async function registerRoutes(
         validatedData.caseClassification === CaseClassification.IN_COURT
       ) {
         const nowIso = new Date().toISOString();
-        const stageHistory = [
+        const stageHistory: CaseStageTransition[] = [
           { stage: "استلام", timestamp: nowIso, userId: createdBy, userName: createdBy, notes: "استلام القضية" },
           { stage: "مداولة_الصلح", timestamp: nowIso, userId: createdBy, userName: createdBy, notes: "بدء القضية من مرحلة مداولة الصلح" },
         ];
@@ -1303,7 +1309,7 @@ export async function registerRoutes(
           currentStage: "مداولة_الصلح",
           stageHistory,
           isSettlementCase: true,
-        } as any);
+        });
         if (updated) {
           Object.assign(newCase, updated);
         }
@@ -1689,14 +1695,14 @@ export async function registerRoutes(
       const isInCourt = caseItem.caseClassification === "منظورة_بالمحكمة";
       const clientRole = caseItem.clientRole as string | undefined;
       const memoRequired = !!caseItem.memoRequired;
-      let skipTarget: string = "دراسة";
+      let skipTarget: CaseStageValue = "دراسة";
       if (isInCourt && memoRequired) {
         skipTarget = clientRole === "مدعى_عليه"
           ? "تحرير_مذكرة_جوابية"
           : "تحرير_صحيفة_الدعوى";
       }
 
-      const stageHistory = [
+      const stageHistory: CaseStageTransition[] = [
         ...existingHistory,
         { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: user.name, notes: "تجاوز تلقائي" },
         { stage: skipTarget, timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
@@ -1705,7 +1711,7 @@ export async function registerRoutes(
       // Step 1: update the case (the only critical operation)
       let updated;
       try {
-        updated = await storage.updateCase(caseItem.id, { currentStage: skipTarget, stageHistory } as any);
+        updated = await storage.updateCase(caseItem.id, { currentStage: skipTarget, stageHistory });
       } catch (err: any) {
         console.error("[skip-data-completion] updateCase FAILED", {
           caseId,
@@ -2165,7 +2171,7 @@ export async function registerRoutes(
           const caseMemos = await storage.getMemosByCase(caseId);
           for (const m of caseMemos) {
             if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
-              await storage.updateMemo(m.id, { assignedTo: null } as any);
+              await storage.updateMemo(m.id, { assignedTo: null } as any);  // FIXME(2D-defer): null -> memos.assigned_to is NOT NULL; this write throws (caught/swallowed below) so dept-transfer unassign silently no-ops. Needs schema migration (drop NOT NULL) or different unassign logic — not a type fix.
             }
           }
         } catch (e) {
@@ -2932,7 +2938,7 @@ export async function registerRoutes(
       const toLabel = (ConsultationStageLabels as Record<string, string>)[targetStage] || targetStage;
       const updated = await storage.updateConsultationAndLog(
         consultation.id,
-        { currentStage: targetStage } as any,
+        { currentStage: targetStage as ConsultationStageValue },
         {
           activityType: ConsultationActivityType.STAGE_RETURNED,
           description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
@@ -3223,8 +3229,8 @@ export async function registerRoutes(
           status: "closed",
           closureReason: reason,
           closureReasonOther: otherText.trim() || null,
-          closedAt: new Date(),
-        } as any,
+          closedAt: new Date().toISOString(),
+        },
         {
           activityType: ConsultationActivityType.EARLY_CLOSED,
           description,
@@ -3289,14 +3295,14 @@ export async function registerRoutes(
           status: "active",
           currentStage: ConsultationStage.RECEIVED,
           followUpCount: nextCount,
-          followUpStartedAt: new Date() as any,
+          followUpStartedAt: new Date() as any,  // Date-mode cast: Date into Drizzle Date-mode timestamp column (not special-cased like closedAt); precise fix needs storage-layer toISOString handling (see storage.ts audit).
           // Clear previous closure metadata — it described the prior
           // lifecycle, not the new cycle.
           closedAt: null,
           closureReason: null,
           closureReasonOther: null,
           // Fresh SLA window for the cycle (R6).
-          expectedDeliveryDate: newExpectedDeliveryDate as any,
+          expectedDeliveryDate: newExpectedDeliveryDate as any,  // Date-mode cast: Date into Drizzle Date-mode timestamp column; precise fix needs storage-layer toISOString handling (see storage.ts audit).
           // Defensive cleanup (R10) — clear any stale pause/await state
           // the row might carry from before its original closure so the
           // new cycle starts cleanly.
@@ -4586,7 +4592,7 @@ export async function registerRoutes(
       const toLabel = (ContractStageLabels as Record<string, string>)[targetStage] || targetStage;
       const updated = await storage.updateContractAndLog(
         contract.id,
-        { currentStage: targetStage } as any,
+        { currentStage: targetStage as ContractStageValue },
         {
           activityType: ContractActivityType.STAGE_RETURNED,
           description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
@@ -4804,7 +4810,7 @@ export async function registerRoutes(
       const updated = await storage.updateContractAndLog(contract.id, {
         status: "closed",
         currentStage: ContractStage.CLOSED,
-        closedAt: new Date() as any,
+        closedAt: new Date().toISOString(),
         closureReason: reason,
       }, {
         activityType: ContractActivityType.EARLY_CLOSED,
@@ -5739,7 +5745,7 @@ export async function registerRoutes(
       const toLabel = (MemoStageLabels as Record<string, string>)[targetStage] || targetStage;
       const updated = await storage.updateMemoAndLog(
         memo.id,
-        { currentStage: targetStage } as any,
+        { currentStage: targetStage as MemoStageValue },
         {
           activityType: MemoActivityType.STAGE_RETURNED,
           description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
@@ -7756,7 +7762,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "نص التعليق مطلوب" });
       }
       const sanitizedMessage = message.trim().substring(0, 2000);
-      const comments = Array.isArray(ticket.comments) ? [...(ticket.comments as any[])] : [];
+      const comments = Array.isArray(ticket.comments) ? [...(ticket.comments as TicketComment[])] : [];
       comments.push({
         id: randomUUID(),
         userId: reqUser.id,
