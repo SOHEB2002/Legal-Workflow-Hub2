@@ -69,6 +69,7 @@ import {
   updateSavedFilterSchema,
   SIDEBAR_SECTIONS,
   type SidebarSectionValue,
+  type UserRoleType,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -112,7 +113,7 @@ function makeContractObjectKey(contractId: string, originalName: string): string
 interface AuthRequest extends Request {
   user?: {
     id: string;
-    role: string;
+    role: UserRoleType;
     name: string;
     departmentId: string | null;
   };
@@ -878,9 +879,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/auth/change-password", passwordChangeLimiter, requireAuth, async (req, res) => {
+  app.post("/api/auth/change-password", passwordChangeLimiter, requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       const { currentPassword, newPassword } = req.body;
       const dbUser = await storage.getUser(user.id);
       if (!dbUser) return res.status(404).json({ error: "المستخدم غير موجود" });
@@ -1090,10 +1091,10 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
+  app.delete("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
     try {
       const userId = String(req.params.id);
-      const currentUser = (req as any).user;
+      const currentUser = req.user!;
 
       if (currentUser.id === userId) {
         return res.status(400).json({ error: "لا يمكنك حذف حسابك الحالي" });
@@ -1251,13 +1252,13 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/cases/:id", requireAuth, async (req, res) => {
+  app.get("/api/cases/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
-      const user = (req as any).user;
+      const user = req.user!;
       if (!canViewCase(user, caseItem)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه القضية" });
       }
@@ -1267,9 +1268,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/cases", requireAuth, async (req, res) => {
+  app.post("/api/cases", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!["branch_manager", "admin_support"].includes(user.role)) {
         return res.status(403).json({ error: "إنشاء القضايا متاح فقط لمدير الفرع والدعم الإداري" });
       }
@@ -1484,11 +1485,11 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/cases/:id/taradi", requireAuth, async (req, res) => {
+  app.patch("/api/cases/:id/taradi", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      const user = (req as any).user;
+      const user = req.user!;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
@@ -1540,11 +1541,11 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/cases/:id/mohr", requireAuth, async (req, res) => {
+  app.patch("/api/cases/:id/mohr", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      const user = (req as any).user;
+      const user = req.user!;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
@@ -1594,11 +1595,11 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/cases/:id/direct-settlement", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/direct-settlement", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      const user = (req as any).user;
+      const user = req.user!;
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
@@ -1642,12 +1643,12 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/cases/:id/skip-data-completion", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/skip-data-completion", requireAuth, async (req: AuthRequest, res) => {
     const caseId = String(req.params.id);
     try {
       const caseItem = await storage.getCaseById(caseId);
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      const user = (req as any).user;
+      const user = req.user!;
 
       // Role gate: branch_manager + admin_support + department_head
       // (own dept) + assigned_lawyer (primary / responsible / in
@@ -1748,11 +1749,11 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/cases/:id/court-register", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/court-register", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      const user = (req as any).user;
+      const user = req.user!;
       if (!canEditCaseData(user)) return res.status(403).json({ error: "لا تملك صلاحية تقييد القضية في المحكمة" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY) {
         return res.status(400).json({ error: "القضية مقيدة في المحكمة بالفعل" });
@@ -1800,13 +1801,13 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/cases/:id", requireAuth, async (req, res) => {
+  app.patch("/api/cases/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const existing = await storage.getCaseById(String(req.params.id));
       if (!existing) {
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
-      const user = (req as any).user;
+      const user = req.user!;
 
       const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
         "courtName", "courtCaseNumber", "judgeName", "circuitNumber", "opponentName", "opponentLawyer", "opponentPhone", "opponentNotes",
@@ -2572,9 +2573,9 @@ export async function registerRoutes(
 
   // ==================== Consultations ====================
 
-  app.get("/api/consultations", requireAuth, async (req, res) => {
+  app.get("/api/consultations", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) {
         return res.status(401).json({ error: "يجب تسجيل الدخول" });
       }
@@ -2605,13 +2606,13 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/consultations/:id", requireAuth, async (req, res) => {
+  app.get("/api/consultations/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
-      const user = (req as any).user;
+      const user = req.user!;
       if (!canModifyConsultation(user, consultation)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
@@ -2621,10 +2622,10 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/consultations", requireAuth, async (req, res) => {
+  app.post("/api/consultations", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertConsultationSchema.parse(req.body);
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       // Phase-6: prefer the authenticated user id over the body-provided
       // createdBy so the activity log's performedBy is always the real
       // actor. Fall back for legacy clients that still pass it explicitly.
@@ -2644,9 +2645,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/consultations/:id", requireAuth, async (req, res) => {
+  app.patch("/api/consultations/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       const existing = await storage.getConsultationById(String(req.params.id));
       if (!existing) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
@@ -2789,9 +2790,9 @@ export async function registerRoutes(
   // they're ready. Allowed roles: WRITTEN — admin_support,
   // department_head, branch_manager; PHONE / PROCEDURAL —
   // department_head, branch_manager only.
-  app.post("/api/consultations/:id/assign", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/assign", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const { assignedTo } = req.body || {};
@@ -2838,9 +2839,9 @@ export async function registerRoutes(
   // Used for transitions where no dedicated endpoint applies. The dedicated
   // endpoints (internal-review, committee-decision, take-notes-outcome) are
   // preferred where they apply because they also record helper-table rows.
-  app.post("/api/consultations/:id/advance-stage", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/advance-stage", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const targetStage = String(req.body?.targetStage || "");
@@ -2897,9 +2898,9 @@ export async function registerRoutes(
   // Body: { targetStage }. Generic backward — validateStageTransition's
   // rollback block enforces: dept_head/branch_manager can return to any
   // prior stage, assigned_lawyer can return one step.
-  app.post("/api/consultations/:id/return-stage", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/return-stage", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const targetStage = String(req.body?.targetStage || "");
@@ -2952,9 +2953,9 @@ export async function registerRoutes(
   // "actor must be the active review cycle's reviewer" check is deferred —
   // the codebase has no active-reviewer tracking column yet. TODO: tighten
   // once that tracking lands (likely a small column add on consultations).
-  app.post("/api/consultations/:id/internal-review", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/internal-review", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const decision = String(req.body?.decision || "");
@@ -3012,9 +3013,9 @@ export async function registerRoutes(
   //   APPROVED    -> READY
   //   NEEDS_NOTES -> TAKING_NOTES
   // Allowed roles: consultations_review_head, branch_manager.
-  app.post("/api/consultations/:id/committee-decision", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/committee-decision", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
@@ -3069,9 +3070,9 @@ export async function registerRoutes(
   // Per spec §3.2.1, ALL outcomes (DONE | NOT_DONE | PARTIAL) advance to
   // READY — the outcome distinction is for record only, not for routing.
   // Allowed roles: assigned_lawyer (synthetic), department_head, branch_manager.
-  app.post("/api/consultations/:id/take-notes-outcome", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/take-notes-outcome", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const outcome = String(req.body?.outcome || "");
@@ -3125,9 +3126,9 @@ export async function registerRoutes(
   // consultation from الأخذ_بالملاحظات back to لجنة_مراجعة. Allowed
   // roles: assigned_lawyer (synthetic), admin_support, department_head,
   // branch_manager — same gate as take-notes-outcome plus admin_support.
-  app.post("/api/consultations/:id/return-to-committee", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const notes = String(req.body?.notes ?? "").trim();
@@ -3170,9 +3171,9 @@ export async function registerRoutes(
   // admin_support / department_head / branch_manager, per spec §3.2.4);
   // PHONE / PROCEDURAL narrow to admin_support / branch_manager only
   // per the new-types common-features list.
-  app.post("/api/consultations/:id/early-close", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/early-close", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3244,9 +3245,9 @@ export async function registerRoutes(
   // is recomputed as now + SLA_DAYS[category] so the cycle gets a
   // fresh SLA window. The activity log preserves the full history.
   // Permission: admin_support / branch_manager.
-  app.post("/api/consultations/:id/start-follow-up", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/start-follow-up", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       if (!["admin_support", "branch_manager"].includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لبدء استشارة تعقيبية" });
@@ -3328,9 +3329,9 @@ export async function registerRoutes(
   // convertedFromConsultationId and the consultation row is preserved with
   // status='converted' so the UI can navigate back for history.
   // Allowed roles: admin_support, department_head, branch_manager.
-  app.post("/api/consultations/:id/convert-to-case", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/convert-to-case", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
@@ -3423,9 +3424,9 @@ export async function registerRoutes(
   // Inserts an audit row in consultation_delivery_extensions and updates
   // consultations.expectedDeliveryDate in a single DB transaction.
   // Allowed roles (Phase-5): department_head (own dept), branch_manager.
-  app.post("/api/consultations/:id/extend-delivery", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/extend-delivery", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3494,9 +3495,9 @@ export async function registerRoutes(
   // Returns the chronological list of expectedDeliveryDate extensions
   // for a consultation. Auth/visibility piggybacks off canModifyConsultation
   // — anyone allowed to view the consultation can see its history.
-  app.get("/api/consultations/:id/delivery-extensions", requireAuth, async (req, res) => {
+  app.get("/api/consultations/:id/delivery-extensions", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3518,9 +3519,9 @@ export async function registerRoutes(
   // allowed to view the consultation can read its log. Inserts happen
   // server-side only inside the workflow handlers, so this endpoint is
   // read-only.
-  app.get("/api/consultations/:id/activities", requireAuth, async (req, res) => {
+  app.get("/api/consultations/:id/activities", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3547,9 +3548,9 @@ export async function registerRoutes(
   // POST /api/consultations/:id/pause
   // Body: { reason }. Sets status="paused", fills pause_* columns,
   // inserts a "paused" activity-log row in the same DB transaction.
-  app.post("/api/consultations/:id/pause", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/pause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3587,9 +3588,9 @@ export async function registerRoutes(
   // Body: { notes? }. Clears pause_* columns and flips status back to
   // "active". Stage stays where it was. Notes are optional and recorded
   // on the activity-log entry when present.
-  app.post("/api/consultations/:id/unpause", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/unpause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3623,9 +3624,9 @@ export async function registerRoutes(
   // Body: { notes }. Required notes — sends case from الأخذ_بالملاحظات
   // back to إحالة_للجنة_المراجعة. Allowed: assigned_lawyer +
   // admin_support + department_head (own dept) + branch_manager.
-  app.post("/api/cases/:id/return-to-committee", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const notes = String(req.body?.notes ?? "").trim();
@@ -3671,9 +3672,9 @@ export async function registerRoutes(
   // Body: { reason }. Sets pause_* columns; status (workflow stage) is
   // intentionally left alone — pause is detected via paused_at IS NOT
   // NULL on cases. Inserts a "paused" case_activity_log row.
-  app.post("/api/cases/:id/pause", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/pause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const lawCase = await storage.getCaseById(String(req.params.id));
@@ -3719,9 +3720,9 @@ export async function registerRoutes(
 
   // POST /api/cases/:id/unpause
   // Body: { notes? }. Clears pause_* columns. Stage untouched.
-  app.post("/api/cases/:id/unpause", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/unpause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const lawCase = await storage.getCaseById(String(req.params.id));
@@ -3763,9 +3764,9 @@ export async function registerRoutes(
   // (workflow state) is left alone; pause is detected via paused_at IS
   // NOT NULL. department_head check uses the parent case's departmentId
   // because memos don't carry departmentId directly.
-  app.post("/api/memos/:id/pause", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/pause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const memo = await storage.getMemoById(String(req.params.id));
@@ -3809,9 +3810,9 @@ export async function registerRoutes(
 
   // POST /api/memos/:id/unpause
   // Body: { notes? }. Clears pause_* columns.
-  app.post("/api/memos/:id/unpause", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/unpause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const memo = await storage.getMemoById(String(req.params.id));
@@ -3848,9 +3849,9 @@ export async function registerRoutes(
   // Returns the chronological activity log for a memo. Visibility gate
   // mirrors the memo edit gate (assignee / case primary / dept head /
   // any role with canChangeMemoStatus or canReviewMemos).
-  app.get("/api/memos/:id/activities", requireAuth, async (req, res) => {
+  app.get("/api/memos/:id/activities", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const memo = await storage.getMemoById(String(req.params.id));
@@ -3891,9 +3892,9 @@ export async function registerRoutes(
   // POST /api/consultations/:id/await-completion
   // Body: { reason }. Sets saved_stage = current_stage, current_stage =
   // RECEIVED_PENDING_COMPLETION, awaiting_completion = true.
-  app.post("/api/consultations/:id/await-completion", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/await-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3936,9 +3937,9 @@ export async function registerRoutes(
   // POST /api/consultations/:id/resume-from-completion
   // Body: { notes? }. Restores current_stage = saved_stage, clears
   // saved_stage, awaiting_completion = false.
-  app.post("/api/consultations/:id/resume-from-completion", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/resume-from-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -3973,9 +3974,9 @@ export async function registerRoutes(
   // target as the normal advance to STUDY but logged as
   // completion_skipped. Available only when NOT in await-completion
   // mode — awaiting=true rows must use /resume-from-completion instead.
-  app.post("/api/consultations/:id/skip-completion", requireAuth, async (req, res) => {
+  app.post("/api/consultations/:id/skip-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const consultation = await storage.getConsultationById(String(req.params.id));
@@ -4036,9 +4037,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts", requireAuth, async (req, res) => {
+  app.post("/api/contracts", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       // Per spec: only branch_manager / admin_support / department_head
       // can create contracts. Employees / lawyers / review committee
@@ -4069,9 +4070,9 @@ export async function registerRoutes(
   // Generic PATCH — handles assignedTo, internalReviewerId, contractType
   // (with stage remap + activity log), priority, priorityReason, title,
   // description, departmentId. Same per-field role gates as consultations.
-  app.patch("/api/contracts/:id", requireAuth, async (req, res) => {
+  app.patch("/api/contracts/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       const existing = await storage.getContractById(String(req.params.id));
       if (!existing) return res.status(404).json({ error: "العقد غير موجود" });
       if (!canModifyContract(user, existing)) {
@@ -4363,9 +4364,9 @@ export async function registerRoutes(
   // moving to PENDING_COMPLETION (normal flow) or skipping straight
   // to DRAFTING via the تجاوز button. Allowed: admin_support,
   // department_head, branch_manager.
-  app.post("/api/contracts/:id/assign", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/assign", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإسناد العقود" });
@@ -4406,9 +4407,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/advance-stage", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/advance-stage", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const targetStage = String(req.body?.targetStage || "");
       if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
@@ -4556,9 +4557,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/return-stage", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/return-stage", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const targetStage = String(req.body?.targetStage || "");
       if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
@@ -4595,9 +4596,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/internal-review", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/internal-review", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const decision = String(req.body?.decision || "");
       const notes = String(req.body?.notes || "").trim();
@@ -4643,9 +4644,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/committee-decision", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/committee-decision", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       // Committee chair = consultations_review_head per spec.
       if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
@@ -4689,9 +4690,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/take-notes-outcome", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/take-notes-outcome", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const outcome = String(req.body?.outcome || "");
       const notes = String(req.body?.notes || "");
@@ -4728,9 +4729,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/return-to-committee", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const notes = String(req.body?.notes ?? "").trim();
       if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
@@ -4762,9 +4763,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/early-close", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/early-close", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -4823,9 +4824,9 @@ export async function registerRoutes(
     || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId)
     || contract.assignedTo === reqUser.id;
 
-  app.post("/api/contracts/:id/pause", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/pause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -4845,9 +4846,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/unpause", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/unpause", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -4866,9 +4867,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/await-completion", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/await-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -4892,9 +4893,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/resume-from-completion", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/resume-from-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -4913,9 +4914,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contracts/:id/skip-completion", requireAuth, async (req, res) => {
+  app.post("/api/contracts/:id/skip-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -4952,9 +4953,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/contracts/:id/activities", requireAuth, async (req, res) => {
+  app.get("/api/contracts/:id/activities", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -5063,7 +5064,7 @@ export async function registerRoutes(
       }
       return res.status(400).json({ error: "فشل تحميل الملف" });
     }),
-    async (req, res) => {
+    async (req: AuthRequest, res) => {
       // diskStorage → file.path is the temp file on disk; file.buffer
       // does not exist. Capture path up front so the finally block
       // can unlink regardless of which early-return we hit.
@@ -5072,7 +5073,7 @@ export async function registerRoutes(
         | undefined;
       const tempPath = file?.path;
       try {
-        const reqUser = (req as any).user;
+        const reqUser = req.user;
         if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
         const contract = await storage.getContractById(String(req.params.id));
         if (!contract) {
@@ -5230,9 +5231,9 @@ export async function registerRoutes(
     },
   );
 
-  app.get("/api/contracts/:id/attachments", requireAuth, async (req, res) => {
+  app.get("/api/contracts/:id/attachments", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -5258,9 +5259,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/contracts/:id/attachments/:attachmentId/download", requireAuth, async (req, res) => {
+  app.get("/api/contracts/:id/attachments/:attachmentId/download", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -5332,9 +5333,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/contracts/:id/attachments/:attachmentId", requireAuth, async (req, res) => {
+  app.delete("/api/contracts/:id/attachments/:attachmentId", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
@@ -5396,9 +5397,9 @@ export async function registerRoutes(
   // POST /api/cases/:id/await-completion
   // Body: { reason }. Routes the case INTO "استكمال_البيانات" from any
   // other stage, recording the leaving stage in saved_stage for resume.
-  app.post("/api/cases/:id/await-completion", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/await-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const lawCase = await storage.getCaseById(String(req.params.id));
@@ -5453,9 +5454,9 @@ export async function registerRoutes(
   // change if an admin edits caseType/classification/clientRole/memoRequired
   // mid-await; we reject the resume in that case so the user explicitly
   // picks a target via the normal stage-edit UI).
-  app.post("/api/cases/:id/resume-from-completion", requireAuth, async (req, res) => {
+  app.post("/api/cases/:id/resume-from-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const lawCase = await storage.getCaseById(String(req.params.id));
@@ -5517,9 +5518,9 @@ export async function registerRoutes(
   // Body: { reason }. Memos don't have a dedicated pending-completion
   // status; we just flag awaiting_completion=true (saved_stage stores
   // the memo status as a snapshot). Memo workflow status is unchanged.
-  app.post("/api/memos/:id/await-completion", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/await-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const memo = await storage.getMemoById(String(req.params.id));
@@ -5564,9 +5565,9 @@ export async function registerRoutes(
   // POST /api/memos/:id/resume-from-completion
   // Body: { notes? }. Clears awaiting_completion + saved_stage. Memo
   // status is untouched (it was untouched on entry too).
-  app.post("/api/memos/:id/resume-from-completion", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/resume-from-completion", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const memo = await storage.getMemoById(String(req.params.id));
@@ -5605,9 +5606,9 @@ export async function registerRoutes(
   // cases_review_head as the committee chair (memos belong to cases).
 
   // Body: { targetStage }. Generic forward via validateStageTransition.
-  app.post("/api/memos/:id/advance-stage", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/advance-stage", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const targetStage = String(req.body?.targetStage || "");
@@ -5698,9 +5699,9 @@ export async function registerRoutes(
   // Body: { targetStage }. Generic backward — validateStageTransition's
   // memo rollback block enforces: dept_head/branch_manager → any prior
   // stage, assigned_lawyer → one step back.
-  app.post("/api/memos/:id/return-stage", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/return-stage", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const targetStage = String(req.body?.targetStage || "");
@@ -5755,9 +5756,9 @@ export async function registerRoutes(
   //   NEEDS_NOTES -> DRAFTING
   // Allowed roles: assigned_lawyer (synthetic) + employee, department_head,
   // cases_review_head, branch_manager.
-  app.post("/api/memos/:id/internal-review", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/internal-review", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const decision = String(req.body?.decision || "");
@@ -5827,9 +5828,9 @@ export async function registerRoutes(
   //   NEEDS_NOTES -> TAKING_NOTES
   // Allowed roles: cases_review_head, branch_manager (committee chair
   // for memos is the cases-side review head).
-  app.post("/api/memos/:id/committee-decision", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/committee-decision", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       if (!["cases_review_head", "branch_manager"].includes(reqUser.role)) {
@@ -5883,9 +5884,9 @@ export async function registerRoutes(
   // outcomes (DONE | NOT_DONE | PARTIAL) advance to READY — the outcome
   // is recorded for audit only, not used for routing. Allowed roles:
   // assigned_lawyer (synthetic), department_head, branch_manager.
-  app.post("/api/memos/:id/take-notes-outcome", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/take-notes-outcome", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const outcome = String(req.body?.outcome || "");
@@ -5937,9 +5938,9 @@ export async function registerRoutes(
   // Body: { notes }. Required notes — sends memo from الأخذ_بالملاحظات
   // back to لجنة_مراجعة. Allowed: assigned_lawyer + admin_support +
   // department_head (own dept via parent case) + branch_manager.
-  app.post("/api/memos/:id/return-to-committee", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const notes = String(req.body?.notes ?? "").trim();
@@ -5993,9 +5994,9 @@ export async function registerRoutes(
   // edits but doesn't populate cancellationReason.
   // Allowed roles: assigned_lawyer + admin_support + department_head
   // (own dept via parent case) + branch_manager + cases_review_head.
-  app.post("/api/memos/:id/cancel", requireAuth, async (req, res) => {
+  app.post("/api/memos/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const reason = String(req.body?.reason ?? "").trim();
@@ -6064,7 +6065,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/hearings", requireAuth, async (req, res) => {
+  app.post("/api/hearings", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertHearingSchema.parse(req.body);
       if (validatedData.caseId && validatedData.caseId !== "none") {
@@ -6079,7 +6080,7 @@ export async function registerRoutes(
         }
       }
       const newHearing = await storage.createHearing(validatedData);
-      const user = (req as any).user;
+      const user = req.user!;
       const createdMemos: any[] = [];
 
       // Auto-unpause: adding any new session to a case that was paused
@@ -6270,9 +6271,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/hearings/:id", requireAuth, async (req, res) => {
+  app.patch("/api/hearings/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       const existing = await storage.getHearingById(String(req.params.id));
       if (!existing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
@@ -6329,14 +6330,14 @@ export async function registerRoutes(
 
   // ==================== Hearing Workflow ====================
 
-  app.post("/api/hearings/:id/result", requireAuth, async (req, res) => {
+  app.post("/api/hearings/:id/result", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing((req as any).user, hearing)) {
+      if (!canActOnHearing(req.user!, hearing)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (hearing.hearingDate) {
@@ -6428,7 +6429,7 @@ export async function registerRoutes(
 
       const updatedHearing = await storage.updateHearing(hearingId, updateData);
 
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (reqUser && effectiveCaseId) {
         try {
           await storage.logCaseActivity({
@@ -6903,14 +6904,14 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/hearings/:id/report", requireAuth, async (req, res) => {
+  app.post("/api/hearings/:id/report", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing((req as any).user, hearing)) {
+      if (!canActOnHearing(req.user!, hearing)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.result) {
@@ -6937,14 +6938,14 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/hearings/:id/close", requireAuth, async (req, res) => {
+  app.post("/api/hearings/:id/close", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing((req as any).user, hearing)) {
+      if (!canActOnHearing(req.user!, hearing)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {
@@ -7060,9 +7061,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/contact-logs", requireAuth, async (req, res) => {
+  app.post("/api/contact-logs", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       const createdBy = user.id;
       const newLog = await storage.createContactLog(req.body, createdBy);
       res.status(201).json(newLog);
@@ -7094,9 +7095,9 @@ export async function registerRoutes(
 
   // ==================== Memos (المذكرات القانونية) ====================
 
-  app.get("/api/memos", requireAuth, async (req, res) => {
+  app.get("/api/memos", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
       const allMemos = await storage.getAllMemos();
       res.json(allMemos);
@@ -7105,9 +7106,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/memos/:id", requireAuth, async (req, res) => {
+  app.get("/api/memos/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) {
@@ -7119,9 +7120,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/memos/case/:caseId", requireAuth, async (req, res) => {
+  app.get("/api/memos/case/:caseId", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
       const caseMemos = await storage.getMemosByCase(String(req.params.caseId));
       res.json(caseMemos);
@@ -7130,9 +7131,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/memos/hearing/:hearingId", requireAuth, async (req, res) => {
+  app.get("/api/memos/hearing/:hearingId", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
       const hearingMemos = await storage.getMemosByHearing(String(req.params.hearingId));
       res.json(hearingMemos);
@@ -7141,9 +7142,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/memos", requireAuth, async (req, res) => {
+  app.post("/api/memos", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
       if (!canCreateMemos(user.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء المذكرات" });
@@ -7251,9 +7252,9 @@ export async function registerRoutes(
     reviewerId: z.string().optional(),
   });
 
-  app.patch("/api/memos/:id", requireAuth, async (req, res) => {
+  app.patch("/api/memos/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
 
       const memo = await storage.getMemoById(String(req.params.id));
@@ -7389,9 +7390,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/memos/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
+  app.delete("/api/memos/:id", requireAuth, requireRole("branch_manager"), async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
       if (!canDeleteMemos(user.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لحذف المذكرات" });
@@ -7447,9 +7448,9 @@ export async function registerRoutes(
 
   // ==================== Notifications ====================
 
-  app.get("/api/notifications", requireAuth, async (req, res) => {
+  app.get("/api/notifications", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
       // Admin roles previously fetched the entire notifications table with getAllNotifications(),
       // which grows unboundedly (scheduler + workflow actions create many rows). The default
@@ -7491,9 +7492,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/notifications/:id", requireAuth, async (req, res) => {
+  app.patch("/api/notifications/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const user = (req as any).user;
+      const user = req.user!;
       const adminRoles = ["branch_manager", "admin_support"];
       if (!adminRoles.includes(user.role)) {
         const existing = await (storage as any).getNotificationById(String(req.params.id));
@@ -7529,9 +7530,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/notifications/mark-all-read", requireAuth, async (req, res) => {
+  app.post("/api/notifications/mark-all-read", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const authUser = (req as any).user;
+      const authUser = req.user!;
       if (!authUser || !authUser.id) {
         return res.status(401).json({ error: "يجب تسجيل الدخول أولاً" });
       }
@@ -7619,9 +7620,9 @@ export async function registerRoutes(
 
   // ==================== Support Tickets ====================
 
-  app.get("/api/support/tickets", requireAuth, async (req, res) => {
+  app.get("/api/support/tickets", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       let tickets;
@@ -7636,9 +7637,9 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/support/tickets/open-count", requireAuth, async (req, res) => {
+  app.get("/api/support/tickets/open-count", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       let tickets;
@@ -7664,9 +7665,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/support/tickets", requireAuth, async (req, res) => {
+  app.post("/api/support/tickets", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
       const data = insertTicketSchema.parse(req.body);
@@ -7681,9 +7682,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/support/tickets/:id/status", requireAuth, async (req, res) => {
+  app.patch("/api/support/tickets/:id/status", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!canManageSupportTickets(reqUser.role)) {
         return res.status(403).json({ error: "غير مصرح بتغيير الحالة" });
       }
@@ -7699,9 +7700,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/support/tickets/:id/assign", requireAuth, async (req, res) => {
+  app.patch("/api/support/tickets/:id/assign", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!canManageSupportTickets(reqUser.role)) {
         return res.status(403).json({ error: "غير مصرح بتعيين التذكرة" });
       }
@@ -7720,9 +7721,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/support/tickets/:id/priority", requireAuth, async (req, res) => {
+  app.patch("/api/support/tickets/:id/priority", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!canManageSupportTickets(reqUser.role)) {
         return res.status(403).json({ error: "غير مصرح بتغيير الأولوية" });
       }
@@ -7735,9 +7736,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/support/tickets/:id/comment", requireAuth, async (req, res) => {
+  app.post("/api/support/tickets/:id/comment", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       const ticket = await storage.getSupportTicketById(String(req.params.id));
       if (!ticket) return res.status(404).json({ error: "التذكرة غير موجودة" });
 
@@ -7767,9 +7768,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/support/tickets/:id/rate", requireAuth, async (req, res) => {
+  app.post("/api/support/tickets/:id/rate", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       const existingTicket = await storage.getSupportTicketById(String(req.params.id));
       if (!existingTicket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       if (existingTicket.submittedBy !== reqUser.id) {
@@ -7787,9 +7788,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/support/tickets/:id", requireAuth, async (req, res) => {
+  app.delete("/api/support/tickets/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser || reqUser.role !== "branch_manager") {
         return res.status(403).json({ error: "غير مصرح بالحذف" });
       }
@@ -7803,9 +7804,9 @@ export async function registerRoutes(
 
   // ==================== Saved Filters ====================
 
-  app.get("/api/saved-filters", requireAuth, async (req, res) => {
+  app.get("/api/saved-filters", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const pageType = String(req.query.pageType || "cases");
       const rows = await storage.getSavedFiltersByUser(reqUser.id, pageType);
@@ -7815,9 +7816,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/saved-filters", requireAuth, async (req, res) => {
+  app.post("/api/saved-filters", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const data = insertSavedFilterSchema.parse(req.body);
       const row = await storage.createSavedFilter(reqUser.id, data);
@@ -7827,9 +7828,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/saved-filters/:id", requireAuth, async (req, res) => {
+  app.patch("/api/saved-filters/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const existing = await storage.getSavedFilterById(String(req.params.id));
       if (!existing) return res.status(404).json({ error: "الفلتر غير موجود" });
@@ -7844,9 +7845,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/saved-filters/:id", requireAuth, async (req, res) => {
+  app.delete("/api/saved-filters/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const existing = await storage.getSavedFilterById(String(req.params.id));
       if (!existing) return res.status(404).json({ error: "الفلتر غير موجود" });
@@ -7863,9 +7864,9 @@ export async function registerRoutes(
 
   // ==================== Sidebar Counts ====================
 
-  app.get("/api/sidebar-counts", requireAuth, async (req, res) => {
+  app.get("/api/sidebar-counts", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const counts = await storage.getSidebarCounts({
         id: reqUser.id,
@@ -7878,9 +7879,9 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/sidebar-counts/mark-viewed", requireAuth, async (req, res) => {
+  app.post("/api/sidebar-counts/mark-viewed", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const reqUser = (req as any).user;
+      const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const section = String(req.body?.section ?? "");
       if (!SIDEBAR_SECTIONS.includes(section as SidebarSectionValue)) {
