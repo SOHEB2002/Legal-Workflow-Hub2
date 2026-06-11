@@ -734,8 +734,8 @@ function mapDbHearing(dbHearing: any): Hearing {
     nextHearingDate: dbHearing.nextHearingDate || null,
     nextHearingTime: dbHearing.nextHearingTime || null,
     responseRequired: dbHearing.responseRequired ?? false,
-    memoRequired: (dbHearing as any).memoRequired ?? false,
-    opponentResponseRequired: (dbHearing as any).opponentResponseRequired ?? false,
+    memoRequired: dbHearing.memoRequired ?? false,
+    opponentResponseRequired: dbHearing.opponentResponseRequired ?? false,
     hearingReport: dbHearing.hearingReport || "",
     recommendations: dbHearing.recommendations || "",
     nextSteps: dbHearing.nextSteps || "",
@@ -1031,7 +1031,7 @@ export class DatabaseStorage implements IStorage {
       reviewActionTaken: null,
       priority: data.priority || "متوسط",
       caseClassification: data.caseClassification || CaseClassification.UNDER_STUDY,
-      clientRole: (data as any).clientRole ?? null,
+      clientRole: data.clientRole ?? null,
       previousHearingsCount: data.previousHearingsCount || 0,
       currentSituation: data.currentSituation || "",
       responseDeadline: data.responseDeadline || null,
@@ -1213,7 +1213,7 @@ export class DatabaseStorage implements IStorage {
     // Phase-4: category drives the SLA. Default to STANDARD (3 days) when
     // not supplied so older clients keep working. expectedDeliveryDate is
     // computed once at creation — there's no manual override (per spec).
-    const incomingCategory = (data as any).category as ConsultationCategoryValue | undefined;
+    const incomingCategory = data.category as ConsultationCategoryValue | undefined;
     const category: ConsultationCategoryValue =
       incomingCategory && (Object.values(ConsultationCategory) as string[]).includes(incomingCategory)
         ? incomingCategory
@@ -1246,14 +1246,14 @@ export class DatabaseStorage implements IStorage {
       expectedDeliveryDate,
       // Intake channel. Literal fallback mirrors mapDbConsultation's
       // "عادية" style; column default also guards manual inserts.
-      source: (data as any).source || "عبر_المجموعة",
+      source: data.source || "عبر_المجموعة",
       // Committee-referral fields. Optional at create — the committee
       // form is typically filled in later, just before the consultation
       // moves into لجنة_مراجعة. Pass-through any values the create
       // dialog supplies.
-      internalReviewerId: (data as any).internalReviewerId ?? null,
-      priority:           (data as any).priority ?? null,
-      priorityReason:     (data as any).priorityReason ?? null,
+      internalReviewerId: data.internalReviewerId ?? null,
+      priority:           data.priority ?? null,
+      priorityReason:     data.priorityReason ?? null,
       createdBy,
       createdAt: now,
       updatedAt: now,
@@ -3321,7 +3321,7 @@ export class DatabaseStorage implements IStorage {
         reviewActionTaken: null,
         priority: caseFields.priority || "متوسط",
         caseClassification: caseFields.caseClassification || CaseClassification.UNDER_STUDY,
-        clientRole: (caseFields as any).clientRole ?? null,
+        clientRole: caseFields.clientRole ?? null,
         previousHearingsCount: caseFields.previousHearingsCount || 0,
         currentSituation: caseFields.currentSituation || existingCon.questionSummary || "",
         responseDeadline: caseFields.responseDeadline || null,
@@ -3404,8 +3404,8 @@ export class DatabaseStorage implements IStorage {
       const now = new Date();
       const fromStage = existing.currentStage;
       const targetStage = "إحالة_للجنة_المراجعة";
-      const existingHistory = Array.isArray((existing as any).stageHistory)
-        ? (existing as any).stageHistory
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
         : [];
       const stageHistory = [
         ...existingHistory,
@@ -3490,8 +3490,8 @@ export class DatabaseStorage implements IStorage {
       const now = new Date();
       const fromStage = existing.currentStage;
       const targetStage = "استكمال_البيانات";
-      const existingHistory = Array.isArray((existing as any).stageHistory)
-        ? (existing as any).stageHistory
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
         : [];
       const stageHistory = [
         ...existingHistory,
@@ -3547,8 +3547,8 @@ export class DatabaseStorage implements IStorage {
         return { ok: false, reason: "INVALID_SAVED_STAGE" } as const;
       }
       const now = new Date();
-      const existingHistory = Array.isArray((existing as any).stageHistory)
-        ? (existing as any).stageHistory
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
         : [];
       const stageHistory = [
         ...existingHistory,
