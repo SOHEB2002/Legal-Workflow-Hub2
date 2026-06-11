@@ -2,7 +2,6 @@ import { createContext, useContext, useState, useCallback, useMemo, useEffect, t
 import { useAuth } from "@/lib/auth-context";
 import { apiRequest } from "@/lib/queryClient";
 import {
-  User,
   ExtendedUser,
   UserStatus,
   UserStatusValue,
@@ -11,15 +10,12 @@ import {
   VacationStatusValue,
   Delegation,
   DelegationType,
-  DelegationTypeValue,
   Team,
   UserCustomPermission,
   UserActivityLog,
   UserSession,
   UserStats,
-  ActivityLogEntityType,
   ActivityLogEntityTypeValue,
-  ActivityActions,
   ActivityActionValue,
   PermissionType,
   RolePermissions,
@@ -147,7 +143,7 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     return saved ? JSON.parse(saved) : [];
   });
   
-  const [sessions, setSessions] = useState<UserSession[]>(() => {
+  const [sessions] = useState<UserSession[]>(() => {
     const saved = localStorage.getItem("user_sessions");
     return saved ? JSON.parse(saved) : [];
   });

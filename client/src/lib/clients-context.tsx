@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import type { Client, ClientTypeValue } from "@shared/schema";
-import { ClientType } from "@shared/schema";
+import type { Client } from "@shared/schema";
 import { apiRequest } from "./queryClient";
 import { useAuth } from "./auth-context";
 

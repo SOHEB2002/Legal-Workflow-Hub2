@@ -9,7 +9,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,7 +31,7 @@ interface CustomPermissionsDialogProps {
 }
 
 export function CustomPermissionsDialog({ open, onOpenChange, user }: CustomPermissionsDialogProps) {
-  const { grantCustomPermission, revokeCustomPermission, customPermissions, getEffectivePermissions } = useUsers();
+  const { grantCustomPermission, revokeCustomPermission, customPermissions } = useUsers();
   const { toast } = useToast();
 
   const [additionalPermissions, setAdditionalPermissions] = useState<string[]>([]);

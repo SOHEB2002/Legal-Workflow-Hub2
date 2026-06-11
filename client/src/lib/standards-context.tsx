@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from "react";
-import type { ReviewStandard, ReviewResult, ReviewStandardTypeValue, ReviewCategory, ReviewCheckpoint } from "@shared/schema";
+import type { ReviewStandard, ReviewResult, ReviewStandardTypeValue } from "@shared/schema";
 
 interface StandardsContextType {
   standards: ReviewStandard[];

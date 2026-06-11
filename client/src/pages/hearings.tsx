@@ -52,7 +52,6 @@ import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import {
   Plus,
   Calendar,
-  Clock,
   MapPin,
   AlertCircle,
   AlertTriangle,
@@ -65,7 +64,6 @@ import {
   Loader2,
   Scale,
   Phone,
-  ClipboardCheck,
   Lock,
   Trash2,
   Pencil,
@@ -82,7 +80,7 @@ import type { CaseStageValue, ObjectionStatusValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
-import type { Hearing, HearingStatusValue, HearingResultValue } from "@shared/schema";
+import type { Hearing, HearingStatusValue } from "@shared/schema";
 import { HearingStatus, HearingResult, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm, formatDualDate, formatHijriDateFull } from "@/lib/date-utils";
@@ -101,7 +99,6 @@ import { useToast } from "@/hooks/use-toast";
 import {
   HearingsAdvancedFilters,
   EMPTY_HEARINGS_ADV_FILTERS,
-  countActiveHearingsAdvFilters,
   PENDING_MEMO_STATUSES,
   type AdvancedHearingsFilters,
 } from "@/components/hearings-advanced-filters";

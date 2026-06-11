@@ -23,7 +23,7 @@ import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
 import { FileText, Search, Download, Filter, Clock, User } from "lucide-react";
-import { ActivityActionLabels, ActivityLogEntityType } from "@shared/schema";
+import { ActivityActionLabels } from "@shared/schema";
 import type { ActivityActionValue, ActivityLogEntityTypeValue } from "@shared/schema";
 
 const entityTypeLabels: Record<ActivityLogEntityTypeValue, string> = {
@@ -40,8 +40,8 @@ const entityTypeLabels: Record<ActivityLogEntityTypeValue, string> = {
 };
 
 export default function ActivityLogPage() {
-  const { users, permissions } = useAuth();
-  const { activityLogs, getRecentActivities } = useUsers();
+  const { users } = useAuth();
+  const { activityLogs } = useUsers();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [userFilter, setUserFilter] = useState<string>("all");

@@ -12,8 +12,6 @@ import {
   CheckCircle,
   Plus,
   FileText,
-  Users,
-  CalendarPlus,
   type LucideIcon
 } from "lucide-react";
 

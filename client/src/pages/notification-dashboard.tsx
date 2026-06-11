@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { BarChart3, Bell, Clock, CheckCircle, ArrowUpCircle, Users, TrendingUp, AlertTriangle } from "lucide-react";
+import { BarChart3, Bell, CheckCircle, ArrowUpCircle, Users, TrendingUp, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -46,7 +46,7 @@ function getPriorityColor(priority: string): string {
 }
 
 export default function NotificationDashboardPage() {
-  const { user, permissions, users } = useAuth();
+  const { permissions, users } = useAuth();
   const { notifications } = useNotifications();
   const { departments } = useDepartments();
   const { cases } = useCases();

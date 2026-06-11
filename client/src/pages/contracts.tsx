@@ -24,19 +24,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
-  XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, MessageSquare,
+  XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
   Upload, Download, FileIcon, Paperclip, Eye,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
   Contract, ContractStageValue, ContractActivity, ContractAttachment, ContractTypeValue,
-  InternalReviewDecisionValue, CommitteeDecisionValue, NoteOutcomeValue, ContractPriorityValue,
+  ContractPriorityValue,
 } from "@shared/schema";
 import {
   ContractStage, ContractStageLabels, ContractStagesAll, ContractStagesOrder,
   ContractType, ContractTypeLabels,
   ContractPriority, ContractPriorityLabels,
-  ContractAttachmentSlot, ContractAttachmentSlotLabels, ContractSlotsByType,
+  ContractAttachmentSlot, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
@@ -219,7 +219,7 @@ export default function ContractsPage() {
     awaitCompletion, resumeFromCompletion, skipCompletion,
     refreshContracts,
   } = useContracts();
-  const { clients, getClientName } = useClients();
+  const { getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, users, isViewer } = useAuth();
   const { toast } = useToast();

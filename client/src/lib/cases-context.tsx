@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { LawCase, CaseStatusValue, ReviewDecisionType, PriorityType, CaseTypeValue, CaseStageValue, CaseStageTransition, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
-import { CaseStatus, Priority, CaseStage, CaseStagesOrder, CaseClassification, getStagesForClassification } from "@shared/schema";
+import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
+import { CaseStatus, Priority, CaseStage, CaseClassification, getStagesForClassification } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
@@ -39,7 +39,7 @@ interface CasesContextType {
 
 const CasesContext = createContext<CasesContextType | undefined>(undefined);
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
+
 
 // Helper to migrate old cases without new fields
 const migrateCase = (c: LawCase): LawCase => {

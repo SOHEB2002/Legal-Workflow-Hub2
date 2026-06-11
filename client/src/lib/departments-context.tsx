@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import type { DepartmentInfo, DepartmentType } from "@shared/schema";
-import { Department } from "@shared/schema";
+import type { DepartmentInfo } from "@shared/schema";
 import { apiRequest } from "./queryClient";
 
 interface DepartmentsContextType {

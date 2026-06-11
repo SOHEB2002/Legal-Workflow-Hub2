@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { PaginationControls } from "@/components/ui/pagination-controls";
@@ -21,8 +21,6 @@ import {
   Paperclip,
   Trash2,
   ExternalLink,
-  Shield,
-  Swords,
   FileText,
   AlertTriangle,
   ArrowLeftRight,
@@ -43,7 +41,7 @@ import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SmartInput } from "@/components/ui/smart-input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -104,7 +102,6 @@ import {
   CaseStage,
   CaseStatus,
   Priority,
-  Department,
   CaseClassification,
   CaseClassificationLabels,
   getStageLabel,
@@ -112,7 +109,7 @@ import {
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, Attachment, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
-import { sendCaseReminder, notifyCaseSentToReview, requestCaseTransfer, notifyCaseAssigned } from "@/lib/notification-triggers";
+import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -124,7 +121,6 @@ import { ReviewChecklist } from "@/components/review-checklist";
 import {
   CasesAdvancedFilters,
   EMPTY_ADV_FILTERS,
-  countActiveAdvFilters,
   getFilterStages,
   type AdvancedCasesFilters,
 } from "@/components/cases-advanced-filters";
@@ -342,14 +338,12 @@ export default function CasesPage() {
   const {
     cases,
     isLoading: casesLoading,
-    comments,
     addCase,
     updateCase,
     assignCase,
     sendToReviewCommittee,
     approveCase,
     rejectCase,
-    closeCase,
     deleteCase,
     moveToNextStage,
     moveToPreviousStage,
@@ -360,7 +354,7 @@ export default function CasesPage() {
     getCaseById,
     refreshCases,
   } = useCases();
-  const { clients, getClientName, isLoading: clientsLoading } = useClients();
+  const { getClientName, isLoading: clientsLoading } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
@@ -486,7 +480,7 @@ export default function CasesPage() {
   }, []);
 
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [classificationGroup, setClassificationGroup] = useState<"" | "new" | "existing">("");
+  const [, setClassificationGroup] = useState<"" | "new" | "existing">("");
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
@@ -839,9 +833,6 @@ export default function CasesPage() {
         return;
       }
     }
-    const computedClientRole = formData.caseClassification === CaseClassification.IN_COURT
-      ? (formData.clientRole || "مدعي")
-      : null;
     try {
       await addCase({
         clientId: formData.clientId || "",
@@ -915,11 +906,6 @@ export default function CasesPage() {
     setShowRejectDialog(false);
     setSelectedCaseId(null);
     setRejectNotes("");
-  };
-
-  const handleClose = (caseItem: LawCase) => {
-    closeCase(caseItem.id);
-    toast({ title: "تم إغلاق القضية" });
   };
 
   const handleDeleteCase = async () => {

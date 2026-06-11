@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { SmartInput } from "@/components/ui/smart-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +34,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
-import { Plus, Search, Pencil, Trash2, Building2, User, Phone as PhoneIcon, Mail, Eye, Briefcase, MessageSquare, PhoneCall, Clock, CheckCircle } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Building2, User, Phone as PhoneIcon, Mail, Eye, Briefcase, MessageSquare, PhoneCall, CheckCircle } from "lucide-react";
 import { useClients } from "@/lib/clients-context";
 import { useFavorites } from "@/lib/favorites-context";
 import { FavoriteButton } from "@/components/favorite-button";
@@ -43,17 +42,17 @@ import { useAuth } from "@/lib/auth-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
 import { useContacts } from "@/lib/contacts-context";
-import type { Client, ClientTypeValue, ContactTypeValue, FollowUpStatusValue } from "@shared/schema";
-import { ClientType, CaseStageLabels, ContactType, ContactTypeLabels, FollowUpStatus, FollowUpStatusLabels } from "@shared/schema";
+import type { Client, ClientTypeValue, ContactTypeValue } from "@shared/schema";
+import { CaseStageLabels, ContactType, ContactTypeLabels, FollowUpStatus, FollowUpStatusLabels } from "@shared/schema";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 export default function ClientsPage() {
-  const { clients, addClient, updateClient, deleteClient, getClientName } = useClients();
+  const { clients, addClient, updateClient, deleteClient } = useClients();
   const { user, permissions } = useAuth();
   const { cases } = useCases();
   const { consultations } = useConsultations();
-  const { contacts, addContact, getContactsByClientId, getLastContactByClientId, markFollowUpComplete } = useContacts();
+  const { addContact, getContactsByClientId, markFollowUpComplete } = useContacts();
   const { addRecentVisit } = useFavorites();
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");

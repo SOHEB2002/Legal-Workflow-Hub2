@@ -3,15 +3,15 @@ import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth-context";
 import { apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -21,14 +21,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Search,
-  Filter,
   MessageCircle,
   Star,
-  ArrowRight,
   Eye,
-  X,
   Send,
-  ChevronDown,
   Headphones,
   Bug,
   Lightbulb,
@@ -41,11 +37,8 @@ import {
 import {
   type SupportTicket,
   type TicketComment,
-  TicketType,
   TicketTypeLabels,
-  TicketStatus,
   TicketStatusLabels,
-  UserRoleLabels,
   canManageSupportTickets,
 } from "@shared/schema";
 

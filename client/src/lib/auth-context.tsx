@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { User, UserRoleType } from "@shared/schema";
+import type { User } from "@shared/schema";
 import {
   canManageAllCases, 
   canManageAllConsultations, 

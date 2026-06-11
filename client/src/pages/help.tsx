@@ -9,15 +9,12 @@ import {
   ClipboardList,
   Settings,
   Shield,
-  ChevronDown,
-  ChevronUp,
   Search,
   Play,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { TourRestartButton } from "@/components/onboarding-tour";
 

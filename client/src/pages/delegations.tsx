@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { DelegationReasonLabels } from "@shared/schema";
 import {
-  Plus, UserCheck, Calendar, Clock, CheckCircle, XCircle, ArrowLeftRight, RefreshCw,
+  Plus, UserCheck, Clock, CheckCircle, XCircle, ArrowLeftRight, RefreshCw,
 } from "lucide-react";
 import { BidiText } from "@/components/ui/bidi-text";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
