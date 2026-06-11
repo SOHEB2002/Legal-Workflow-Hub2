@@ -55,11 +55,15 @@ Stack: TypeScript + React + Tailwind + Shadcn/UI (frontend), Node/Express (backe
 
 ## Current state (update this section as work progresses)
 - **Phase 0 + 1 (frontend):** complete, deployed. Frontend casts → 0: cases 107→7 (7 intentional/tracked), consultations→0, hearings→0, notifications→0 (root-fixed via `NotificationResponse` widening in schema.ts). Batch 3 cleared all 17 TS errors → **tsc-0 baseline (regression check: must stay 0)**.
-- **Phase 2 (routes.ts):** complete, deployed (2A-2C merged to main via `--no-ff`). 282→20 casts = 17 permanent (15 `catch`/`error as any` + 2 multer `req.file`) + 3 documented deferred.
+- **Phase 2 (routes.ts):** complete, deployed (2A-2C merged to main via `--no-ff`). 282→~17 casts = permanent (`catch`/`error as any` + multer `req.file`); the 2 deferred Date casts resolved in 3C.
+- **Phase 3 (storage.ts):** IN PROGRESS, branch only (NOT deployed). 122→107 casts so far.
+  - **3A probe** ✅ — verdict: the ~95 Drizzle write-payload casts (`.set/.values({…}) as any`) are VESTIGIAL/cargo-culted, not load-bearing. 3D is a mechanical sweep, not an architectural project. (Root: bare `timestamp()` = Drizzle date-mode vs string interfaces; values actually match `$inferInsert`.)
+  - **3B** ✅ commit 57da4b0 — 15 vestigial field-access casts stripped (122→107).
+  - **3C** ✅ commit 5eab4e3 — resolved the 2 deferred Date casts; extended the closedAt string→Date idiom to `followUpStartedAt`/`expectedDeliveryDate` in `updateConsultation`+`updateConsultationAndLog`; routes passes `.toISOString()`.
+  - **3D** PENDING — sweep the ~92 remaining write-payload casts per-method with a tsc gate each.
+  - **3E** GATED — assigned_to NOT NULL bug (below); awaiting user Option A (nullable migration) vs B (sentinel reassign).
 - **Deferred / pending:**
-  - assigned_to NOT NULL bug (above) — product decision needed.
-  - 2 Date-mode timestamp casts: `followUpStartedAt` / `expectedDeliveryDate` (routes.ts ~3292/~3299) — Date passed to Drizzle Date-mode column; real fix is storage-layer `toISOString` conversion (mirror closedAt). Flagged inline `// Date-mode cast:`.
+  - assigned_to NOT NULL bug (above) — product decision needed (Phase-3 3E).
   - 2D' validation hardening (big), 2E workflow dedup (likely decline).
-  - **storage.ts audit** — next major target; owns the real fix for all 3 deferred items.
   - Phase 6 dead-code sweep: dead `deleteUser` methods, unused `CourtType` import (`hearings.tsx:86`), `contracts.tsx:551` multipart refresh race, `auth-context.tsx:57` fetchUsersFromAPI migration.
 - **Explicitly DECLINED (not deferred):** `useCasesFilter` hook extraction — revisit only if a test suite is adopted. cases.tsx structural-extraction work ended at Batch 4B.
