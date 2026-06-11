@@ -2171,7 +2171,12 @@ export async function registerRoutes(
           const caseMemos = await storage.getMemosByCase(caseId);
           for (const m of caseMemos) {
             if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
-              await storage.updateMemo(m.id, { assignedTo: null } as any);  // FIXME(2D-defer): null -> memos.assigned_to is NOT NULL; this write throws (caught/swallowed below) so dept-transfer unassign silently no-ops. Needs schema migration (drop NOT NULL) or different unassign logic — not a type fix.
+              // "" is the system's unassigned sentinel (memos.assigned_to is
+              // NOT NULL; auto-memos write `primaryLawyerId || responsibleLawyerId || ""`).
+              // The memo mirrors its case: unassigned at transfer, then the
+              // primaryLawyerId-change cascade below re-points it when the new
+              // department assigns a lawyer.
+              await storage.updateMemo(m.id, { assignedTo: "" });
             }
           }
         } catch (e) {
@@ -3295,14 +3300,14 @@ export async function registerRoutes(
           status: "active",
           currentStage: ConsultationStage.RECEIVED,
           followUpCount: nextCount,
-          followUpStartedAt: new Date() as any,  // Date-mode cast: Date into Drizzle Date-mode timestamp column (not special-cased like closedAt); precise fix needs storage-layer toISOString handling (see storage.ts audit).
+          followUpStartedAt: new Date().toISOString(),
           // Clear previous closure metadata — it described the prior
           // lifecycle, not the new cycle.
           closedAt: null,
           closureReason: null,
           closureReasonOther: null,
           // Fresh SLA window for the cycle (R6).
-          expectedDeliveryDate: newExpectedDeliveryDate as any,  // Date-mode cast: Date into Drizzle Date-mode timestamp column; precise fix needs storage-layer toISOString handling (see storage.ts audit).
+          expectedDeliveryDate: newExpectedDeliveryDate.toISOString(),
           // Defensive cleanup (R10) — clear any stale pause/await state
           // the row might carry from before its original closure so the
           // new cycle starts cleanly.
