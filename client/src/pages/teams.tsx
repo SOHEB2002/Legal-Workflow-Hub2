@@ -45,14 +45,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Users, Plus, MoreHorizontal, Pencil, Trash2, UserPlus, UserMinus, Crown } from "lucide-react";
+import { Users, Plus, MoreHorizontal, Pencil, Trash2, UserMinus, Crown } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
 import { useToast } from "@/hooks/use-toast";
 
 export default function TeamsPage() {
-  const { users, permissions } = useAuth();
+  const { users } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { teams, createTeam, updateTeam, deleteTeam, addTeamMember, removeTeamMember, changeTeamLead, getTeamWorkload } = useUsers();
   const { toast } = useToast();

@@ -37,13 +37,12 @@ import {
   Palmtree,
   UserCheck,
   Shield,
-  ArrowRight,
   Lock,
   Eye,
   EyeOff,
 } from "lucide-react";
-import { UserRoleLabels, UserStatusLabels, VacationStatusLabels, DelegationTypeLabels, CaseStageLabels } from "@shared/schema";
-import type { UserRoleType, UserStatusValue, VacationStatusValue, DelegationTypeValue, CaseStageValue } from "@shared/schema";
+import { UserRoleLabels, VacationStatusLabels, DelegationTypeLabels, CaseStageLabels } from "@shared/schema";
+import type { UserRoleType, VacationStatusValue, DelegationTypeValue, CaseStageValue } from "@shared/schema";
 import { VacationDialog } from "@/components/users/vacation-dialog";
 import { DelegationDialog } from "@/components/users/delegation-dialog";
 

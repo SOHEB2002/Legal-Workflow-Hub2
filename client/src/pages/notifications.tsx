@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Bell, CheckCheck, Trash2, Archive, Send, Filter, ArrowUpCircle, Eye, RefreshCw, MessageSquare } from "lucide-react";
+import { Bell, CheckCheck, Trash2, Send, Filter, ArrowUpCircle, Eye, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -35,11 +35,10 @@ import {
   NotificationPriority,
   NotificationPriorityLabels,
   NotificationStatus,
-  NotificationStatusLabels,
   NotificationTypeLabels,
   ResponseTypeLabels,
 } from "@shared/schema";
-import type { Notification, NotificationTypeValue, NotificationPriorityValue, ResponseTypeValue } from "@shared/schema";
+import type { Notification, ResponseTypeValue } from "@shared/schema";
 import { cn } from "@/lib/utils";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { Link } from "wouter";
@@ -62,9 +61,7 @@ export default function NotificationsPage() {
   const {
     getMyNotifications,
     markAsRead,
-    markAllAsRead,
     deleteNotification,
-    archiveOldNotifications,
     getEscalatedNotifications,
   } = useNotifications();
   const { toast } = useToast();

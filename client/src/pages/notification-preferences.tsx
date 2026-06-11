@@ -17,7 +17,6 @@ import { useNotifications } from "@/lib/notifications-context";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import {
-  NotificationType,
   NotificationTypeLabels,
   DigestMode,
   DigestModeLabels,

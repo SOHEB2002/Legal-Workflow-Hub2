@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -52,7 +52,6 @@ import { useToast } from "@/hooks/use-toast";
 import {
   FieldTaskStatus,
   FieldTaskStatusLabels,
-  FieldTaskType,
   FieldTaskTypeLabels,
   Priority,
   canAssignFieldTasks,
@@ -65,7 +64,7 @@ import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 export default function FieldTasksPage() {
-  const { user, permissions, users } = useAuth();
+  const { user, users } = useAuth();
   const { fieldTasks, addFieldTask, startTask, completeTask, cancelTask, deleteFieldTask } = useFieldTasks();
   const { cases } = useCases();
   const { consultations } = useConsultations();

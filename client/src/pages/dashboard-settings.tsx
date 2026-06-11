@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowUp, ArrowDown, RotateCcw, Save, ArrowRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { useDashboard, type WidgetSize, type WidgetConfig } from "@/lib/dashboard-context";
+import { useDashboard, type WidgetSize } from "@/lib/dashboard-context";
 import { widgetIcons } from "@/components/dashboard-widgets";
 
 const sizeLabels: Record<WidgetSize, string> = {

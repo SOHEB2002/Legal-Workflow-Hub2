@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { startOfMonth, endOfMonth, isWithinInterval, parseISO, subMonths, startOfYear, endOfYear } from "date-fns";
+import { startOfMonth, endOfMonth, isWithinInterval, parseISO } from "date-fns";
 import { formatMonthYearArabic } from "@/lib/date-utils";
 import { 
   TrendingUp, 

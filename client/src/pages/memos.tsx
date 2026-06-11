@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { getClientRoleLabel } from "@/lib/client-role";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -85,7 +85,6 @@ import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
 import { useClients } from "@/lib/clients-context";
 import {
-  MemoType,
   MemoTypeLabels,
   MemoStatus,
   MemoStatusLabels,
@@ -115,7 +114,6 @@ import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import {
   MemosAdvancedFilters,
   EMPTY_MEMOS_ADV_FILTERS,
-  countActiveMemosAdvFilters,
   isMemoNonFinal,
   type AdvancedMemosFilters,
 } from "@/components/memos-advanced-filters";

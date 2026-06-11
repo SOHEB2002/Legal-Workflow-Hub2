@@ -1,5 +1,5 @@
 import type { Express, Request } from "express";
-import { createServer, type Server } from "http";
+import { type Server } from "http";
 import { storage } from "./storage";
 import {
   loginSchema,
@@ -25,9 +25,7 @@ import {
   MemoActivityType,
   CaseClassification,
   CaseStage,
-  CaseStagesOrder,
   ConsultationStage,
-  ConsultationStagesAll,
   ConsultationStageLabels,
   ConsultationType,
   ConsultationTypeLabels,
@@ -44,12 +42,10 @@ import {
   ContractType,
   ContractTypeLabels,
   ContractActivityType,
-  ContractStatus,
   ContractAttachmentSlot,
   ContractAttachmentSlotLabels,
   ContractSlotsByType,
   resolveContractType,
-  getContractStagesForType,
   remapContractStageForType,
   insertContractSchema,
   InternalReviewDecision,
@@ -4212,7 +4208,6 @@ export async function registerRoutes(
         // helper below if both happen — see metadata.alsoChangedType).
         const fromDeptName = await storage.getDepartmentById(deptTransfer.fromDeptId).then((d) => d?.name || deptTransfer.fromDeptId).catch(() => deptTransfer.fromDeptId);
         const toDeptName = await storage.getDepartmentById(deptTransfer.toDeptId).then((d) => d?.name || deptTransfer.toDeptId).catch(() => deptTransfer.toDeptId);
-        const fromStageLabel = (ContractStageLabels as Record<string, string>)[deptTransfer.fromStage] || deptTransfer.fromStage;
         const description = deptTransfer.reason
           ? `تحويل من قسم "${fromDeptName}" إلى قسم "${toDeptName}" — ${deptTransfer.reason}`
           : `تحويل من قسم "${fromDeptName}" إلى قسم "${toDeptName}"`;

@@ -8,7 +8,7 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
-  type SidebarCounts, type SidebarSectionValue, SIDEBAR_SECTIONS,
+  type SidebarCounts, type SidebarSectionValue, 
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -3812,7 +3812,6 @@ export class DatabaseStorage implements IStorage {
       closedAt: null,
     };
 
-    let lastErr: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const contractNumber = generateContractNumber();
       const newContract = { ...baseContract, contractNumber };
@@ -3831,7 +3830,6 @@ export class DatabaseStorage implements IStorage {
         });
         return mapDbContract(newContract);
       } catch (err) {
-        lastErr = err;
         if (isUniqueViolationOn(err, "contract_number")) {
           continue;
         }

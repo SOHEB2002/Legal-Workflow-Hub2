@@ -24,19 +24,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
-  XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, MessageSquare,
+  XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
   Upload, Download, FileIcon, Paperclip, Eye,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
   Contract, ContractStageValue, ContractActivity, ContractAttachment, ContractTypeValue,
-  InternalReviewDecisionValue, CommitteeDecisionValue, NoteOutcomeValue, ContractPriorityValue,
+  ContractPriorityValue,
 } from "@shared/schema";
 import {
   ContractStage, ContractStageLabels, ContractStagesAll, ContractStagesOrder,
   ContractType, ContractTypeLabels,
   ContractPriority, ContractPriorityLabels,
-  ContractAttachmentSlot, ContractAttachmentSlotLabels, ContractSlotsByType,
+  ContractAttachmentSlot, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
@@ -45,7 +45,7 @@ import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, refreshAuthToken } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 
 // FE mirror of ALLOWED_CONTRACT_TRANSITIONS for the linear-forward
@@ -219,7 +219,7 @@ export default function ContractsPage() {
     awaitCompletion, resumeFromCompletion, skipCompletion,
     refreshContracts,
   } = useContracts();
-  const { clients, getClientName } = useClients();
+  const { getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, users, isViewer } = useAuth();
   const { toast } = useToast();
@@ -510,10 +510,14 @@ export default function ContractsPage() {
   // 401 + 403 are recovered transparently: a stale JWT (401) or a
   // stale CSRF token (403 — 4h TTL while sessions are typically
   // longer) was the silent cause of "uploads suddenly stop working
-  // until I refresh the page". We hit /api/auth/refresh, swap both
-  // tokens in localStorage, and replay the upload once. After that
-  // one retry, any non-2xx surfaces with the server's error message
-  // AND the HTTP status logged to console for support triage.
+  // until I refresh the page". The refresh goes through queryClient's
+  // single-flight refreshAuthToken — sharing the in-flight promise with
+  // apiRequest's 401 path and auth-context's scheduled refresh, so a
+  // concurrent refresh can't consume the rotation token out from under
+  // us (same race class fixed in Phase 0) — then the upload replays
+  // once. After that one retry, any non-2xx surfaces with the server's
+  // error message AND the HTTP status logged to console for support
+  // triage.
   const uploadAttachmentRaw = async (
     contractId: string,
     file: File,
@@ -537,34 +541,13 @@ export default function ContractsPage() {
       if (description) fd.append("description", description);
       return fd;
     };
-    const tryRefreshTokens = async (): Promise<boolean> => {
-      const oldToken = localStorage.getItem("lawfirm_token");
-      if (!oldToken) return false;
-      try {
-        const refreshRes = await fetch("/api/auth/refresh", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${oldToken}`,
-            "Content-Type": "application/json",
-          },
-        });
-        if (!refreshRes.ok) return false;
-        const data = await refreshRes.json();
-        if (data?.token) localStorage.setItem("lawfirm_token", data.token);
-        if (data?.csrfToken) localStorage.setItem("lawfirm_csrf_token", data.csrfToken);
-        return !!data?.token;
-      } catch {
-        return false;
-      }
-    };
-
     let res = await fetch(`/api/contracts/${contractId}/attachments`, {
       method: "POST",
       headers: buildHeaders(),
       body: buildFormData(),
       credentials: "same-origin",
     });
-    if ((res.status === 401 || res.status === 403) && await tryRefreshTokens()) {
+    if ((res.status === 401 || res.status === 403) && (await refreshAuthToken()).ok) {
       res = await fetch(`/api/contracts/${contractId}/attachments`, {
         method: "POST",
         headers: buildHeaders(),

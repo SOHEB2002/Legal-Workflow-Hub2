@@ -7,10 +7,7 @@ import type {
   NotificationPriorityValue,
   NotificationStatusValue,
   ResponseTypeValue,
-  DigestModeValue,
   NotificationRule,
-  NotificationRuleConditions,
-  NotificationRuleRecipients,
 } from "@shared/schema";
 import { NotificationType, NotificationPriority, NotificationStatus, DigestMode } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";

@@ -58,7 +58,6 @@ import type {
   Consultation,
   ConsultationStageValue,
   ConsultationTypeValue,
-  CaseTypeValue,
   InternalReviewDecisionValue,
   CommitteeDecisionValue,
   NoteOutcomeValue,
@@ -97,7 +96,6 @@ import {
   CaseStage,
   CaseStageLabels,
   CaseStagesOrder,
-  Department,
 } from "@shared/schema";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
@@ -666,12 +664,12 @@ export default function ConsultationsPage() {
     deleteConsultation,
     refreshConsultations,
   } = useConsultations();
-  const { clients, getClientName } = useClients();
+  const { getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users } = useAuth();
   const { addRecentVisit } = useFavorites();
   const { toast } = useToast();
-  const lawyers = users.filter(u => u.canBeAssignedConsultations);
+
 
   // Resolves an assigned-lawyer id to a display name. Mirrors the
   // memos/teams-page pattern. Returns "—" when null/unknown so callers

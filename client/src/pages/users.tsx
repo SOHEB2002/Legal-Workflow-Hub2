@@ -36,7 +36,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Calendar, Users, FileText, Eye, Briefcase, Palmtree, UserCheck, AlertTriangle, Loader2 } from "lucide-react";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, Palmtree, UserCheck, AlertTriangle, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
@@ -88,20 +88,11 @@ function getStatusBadgeColor(status: UserStatusValue) {
   }
 }
 
-function getWorkloadBadge(activeCases: number, activeConsultations: number) {
-  const total = activeCases + activeConsultations;
-  if (total > 15) {
-    return { label: "حرج", color: "bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30" };
-  } else if (total > 10) {
-    return { label: "مرتفع", color: "bg-orange-500/20 text-orange-600 dark:text-orange-400 border-orange-500/30" };
-  }
-  return { label: "عادي", color: "bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30" };
-}
 
 export default function UsersPage() {
-  const { user, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
+  const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
-  const { teams, getTeamById, extendedUsers, isUserOnVacation, getActiveDelegations, toggleUserStatus: toggleUserStatusExtended } = useUsers();
+  const { extendedUsers, isUserOnVacation } = useUsers();
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
@@ -427,11 +418,6 @@ export default function UsersPage() {
     return matchesSearch && matchesRole && matchesDepartment && matchesStatus;
   });
 
-  const getUserExtendedInfo = (userId: string) => {
-    const extended = extendedUsers.find(eu => eu.id === userId);
-    return extended || null;
-  };
-  
   const getUserStatus = (userId: string): UserStatusValue => {
     const extended = extendedUsers.find(eu => eu.id === userId);
     if (extended?.status) return extended.status;

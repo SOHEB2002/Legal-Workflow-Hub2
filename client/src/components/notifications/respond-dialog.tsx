@@ -12,7 +12,6 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useNotifications } from "@/lib/notifications-context";
-import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import {
   ResponseType,
@@ -20,7 +19,6 @@ import {
   NotificationPriorityLabels,
   NotificationTypeLabels,
   NotificationPriority,
-  NotificationStatus,
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
 import { cn } from "@/lib/utils";
@@ -54,7 +52,6 @@ const responseOptions: { type: ResponseTypeValue; icon: typeof CheckCircle; labe
 
 export function RespondDialog({ open, onOpenChange, notification }: RespondDialogProps) {
   const { respondToNotification, markAsRead } = useNotifications();
-  const { user } = useAuth();
   const { toast } = useToast();
 
   const [selectedResponse, setSelectedResponse] = useState<ResponseTypeValue | null>(null);
@@ -71,19 +68,6 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
     setSelectedResponse(null);
     setResponseMessage("");
     onOpenChange(false);
-  };
-
-  const handleQuickRespond = async (type: ResponseTypeValue) => {
-    if (!notification) return;
-
-    try {
-      await respondToNotification(notification.id, type, "");
-      markAsRead(notification.id);
-      toast({ title: `تم الرد: ${ResponseTypeLabels[type]}` });
-      onOpenChange(false);
-    } catch (err: any) {
-      toast({ title: "فشل تنفيذ الإجراء", description: err?.message || "حدث خطأ أثناء معالجة الطلب", variant: "destructive" });
-    }
   };
 
   if (!notification) return null;

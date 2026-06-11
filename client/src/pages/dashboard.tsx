@@ -25,8 +25,8 @@ import {
 } from "@/components/ui/dialog";
 import { StatCardWidget, ListWidget, QuickActionsWidget, widgetIcons, widgetVariants } from "@/components/dashboard-widgets";
 import { useCases } from "@/lib/cases-context";
-import { CaseClassification, CaseClassificationLabels } from "@shared/schema";
-import type { CaseClassificationValue, LawCase, Consultation, Memo, Contract } from "@shared/schema";
+import { CaseClassification } from "@shared/schema";
+import type { LawCase, Consultation, Memo, Contract } from "@shared/schema";
 import { useConsultations } from "@/lib/consultations-context";
 import { useContracts } from "@/lib/contracts-context";
 import { useHearings } from "@/lib/hearings-context";

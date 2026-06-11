@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { User, UserRoleType } from "@shared/schema";
+import type { User } from "@shared/schema";
 import {
   canManageAllCases, 
   canManageAllConsultations, 
@@ -45,7 +45,6 @@ interface AuthContextType {
   refetchUsers: () => Promise<void>;
   addUser: (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => Promise<{ success: boolean; error?: string }>;
   updateUser: (id: string, userData: Partial<User>) => Promise<{ success: boolean; error?: string }>;
-  deleteUser: (id: string) => Promise<{ success: boolean; message: string }>;
   resetPassword: (id: string, newPassword: string) => void;
   toggleUserStatus: (id: string) => void;
 }
@@ -272,43 +271,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const deleteUser = async (id: string): Promise<{ success: boolean; message: string }> => {
-    const userToDelete = users.find(u => u.id === id);
-    if (!userToDelete) {
-      return { success: false, message: "المستخدم غير موجود" };
-    }
-
-    if (userToDelete.role === "branch_manager") {
-      const branchManagers = users.filter(u => u.role === "branch_manager" && u.id !== id);
-      if (branchManagers.length === 0) {
-        return { success: false, message: "لا يمكن حذف آخر مدير فرع في النظام" };
-      }
-    }
-
-    if (user?.id === id) {
-      return { success: false, message: "لا يمكنك حذف حسابك الحالي" };
-    }
-
-    try {
-      const token = localStorage.getItem("lawfirm_token");
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`/api/users/${id}`, { method: "DELETE", headers });
-      const data = await res.json();
-      if (!res.ok) {
-        if (data.dependencies) {
-          return { success: false, message: `لا يمكن حذف المستخدم لوجود بيانات مرتبطة:\n${data.dependencies.join("\n")}` };
-        }
-        return { success: false, message: data.error || "فشل حذف المستخدم" };
-      }
-      await refetchUsers();
-      return { success: true, message: data.message || "تم حذف المستخدم بنجاح" };
-    } catch (error: any) {
-      console.error("Error deleting user:", error);
-      return { success: false, message: "فشل حذف المستخدم" };
-    }
-  };
-
   const resetPassword = async (id: string, newPassword: string) => {
     const res = await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword, mustChangePassword: true });
     if (!res.ok) {
@@ -355,7 +317,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isViewer = user?.role === "viewer";
 
   return (
-    <AuthContext.Provider value={{ user, isViewer, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus }}>
+    <AuthContext.Provider value={{ user, isViewer, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, resetPassword, toggleUserStatus }}>
       {children}
     </AuthContext.Provider>
   );

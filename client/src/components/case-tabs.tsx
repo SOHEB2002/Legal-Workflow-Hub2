@@ -11,10 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import {
   Clock, FileText, Pin, AlertTriangle, Calendar, Plus, Trash2, Edit3, Save,
-  MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, Star, ClipboardList,
+  MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, ClipboardList,
 } from "lucide-react";
 import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels } from "@shared/schema";
-import { LtrInline } from "@/components/ui/bidi-text";
 import { formatRelativeArabic } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";

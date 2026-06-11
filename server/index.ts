@@ -21,9 +21,6 @@ const httpServer = createServer(app);
 const activeUserCache = new Map<string, { isActive: boolean; ts: number }>();
 const USER_CACHE_TTL_MS = 30_000;
 
-function clearActiveUserCache(userId: string) {
-  activeUserCache.delete(userId);
-}
 
 declare module "http" {
   interface IncomingMessage {
