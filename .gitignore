@@ -11,9 +11,5 @@ FETCH_HEAD
 # runtime upload storage (contract attachments etc.) — data, not source
 uploads/
 
-# Replit paste-artifact binaries (screenshots, zips); text/code artifacts stay tracked for now
-attached_assets/*.png
-attached_assets/*.jpg
-attached_assets/*.jpeg
-attached_assets/*.zip
-attached_assets/*.pdf
+# Replit paste-artifact dump (screenshots, zips, code/text pastes) — dev detritus, not source
+attached_assets/
