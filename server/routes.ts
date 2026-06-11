@@ -2171,7 +2171,12 @@ export async function registerRoutes(
           const caseMemos = await storage.getMemosByCase(caseId);
           for (const m of caseMemos) {
             if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
-              await storage.updateMemo(m.id, { assignedTo: null } as any);  // FIXME(2D-defer): null -> memos.assigned_to is NOT NULL; this write throws (caught/swallowed below) so dept-transfer unassign silently no-ops. Needs schema migration (drop NOT NULL) or different unassign logic — not a type fix.
+              // "" is the system's unassigned sentinel (memos.assigned_to is
+              // NOT NULL; auto-memos write `primaryLawyerId || responsibleLawyerId || ""`).
+              // The memo mirrors its case: unassigned at transfer, then the
+              // primaryLawyerId-change cascade below re-points it when the new
+              // department assigns a lawyer.
+              await storage.updateMemo(m.id, { assignedTo: "" });
             }
           }
         } catch (e) {
