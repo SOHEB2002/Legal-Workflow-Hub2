@@ -99,7 +99,7 @@ function getWorkloadBadge(activeCases: number, activeConsultations: number) {
 }
 
 export default function UsersPage() {
-  const { user, permissions, users, addUser, updateUser, deleteUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
+  const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { teams, getTeamById, extendedUsers, isUserOnVacation, getActiveDelegations, toggleUserStatus: toggleUserStatusExtended } = useUsers();
   const { toast } = useToast();

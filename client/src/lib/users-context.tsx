@@ -39,7 +39,6 @@ interface UsersContextType {
   
   addUser: (userData: Partial<ExtendedUser>) => Promise<ExtendedUser>;
   updateUser: (id: string, userData: Partial<ExtendedUser>) => Promise<{ success: boolean; error?: string }>;
-  deleteUser: (id: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (id: string, newPassword: string) => Promise<void>;
   toggleUserStatus: (id: string, status: UserStatusValue) => Promise<void>;
   getUserById: (id: string) => ExtendedUser | undefined;
@@ -253,33 +252,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
       return { success: false, error: message };
     }
   }, [refetchUsers]);
-
-  const deleteUser = useCallback(async (id: string): Promise<{ success: boolean; error?: string }> => {
-    const user = extendedUsers.find(u => u.id === id);
-    if (!user) return { success: false, error: "المستخدم غير موجود" };
-    
-    const branchManagers = extendedUsers.filter(u => u.role === "branch_manager" && u.isActive);
-    if (user.role === "branch_manager" && branchManagers.length <= 1) {
-      return { success: false, error: "لا يمكن حذف آخر مدير فرع" };
-    }
-    
-    if (user.stats.activeCases > 0 || user.stats.activeConsultations > 0) {
-      return { success: false, error: "لا يمكن حذف مستخدم لديه قضايا أو استشارات نشطة" };
-    }
-    
-    try {
-      await apiRequest("DELETE", `/api/users/${id}`);
-      await refetchUsers();
-      setLocalExtensions(prev => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      return { success: true };
-    } catch {
-      return { success: false, error: "فشل في حذف المستخدم" };
-    }
-  }, [extendedUsers, refetchUsers]);
 
   const resetPassword = useCallback(async (id: string, newPassword: string) => {
     const res = await apiRequest("PATCH", `/api/users/${id}`, { password: newPassword, mustChangePassword: true });
@@ -629,7 +601,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     sessions,
     addUser,
     updateUser,
-    deleteUser,
     resetPassword,
     toggleUserStatus,
     getUserById,
