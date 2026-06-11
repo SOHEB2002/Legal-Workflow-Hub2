@@ -142,7 +142,7 @@ export interface IStorage {
   getAllSupportTickets(): Promise<SupportTicket[]>;
   getSupportTicketById(id: string): Promise<SupportTicket | undefined>;
   getSupportTicketsByUser(userId: string): Promise<SupportTicket[]>;
-  createSupportTicket(data: Partial<SupportTicket>): Promise<SupportTicket>;
+  createSupportTicket(data: Partial<SupportTicket> & Pick<SupportTicket, "ticketType" | "title" | "description" | "submittedBy">): Promise<SupportTicket>;
   updateSupportTicket(id: string, data: Partial<SupportTicket>): Promise<SupportTicket | undefined>;
   deleteSupportTicket(id: string): Promise<boolean>;
   getNextTicketNumber(): Promise<string>;
@@ -1280,7 +1280,7 @@ export class DatabaseStorage implements IStorage {
             metadata: {},
             performedBy: createdBy,
             performedAt: now,
-          } as any);
+          });
         });
         return mapDbConsultation(newConsultation);
       } catch (err) {
@@ -1358,7 +1358,7 @@ export class DatabaseStorage implements IStorage {
         metadata: activity.metadata ?? {},
         performedBy: activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
       return updated ? mapDbConsultation(updated) : undefined;
@@ -1385,7 +1385,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: input.performedBy,
         pausedAt: now,
         updatedAt: now,
-      } as any).where(eq(consultations.id, id));
+      }).where(eq(consultations.id, id));
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
         consultationId: id,
@@ -1394,7 +1394,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { reason: input.reason },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
       return updated ? mapDbConsultation(updated) : undefined;
     });
@@ -1422,7 +1422,7 @@ export class DatabaseStorage implements IStorage {
         savedStage: fromStage,
         awaitingCompletion: true,
         updatedAt: now,
-      } as any).where(eq(consultations.id, id));
+      }).where(eq(consultations.id, id));
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
         consultationId: id,
@@ -1431,7 +1431,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { reason: input.reason, savedStage: fromStage },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
       return updated ? mapDbConsultation(updated) : undefined;
     });
@@ -1455,7 +1455,7 @@ export class DatabaseStorage implements IStorage {
         savedStage: null,
         awaitingCompletion: false,
         updatedAt: now,
-      } as any).where(eq(consultations.id, id));
+      }).where(eq(consultations.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
@@ -1467,7 +1467,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { notes: notes || undefined, returnedToStage: targetStage },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
       return updated ? mapDbConsultation(updated) : undefined;
     });
@@ -1490,7 +1490,7 @@ export class DatabaseStorage implements IStorage {
       await tx.update(consultations).set({
         currentStage: targetStage,
         updatedAt: now,
-      } as any).where(eq(consultations.id, id));
+      }).where(eq(consultations.id, id));
       const targetLabel = targetStage === ConsultationStage.IN_PROGRESS ? "جاري العمل" : "دراسة";
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
@@ -1500,7 +1500,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { targetStage },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
       return updated ? mapDbConsultation(updated) : undefined;
     });
@@ -1520,7 +1520,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: null,
         pausedAt: null,
         updatedAt: now,
-      } as any).where(eq(consultations.id, id));
+      }).where(eq(consultations.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
@@ -1530,7 +1530,7 @@ export class DatabaseStorage implements IStorage {
         metadata: notes ? { notes } : {},
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
       return updated ? mapDbConsultation(updated) : undefined;
     });
@@ -1591,8 +1591,8 @@ export class DatabaseStorage implements IStorage {
       nextHearingDate: null,
       nextHearingTime: null,
       responseRequired: data.responseRequired || false,
-      memoRequired: (data as any).memoRequired || false,
-      opponentResponseRequired: (data as any).opponentResponseRequired || false,
+      memoRequired: data.memoRequired || false,
+      opponentResponseRequired: data.opponentResponseRequired || false,
       hearingReport: "",
       recommendations: "",
       nextSteps: "",
@@ -1957,7 +1957,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: input.performedBy,
         pausedAt: now,
         updatedAt: now,
-      } as any).where(eq(memos.id, id));
+      }).where(eq(memos.id, id));
       await tx.insert(memoActivityLog).values({
         id: randomUUID(),
         memoId: id,
@@ -1966,7 +1966,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { reason: input.reason },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
     });
@@ -1989,7 +1989,7 @@ export class DatabaseStorage implements IStorage {
         awaitingCompletion: true,
         savedStage: existing.status,
         updatedAt: now,
-      } as any).where(eq(memos.id, id));
+      }).where(eq(memos.id, id));
       await tx.insert(memoActivityLog).values({
         id: randomUUID(),
         memoId: id,
@@ -1998,7 +1998,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { reason: input.reason, savedStage: existing.status },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
     });
@@ -2016,7 +2016,7 @@ export class DatabaseStorage implements IStorage {
         awaitingCompletion: false,
         savedStage: null,
         updatedAt: now,
-      } as any).where(eq(memos.id, id));
+      }).where(eq(memos.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(memoActivityLog).values({
         id: randomUUID(),
@@ -2026,7 +2026,7 @@ export class DatabaseStorage implements IStorage {
         metadata: notes ? { notes } : {},
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
     });
@@ -2045,7 +2045,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: null,
         pausedAt: null,
         updatedAt: now,
-      } as any).where(eq(memos.id, id));
+      }).where(eq(memos.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(memoActivityLog).values({
         id: randomUUID(),
@@ -2055,7 +2055,7 @@ export class DatabaseStorage implements IStorage {
         metadata: notes ? { notes } : {},
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
     });
@@ -2115,7 +2115,7 @@ export class DatabaseStorage implements IStorage {
         metadata: activity.metadata ?? {},
         performedBy: activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
@@ -2139,10 +2139,10 @@ export class DatabaseStorage implements IStorage {
         decision: input.decision,
         notes: input.notes,
         createdAt: now,
-      } as any).returning();
+      }).returning();
 
       await tx.update(memos)
-        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .set({ currentStage: input.nextStage, updatedAt: now })
         .where(eq(memos.id, input.memoId));
 
       await tx.insert(memoActivityLog).values({
@@ -2153,7 +2153,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
       if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
@@ -2189,10 +2189,10 @@ export class DatabaseStorage implements IStorage {
         notes: input.notes,
         decidedBy: input.decidedBy,
         decidedAt: now,
-      } as any).returning();
+      }).returning();
 
       await tx.update(memos)
-        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .set({ currentStage: input.nextStage, updatedAt: now })
         .where(eq(memos.id, input.memoId));
 
       await tx.insert(memoActivityLog).values({
@@ -2203,7 +2203,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
       if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
@@ -2239,10 +2239,10 @@ export class DatabaseStorage implements IStorage {
         notes: input.notes,
         recordedBy: input.recordedBy,
         recordedAt: now,
-      } as any).returning();
+      }).returning();
 
       await tx.update(memos)
-        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .set({ currentStage: input.nextStage, updatedAt: now })
         .where(eq(memos.id, input.memoId));
 
       await tx.insert(memoActivityLog).values({
@@ -2253,7 +2253,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updatedMemo] = await tx.select().from(memos).where(eq(memos.id, input.memoId));
       if (!updatedMemo) throw new Error("MEMO_NOT_FOUND");
@@ -2329,7 +2329,7 @@ export class DatabaseStorage implements IStorage {
         status: "ملغاة",
         cancellationReason: input.reason,
         updatedAt: now,
-      } as any).where(eq(memos.id, id));
+      }).where(eq(memos.id, id));
       await tx.insert(memoActivityLog).values({
         id: randomUUID(),
         memoId: id,
@@ -2338,7 +2338,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { reason: input.reason },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
     });
@@ -2356,7 +2356,7 @@ export class DatabaseStorage implements IStorage {
       await tx.update(memos).set({
         currentStage: MemoStage.COMMITTEE,
         updatedAt: now,
-      } as any).where(eq(memos.id, id));
+      }).where(eq(memos.id, id));
       await tx.insert(memoActivityLog).values({
         id: randomUUID(),
         memoId: id,
@@ -2367,7 +2367,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { notes: input.notes },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
     });
@@ -2438,7 +2438,10 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(supportTickets).where(eq(supportTickets.submittedBy, userId)).orderBy(supportTickets.createdAt);
   }
 
-  async createSupportTicket(data: Partial<SupportTicket>): Promise<SupportTicket> {
+  // The four Pick'd fields are the table's notNull-without-default columns;
+  // the single caller (routes POST /api/support/tickets) guarantees them via
+  // insertTicketSchema.parse + an explicit submittedBy.
+  async createSupportTicket(data: Partial<SupportTicket> & Pick<SupportTicket, "ticketType" | "title" | "description" | "submittedBy">): Promise<SupportTicket> {
     const id = randomUUID();
     const ticketNumber = await this.getNextTicketNumber();
     const [ticket] = await db.insert(supportTickets).values({
@@ -2447,13 +2450,13 @@ export class DatabaseStorage implements IStorage {
       ...data,
       createdAt: new Date(),
       updatedAt: new Date(),
-    } as any).returning();
+    }).returning();
     return ticket;
   }
 
   async updateSupportTicket(id: string, data: Partial<SupportTicket>): Promise<SupportTicket | undefined> {
     const [ticket] = await db.update(supportTickets)
-      .set({ ...data, updatedAt: new Date() } as any)
+      .set({ ...data, updatedAt: new Date() })
       .where(eq(supportTickets.id, id))
       .returning();
     return ticket;
@@ -2495,7 +2498,7 @@ export class DatabaseStorage implements IStorage {
       filterConfig: data.filterConfig,
       pageType: data.pageType || "cases",
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return row;
   }
 
@@ -2736,7 +2739,7 @@ export class DatabaseStorage implements IStorage {
     // (user, section) pair, bump last_viewed_at to NOW(). This is what
     // clears the badge after a user opens the page.
     await db.insert(userSectionViews)
-      .values({ userId, section, lastViewedAt: new Date() } as any)
+      .values({ userId, section, lastViewedAt: new Date() })
       .onConflictDoUpdate({
         target: [userSectionViews.userId, userSectionViews.section],
         set: { lastViewedAt: new Date() },
@@ -2753,7 +2756,7 @@ export class DatabaseStorage implements IStorage {
       notes: data.notes,
       createdBy: data.createdBy,
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return {
       id: row.id,
       consultationId: row.consultationId,
@@ -2784,7 +2787,7 @@ export class DatabaseStorage implements IStorage {
       content: data.content,
       createdBy: data.createdBy,
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return {
       id: row.id,
       consultationId: row.consultationId,
@@ -2816,7 +2819,7 @@ export class DatabaseStorage implements IStorage {
       decision: data.decision,
       notes: data.notes,
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return {
       id: row.id,
       consultationId: row.consultationId,
@@ -2849,10 +2852,10 @@ export class DatabaseStorage implements IStorage {
         decision: input.decision,
         notes: input.notes,
         createdAt: now,
-      } as any).returning();
+      }).returning();
 
       await tx.update(consultations)
-        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .set({ currentStage: input.nextStage, updatedAt: now })
         .where(eq(consultations.id, input.consultationId));
 
       await tx.insert(consultationActivityLog).values({
@@ -2863,7 +2866,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
       if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
@@ -2921,7 +2924,7 @@ export class DatabaseStorage implements IStorage {
       notes: data.notes,
       decidedBy: data.decidedBy,
       decidedAt: new Date(),
-    } as any).returning();
+    }).returning();
     return {
       id: row.id,
       consultationId: row.consultationId,
@@ -2952,10 +2955,10 @@ export class DatabaseStorage implements IStorage {
         notes: input.notes,
         decidedBy: input.decidedBy,
         decidedAt: now,
-      } as any).returning();
+      }).returning();
 
       await tx.update(consultations)
-        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .set({ currentStage: input.nextStage, updatedAt: now })
         .where(eq(consultations.id, input.consultationId));
 
       await tx.insert(consultationActivityLog).values({
@@ -2966,7 +2969,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
       if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
@@ -3008,7 +3011,7 @@ export class DatabaseStorage implements IStorage {
       notes: data.notes,
       recordedBy: data.recordedBy,
       recordedAt: new Date(),
-    } as any).returning();
+    }).returning();
     return {
       id: row.id,
       consultationId: row.consultationId,
@@ -3040,10 +3043,10 @@ export class DatabaseStorage implements IStorage {
         notes: input.notes,
         recordedBy: input.recordedBy,
         recordedAt: now,
-      } as any).returning();
+      }).returning();
 
       await tx.update(consultations)
-        .set({ currentStage: input.nextStage, updatedAt: now } as any)
+        .set({ currentStage: input.nextStage, updatedAt: now })
         .where(eq(consultations.id, input.consultationId));
 
       await tx.insert(consultationActivityLog).values({
@@ -3054,7 +3057,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
 
       const [updatedCon] = await tx.select().from(consultations).where(eq(consultations.id, input.consultationId));
       if (!updatedCon) throw new Error("CONSULTATION_NOT_FOUND");
@@ -3085,7 +3088,7 @@ export class DatabaseStorage implements IStorage {
       await tx.update(consultations).set({
         currentStage: ConsultationStage.COMMITTEE,
         updatedAt: now,
-      } as any).where(eq(consultations.id, id));
+      }).where(eq(consultations.id, id));
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
         consultationId: id,
@@ -3096,7 +3099,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { notes: input.notes },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
       return updated ? mapDbConsultation(updated) : undefined;
     });
@@ -3153,13 +3156,13 @@ export class DatabaseStorage implements IStorage {
         extendedBy,
         extendedAt: now,
       };
-      await tx.insert(consultationDeliveryExtensions).values(extensionRow as any);
+      await tx.insert(consultationDeliveryExtensions).values(extensionRow);
 
       const updated = await tx.update(consultations)
         .set({
           expectedDeliveryDate: data.newExpectedDeliveryDate,
           updatedAt: now,
-        } as any)
+        })
         .where(eq(consultations.id, consultationId))
         .returning();
       if (!updated.length) throw new Error("CONSULTATION_UPDATE_FAILED");
@@ -3174,7 +3177,7 @@ export class DatabaseStorage implements IStorage {
           metadata: activity.metadata ?? {},
           performedBy: extendedBy,
           performedAt: now,
-        } as any);
+        });
       }
 
       return {
@@ -3225,7 +3228,7 @@ export class DatabaseStorage implements IStorage {
       metadata: input.metadata ?? {},
       performedBy: input.performedBy,
       performedAt: new Date(),
-    } as any).returning();
+    }).returning();
     return mapDbConsultationActivity(row);
   }
 
@@ -3351,7 +3354,7 @@ export class DatabaseStorage implements IStorage {
         closedAt: null,
       };
 
-      const inserted = await tx.insert(lawCases).values(newCaseRow as any).returning();
+      const inserted = await tx.insert(lawCases).values(newCaseRow).returning();
       if (!inserted.length) throw new Error("CASE_INSERT_FAILED");
 
       // 3. Update consultation to mark conversion (helper-table copies skipped per option ii)
@@ -3361,7 +3364,7 @@ export class DatabaseStorage implements IStorage {
           convertedToCaseId: newCaseId,
           closedAt: now,
           updatedAt: now,
-        } as any)
+        })
         .where(eq(consultations.id, consultationId))
         .returning();
       if (!updatedConRows.length) throw new Error("CONSULTATION_UPDATE_FAILED");
@@ -3382,7 +3385,7 @@ export class DatabaseStorage implements IStorage {
           },
           performedBy: actorId,
           performedAt: now,
-        } as any);
+        });
       }
 
       return {
@@ -3400,7 +3403,7 @@ export class DatabaseStorage implements IStorage {
       ...data,
       id,
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return activity;
   }
 
@@ -3442,7 +3445,7 @@ export class DatabaseStorage implements IStorage {
         currentStage: targetStage,
         stageHistory,
         updatedAt: now,
-      } as any).where(eq(lawCases.id, id));
+      }).where(eq(lawCases.id, id));
       const truncated = input.notes ? input.notes.slice(0, 120) : "";
       await tx.insert(caseActivityLog).values({
         id: nanoid(),
@@ -3455,7 +3458,7 @@ export class DatabaseStorage implements IStorage {
         previousValue: fromStage,
         newValue: targetStage,
         createdAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
       return updated ? mapDbCase(updated) : undefined;
     });
@@ -3477,7 +3480,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: input.performedBy,
         pausedAt: now,
         updatedAt: now,
-      } as any).where(eq(lawCases.id, id));
+      }).where(eq(lawCases.id, id));
       await tx.insert(caseActivityLog).values({
         id: nanoid(),
         caseId: id,
@@ -3487,7 +3490,7 @@ export class DatabaseStorage implements IStorage {
         title: "تعليق القضية",
         details: input.reason,
         createdAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
       return updated ? mapDbCase(updated) : undefined;
     });
@@ -3528,7 +3531,7 @@ export class DatabaseStorage implements IStorage {
         awaitingCompletion: true,
         stageHistory,
         updatedAt: now,
-      } as any).where(eq(lawCases.id, id));
+      }).where(eq(lawCases.id, id));
       await tx.insert(caseActivityLog).values({
         id: nanoid(),
         caseId: id,
@@ -3540,7 +3543,7 @@ export class DatabaseStorage implements IStorage {
         previousValue: fromStage,
         newValue: targetStage,
         createdAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
       return updated ? mapDbCase(updated) : undefined;
     });
@@ -3585,7 +3588,7 @@ export class DatabaseStorage implements IStorage {
         awaitingCompletion: false,
         stageHistory,
         updatedAt: now,
-      } as any).where(eq(lawCases.id, id));
+      }).where(eq(lawCases.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(caseActivityLog).values({
         id: nanoid(),
@@ -3598,7 +3601,7 @@ export class DatabaseStorage implements IStorage {
         previousValue: "استكمال_البيانات",
         newValue: targetStage,
         createdAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
       return updated
         ? { ok: true as const, lawCase: mapDbCase(updated) }
@@ -3619,7 +3622,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: null,
         pausedAt: null,
         updatedAt: now,
-      } as any).where(eq(lawCases.id, id));
+      }).where(eq(lawCases.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(caseActivityLog).values({
         id: nanoid(),
@@ -3630,7 +3633,7 @@ export class DatabaseStorage implements IStorage {
         title: "إلغاء تعليق القضية",
         details: notes || null,
         createdAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
       return updated ? mapDbCase(updated) : undefined;
     });
@@ -3655,13 +3658,13 @@ export class DatabaseStorage implements IStorage {
       ...data,
       id,
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return note;
   }
 
   async updateCaseNote(id: string, data: Partial<CaseNote>): Promise<CaseNote | undefined> {
     const [note] = await db.update(caseNotes)
-      .set({ ...data, editedAt: new Date() } as any)
+      .set({ ...data, editedAt: new Date() })
       .where(eq(caseNotes.id, id))
       .returning();
     return note;
@@ -3708,13 +3711,13 @@ export class DatabaseStorage implements IStorage {
       ...data,
       id,
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return deadline;
   }
 
   async updateLegalDeadline(id: string, data: Partial<LegalDeadline>): Promise<LegalDeadline | undefined> {
     const [deadline] = await db.update(legalDeadlines)
-      .set(data as any)
+      .set(data)
       .where(eq(legalDeadlines.id, id))
       .returning();
     return deadline;
@@ -3757,13 +3760,13 @@ export class DatabaseStorage implements IStorage {
       ...data,
       id,
       createdAt: new Date(),
-    } as any).returning();
+    }).returning();
     return delegation;
   }
 
   async updateDelegation(id: string, data: Partial<DelegationRecord>): Promise<DelegationRecord | undefined> {
     const [delegation] = await db.update(delegationsTable)
-      .set(data as any)
+      .set(data)
       .where(eq(delegationsTable.id, id))
       .returning();
     return delegation;
@@ -3815,7 +3818,7 @@ export class DatabaseStorage implements IStorage {
       const newContract = { ...baseContract, contractNumber };
       try {
         await db.transaction(async (tx) => {
-          await tx.insert(contracts).values(newContract as any);
+          await tx.insert(contracts).values(newContract);
           await tx.insert(contractActivityLog).values({
             id: randomUUID(),
             contractId: id,
@@ -3824,7 +3827,7 @@ export class DatabaseStorage implements IStorage {
             metadata: {},
             performedBy: createdBy,
             performedAt: now,
-          } as any);
+          });
         });
         return mapDbContract(newContract);
       } catch (err) {
@@ -3849,7 +3852,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined> {
-    const { createdAt, updatedAt, closedAt, ...rest } = data as any;
+    const { createdAt, updatedAt, closedAt, ...rest } = data;
     const update: any = { ...rest, updatedAt: new Date() };
     if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
     await db.update(contracts).set(update).where(eq(contracts.id, id));
@@ -3864,7 +3867,7 @@ export class DatabaseStorage implements IStorage {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
       if (!existing) return undefined;
-      const { createdAt, updatedAt, closedAt, ...rest } = data as any;
+      const { createdAt, updatedAt, closedAt, ...rest } = data;
       const now = new Date();
       const update: any = { ...rest, updatedAt: now };
       if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
@@ -3877,7 +3880,7 @@ export class DatabaseStorage implements IStorage {
         metadata: activity.metadata ?? {},
         performedBy: activity.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
       return updated ? mapDbContract(updated) : undefined;
     });
@@ -3899,7 +3902,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: input.performedBy,
         pausedAt: now,
         updatedAt: now,
-      } as any).where(eq(contracts.id, id));
+      }).where(eq(contracts.id, id));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: id,
@@ -3908,7 +3911,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { reason: input.reason },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
       return updated ? mapDbContract(updated) : undefined;
     });
@@ -3925,7 +3928,7 @@ export class DatabaseStorage implements IStorage {
         pausedBy: null,
         pausedAt: null,
         updatedAt: now,
-      } as any).where(eq(contracts.id, id));
+      }).where(eq(contracts.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
@@ -3935,7 +3938,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { notes: notes || undefined },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
       return updated ? mapDbContract(updated) : undefined;
     });
@@ -3952,7 +3955,7 @@ export class DatabaseStorage implements IStorage {
         savedStage: fromStage,
         awaitingCompletion: true,
         updatedAt: now,
-      } as any).where(eq(contracts.id, id));
+      }).where(eq(contracts.id, id));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: id,
@@ -3961,7 +3964,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { reason: input.reason, savedStage: fromStage },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
       return updated ? mapDbContract(updated) : undefined;
     });
@@ -3978,7 +3981,7 @@ export class DatabaseStorage implements IStorage {
         savedStage: null,
         awaitingCompletion: false,
         updatedAt: now,
-      } as any).where(eq(contracts.id, id));
+      }).where(eq(contracts.id, id));
       const notes = (input.notes ?? "").trim();
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
@@ -3990,7 +3993,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { notes: notes || undefined, returnedToStage: targetStage },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
       return updated ? mapDbContract(updated) : undefined;
     });
@@ -4006,7 +4009,7 @@ export class DatabaseStorage implements IStorage {
       await tx.update(contracts).set({
         currentStage: ContractStage.DRAFTING,
         updatedAt: now,
-      } as any).where(eq(contracts.id, id));
+      }).where(eq(contracts.id, id));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: id,
@@ -4015,7 +4018,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { targetStage: ContractStage.DRAFTING },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
       return updated ? mapDbContract(updated) : undefined;
     });
@@ -4035,7 +4038,7 @@ export class DatabaseStorage implements IStorage {
         currentStage: input.nextStage,
         reviewNotes: input.notes,
         updatedAt: now,
-      } as any).where(eq(contracts.id, input.contractId));
+      }).where(eq(contracts.id, input.contractId));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: input.contractId,
@@ -4044,7 +4047,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId));
       return updated;
     });
@@ -4065,7 +4068,7 @@ export class DatabaseStorage implements IStorage {
         currentStage: input.nextStage,
         reviewNotes: input.notes,
         updatedAt: now,
-      } as any).where(eq(contracts.id, input.contractId));
+      }).where(eq(contracts.id, input.contractId));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: input.contractId,
@@ -4074,7 +4077,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId));
       return updated;
     });
@@ -4094,7 +4097,7 @@ export class DatabaseStorage implements IStorage {
       await tx.update(contracts).set({
         currentStage: input.nextStage,
         updatedAt: now,
-      } as any).where(eq(contracts.id, input.contractId));
+      }).where(eq(contracts.id, input.contractId));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: input.contractId,
@@ -4103,7 +4106,7 @@ export class DatabaseStorage implements IStorage {
         metadata: input.activity.metadata ?? {},
         performedBy: input.activity.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, input.contractId));
       return updated;
     });
@@ -4121,7 +4124,7 @@ export class DatabaseStorage implements IStorage {
       await tx.update(contracts).set({
         currentStage: ContractStage.COMMITTEE,
         updatedAt: now,
-      } as any).where(eq(contracts.id, id));
+      }).where(eq(contracts.id, id));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: id,
@@ -4130,7 +4133,7 @@ export class DatabaseStorage implements IStorage {
         metadata: { notes: input.notes },
         performedBy: input.performedBy,
         performedAt: now,
-      } as any);
+      });
       const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
       return updated ? mapDbContract(updated) : undefined;
     });
@@ -4153,7 +4156,7 @@ export class DatabaseStorage implements IStorage {
       metadata: input.metadata ?? {},
       performedBy: input.performedBy,
       performedAt: now,
-    } as any);
+    });
     return {
       id,
       contractId: input.contractId,
@@ -4213,7 +4216,7 @@ export class DatabaseStorage implements IStorage {
         description: input.description,
         uploadedBy: input.uploadedBy,
         uploadedAt: now,
-      } as any);
+      });
       const attachment: ContractAttachment = {
         id,
         contractId: input.contractId,
