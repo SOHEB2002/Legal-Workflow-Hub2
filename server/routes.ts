@@ -3295,14 +3295,14 @@ export async function registerRoutes(
           status: "active",
           currentStage: ConsultationStage.RECEIVED,
           followUpCount: nextCount,
-          followUpStartedAt: new Date() as any,  // Date-mode cast: Date into Drizzle Date-mode timestamp column (not special-cased like closedAt); precise fix needs storage-layer toISOString handling (see storage.ts audit).
+          followUpStartedAt: new Date().toISOString(),
           // Clear previous closure metadata — it described the prior
           // lifecycle, not the new cycle.
           closedAt: null,
           closureReason: null,
           closureReasonOther: null,
           // Fresh SLA window for the cycle (R6).
-          expectedDeliveryDate: newExpectedDeliveryDate as any,  // Date-mode cast: Date into Drizzle Date-mode timestamp column; precise fix needs storage-layer toISOString handling (see storage.ts audit).
+          expectedDeliveryDate: newExpectedDeliveryDate.toISOString(),
           // Defensive cleanup (R10) — clear any stale pause/await state
           // the row might carry from before its original closure so the
           // new cycle starts cleanly.

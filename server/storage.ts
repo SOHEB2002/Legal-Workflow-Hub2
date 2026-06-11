@@ -1300,10 +1300,19 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getConsultationById(id);
     if (!existing) return undefined;
 
-    const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, closedAt, followUpStartedAt, expectedDeliveryDate, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
+    // Date-mode timestamp columns: the interface types these as ISO strings,
+    // but Drizzle expects Date. Convert here (mirrors closedAt) so callers
+    // pass strings and never need a cast.
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
+    }
+    if (followUpStartedAt !== undefined) {
+      updateData.followUpStartedAt = followUpStartedAt ? new Date(followUpStartedAt) : null;
+    }
+    if (expectedDeliveryDate !== undefined) {
+      updateData.expectedDeliveryDate = expectedDeliveryDate ? new Date(expectedDeliveryDate) : null;
     }
     await db.update(consultations).set(updateData).where(eq(consultations.id, id));
 
@@ -1323,11 +1332,21 @@ export class DatabaseStorage implements IStorage {
       const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
       if (!existing) return undefined;
 
-      const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+      const { createdAt, updatedAt, closedAt, followUpStartedAt, expectedDeliveryDate, ...updateFields } = data;
       const now = new Date();
       const updateData: any = { ...updateFields, updatedAt: now };
+      // Date-mode timestamp columns: interface types them as ISO strings,
+      // Drizzle wants Date. Convert here (mirrors closedAt) so callers pass
+      // strings and drop the cast (Phase-3 3C: followUpStartedAt +
+      // expectedDeliveryDate, previously cast at the routes.ts call site).
       if (closedAt !== undefined) {
         updateData.closedAt = closedAt ? new Date(closedAt) : null;
+      }
+      if (followUpStartedAt !== undefined) {
+        updateData.followUpStartedAt = followUpStartedAt ? new Date(followUpStartedAt) : null;
+      }
+      if (expectedDeliveryDate !== undefined) {
+        updateData.expectedDeliveryDate = expectedDeliveryDate ? new Date(expectedDeliveryDate) : null;
       }
       await tx.update(consultations).set(updateData).where(eq(consultations.id, id));
 
