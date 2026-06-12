@@ -83,6 +83,8 @@ import {
   assignConsultationSchema,
   startConsultationFollowUpSchema,
   updateConsultationSchema,
+  assignContractSchema,
+  advanceContractStageSchema,
   updateContractSchema,
   updateHearingSchema,
   SIDEBAR_SECTIONS,
@@ -4535,6 +4537,11 @@ export async function registerRoutes(
       if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإسناد العقود" });
       }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = assignContractSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const { assignedTo } = req.body || {};
       if (!assignedTo || typeof assignedTo !== "string") {
         return res.status(400).json({ error: "assignedTo مطلوب" });
@@ -4575,6 +4582,11 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = advanceContractStageSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const targetStage = String(req.body?.targetStage || "");
       if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
       const contract = await storage.getContractById(String(req.params.id));
@@ -4725,6 +4737,11 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowTargetStageSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const targetStage = String(req.body?.targetStage || "");
       if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
       const contract = await storage.getContractById(String(req.params.id));
@@ -4764,6 +4781,11 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowDecisionSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const decision = String(req.body?.decision || "");
       const notes = String(req.body?.notes || "").trim();
       const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
@@ -4816,6 +4838,11 @@ export async function registerRoutes(
       if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowDecisionSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const decision = String(req.body?.decision || "");
       const notes = String(req.body?.notes || "").trim();
       const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
@@ -4858,6 +4885,11 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowOutcomeSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const outcome = String(req.body?.outcome || "");
       const notes = String(req.body?.notes || "");
       const valid = (Object.values(NoteOutcome) as string[]).includes(outcome);
@@ -4897,6 +4929,11 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const notes = String(req.body?.notes ?? "").trim();
       if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
       const contract = await storage.getContractById(String(req.params.id));
@@ -4953,6 +4990,11 @@ export async function registerRoutes(
       if (contract.status !== "active") {
         return res.status(400).json({ error: "العقد ليس نشطاً" });
       }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason || "").trim();
       if (!reason) return res.status(400).json({ error: "سبب الإغلاق مطلوب" });
       // currentStage must move to CLOSED so status + stage stay in
@@ -5000,6 +5042,11 @@ export async function registerRoutes(
       if (contract.status !== "active") {
         return res.status(400).json({ error: "العقد ليس نشطاً" });
       }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
       const updated = await storage.pauseContract(contract.id, { reason, performedBy: reqUser.id });
@@ -5021,6 +5068,11 @@ export async function registerRoutes(
       }
       if (contract.status !== "paused") {
         return res.status(400).json({ error: "العقد ليس معلّقاً" });
+      }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const updated = await storage.unpauseContract(contract.id, { notes, performedBy: reqUser.id });
@@ -5047,6 +5099,11 @@ export async function registerRoutes(
       if (contract.currentStage === ContractStage.RECEIVED_PENDING_COMPLETION) {
         return res.status(400).json({ error: "العقد بالفعل في مرحلة الاستكمال" });
       }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
       const updated = await storage.awaitContractCompletion(contract.id, { reason, performedBy: reqUser.id });
@@ -5068,6 +5125,11 @@ export async function registerRoutes(
       }
       if (!contract.awaitingCompletion) {
         return res.status(400).json({ error: "العقد ليس بانتظار الاستكمال" });
+      }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const updated = await storage.resumeContractFromCompletion(contract.id, { notes, performedBy: reqUser.id });

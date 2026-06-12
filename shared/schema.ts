@@ -3911,6 +3911,97 @@ export const startConsultationFollowUpSchema = z.object({
   question: z.string().optional(),
 }).passthrough();
 
+// ---- 2D' V2b — contracts/memos/misc Tier-2 bodies ----
+// Same gate-only philosophy as V2a: all fields optional, handlers keep
+// their own requiredness checks; nullability mirrors entity interfaces.
+
+// assignedTo mirrors Contract.assignedTo: string | null.
+export const assignContractSchema = z.object({
+  assignedTo: z.string().nullable().optional(),
+}).passthrough();
+
+// Contracts advance-stage carries stage-entry extras the handler reads
+// (notes / internalReviewerId / priority / priorityReason).
+export const advanceContractStageSchema = z.object({
+  targetStage: z.string().optional(),
+  notes: z.string().optional(),
+  internalReviewerId: z.string().optional(),
+  priority: z.string().optional(),
+  priorityReason: z.string().optional(),
+}).passthrough();
+
+// Memos advance-stage carries an optional internalReviewerId extra.
+export const advanceMemoStageSchema = z.object({
+  targetStage: z.string().optional(),
+  internalReviewerId: z.string().optional(),
+}).passthrough();
+
+// One body schema serves POST and PATCH /api/contact-logs — both are
+// gate-only and all-optional; nullability mirrors the ContactLog interface.
+export const contactLogBodySchema = z.object({
+  clientId: z.string().optional(),
+  contactType: z.string().optional(),
+  contactDate: z.string().optional(),
+  nextFollowUpDate: z.string().nullable().optional(),
+  followUpStatus: z.string().optional(),
+  notes: z.string().optional(),
+  communicationType: z.string().nullable().optional(),
+  duration: z.string().nullable().optional(),
+  followUpRequired: z.boolean().optional(),
+  followUpDate: z.string().nullable().optional(),
+  followUpNotes: z.string().nullable().optional(),
+  followUpCompleted: z.boolean().optional(),
+  caseId: z.string().nullable().optional(),
+  createdBy: z.string().optional(),
+}).passthrough();
+
+// Nullability mirrors the FieldTask interface.
+export const updateFieldTaskSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  taskType: z.string().optional(),
+  caseId: z.string().nullable().optional(),
+  consultationId: z.string().nullable().optional(),
+  assignedTo: z.string().optional(),
+  assignedBy: z.string().optional(),
+  status: z.string().optional(),
+  priority: z.string().optional(),
+  dueDate: z.string().optional(),
+  startedAt: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
+  completionNotes: z.string().optional(),
+  proofDescription: z.string().optional(),
+  proofFileLink: z.string().optional(),
+}).passthrough();
+
+// Mirrors the legal_deadlines columns (status is the only field the FE
+// PATCHes today; the rest typed for completeness).
+export const updateLegalDeadlineSchema = z.object({
+  caseId: z.string().optional(),
+  hearingId: z.string().nullable().optional(),
+  deadlineType: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().nullable().optional(),
+  startDate: z.string().optional(),
+  durationDays: z.number().optional(),
+  deadlineDate: z.string().optional(),
+  status: z.string().optional(),
+}).passthrough();
+
+// Ticket sub-ops — status/priority stay wide strings (no enum narrowing);
+// assignedTo mirrors the nullable supportTickets.assigned_to column.
+export const updateTicketStatusSchema = z.object({
+  status: z.string().optional(),
+}).passthrough();
+
+export const assignTicketSchema = z.object({
+  assignedTo: z.string().nullable().optional(),
+}).passthrough();
+
+export const updateTicketPrioritySchema = z.object({
+  priority: z.string().optional(),
+}).passthrough();
+
 // Pattern-A gate for PATCH /api/cases/:id — all-optional typed subset of
 // LawCase columns plus the transient workflow fields the handler reads
 // (transferReason, stageChangeNotes, judgmentType/judgmentFinal/needsAppeal).
