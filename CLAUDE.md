@@ -68,8 +68,8 @@ Stack: TypeScript + React + Tailwind + Shadcn/UI (frontend), Node/Express (backe
   - 2D' validation hardening (big).
   - Cascade gap (low): lawyer assignment setting only `responsibleLawyerId` doesn't re-point memos (cascade keys off `primaryLawyerId`).
   - Phase 5 auth pass backlog (memory: phase5-auth-backlog): `fetchUsersFromAPI` migration; instant-revocation wire-up (user deactivation takes ≤30s to propagate via activeUserCache TTL — 2-line fix if wanted).
-  - **Skills roadmap — 3 remaining, build each WHEN its trigger arrives (user decision, do not build preemptively):**
-    - `validation-patterns`: AFTER the 2D' V1 batch ships — extract the tolerant-zod + FE-contract-verification pattern from the actual V1 work.
+  - **Skills roadmap — 2 remaining, build each WHEN its trigger arrives (user decision, do not build preemptively):**
+    - `validation-patterns`: ✅ DONE (ecccde7) — extracted from the shipped 2D' V1 batch.
     - `feature-design`: BEFORE the first new feature — needs an architectural inventory pass (tables, notification/permission/workflow systems, declined decisions) to give new features a design-first checklist.
     - `feature-verify`: AFTER the first new feature ships — capture the manual test checklist pattern (gates + edge cases + Arabic user-test steps) from that real experience.
     - When any of these milestones is reached, REMIND the user that the corresponding skill is due.
