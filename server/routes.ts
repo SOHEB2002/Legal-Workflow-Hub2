@@ -77,6 +77,11 @@ import {
   workflowNotesSchema,
   updateCaseTaradiSchema,
   updateCaseMohrSchema,
+  workflowTargetStageSchema,
+  workflowDecisionSchema,
+  workflowOutcomeSchema,
+  assignConsultationSchema,
+  startConsultationFollowUpSchema,
   updateConsultationSchema,
   updateContractSchema,
   updateHearingSchema,
@@ -2860,6 +2865,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = assignConsultationSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const { assignedTo } = req.body || {};
       if (!assignedTo || typeof assignedTo !== "string") {
         return res.status(400).json({ error: "assignedTo مطلوب" });
@@ -2909,6 +2919,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowTargetStageSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const targetStage = String(req.body?.targetStage || "");
       if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
 
@@ -2968,6 +2983,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowTargetStageSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const targetStage = String(req.body?.targetStage || "");
       if (!targetStage) return res.status(400).json({ error: "targetStage مطلوب" });
 
@@ -3023,6 +3043,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowDecisionSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const decision = String(req.body?.decision || "");
       const notes = String(req.body?.notes || "");
       const valid = (Object.values(InternalReviewDecision) as string[]).includes(decision);
@@ -3087,6 +3112,11 @@ export async function registerRoutes(
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowDecisionSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const decision = String(req.body?.decision || "");
       const notes = String(req.body?.notes || "");
       const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
@@ -3140,6 +3170,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowOutcomeSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const outcome = String(req.body?.outcome || "");
       const notes = String(req.body?.notes || "");
       const valid = (Object.values(NoteOutcome) as string[]).includes(outcome);
@@ -3196,6 +3231,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const notes = String(req.body?.notes ?? "").trim();
       if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
 
@@ -3261,6 +3301,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason || "");
       const otherText = String(req.body?.otherText || "");
       if (!reason) return res.status(400).json({ error: "سبب الإغلاق مطلوب" });
@@ -3327,6 +3372,11 @@ export async function registerRoutes(
       // The cycle question is the customer's new follow-up inquiry. Stored
       // in the activity-log metadata only (no new column) — the UI reads
       // the latest FOLLOW_UP_STARTED entry to surface it during the cycle.
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = startConsultationFollowUpSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const question = String(req.body?.question ?? "").trim();
       if (!question) {
         return res.status(400).json({ error: "السؤال مطلوب لبدء استشارة تعقيبية" });
@@ -3642,6 +3692,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "لا يمكن تعليق استشارة ليست نشطة" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
 
@@ -3680,6 +3735,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "هذه الاستشارة ليست معلّقة" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const updated = await storage.unpauseConsultation(consultation.id, {
         notes,
@@ -4007,6 +4067,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة بالفعل في مرحلة الاستكمال" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
 
@@ -4044,6 +4109,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست بانتظار استكمال المرفقات والبيانات" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const updated = await storage.resumeConsultationFromCompletion(consultation.id, {
         notes,
