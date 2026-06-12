@@ -73,6 +73,10 @@ import {
   updateDelegationSchema,
   convertConsultationToCaseSchema,
   updateCaseSchema,
+  workflowReasonSchema,
+  workflowNotesSchema,
+  updateCaseTaradiSchema,
+  updateCaseMohrSchema,
   updateConsultationSchema,
   updateContractSchema,
   updateHearingSchema,
@@ -1521,6 +1525,11 @@ export async function registerRoutes(
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = updateCaseTaradiSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const validStatuses = ["مقيدة_في_تراضي", "تم_الصلح", "لم_يتم_صلح"];
       const { status, taradiNumber } = req.body;
       if (!status || !validStatuses.includes(status)) return res.status(400).json({ error: "حالة غير صالحة" });
@@ -1576,6 +1585,11 @@ export async function registerRoutes(
       if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
+      }
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = updateCaseMohrSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const validStatuses = ["مقيدة_في_الموارد", "توجيه_تسوية_ودية", "انتهت_التسوية"];
       const { status, mohrNumber } = req.body;
@@ -1699,6 +1713,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "تجاوز مرحلة استكمال المرفقات والبيانات متاح فقط من مرحلة الاستلام" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const { notes } = req.body;
       const skipNote = (notes && typeof notes === "string" && notes.trim()) || "تم تجاوز مرحلة استكمال المرفقات والبيانات - الدعوى مكتملة";
       const now = new Date().toISOString();
@@ -3683,6 +3702,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const notes = String(req.body?.notes ?? "").trim();
       if (!notes) return res.status(400).json({ error: "الملاحظات مطلوبة" });
 
@@ -3754,6 +3778,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "لا يمكن تعليق قضية مغلقة أو مؤرشفة" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
 
@@ -3797,6 +3826,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "هذه القضية ليست معلّقة" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const performer = await storage.getUser(reqUser.id);
       const performerName = performer?.name || reqUser.id;
@@ -5489,6 +5523,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "القضية بالفعل في مرحلة الاستكمال" });
       }
 
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
 
@@ -5550,6 +5589,11 @@ export async function registerRoutes(
         !!lawCase.isSettlementCase,
       ) as string[]);
 
+      // 2D'-V2a Pattern-A gate: type check only.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const performer = await storage.getUser(reqUser.id);
       const performerName = performer?.name || reqUser.id;

@@ -3854,6 +3854,63 @@ export const convertConsultationToCaseSchema = z.object({
   caseDepartmentId: z.string().min(1, "caseDepartmentId مطلوب"),
 }).passthrough();
 
+// ---- 2D' V2 — shared workflow body-shape schemas (approved decision c) ----
+// The ~45 per-resource workflow handlers reduce to 5 request-body shapes.
+// Sharing the SCHEMA is not the declined 2E handler dedup: handlers stay
+// per-resource; only the trivially identical body shape is shared. All
+// fields optional — each handler enforces its own requiredness with its
+// existing Arabic 400s (zero behavior change); these gates reject type
+// garbage only.
+
+export const workflowTargetStageSchema = z.object({
+  targetStage: z.string().optional(),
+}).passthrough();
+
+export const workflowDecisionSchema = z.object({
+  decision: z.string().optional(),
+  notes: z.string().optional(),
+}).passthrough();
+
+export const workflowOutcomeSchema = z.object({
+  outcome: z.string().optional(),
+  notes: z.string().optional(),
+}).passthrough();
+
+export const workflowReasonSchema = z.object({
+  reason: z.string().optional(),
+  otherText: z.string().optional(),
+}).passthrough();
+
+export const workflowNotesSchema = z.object({
+  notes: z.string().optional(),
+}).passthrough();
+
+// ---- 2D' V2a — cases/consultations non-workflow Tier-2 bodies ----
+
+export const updateCaseTaradiSchema = z.object({
+  status: z.string().optional(),
+  taradiNumber: z.string().optional(),
+}).passthrough();
+
+export const updateCaseMohrSchema = z.object({
+  status: z.string().optional(),
+  mohrNumber: z.string().optional(),
+}).passthrough();
+
+export const courtRegisterCaseSchema = z.object({
+  courtCaseNumber: z.string().optional(),
+  najizNumber: z.string().optional(),
+}).passthrough();
+
+// assignedTo mirrors Consultation.assignedTo: string | null.
+export const assignConsultationSchema = z.object({
+  assignedTo: z.string().nullable().optional(),
+}).passthrough();
+
+export const startConsultationFollowUpSchema = z.object({
+  question: z.string().optional(),
+}).passthrough();
+
 // Pattern-A gate for PATCH /api/cases/:id — all-optional typed subset of
 // LawCase columns plus the transient workflow fields the handler reads
 // (transferReason, stageChangeNotes, judgmentType/judgmentFinal/needsAppeal).
