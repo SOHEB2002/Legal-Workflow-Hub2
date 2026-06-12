@@ -86,6 +86,12 @@ import {
   assignContractSchema,
   advanceContractStageSchema,
   advanceMemoStageSchema,
+  contactLogBodySchema,
+  updateFieldTaskSchema,
+  updateLegalDeadlineSchema,
+  updateTicketStatusSchema,
+  assignTicketSchema,
+  updateTicketPrioritySchema,
   updateContractSchema,
   updateHearingSchema,
   SIDEBAR_SECTIONS,
@@ -7314,6 +7320,11 @@ export async function registerRoutes(
   app.patch("/api/field-tasks/:id", requireAuth, async (req, res) => {
     try {
       // Validate assignedTo user is active if being changed
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = updateFieldTaskSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       if (req.body.assignedTo) {
         const { valid } = await validateAssignedUsersActive([req.body.assignedTo]);
         if (!valid) {
@@ -7364,6 +7375,11 @@ export async function registerRoutes(
     try {
       const user = req.user!;
       const createdBy = user.id;
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = contactLogBodySchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const newLog = await storage.createContactLog(req.body, createdBy);
       res.status(201).json(newLog);
     } catch (error) {
@@ -7373,6 +7389,11 @@ export async function registerRoutes(
 
   app.patch("/api/contact-logs/:id", requireAuth, async (req, res) => {
     try {
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = contactLogBodySchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const updated = await storage.updateContactLog(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "سجل التواصل غير موجود" });
@@ -7998,6 +8019,11 @@ export async function registerRoutes(
       if (!canManageSupportTickets(reqUser.role)) {
         return res.status(403).json({ error: "غير مصرح بتغيير الحالة" });
       }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = updateTicketStatusSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const { status } = req.body;
       const updates: any = { status };
       if (status === "تم_الحل") updates.resolvedAt = new Date();
@@ -8015,6 +8041,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!canManageSupportTickets(reqUser.role)) {
         return res.status(403).json({ error: "غير مصرح بتعيين التذكرة" });
+      }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = assignTicketSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const { assignedTo } = req.body;
       if (assignedTo) {
@@ -8036,6 +8067,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!canManageSupportTickets(reqUser.role)) {
         return res.status(403).json({ error: "غير مصرح بتغيير الأولوية" });
+      }
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = updateTicketPrioritySchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const { priority } = req.body;
       const ticket = await storage.updateSupportTicket(String(req.params.id), { priority });
@@ -8496,6 +8532,11 @@ export async function registerRoutes(
 
   app.patch("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = updateLegalDeadlineSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
       if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
       res.json(deadline);
