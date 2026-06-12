@@ -68,7 +68,14 @@ import {
   resetUserPasswordSchema,
   deleteUserSchema,
   insertNotificationSchema,
+  updateNotificationSchema,
   insertDelegationBodySchema,
+  updateDelegationSchema,
+  convertConsultationToCaseSchema,
+  updateCaseSchema,
+  updateConsultationSchema,
+  updateContractSchema,
+  updateHearingSchema,
   SIDEBAR_SECTIONS,
   type SidebarSectionValue,
   type UserRoleType,
@@ -1829,6 +1836,13 @@ export async function registerRoutes(
       }
       const user = req.user!;
 
+      // 2D'-V1b Pattern-A gate: validate types only, then keep using
+      // req.body untouched (the handler mutates it downstream).
+      const bodyCheck = updateCaseSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
       const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
         "courtName", "courtCaseNumber", "judgeName", "circuitNumber", "opponentName", "opponentLawyer", "opponentPhone", "opponentNotes",
         "caseClassification", "previousHearingsCount", "currentSituation", "responseDeadline", "adminCaseSubType", "prescriptionDate", "priority"];
@@ -2681,6 +2695,13 @@ export async function registerRoutes(
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الاستشارة" });
       }
 
+      // 2D'-V1b Pattern-A gate: validate types only, then keep using
+      // req.body untouched (the handler mutates it downstream).
+      const bodyCheck = updateConsultationSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
       // Validate stage transition if changing status
       if (req.body.status && req.body.status !== existing.status) {
         const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing);
@@ -3382,6 +3403,14 @@ export async function registerRoutes(
       // this inside the transaction.
       if ((consultation.followUpCount ?? 0) > 0) {
         return res.status(400).json({ error: "لا يمكن تحويل استشارة تعقيبية لقضية" });
+      }
+
+      // 2D'-V1b Pattern-A gate: validate types only; the manual checks
+      // below stay (zero handler-logic change), the gate adds type safety
+      // for the ...rest spread into case creation.
+      const bodyCheck = convertConsultationToCaseSchema.safeParse(req.body ?? {});
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
 
       const { targetCaseStage, caseDepartmentId, ...rest } = req.body || {};
@@ -4102,6 +4131,13 @@ export async function registerRoutes(
       if (!existing) return res.status(404).json({ error: "العقد غير موجود" });
       if (!canModifyContract(user, existing)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا العقد" });
+      }
+
+      // 2D'-V1b Pattern-A gate: validate types only, then keep using
+      // req.body untouched (the handler mutates it downstream).
+      const bodyCheck = updateContractSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
 
       // Validate assignedTo user is active when set non-null.
@@ -6307,6 +6343,13 @@ export async function registerRoutes(
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الجلسة" });
       }
 
+      // 2D'-V1b Pattern-A gate: validate types only, then keep using
+      // req.body untouched.
+      const bodyCheck = updateHearingSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
       // Prevent closing hearing without a result - must use POST /api/hearings/:id/result instead
       if (req.body.status === HearingStatus.COMPLETED && existing.status !== HearingStatus.COMPLETED) {
         if (!existing.result) {
@@ -7531,6 +7574,13 @@ export async function registerRoutes(
           return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا الإشعار" });
         }
       }
+      // 2D'-V1b Pattern-A gate: validate types only, then keep using
+      // req.body untouched. Field allowlisting deferred to Phase 5
+      // (see phase5-auth-backlog).
+      const bodyCheck = updateNotificationSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const updated = await storage.updateNotification(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الإشعار غير موجود" });
@@ -8284,6 +8334,12 @@ export async function registerRoutes(
       if (!existing) return res.status(404).json({ message: "تفويض غير موجود" });
       if (!adminRoles.includes(user.role) && existing.fromUserId !== user.id) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا التفويض" });
+      }
+      // 2D'-V1b Pattern-A gate: validate types only, then keep using
+      // req.body untouched.
+      const bodyCheck = updateDelegationSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const delegation = await storage.updateDelegation(String(req.params.id), req.body);
       if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
