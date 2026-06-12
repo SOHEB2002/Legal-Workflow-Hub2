@@ -22,6 +22,7 @@ Stack: TypeScript + React + Tailwind + Shadcn/UI (frontend), Node/Express (backe
 
 ## Workflow & division of labor
 - The user (Soheb) is non-technical, Arabic-speaking. He relays prompts from a planning Claude session; reports go back to that session for review.
+- **MOBILE-SESSION REPORTING:** When the user is working via Remote Control from mobile, the final report is the ONLY thing relayed to the planning session — intermediate steps can't be copied. So final reports must be self-contained: include commit hashes + per-commit summary (files touched, +/- line counts), all gate results (tsc, noUnusedLocals, custom checks), every judgment call made with its rationale, anything that STOPPED or deviated from plan, and exact verification commands the planning session could request if it wants to drill in (e.g. `git show <hash> --stat`). Write it as if the reader saw nothing of the session.
 - Branch: **`feature/consultations-audit`** (long-running audit branch). Never commit to main from here.
 - **Operating mode — "investigate-and-apply-if-routine" (since Phase 2):**
   - For batches on the PROVEN pipeline (cast cleanup, type-only, mechanical): investigate → if all findings are within the proven pattern (vestigial drops, precise narrowings, tsc stays 0, zero behavior change, zero schema change) → APPLY, COMMIT, PUSH directly, then report.

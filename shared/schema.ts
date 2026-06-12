@@ -3769,6 +3769,230 @@ export const insertDelegationSchema = z.object({
 export type InsertDelegation = z.infer<typeof insertDelegationSchema>;
 export type DelegationRecord = typeof delegationsTable.$inferSelect;
 
+// ==================== 2D' V1 — tolerant request-body schemas ====================
+// Validation-hardening pass over the Tier-1 unvalidated routes. Two usage
+// patterns in routes.ts:
+//   Pattern B (parse-and-use): simple handlers destructure the parsed result.
+//   Pattern A (safeParse gate): complex handlers validate then keep using
+//     req.body untouched, so unknown/extra fields flow through unchanged.
+// All schemas are TOLERANT: .passthrough() (extras allowed, never .strict()),
+// every field optional unless the handler already requires it, string types
+// kept wide (no enum narrowing) so legacy values and FE spreads keep working.
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "كلمة المرور الحالية مطلوبة"),
+  newPassword: z.string().min(1, "كلمة المرور الجديدة مطلوبة"),
+}).passthrough();
+
+// Route checks the emergency secret BEFORE this schema runs (security
+// ordering); the schema only covers the remaining field.
+export const emergencyResetSchema = z.object({
+  username: z.string().min(1, "اسم المستخدم مطلوب"),
+}).passthrough();
+
+export const resetUserPasswordSchema = z.object({
+  newPassword: z.string().min(1, "كلمة المرور الجديدة مطلوبة"),
+}).passthrough();
+
+// DELETE /api/users/:id body. Keys are `case_/consultation_/department_/
+// fieldTask_${id}`, values are a user id or "" (= leave unassigned).
+export const deleteUserSchema = z.object({
+  reassignments: z.record(z.string()).optional().default({}),
+}).passthrough();
+
+export const insertNotificationSchema = z.object({
+  type: z.string().min(1, "نوع الإشعار مطلوب"),
+  title: z.string().min(1, "عنوان الإشعار مطلوب"),
+  message: z.string().min(1, "نص الإشعار مطلوب"),
+  recipientId: z.string().min(1, "المستلم مطلوب"),
+  priority: z.string().optional(),
+  status: z.string().optional(),
+  senderId: z.string().nullable().optional(),
+  senderName: z.string().nullable().optional(),
+  relatedType: z.string().nullable().optional(),
+  relatedId: z.string().nullable().optional(),
+  isRead: z.boolean().optional(),
+  readAt: z.string().nullable().optional(),
+  response: z.object({}).passthrough().nullable().optional(),
+  requiresResponse: z.boolean().optional(),
+  scheduledAt: z.string().nullable().optional(),
+  escalationLevel: z.number().optional(),
+  escalatedTo: z.string().nullable().optional(),
+}).passthrough();
+
+export const updateNotificationSchema = z.object({
+  isRead: z.boolean().optional(),
+  readAt: z.string().nullable().optional(),
+  status: z.string().optional(),
+  response: z.object({}).passthrough().nullable().optional(),
+  escalationLevel: z.number().optional(),
+  escalatedTo: z.string().nullable().optional(),
+  title: z.string().optional(),
+  message: z.string().optional(),
+  priority: z.string().optional(),
+}).passthrough();
+
+// POST /api/delegations body — fromUserId is injected from req.user by the
+// route, so the request schema omits it.
+export const insertDelegationBodySchema = insertDelegationSchema
+  .omit({ fromUserId: true })
+  .passthrough();
+
+export const updateDelegationSchema = z.object({
+  toUserId: z.string().min(1).optional(),
+  reason: z.string().optional(),
+  reasonDetails: z.string().nullable().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  status: z.string().optional(),
+  scope: z.string().optional(),
+  specificCaseIds: z.array(z.string()).nullable().optional(),
+}).passthrough();
+
+export const convertConsultationToCaseSchema = z.object({
+  targetCaseStage: z.string().min(1, "targetCaseStage مطلوب"),
+  caseDepartmentId: z.string().min(1, "caseDepartmentId مطلوب"),
+}).passthrough();
+
+// Pattern-A gate for PATCH /api/cases/:id — all-optional typed subset of
+// LawCase columns plus the transient workflow fields the handler reads
+// (transferReason, stageChangeNotes, judgmentType/judgmentFinal/needsAppeal).
+// Nullability mirrors the LawCase interface.
+export const updateCaseSchema = z.object({
+  caseNumber: z.string().optional(),
+  clientId: z.string().optional(),
+  caseType: z.string().optional(),
+  caseTypeOther: z.string().optional(),
+  departmentOther: z.string().optional(),
+  status: z.string().optional(),
+  currentStage: z.string().optional(),
+  departmentId: z.string().optional(),
+  assignedLawyers: z.array(z.string()).optional(),
+  primaryLawyerId: z.string().nullable().optional(),
+  responsibleLawyerId: z.string().nullable().optional(),
+  internalReviewerId: z.string().nullable().optional(),
+  appealLawyerId: z.string().nullable().optional(),
+  courtName: z.string().optional(),
+  courtCaseNumber: z.string().optional(),
+  judgeName: z.string().optional(),
+  circuitNumber: z.string().optional(),
+  plaintiffName: z.string().optional(),
+  opponentName: z.string().optional(),
+  opponentLawyer: z.string().optional(),
+  opponentPhone: z.string().optional(),
+  opponentNotes: z.string().optional(),
+  whatsappGroupLink: z.string().optional(),
+  googleDriveFolderId: z.string().optional(),
+  priority: z.string().optional(),
+  caseClassification: z.string().optional(),
+  clientRole: z.string().nullable().optional(),
+  isArchived: z.boolean().optional(),
+  isSettlementCase: z.boolean().optional(),
+  memoRequired: z.boolean().optional(),
+  grievanceRequired: z.boolean().optional(),
+  platformReviewResubmitted: z.boolean().optional(),
+  nextHearingDate: z.string().nullable().optional(),
+  nextHearingTime: z.string().nullable().optional(),
+  responseDeadline: z.string().nullable().optional(),
+  prescriptionDate: z.string().nullable().optional(),
+  grievanceDate: z.string().nullable().optional(),
+  grievanceResult: z.string().nullable().optional(),
+  taradiNumber: z.string().nullable().optional(),
+  mohrNumber: z.string().nullable().optional(),
+  najizNumber: z.string().optional(),
+  moeenNumber: z.string().nullable().optional(),
+  closureReason: z.string().nullable().optional(),
+  closureReasonOther: z.string().nullable().optional(),
+  reviewNotes: z.string().optional(),
+  reviewDecision: z.string().nullable().optional(),
+  currentSituation: z.string().optional(),
+  transferReason: z.string().optional(),
+  stageChangeNotes: z.string().optional(),
+  judgmentType: z.string().optional(),
+  judgmentFinal: z.boolean().optional(),
+  needsAppeal: z.boolean().optional(),
+}).passthrough();
+
+// Pattern-A gate for PATCH /api/consultations/:id.
+export const updateConsultationSchema = z.object({
+  clientId: z.string().optional(),
+  consultationType: z.string().optional(),
+  deliveryType: z.string().optional(),
+  currentStage: z.string().optional(),
+  status: z.string().optional(),
+  departmentId: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
+  questionSummary: z.string().optional(),
+  response: z.string().optional(),
+  whatsappGroupLink: z.string().optional(),
+  googleDriveFolderId: z.string().optional(),
+  reviewNotes: z.string().optional(),
+  reviewDecision: z.string().nullable().optional(),
+  closureReason: z.string().nullable().optional(),
+  closureReasonOther: z.string().nullable().optional(),
+  category: z.string().optional(),
+  expectedDeliveryDate: z.string().nullable().optional(),
+  source: z.string().optional(),
+  internalReviewerId: z.string().nullable().optional(),
+  priority: z.string().nullable().optional(),
+  priorityReason: z.string().nullable().optional(),
+  followUpStartedAt: z.string().nullable().optional(),
+  transferReason: z.string().optional(),
+}).passthrough();
+
+// Pattern-A gate for PATCH /api/contracts/:id.
+export const updateContractSchema = z.object({
+  title: z.string().optional(),
+  clientId: z.string().optional(),
+  contractType: z.string().optional(),
+  description: z.string().optional(),
+  currentStage: z.string().optional(),
+  status: z.string().optional(),
+  departmentId: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
+  internalReviewerId: z.string().nullable().optional(),
+  priority: z.string().nullable().optional(),
+  priorityReason: z.string().nullable().optional(),
+  reviewNotes: z.string().optional(),
+  closureReason: z.string().nullable().optional(),
+  closureReasonOther: z.string().nullable().optional(),
+  transferReason: z.string().optional(),
+}).passthrough();
+
+// Pattern-A gate for PATCH /api/hearings/:id.
+export const updateHearingSchema = z.object({
+  caseId: z.string().optional(),
+  hearingDate: z.string().optional(),
+  hearingTime: z.string().optional(),
+  hearingType: z.string().optional(),
+  courtName: z.string().optional(),
+  courtNameOther: z.string().nullable().optional(),
+  courtRoom: z.string().optional(),
+  status: z.string().optional(),
+  result: z.string().nullable().optional(),
+  resultDetails: z.string().optional(),
+  judgmentSide: z.string().nullable().optional(),
+  judgmentFinal: z.boolean().nullable().optional(),
+  objectionFeasible: z.boolean().nullable().optional(),
+  objectionDeadline: z.string().nullable().optional(),
+  objectionStatus: z.string().nullable().optional(),
+  nextHearingDate: z.string().nullable().optional(),
+  nextHearingTime: z.string().nullable().optional(),
+  responseRequired: z.boolean().optional(),
+  memoRequired: z.boolean().optional(),
+  opponentResponseRequired: z.boolean().optional(),
+  hearingReport: z.string().optional(),
+  recommendations: z.string().optional(),
+  nextSteps: z.string().optional(),
+  contactCompleted: z.boolean().optional(),
+  reportCompleted: z.boolean().optional(),
+  adminTasksCreated: z.boolean().optional(),
+  opponentMemos: z.string().optional(),
+  hearingMinutes: z.string().optional(),
+  attendingLawyerId: z.string().nullable().optional(),
+  notes: z.string().optional(),
+}).passthrough();
+
 export const DeadlineTypeLabels: Record<string, string> = {
   objection: "مهلة الاعتراض",
   cassation: "مهلة النقض",

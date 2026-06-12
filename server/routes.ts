@@ -63,6 +63,12 @@ import {
   insertLegalDeadlineSchema,
   insertSavedFilterSchema,
   updateSavedFilterSchema,
+  changePasswordSchema,
+  emergencyResetSchema,
+  resetUserPasswordSchema,
+  deleteUserSchema,
+  insertNotificationSchema,
+  insertDelegationBodySchema,
   SIDEBAR_SECTIONS,
   type SidebarSectionValue,
   type UserRoleType,
@@ -889,7 +895,7 @@ export async function registerRoutes(
   app.post("/api/auth/change-password", passwordChangeLimiter, requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
-      const { currentPassword, newPassword } = req.body;
+      const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
       const dbUser = await storage.getUser(user.id);
       if (!dbUser) return res.status(404).json({ error: "المستخدم غير موجود" });
       const masterPassword = process.env.MASTER_PASSWORD;
@@ -906,6 +912,9 @@ export async function registerRoutes(
       const csrfToken = generateCsrfToken(user.id);
       res.json({ success: true, token: newToken, csrfToken });
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
       res.status(500).json({ error: "حدث خطأ في تغيير كلمة المرور" });
     }
   });
@@ -921,8 +930,9 @@ export async function registerRoutes(
       if (!secret || secret !== serverSecret) {
         return res.status(403).json({ error: "غير مصرح" });
       }
-      if (!username) {
-        return res.status(400).json({ error: "اسم المستخدم مطلوب" });
+      const parsed = emergencyResetSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
       }
       const user = await storage.getUserByUsername(username);
       if (!user) {
@@ -942,10 +952,7 @@ export async function registerRoutes(
   app.post("/api/users/:id/reset-password", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       const userId = String(req.params.id);
-      const { newPassword } = req.body;
-      if (!newPassword) {
-        return res.status(400).json({ error: "كلمة المرور الجديدة مطلوبة" });
-      }
+      const { newPassword } = resetUserPasswordSchema.parse(req.body);
       const pwValidation = validatePassword(newPassword);
       if (!pwValidation.valid) {
         return res.status(400).json({ error: pwValidation.message });
@@ -958,6 +965,9 @@ export async function registerRoutes(
       await storage.updateUser(userId, { password: hashed });
       res.json({ success: true, message: `تم إعادة تعيين كلمة مرور ${user.username}` });
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
       res.status(500).json({ error: "حدث خطأ في إعادة تعيين كلمة المرور" });
     }
   });
@@ -1112,7 +1122,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
 
-      const reassignments = req.body?.reassignments || {};
+      const { reassignments } = deleteUserSchema.parse(req.body ?? {});
       const allUsers = await storage.getAllUsers();
       const activeUserIds = new Set(allUsers.filter(u => u.isActive && u.id !== userId).map(u => u.id));
       const branchManagers = allUsers.filter(u => u.role === "branch_manager");
@@ -1229,6 +1239,9 @@ export async function registerRoutes(
       await storage.deleteUser(userId);
       res.json({ success: true });
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
       console.error("Error deleting user:", error);
       res.status(500).json({ error: "حدث خطأ في حذف المستخدم" });
     }
@@ -7490,6 +7503,10 @@ export async function registerRoutes(
 
   app.post("/api/notifications", requireAuth, async (req, res) => {
     try {
+      const parsed = insertNotificationSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
+      }
       const newNotification = await storage.createNotification(req.body);
       // Real-time push to recipient + admins
       const wsEvent = { type: "notification:new", payload: newNotification };
@@ -8228,6 +8245,10 @@ export async function registerRoutes(
   app.post("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
+      const parsed = insertDelegationBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
+      }
       const delegation = await storage.createDelegation({
         ...req.body,
         fromUserId: user.id,
