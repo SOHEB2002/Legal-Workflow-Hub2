@@ -138,6 +138,9 @@ export const lawCases = pgTable("law_cases", {
   primaryLawyerIdx:     index("law_cases_primary_lawyer_idx").on(t.primaryLawyerId),
   responsibleLawyerIdx: index("law_cases_responsible_lawyer_idx").on(t.responsibleLawyerId),
   createdAtIdx:         index("law_cases_created_at_idx").on(t.createdAt),
+  // Phase-7 P7-2 — the cases list (getAllCases + role branches) orders by
+  // updatedAt; createdAt above stays for getSidebarCounts' createdAt range.
+  updatedAtIdx:        index("law_cases_updated_at_idx").on(t.updatedAt),
 }));
 
 export const consultations = pgTable("consultations", {
@@ -477,6 +480,8 @@ export const hearings = pgTable("hearings", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("hearings_case_idx").on(t.caseId),
+  // Phase-7 P7-2 — getAllHearings/getHearingsByCase order by (hearingDate, hearingTime).
+  hearingDateIdx: index("hearings_hearing_date_idx").on(t.hearingDate, t.hearingTime),
 }));
 
 export const fieldTasks = pgTable("field_tasks", {
@@ -551,6 +556,8 @@ export const notifications = pgTable("notifications", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   recipientIdx: index("notifications_recipient_idx").on(t.recipientId),
+  // Phase-7 P7-2 — getRecentNotifications(200) orders by createdAt DESC.
+  createdAtIdx: index("notifications_created_at_idx").on(t.createdAt),
 }));
 
 export const departments = pgTable("departments", {
@@ -570,7 +577,12 @@ export const attachments = pgTable("attachments", {
   fileSize: integer("file_size").default(0),
   uploadedBy: varchar("uploaded_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => ({
+  // Phase-7 P7-2 — getAttachmentsByEntity filters (entityType, entityId) on
+  // every detail-view open; table had zero indexes. Mirrors the
+  // contract_attachments_slot_lookup_idx two-column idiom.
+  entityIdx: index("attachments_entity_idx").on(t.entityType, t.entityId),
+}));
 
 export const memos = pgTable("memos", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -635,6 +647,8 @@ export const memos = pgTable("memos", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("memos_case_idx").on(t.caseId),
+  // Phase-7 P7-2 — getAllMemos orders by deadline.
+  deadlineIdx: index("memos_deadline_idx").on(t.deadline),
 }));
 
 export const caseActivityLog = pgTable("case_activity_log", {
