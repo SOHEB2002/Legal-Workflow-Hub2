@@ -4002,6 +4002,47 @@ export const updateTicketPrioritySchema = z.object({
   priority: z.string().optional(),
 }).passthrough();
 
+// ---- 2D' V3 — Tier-3 bodies (comments/notes/preferences) ----
+// Same gate-only philosophy; handlers keep their own requiredness checks.
+
+// FE also sends userId/userName/userRole (ignored server-side) → passthrough.
+export const ticketCommentSchema = z.object({
+  message: z.string().optional(),
+  isInternal: z.boolean().optional(),
+}).passthrough();
+
+export const ticketRateSchema = z.object({
+  rating: z.number().optional(),
+  ratingComment: z.string().optional(),
+}).passthrough();
+
+export const caseCommentSchema = z.object({
+  content: z.string().optional(),
+}).passthrough();
+
+// POST /api/cases/:id/notes — handler spreads ...req.body into the note,
+// then overrides content/caseId/userId/userName. FE sends content +
+// category + isImportant; mirror the caseNotes columns (editedAt is
+// set server-side as a Date — intentionally NOT in the schema).
+export const createCaseNoteSchema = z.object({
+  content: z.string().optional(),
+  category: z.string().optional(),
+  isPinned: z.boolean().optional(),
+  isImportant: z.boolean().optional(),
+}).passthrough();
+
+// PATCH /api/case-notes/:id — FE sends { content } or { isPinned }.
+export const updateCaseNoteSchema = z.object({
+  content: z.string().optional(),
+  category: z.string().optional(),
+  isPinned: z.boolean().optional(),
+  isImportant: z.boolean().optional(),
+}).passthrough();
+
+export const markSectionViewedSchema = z.object({
+  section: z.string().optional(),
+}).passthrough();
+
 // Pattern-A gate for PATCH /api/cases/:id — all-optional typed subset of
 // LawCase columns plus the transient workflow fields the handler reads
 // (transferReason, stageChangeNotes, judgmentType/judgmentFinal/needsAppeal).

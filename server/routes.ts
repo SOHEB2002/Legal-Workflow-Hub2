@@ -92,6 +92,12 @@ import {
   updateTicketStatusSchema,
   assignTicketSchema,
   updateTicketPrioritySchema,
+  ticketCommentSchema,
+  ticketRateSchema,
+  caseCommentSchema,
+  createCaseNoteSchema,
+  updateCaseNoteSchema,
+  markSectionViewedSchema,
   updateContractSchema,
   updateHearingSchema,
   SIDEBAR_SECTIONS,
@@ -8092,6 +8098,11 @@ export async function registerRoutes(
       const userName = dbUser?.name || "مستخدم";
       const userRole = reqUser.role;
 
+      // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = ticketCommentSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const { message, isInternal } = req.body;
       if (!message || typeof message !== "string" || !message.trim()) {
         return res.status(400).json({ error: "نص التعليق مطلوب" });
@@ -8121,6 +8132,11 @@ export async function registerRoutes(
       if (!existingTicket) return res.status(404).json({ error: "التذكرة غير موجودة" });
       if (existingTicket.submittedBy !== reqUser.id) {
         return res.status(403).json({ error: "لا يمكنك تقييم تذاكر الآخرين" });
+      }
+      // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = ticketRateSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const { rating, ratingComment } = req.body;
       if (typeof rating !== "number" || rating < 1 || rating > 5) {
@@ -8229,6 +8245,11 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = markSectionViewedSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const section = String(req.body?.section ?? "");
       if (!SIDEBAR_SECTIONS.includes(section as SidebarSectionValue)) {
         return res.status(400).json({ error: "قسم غير صالح" });
@@ -8384,6 +8405,11 @@ export async function registerRoutes(
       if (!canViewCase(user, caseItem)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة تعليق على هذه القضية" });
       }
+      // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = caseCommentSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
       const { content } = req.body;
       if (!content || !String(content).trim()) {
         return res.status(400).json({ error: "محتوى التعليق مطلوب" });
@@ -8423,6 +8449,11 @@ export async function registerRoutes(
       // their dept and any read-only viewer who tried to leave a note.
       if (!canViewCase(user, caseItem)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة ملاحظة على هذه القضية" });
+      }
+      // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = createCaseNoteSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const { content } = req.body;
       if (!content || !String(content).trim()) {
@@ -8465,6 +8496,11 @@ export async function registerRoutes(
       if (!existing) return res.status(404).json({ message: "ملاحظة غير موجودة" });
       if (!adminRoles.includes(user.role) && existing.userId !== user.id) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الملاحظة" });
+      }
+      // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = updateCaseNoteSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const note = await storage.updateCaseNote(String(req.params.id), { ...req.body, editedAt: new Date() });
       if (!note) return res.status(404).json({ message: "ملاحظة غير موجودة" });
