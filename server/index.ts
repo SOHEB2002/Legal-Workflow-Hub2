@@ -107,7 +107,14 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        // Auth responses carry secrets (token / csrfToken / tempPassword);
+        // never serialize their bodies into the log. Everything else logs
+        // its response body as before.
+        if (path.startsWith("/api/auth")) {
+          logLine += ` :: [redacted]`;
+        } else {
+          logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        }
       }
 
       log(logLine);
