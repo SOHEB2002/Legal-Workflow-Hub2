@@ -3511,7 +3511,7 @@ export class DatabaseStorage implements IStorage {
       if (!existing) return undefined;
       const now = new Date();
       const fromStage = existing.currentStage;
-      const targetStage = "استكمال_البيانات";
+      const targetStage = CaseStage.DATA_COMPLETION;
       const existingHistory = Array.isArray(existing.stageHistory)
         ? existing.stageHistory
         : [];

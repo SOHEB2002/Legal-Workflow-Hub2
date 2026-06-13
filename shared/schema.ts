@@ -2131,7 +2131,7 @@ export interface Consultation {
   category: ConsultationCategoryValue;
   expectedDeliveryDate: string | null;
   // How the consultation reached us (ConsultationSourceValue). NOT NULL +
-  // DB default so legacy rows surface as "على_الخاص" after the backfill.
+  // DB default so legacy rows surface as "عبر_المجموعة" after the backfill.
   source: ConsultationSourceValue;
   createdBy: string;
   createdAt: string;
