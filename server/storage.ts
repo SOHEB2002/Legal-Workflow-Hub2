@@ -1069,10 +1069,18 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getCaseById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, closedAt, archivedAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
+    }
+    // archived_at is a date-mode column; mirror the closedAt idiom so the
+    // ISO string callers pass (e.g. the auto-archive scheduler) becomes a
+    // Date. Previously archivedAt was spread through as a raw string, which
+    // made drizzle call `string.toISOString()` and throw — silently breaking
+    // auto-archive inside the scheduler's try/catch.
+    if (archivedAt !== undefined) {
+      updateData.archivedAt = archivedAt ? new Date(archivedAt) : null;
     }
     if (updateData.courtCaseNumber && updateData.courtCaseNumber.trim()) {
       updateData.caseNumber = updateData.courtCaseNumber.trim();

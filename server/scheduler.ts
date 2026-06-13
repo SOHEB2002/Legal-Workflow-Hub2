@@ -630,7 +630,7 @@ async function autoArchiveClosedCases() {
           isArchived: true,
           archivedAt: now.toISOString(),
           archiveReason: "أرشفة تلقائية - مضى 6 أشهر على الإغلاق",
-        } as any);
+        });
       }
     }
   } catch (error) {
