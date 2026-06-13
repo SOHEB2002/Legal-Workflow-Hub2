@@ -2848,6 +2848,14 @@ export async function registerRoutes(
       if (!allowedRoles.includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
       }
+      // Phase 8 F4 — dept-head scope, mirroring contracts /assign: a
+      // dept_head may only assign consultations in their OWN department.
+      if (
+        reqUser.role === "department_head"
+        && consultation.departmentId !== reqUser.departmentId
+      ) {
+        return res.status(403).json({ error: "رئيس القسم يمكنه إسناد استشارات قسمه فقط" });
+      }
 
       if (consultation.status !== "active") {
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
@@ -3212,9 +3220,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
+      // Phase 8 F9 — dept-head scoped to own dept (mirrors cases
+      // /return-to-committee, which likewise allows admin_support).
       const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const allowedRoles = ["admin_support", "department_head", "branch_manager"];
-      if (!isLawyer && !allowedRoles.includes(reqUser.role)) {
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && consultation.departmentId === reqUser.departmentId;
+      const allowed =
+        reqUser.role === "branch_manager"
+        || reqUser.role === "admin_support"
+        || isOwnDeptHead
+        || isLawyer;
+      if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإعادة الاستشارة للجنة" });
       }
 
@@ -3251,8 +3268,16 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, consultation);
       let permitted: boolean;
       if (resolvedType === ConsultationType.WRITTEN) {
-        const adminLike = ["admin_support", "department_head", "branch_manager"];
-        permitted = adminLike.includes(reqUser.role) || isLawyer;
+        // Phase 8 F6 — dept-head scoped to own dept (mirrors contracts
+        // /early-close), with the both-sides non-null guard so a null-dept
+        // head can't match a null-dept consultation.
+        permitted =
+          ["admin_support", "branch_manager"].includes(reqUser.role) ||
+          (reqUser.role === "department_head"
+            && !!reqUser.departmentId
+            && !!consultation.departmentId
+            && consultation.departmentId === reqUser.departmentId) ||
+          isLawyer;
       } else {
         permitted = ["admin_support", "branch_manager"].includes(reqUser.role);
       }
