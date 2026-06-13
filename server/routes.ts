@@ -835,22 +835,6 @@ export async function registerRoutes(
   const uploadsDir = "./uploads";
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-  const upload = multer({
-    storage: multer.diskStorage({
-      destination: uploadsDir,
-      filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname).replace(/[^a-zA-Z0-9.]/g, '');
-        const safeName = `${Date.now()}-${randomUUID()}${ext}`;
-        cb(null, safeName);
-      }
-    }),
-    limits: { fileSize: 10 * 1024 * 1024 },
-    fileFilter: (req, file, cb) => {
-      const allowed = ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "image/jpeg", "image/png", "image/gif", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
-      cb(null, allowed.includes(file.mimetype));
-    }
-  });
-
   app.use("/uploads", requireAuth, (req, res, next) => {
     const requestedPath = path.normalize(req.path).replace(/^(\.\.(\/|\\|$))+/, '');
     const filePath = path.resolve(uploadsDir, requestedPath);
@@ -8954,42 +8938,6 @@ export async function registerRoutes(
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename=hearings-${Date.now()}.csv`);
     res.send("\uFEFF" + csv);
-  });
-
-  // ==================== File Upload/Download ====================
-
-  app.post("/api/attachments/upload", requireAuth, upload.single("file"), async (req: AuthRequest, res) => {
-    if (!req.file) return res.status(400).json({ message: "لم يتم رفع ملف" });
-    const user = req.user!;
-    const attachment = await storage.createAttachment({
-      entityType: req.body.entityType || "case",
-      entityId: req.body.entityId,
-      fileName: req.file.originalname,
-      fileUrl: `/uploads/${req.file.filename}`,
-      fileType: req.file.mimetype,
-      fileSize: req.file.size,
-      uploadedBy: user.id,
-    });
-    if (req.body.entityType === "case" && req.body.entityId) {
-      await storage.logCaseActivity({
-        caseId: req.body.entityId,
-        userId: user.id,
-        userName: user.name,
-        actionType: "attachment_added",
-        title: `تم إرفاق ملف: ${req.file.originalname}`,
-        relatedEntityType: "attachment",
-        relatedEntityId: attachment.id,
-      });
-    }
-    res.json(attachment);
-  });
-
-  app.get("/api/attachments/:id/download", requireAuth, async (req: AuthRequest, res) => {
-    const filePath = path.join(uploadsDir, String(req.params.id));
-    if (fs.existsSync(filePath)) {
-      return res.download(filePath);
-    }
-    res.status(404).json({ message: "ملف غير موجود" });
   });
 
   return httpServer;
