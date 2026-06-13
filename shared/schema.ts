@@ -132,6 +132,12 @@ export const lawCases = pgTable("law_cases", {
   //   columns: [t.convertedFromConsultationId],
   //   foreignColumns: [consultations.id],
   // }).onDelete("set null"),
+  // Phase-4 S1 — hot-path indexes on FK-like filter columns (mirrors the
+  // contracts index idiom). Additive only; CREATE INDEX is non-destructive.
+  departmentIdx:        index("law_cases_department_idx").on(t.departmentId),
+  primaryLawyerIdx:     index("law_cases_primary_lawyer_idx").on(t.primaryLawyerId),
+  responsibleLawyerIdx: index("law_cases_responsible_lawyer_idx").on(t.responsibleLawyerId),
+  createdAtIdx:         index("law_cases_created_at_idx").on(t.createdAt),
 }));
 
 export const consultations = pgTable("consultations", {
@@ -201,7 +207,12 @@ export const consultations = pgTable("consultations", {
   // so drizzle-kit push backfills existing rows cleanly.
   followUpCount:     integer("follow_up_count").notNull().default(0),
   followUpStartedAt: timestamp("follow_up_started_at"),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path indexes (mirrors the contracts index idiom).
+  departmentIdx: index("consultations_department_idx").on(t.departmentId),
+  assignedIdx:   index("consultations_assigned_idx").on(t.assignedTo),
+  createdAtIdx:  index("consultations_created_at_idx").on(t.createdAt),
+}));
 
 export const consultationStudies = pgTable("consultation_studies", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -463,7 +474,10 @@ export const hearings = pgTable("hearings", {
   notes: text("notes").default(""),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  caseIdx: index("hearings_case_idx").on(t.caseId),
+}));
 
 export const fieldTasks = pgTable("field_tasks", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -483,7 +497,10 @@ export const fieldTasks = pgTable("field_tasks", {
   proofFileLink: varchar("proof_file_link", { length: 500 }).default(""),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  caseIdx: index("field_tasks_case_idx").on(t.caseId),
+}));
 
 export const contactLogs = pgTable("contact_logs", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -503,7 +520,10 @@ export const contactLogs = pgTable("contact_logs", {
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  clientIdx: index("contact_logs_client_idx").on(t.clientId),
+}));
 
 export const notifications = pgTable("notifications", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -528,7 +548,10 @@ export const notifications = pgTable("notifications", {
   autoEscalateAfterHours: integer("auto_escalate_after_hours").default(24),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  recipientIdx: index("notifications_recipient_idx").on(t.recipientId),
+}));
 
 export const departments = pgTable("departments", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -609,7 +632,10 @@ export const memos = pgTable("memos", {
   // recorded in memo_activity_log alongside the reason.
   // Migration: script/add-memo-cancellation-reason.sql.
   cancellationReason: text("cancellation_reason"),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  caseIdx: index("memos_case_idx").on(t.caseId),
+}));
 
 export const caseActivityLog = pgTable("case_activity_log", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -624,7 +650,10 @@ export const caseActivityLog = pgTable("case_activity_log", {
   relatedEntityType: varchar("related_entity_type", { length: 50 }),
   relatedEntityId: varchar("related_entity_id", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  caseIdx: index("case_activity_log_case_idx").on(t.caseId),
+}));
 
 // Phase-8 — memo activity log (mirrors consultation_activity_log).
 // One row per meaningful event on a memo. Inserts happen server-side in
@@ -715,7 +744,10 @@ export const caseNotes = pgTable("case_notes", {
   category: varchar("category", { length: 50 }).default("عام"),
   editedAt: timestamp("edited_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  caseIdx: index("case_notes_case_idx").on(t.caseId),
+}));
 
 export const caseComments = pgTable("case_comments", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -724,7 +756,10 @@ export const caseComments = pgTable("case_comments", {
   userName: varchar("user_name", { length: 255 }).notNull(),
   content: text("content").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  caseIdx: index("case_comments_case_idx").on(t.caseId),
+}));
 
 export const legalDeadlines = pgTable("legal_deadlines", {
   id: varchar("id", { length: 255 }).primaryKey(),
@@ -742,7 +777,10 @@ export const legalDeadlines = pgTable("legal_deadlines", {
   reminder1daySent: boolean("reminder_1_day_sent").default(false),
   completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
+  caseIdx: index("legal_deadlines_case_idx").on(t.caseId),
+}));
 
 export const delegationsTable = pgTable("delegations_table", {
   id: varchar("id", { length: 255 }).primaryKey(),
