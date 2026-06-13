@@ -7847,21 +7847,10 @@ export async function registerRoutes(
         return res.status(401).json({ error: "يجب تسجيل الدخول أولاً" });
       }
       const userId = authUser.id;
-      const allNotifications = await storage.getNotificationsByRecipient(userId);
-      const unread = allNotifications.filter(n => !n.isRead);
-      const now = new Date().toISOString();
-      await Promise.all(
-        unread.map(n =>
-          storage.updateNotification(n.id, {
-            isRead: true,
-            readAt: now,
-            status: "read",
-          })
-        )
-      );
+      const count = await storage.markAllNotificationsRead(userId);
       // Push mark-all-read event to the user's other tabs
       sendToUser(userId, { type: "notification:all-read" });
-      res.json({ success: true, count: unread.length });
+      res.json({ success: true, count });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث الإشعارات" });
     }
