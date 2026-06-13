@@ -3570,8 +3570,12 @@ export interface Notification {
   status: NotificationStatusValue;
   title: string;
   message: string;
-  senderId: string | null;
-  senderName: string | null;
+  // NOT NULL columns (sender_id / sender_name). createNotification coalesces
+  // any missing value to "" (storage.ts), and the read mapping passes the
+  // column through, so on read these are always a (possibly empty) string —
+  // never null. Aligned to reality from the prior `string | null` drift.
+  senderId: string;
+  senderName: string;
   recipientId: string;
   recipientIds?: string[];
   relatedType: "case" | "consultation" | "task" | "field_task" | "hearing" | "memo" | null;
