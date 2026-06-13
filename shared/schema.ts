@@ -3897,11 +3897,6 @@ export const updateCaseMohrSchema = z.object({
   mohrNumber: z.string().optional(),
 }).passthrough();
 
-export const courtRegisterCaseSchema = z.object({
-  courtCaseNumber: z.string().optional(),
-  najizNumber: z.string().optional(),
-}).passthrough();
-
 // assignedTo mirrors Consultation.assignedTo: string | null.
 export const assignConsultationSchema = z.object({
   assignedTo: z.string().nullable().optional(),

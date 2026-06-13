@@ -771,9 +771,6 @@ export default function CasesPage() {
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
   const [registrationDialogType, setRegistrationDialogType] = useState<"" | "taradi" | "mohr">("");
   const [registrationNumberInput, setRegistrationNumberInput] = useState("");
-  const [showCourtRegistrationDialog, setShowCourtRegistrationDialog] = useState(false);
-  const [courtRegistrationCaseId, setCourtRegistrationCaseId] = useState<string | null>(null);
-  const [courtCaseNumberInput, setCourtCaseNumberInput] = useState("");
 
   const resetForm = () => {
     setFormData({
@@ -2725,44 +2722,6 @@ export default function CasesPage() {
                             </Button>
                           )
                         )}
-                        {selectedCase.taradiStatus === "مقيدة_في_تراضي" && (
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="default"
-                              data-testid="button-taradi-reconciled"
-                              onClick={async () => {
-                                try {
-                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "تم_الصلح" });
-                                  if (res.ok) { toast({ title: "تم تسجيل الصلح" }); await updateCase(selectedCase.id, { taradiStatus: "تم_الصلح" }); }
-                                } catch (e) {
-                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
-                                  // would otherwise surface as an unhandled promise rejection in console.
-                                  // Future: surface an error toast (beyond Batch 2B scope).
-                                }
-                              }}
-                            >
-                              تم الصلح
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              data-testid="button-taradi-not-reconciled"
-                              onClick={async () => {
-                                try {
-                                  const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/taradi`, { status: "لم_يتم_صلح" });
-                                  if (res.ok) { toast({ title: "تم تسجيل عدم الصلح - سيتم إشعار القسم لتقييد القضية في المحكمة" }); await updateCase(selectedCase.id, { taradiStatus: "لم_يتم_صلح" }); }
-                                } catch (e) {
-                                  // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
-                                  // would otherwise surface as an unhandled promise rejection in console.
-                                  // Future: surface an error toast (beyond Batch 2B scope).
-                                }
-                              }}
-                            >
-                              لم يتم صلح
-                            </Button>
-                          </div>
-                        )}
                       </div>
                     </div>
                   )}
@@ -2911,43 +2870,6 @@ export default function CasesPage() {
                           </div>
                         )}
                       </div>
-                    </div>
-                  )}
-
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY &&
-                    CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.READY_TO_SUBMIT) &&
-                    (user?.role === "branch_manager" || user?.role === "admin_support") &&
-                    (selectedCase.caseType !== "تجاري" || selectedCase.taradiStatus === "لم_يتم_صلح") &&
-                    (selectedCase.caseType !== "عمالي" || selectedCase.mohrStatus === "انتهت_التسوية") && (
-                    <div className="border-t pt-4">
-                      <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
-                        <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
-                        تحويل القضية إلى منظورة
-                      </h4>
-                      <p className="text-xs text-muted-foreground mb-3">عند تقييد القضية في المحكمة، يتم تحويل تصنيفها إلى "منظورة" وتنتقل لمرحلة "تحت النظر"</p>
-                      {selectedCase.caseType === "تجاري" && !selectedCase.taradiNumber ? (
-                        <p className="text-sm text-amber-600 font-medium" data-testid="taradi-number-required-notice">
-                          يجب إدخال رقم الطلب في منصة تراضي أولاً قبل تقييد القضية في المحكمة. يرجى إدخاله في قسم "أرقام الطلبات" أعلاه.
-                        </p>
-                      ) : showCourtRegistrationDialog && courtRegistrationCaseId === selectedCase.id ? (
-                        <div className="flex items-center gap-2" dir="rtl">
-                          <Input value={courtCaseNumberInput} onChange={e => setCourtCaseNumberInput(e.target.value)} placeholder="رقم القضية في المحكمة" className="h-8 text-sm" autoFocus data-testid="input-court-registration-number" />
-                          <Button size="sm" data-testid="button-confirm-court-registration" onClick={async () => {
-                            if (!courtCaseNumberInput.trim()) { toast({ title: "يرجى إدخال رقم القضية", variant: "destructive" }); return; }
-                            try {
-                              await apiRequest("POST", `/api/cases/${selectedCase.id}/court-register`, { courtCaseNumber: courtCaseNumberInput.trim() });
-                              await refreshCases();
-                              toast({ title: "تم تقييد القضية في المحكمة بنجاح" });
-                              setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput("");
-                            } catch (e) { toast({ title: extractApiError(e), variant: "destructive" }); }
-                          }}>تأكيد</Button>
-                          <Button size="sm" variant="ghost" onClick={() => { setShowCourtRegistrationDialog(false); setCourtRegistrationCaseId(null); setCourtCaseNumberInput(""); }}>إلغاء</Button>
-                        </div>
-                      ) : (
-                        <Button size="sm" variant="outline" className="border-blue-500 text-blue-600" data-testid="button-register-court" onClick={() => { setShowCourtRegistrationDialog(true); setCourtRegistrationCaseId(selectedCase.id); setCourtCaseNumberInput(""); }}>
-                          <Scale className="w-3 h-3 mr-1" /> تقييد القضية في المحكمة
-                        </Button>
-                      )}
                     </div>
                   )}
 
