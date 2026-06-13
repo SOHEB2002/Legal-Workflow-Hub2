@@ -3570,8 +3570,12 @@ export interface Notification {
   status: NotificationStatusValue;
   title: string;
   message: string;
-  senderId: string | null;
-  senderName: string | null;
+  // NOT NULL columns (sender_id / sender_name). createNotification coalesces
+  // any missing value to "" (storage.ts), and the read mapping passes the
+  // column through, so on read these are always a (possibly empty) string —
+  // never null. Aligned to reality from the prior `string | null` drift.
+  senderId: string;
+  senderName: string;
   recipientId: string;
   recipientIds?: string[];
   relatedType: "case" | "consultation" | "task" | "field_task" | "hearing" | "memo" | null;
@@ -4532,19 +4536,6 @@ export interface UserVacation {
   createdAt: string;
 }
 
-export interface Delegation {
-  id: string;
-  fromUserId: string;
-  toUserId: string;
-  startDate: string;
-  endDate: string;
-  type: DelegationTypeValue;
-  permissions: string[];
-  reason: string;
-  isActive: boolean;
-  createdAt: string;
-}
-
 export interface Team {
   id: string;
   name: string;
@@ -4619,7 +4610,6 @@ export interface ExtendedUser extends User {
   hireDate: string;
   lastLoginAt: string | null;
   currentVacation: UserVacation | null;
-  activeDelegations: Delegation[];
   customPermissions: UserCustomPermission | null;
   stats: UserStats;
 }

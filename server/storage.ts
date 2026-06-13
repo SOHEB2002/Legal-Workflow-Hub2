@@ -29,7 +29,7 @@ import {
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, gt, desc, asc, lte, gte, sql } from "drizzle-orm";
+import { eq, and, or, gt, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
@@ -1069,10 +1069,18 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getCaseById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, closedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, closedAt, archivedAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
+    }
+    // archived_at is a date-mode column; mirror the closedAt idiom so the
+    // ISO string callers pass (e.g. the auto-archive scheduler) becomes a
+    // Date. Previously archivedAt was spread through as a raw string, which
+    // made drizzle call `string.toISOString()` and throw — silently breaking
+    // auto-archive inside the scheduler's try/catch.
+    if (archivedAt !== undefined) {
+      updateData.archivedAt = archivedAt ? new Date(archivedAt) : null;
     }
     if (updateData.courtCaseNumber && updateData.courtCaseNumber.trim()) {
       updateData.caseNumber = updateData.courtCaseNumber.trim();
@@ -1089,20 +1097,17 @@ export class DatabaseStorage implements IStorage {
     const hearingIds = relatedHearings.map(h => h.id);
     const memoIds = relatedMemos.map(m => m.id);
 
-    // حذف الإشعارات المرتبطة بالجلسات
+    // حذف الإشعارات المرتبطة بالجلسات — batched IN (…) instead of one
+    // DELETE per id (same rows removed; the length guard avoids an empty IN).
     if (hearingIds.length > 0) {
-      for (const hid of hearingIds) {
-        await db.delete(notifications).where(and(eq(notifications.relatedType, "hearing"), eq(notifications.relatedId, hid)));
-        await db.delete(attachments).where(and(eq(attachments.entityType, "hearing"), eq(attachments.entityId, hid)));
-      }
+      await db.delete(notifications).where(and(eq(notifications.relatedType, "hearing"), inArray(notifications.relatedId, hearingIds)));
+      await db.delete(attachments).where(and(eq(attachments.entityType, "hearing"), inArray(attachments.entityId, hearingIds)));
     }
 
-    // حذف الإشعارات المرتبطة بالمذكرات
+    // حذف الإشعارات المرتبطة بالمذكرات — batched IN (…) as above.
     if (memoIds.length > 0) {
-      for (const mid of memoIds) {
-        await db.delete(notifications).where(and(eq(notifications.relatedType, "memo"), eq(notifications.relatedId, mid)));
-        await db.delete(attachments).where(and(eq(attachments.entityType, "memo"), eq(attachments.entityId, mid)));
-      }
+      await db.delete(notifications).where(and(eq(notifications.relatedType, "memo"), inArray(notifications.relatedId, memoIds)));
+      await db.delete(attachments).where(and(eq(attachments.entityType, "memo"), inArray(attachments.entityId, memoIds)));
     }
 
     // حذف الجلسات والمذكرات والسجلات المرتبطة
@@ -2468,11 +2473,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getNextTicketNumber(): Promise<string> {
-    const allTickets = await db.select().from(supportTickets);
-    const maxNum = allTickets.reduce((max, t) => {
-      const num = parseInt(t.ticketNumber.replace("TK-", ""), 10);
-      return isNaN(num) ? max : Math.max(max, num);
-    }, 0);
+    // Single aggregate instead of loading every ticket and reducing in JS.
+    // SUBSTRING(... FROM '[0-9]+') extracts the leading digit run (mirrors
+    // the old `.replace("TK-","")` + parseInt, including the skip of any
+    // malformed number → NULL, which MAX ignores). COALESCE → 0 for the
+    // empty-table case, so an empty table still yields TK-0001.
+    const [row] = await db
+      .select({
+        maxNum: sql<number>`COALESCE(MAX(CAST(SUBSTRING(${supportTickets.ticketNumber} FROM '[0-9]+') AS INTEGER)), 0)`,
+      })
+      .from(supportTickets);
+    const maxNum = Number(row?.maxNum ?? 0);
     return `TK-${String(maxNum + 1).padStart(4, "0")}`;
   }
 

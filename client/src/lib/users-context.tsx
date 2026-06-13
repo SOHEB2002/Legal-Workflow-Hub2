@@ -8,7 +8,6 @@ import {
   UserVacation,
   VacationStatus,
   VacationStatusValue,
-  Delegation,
   DelegationType,
   Team,
   UserCustomPermission,
@@ -27,7 +26,6 @@ const generateId = () => `${Date.now()}_${Math.random().toString(36).substr(2, 9
 interface UsersContextType {
   extendedUsers: ExtendedUser[];
   vacations: UserVacation[];
-  delegations: Delegation[];
   teams: Team[];
   customPermissions: UserCustomPermission[];
   activityLogs: UserActivityLog[];
@@ -48,13 +46,7 @@ interface UsersContextType {
   getUserVacations: (userId: string) => UserVacation[];
   checkVacationConflicts: (userId: string, startDate: string, endDate: string) => UserVacation | null;
   autoReassignOnVacation: (userId: string) => void;
-  
-  createDelegation: (delegationData: Partial<Delegation>) => Delegation;
-  endDelegation: (delegationId: string) => void;
-  getActiveDelegations: (userId: string) => Delegation[];
-  getDelegatedToMe: (userId: string) => Delegation[];
-  canActOnBehalf: (actingUserId: string, originalUserId: string) => boolean;
-  
+
   createTeam: (teamData: Partial<Team>) => Team;
   updateTeam: (id: string, teamData: Partial<Team>) => void;
   deleteTeam: (id: string) => void;
@@ -111,7 +103,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
         lastLoginAt: ext.lastLoginAt ?? null,
         teamId: ext.teamId ?? null,
         currentVacation: null,
-        activeDelegations: [],
         customPermissions: null,
         stats: defaultStats,
       } as unknown as ExtendedUser;
@@ -120,11 +111,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   
   const [vacations, setVacations] = useState<UserVacation[]>(() => {
     const saved = localStorage.getItem("user_vacations");
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  const [delegations, setDelegations] = useState<Delegation[]>(() => {
-    const saved = localStorage.getItem("user_delegations");
     return saved ? JSON.parse(saved) : [];
   });
   
@@ -155,10 +141,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem("user_vacations", JSON.stringify(vacations));
   }, [vacations]);
-  
-  useEffect(() => {
-    localStorage.setItem("user_delegations", JSON.stringify(delegations));
-  }, [delegations]);
   
   useEffect(() => {
     localStorage.setItem("user_teams", JSON.stringify(teams));
@@ -215,7 +197,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
       lastLoginAt: null,
       teamId: userData.teamId || null,
       currentVacation: null,
-      activeDelegations: [],
       customPermissions: null,
       stats: defaultStats,
     } as ExtendedUser;
@@ -223,7 +204,7 @@ export function UsersProvider({ children }: { children: ReactNode }) {
 
   const updateUser = useCallback(async (id: string, userData: Partial<ExtendedUser>): Promise<{ success: boolean; error?: string }> => {
     try {
-      const { status, hireDate, lastLoginAt, teamId, currentVacation, activeDelegations, customPermissions: cp, stats, ...apiFields } = userData as any;
+      const { status, hireDate, lastLoginAt, teamId, currentVacation, customPermissions: cp, stats, ...apiFields } = userData as any;
 
       if (Object.keys(apiFields).length > 0) {
         await apiRequest("PATCH", `/api/users/${id}`, apiFields);
@@ -334,45 +315,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   const autoReassignOnVacation = useCallback((userId: string) => {
     // Auto reassign cases for user on vacation
   }, []);
-
-  const createDelegation = useCallback((delegationData: Partial<Delegation>): Delegation => {
-    const newDelegation: Delegation = {
-      id: generateId(),
-      fromUserId: delegationData.fromUserId || "",
-      toUserId: delegationData.toUserId || "",
-      startDate: delegationData.startDate || "",
-      endDate: delegationData.endDate || "",
-      type: delegationData.type || DelegationType.FULL,
-      permissions: delegationData.permissions || [],
-      reason: delegationData.reason || "",
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    };
-    setDelegations(prev => [...prev, newDelegation]);
-    return newDelegation;
-  }, []);
-
-  const endDelegation = useCallback((delegationId: string) => {
-    setDelegations(prev => prev.map(d => 
-      d.id === delegationId ? { ...d, isActive: false } : d
-    ));
-  }, []);
-
-  const getActiveDelegations = useCallback((userId: string): Delegation[] => {
-    return delegations.filter(d => d.fromUserId === userId && d.isActive);
-  }, [delegations]);
-
-  const getDelegatedToMe = useCallback((userId: string): Delegation[] => {
-    return delegations.filter(d => d.toUserId === userId && d.isActive);
-  }, [delegations]);
-
-  const canActOnBehalf = useCallback((actingUserId: string, originalUserId: string): boolean => {
-    return delegations.some(d => 
-      d.toUserId === actingUserId && 
-      d.fromUserId === originalUserId && 
-      d.isActive
-    );
-  }, [delegations]);
 
   const createTeam = useCallback((teamData: Partial<Team>): Team => {
     const newTeam: Team = {
@@ -590,7 +532,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   const value: UsersContextType = {
     extendedUsers,
     vacations,
-    delegations,
     teams,
     customPermissions,
     activityLogs,
@@ -609,11 +550,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     getUserVacations,
     checkVacationConflicts,
     autoReassignOnVacation,
-    createDelegation,
-    endDelegation,
-    getActiveDelegations,
-    getDelegatedToMe,
-    canActOnBehalf,
     createTeam,
     updateTeam,
     deleteTeam,
