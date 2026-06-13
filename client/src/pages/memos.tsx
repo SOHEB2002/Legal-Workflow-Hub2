@@ -54,7 +54,6 @@ import {
   Clock,
   AlertTriangle,
   CheckCircle,
-  XCircle,
   Trash2,
   Zap,
   Ban,
@@ -97,7 +96,6 @@ import {
   NoteOutcome,
   Priority,
   canCreateMemos,
-  canReviewMemos,
   canChangeMemoStatus,
   canDeleteMemos,
 } from "@shared/schema";
@@ -397,7 +395,6 @@ export default function MemosPage() {
     if (assignedTo) setFilterAssignedTo(assignedTo);
   }, []);
 
-  const [reviewNotes, setReviewNotes] = useState("");
   const [reassignMemoDialog, setReassignMemoDialog] = useState<Memo | null>(null);
   const [reassignMemoAssignedTo, setReassignMemoAssignedTo] = useState<string>("");
 
@@ -477,27 +474,6 @@ export default function MemosPage() {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleApprove = async () => {
-    if (!detailMemo || !user) return;
-    await handleStatusChange(detailMemo, MemoStatus.APPROVED, {
-      reviewNotes,
-      reviewerId: user.id,
-      reviewedAt: new Date().toISOString(),
-    });
-    setReviewNotes("");
-  };
-
-  const handleReturn = async () => {
-    if (!detailMemo || !user) return;
-    await handleStatusChange(detailMemo, MemoStatus.REVISION_REQUIRED, {
-      reviewNotes,
-      reviewerId: user.id,
-      reviewedAt: new Date().toISOString(),
-      returnCount: (detailMemo.returnCount || 0) + 1,
-    });
-    setReviewNotes("");
   };
 
   const handleDelete = async (memo: Memo) => {
@@ -1386,7 +1362,6 @@ export default function MemosPage() {
                                 data-testid={`button-view-memo-${memo.id}`}
                                 onClick={() => {
                                   setDetailMemoId(memo.id);
-                                  setReviewNotes("");
                                 }}
                               >
                                 <Eye className="w-4 h-4 ml-2" />
@@ -1906,66 +1881,6 @@ export default function MemosPage() {
                   <div>
                     <p className="text-sm text-muted-foreground mb-1">سبب الإنشاء التلقائي</p>
                     <p className="text-sm">{detailMemo.autoGenerateReason}</p>
-                  </div>
-                )}
-
-                {/* Phase-9 — legacy review panel. Driven by the old
-                    MemoStatus enum; the new flow uses the inline
-                    internal-review / committee-decision dialogs below.
-                    Hidden once the memo is on the new currentStage axis. */}
-                {!detailMemo.currentStage && (detailMemo.status === MemoStatus.IN_REVIEW ||
-                  detailMemo.status === MemoStatus.APPROVED ||
-                  detailMemo.status === MemoStatus.REVISION_REQUIRED ||
-                  detailMemo.status === MemoStatus.SUBMITTED) && (
-                  <div className="border rounded-md p-4 space-y-3">
-                    <p className="font-medium text-sm">المراجعة</p>
-                    {detailMemo.reviewNotes && (
-                      <div>
-                        <p className="text-sm text-muted-foreground">ملاحظات المراجعة</p>
-                        <p className="text-sm mt-1">{detailMemo.reviewNotes}</p>
-                      </div>
-                    )}
-                    {detailMemo.reviewerId && (
-                      <div>
-                        <p className="text-sm text-muted-foreground">المراجع</p>
-                        <p className="text-sm">{getUserName(detailMemo.reviewerId)}</p>
-                      </div>
-                    )}
-                    {detailMemo.status === MemoStatus.IN_REVIEW && user && canReviewMemos(user.role) && (
-                      <div className="space-y-3 pt-2 border-t">
-                        <div>
-                          <Label>ملاحظات المراجعة</Label>
-                          <Textarea
-                            data-testid="input-review-notes"
-                            value={reviewNotes}
-                            onChange={(e) => setReviewNotes(e.target.value)}
-                            placeholder="أضف ملاحظاتك..."
-                          />
-                        </div>
-                        <div className="flex gap-2 flex-wrap">
-                          <Button
-                            data-testid="button-approve-memo"
-                            variant="default"
-                            onClick={handleApprove}
-                            disabled={submitting}
-                            className="bg-green-600 hover:bg-green-700 dark:bg-green-700"
-                          >
-                            {submitting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <CheckCircle className="w-4 h-4 ml-2" />}
-                            اعتماد
-                          </Button>
-                          <Button
-                            data-testid="button-return-memo"
-                            variant="default"
-                            onClick={handleReturn}
-                            disabled={submitting}
-                            className="bg-orange-500 hover:bg-orange-600 dark:bg-orange-600"
-                          >
-                            {submitting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <XCircle className="w-4 h-4 ml-2" />}
-                            إعادة للتعديل
-                          </Button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
 

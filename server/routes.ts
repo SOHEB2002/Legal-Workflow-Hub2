@@ -1815,58 +1815,6 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/cases/:id/court-register", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const caseItem = await storage.getCaseById(String(req.params.id));
-      if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
-      const user = req.user!;
-      if (!canEditCaseData(user)) return res.status(403).json({ error: "لا تملك صلاحية تقييد القضية في المحكمة" });
-      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY) {
-        return res.status(400).json({ error: "القضية مقيدة في المحكمة بالفعل" });
-      }
-      // Prerequisite: commercial cases must have taradiStatus === "لم_يتم_صلح" and a taradi number
-      if (caseItem.caseType === "تجاري" && caseItem.taradiStatus !== "لم_يتم_صلح") {
-        return res.status(400).json({ error: "يجب إتمام مرحلة تراضي (عدم الصلح) قبل تقييد القضية التجارية في المحكمة" });
-      }
-      if (caseItem.caseType === "تجاري" && !caseItem.taradiNumber) {
-        return res.status(400).json({ error: "يجب إدخال رقم الطلب في منصة تراضي قبل تقييد القضية في المحكمة" });
-      }
-      // Prerequisite: labor cases must have mohrStatus === "انتهت_التسوية"
-      if (caseItem.caseType === "عمالي" && caseItem.mohrStatus !== "انتهت_التسوية") {
-        return res.status(400).json({ error: "يجب إتمام مرحلة وزارة الموارد البشرية (انتهاء التسوية) قبل تقييد القضية العمالية في المحكمة" });
-      }
-      const { courtCaseNumber, najizNumber } = req.body;
-      if (!courtCaseNumber || typeof courtCaseNumber !== "string" || !courtCaseNumber.trim()) {
-        return res.status(400).json({ error: "يرجى إدخال رقم القضية في المحكمة" });
-      }
-      if (!najizNumber || typeof najizNumber !== "string" || !najizNumber.trim()) {
-        return res.status(400).json({ error: "يرجى إدخال رقم القيد في ناجز" });
-      }
-      const updated = await storage.updateCase(caseItem.id, {
-        caseClassification: CaseClassification.IN_COURT,
-        currentStage: CaseStage.UNDER_REVIEW,
-        courtCaseNumber: courtCaseNumber.trim().substring(0, 100),
-        najizNumber: najizNumber.trim().substring(0, 100),
-        // قيد_الدراسة cases store clientRole as null because the firm is
-        // implicitly the plaintiff. On promotion to IN_COURT we must persist
-        // that as an explicit "مدعي" — otherwise the row ends up IN_COURT
-        // with null clientRole and the UI loses the role.
-        ...(!caseItem.clientRole ? { clientRole: "مدعي" } : {}),
-      });
-      await storage.logCaseActivity({
-        caseId: caseItem.id,
-        userId: user.id,
-        userName: user.name,
-        actionType: "stage_changed",
-        title: `تم تقييد القضية في المحكمة - رقم القضية: ${courtCaseNumber.trim()} - رقم ناجز: ${najizNumber.trim()}`,
-      });
-      res.json(updated);
-    } catch (error) {
-      console.error("Error registering court case:", error);
-      res.status(500).json({ error: "حدث خطأ في تقييد القضية في المحكمة" });
-    }
-  });
-
   app.patch("/api/cases/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const existing = await storage.getCaseById(String(req.params.id));
@@ -2900,6 +2848,14 @@ export async function registerRoutes(
       if (!allowedRoles.includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
       }
+      // Phase 8 F4 — dept-head scope, mirroring contracts /assign: a
+      // dept_head may only assign consultations in their OWN department.
+      if (
+        reqUser.role === "department_head"
+        && consultation.departmentId !== reqUser.departmentId
+      ) {
+        return res.status(403).json({ error: "رئيس القسم يمكنه إسناد استشارات قسمه فقط" });
+      }
 
       if (consultation.status !== "active") {
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
@@ -3264,9 +3220,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
+      // Phase 8 F9 — dept-head scoped to own dept (mirrors cases
+      // /return-to-committee, which likewise allows admin_support).
       const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const allowedRoles = ["admin_support", "department_head", "branch_manager"];
-      if (!isLawyer && !allowedRoles.includes(reqUser.role)) {
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && consultation.departmentId === reqUser.departmentId;
+      const allowed =
+        reqUser.role === "branch_manager"
+        || reqUser.role === "admin_support"
+        || isOwnDeptHead
+        || isLawyer;
+      if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإعادة الاستشارة للجنة" });
       }
 
@@ -3303,8 +3268,16 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, consultation);
       let permitted: boolean;
       if (resolvedType === ConsultationType.WRITTEN) {
-        const adminLike = ["admin_support", "department_head", "branch_manager"];
-        permitted = adminLike.includes(reqUser.role) || isLawyer;
+        // Phase 8 F6 — dept-head scoped to own dept (mirrors contracts
+        // /early-close), with the both-sides non-null guard so a null-dept
+        // head can't match a null-dept consultation.
+        permitted =
+          ["admin_support", "branch_manager"].includes(reqUser.role) ||
+          (reqUser.role === "department_head"
+            && !!reqUser.departmentId
+            && !!consultation.departmentId
+            && consultation.departmentId === reqUser.departmentId) ||
+          isLawyer;
       } else {
         permitted = ["admin_support", "branch_manager"].includes(reqUser.role);
       }

@@ -2131,7 +2131,7 @@ export interface Consultation {
   category: ConsultationCategoryValue;
   expectedDeliveryDate: string | null;
   // How the consultation reached us (ConsultationSourceValue). NOT NULL +
-  // DB default so legacy rows surface as "على_الخاص" after the backfill.
+  // DB default so legacy rows surface as "عبر_المجموعة" after the backfill.
   source: ConsultationSourceValue;
   createdBy: string;
   createdAt: string;
@@ -3895,11 +3895,6 @@ export const updateCaseTaradiSchema = z.object({
 export const updateCaseMohrSchema = z.object({
   status: z.string().optional(),
   mohrNumber: z.string().optional(),
-}).passthrough();
-
-export const courtRegisterCaseSchema = z.object({
-  courtCaseNumber: z.string().optional(),
-  najizNumber: z.string().optional(),
 }).passthrough();
 
 // assignedTo mirrors Consultation.assignedTo: string | null.
