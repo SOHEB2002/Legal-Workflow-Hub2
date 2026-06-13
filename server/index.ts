@@ -224,7 +224,6 @@ app.use((req, res, next) => {
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
 
     console.error("Internal Server Error:", err);
 
@@ -232,6 +231,11 @@ app.use((req, res, next) => {
       return next(err);
     }
 
+    // Don't leak raw err.message to clients on server errors — an unhandled
+    // DB/Drizzle throw can echo SQL/column/constraint text. 5xx returns a
+    // generic message; a deliberately-thrown 4xx keeps its own message. The
+    // full error is still recorded server-side via console.error above.
+    const message = status >= 500 ? "Internal Server Error" : (err.message || "Bad Request");
     return res.status(status).json({ message });
   });
 
