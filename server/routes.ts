@@ -8792,7 +8792,6 @@ export async function registerRoutes(
     const allCases = await storage.getAllCases();
     const allHearings = await storage.getAllHearings();
     const allMemos = await storage.getAllMemos();
-    const allNotifications = await storage.getAllNotifications();
 
     let userCases = allCases;
     if (user.role === "employee") {
@@ -8851,7 +8850,7 @@ export async function registerRoutes(
       return { ...d, daysLeft };
     });
 
-    const unreadNotifications = allNotifications.filter(n => n.recipientId === user.id && !n.isRead).length;
+    const unreadNotifications = await storage.getUnreadNotificationCount(user.id);
 
     const activeCases = userCases.filter(c => (c.currentStage as string) !== "مقفلة" && (c.currentStage as string) !== "مغلق" && !c.isArchived);
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);

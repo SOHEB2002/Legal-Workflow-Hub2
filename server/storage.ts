@@ -118,6 +118,7 @@ export interface IStorage {
   createNotification(data: Partial<Notification>): Promise<Notification>;
   updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
   markAllNotificationsRead(recipientId: string): Promise<number>;
+  getUnreadNotificationCount(recipientId: string): Promise<number>;
   deleteNotification(id: string): Promise<boolean>;
 
   // Departments
@@ -1837,6 +1838,15 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(notifications.recipientId, recipientId), eq(notifications.isRead, false)))
       .returning({ id: notifications.id });
     return updated.length;
+  }
+
+  async getUnreadNotificationCount(recipientId: string): Promise<number> {
+    // COUNT(*) instead of loading the whole notifications table to count one
+    // recipient's unread rows. Mirrors the getSidebarCounts count idiom.
+    const rows = await db.select({ c: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(and(eq(notifications.recipientId, recipientId), eq(notifications.isRead, false)));
+    return rows[0]?.c ?? 0;
   }
 
   async deleteNotification(id: string): Promise<boolean> {
