@@ -36,7 +36,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, Palmtree, UserCheck, AlertTriangle, Loader2 } from "lucide-react";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, Palmtree, AlertTriangle, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
@@ -47,7 +47,6 @@ import { useLocation } from "wouter";
 import type { User as UserType, UserRoleType, UserStatusValue } from "@shared/schema";
 import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels } from "@shared/schema";
 import { VacationDialog } from "@/components/users/vacation-dialog";
-import { DelegationDialog } from "@/components/users/delegation-dialog";
 import { CustomPermissionsDialog } from "@/components/users/custom-permissions-dialog";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 
@@ -105,7 +104,6 @@ export default function UsersPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
   const [showVacationDialog, setShowVacationDialog] = useState(false);
-  const [showDelegationDialog, setShowDelegationDialog] = useState(false);
   const [showPermissionsDialog, setShowPermissionsDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -694,19 +692,6 @@ export default function UsersPage() {
                         )}
                         {!isDepartmentHead && (
                           <DropdownMenuItem
-                            data-testid={`button-create-delegation-${u.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setUserToAction(u);
-                              setShowDelegationDialog(true);
-                            }}
-                          >
-                            <UserCheck className="w-4 h-4 ml-2" />
-                            إنشاء تفويض
-                          </DropdownMenuItem>
-                        )}
-                        {!isDepartmentHead && (
-                          <DropdownMenuItem
                             data-testid={`button-custom-permissions-${u.id}`}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1272,11 +1257,6 @@ export default function UsersPage() {
       <VacationDialog
         open={showVacationDialog}
         onOpenChange={setShowVacationDialog}
-        user={userToAction}
-      />
-      <DelegationDialog
-        open={showDelegationDialog}
-        onOpenChange={setShowDelegationDialog}
         user={userToAction}
       />
       <CustomPermissionsDialog

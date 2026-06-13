@@ -35,16 +35,14 @@ import {
   FileText,
   Users,
   Palmtree,
-  UserCheck,
   Shield,
   Lock,
   Eye,
   EyeOff,
 } from "lucide-react";
-import { UserRoleLabels, VacationStatusLabels, DelegationTypeLabels, CaseStageLabels } from "@shared/schema";
-import type { UserRoleType, VacationStatusValue, DelegationTypeValue, CaseStageValue } from "@shared/schema";
+import { UserRoleLabels, VacationStatusLabels, CaseStageLabels } from "@shared/schema";
+import type { UserRoleType, VacationStatusValue, CaseStageValue } from "@shared/schema";
 import { VacationDialog } from "@/components/users/vacation-dialog";
-import { DelegationDialog } from "@/components/users/delegation-dialog";
 
 export default function UserProfilePage() {
   const [, params] = useRoute("/user-profile/:id");
@@ -55,9 +53,7 @@ export default function UserProfilePage() {
   const { getDepartmentName } = useDepartments();
   const { 
     extendedUsers, 
-    getUserVacations, 
-    getActiveDelegations, 
-    getDelegatedToMe,
+    getUserVacations,
     getUserActivityLog,
     getTeamById,
     getUserStats,
@@ -66,7 +62,6 @@ export default function UserProfilePage() {
   const { consultations } = useConsultations();
 
   const [showVacationDialog, setShowVacationDialog] = useState(false);
-  const [showDelegationDialog, setShowDelegationDialog] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -105,8 +100,6 @@ export default function UserProfilePage() {
   const user = users.find(u => u.id === userId);
   const extendedUser = extendedUsers.find(eu => eu.id === userId);
   const userVacations = userId ? getUserVacations(userId) : [];
-  const outgoingDelegations = userId ? getActiveDelegations(userId) : [];
-  const incomingDelegations = userId ? getDelegatedToMe(userId) : [];
   const activityLog = userId ? getUserActivityLog(userId).slice(0, 20) : [];
   const team = extendedUser?.teamId ? getTeamById(extendedUser.teamId) : null;
   const stats = userId ? getUserStats(userId) : null;
@@ -205,21 +198,16 @@ export default function UserProfilePage() {
                 <Palmtree className="w-4 h-4 ml-2" />
                 جدولة إجازة
               </Button>
-              <Button variant="outline" onClick={() => setShowDelegationDialog(true)}>
-                <UserCheck className="w-4 h-4 ml-2" />
-                إنشاء تفويض
-              </Button>
             </div>
           </div>
         </CardContent>
       </Card>
 
       <Tabs defaultValue="stats" className="w-full">
-        <TabsList className={`grid w-full ${isOwnProfile ? "grid-cols-7" : "grid-cols-6"}`}>
+        <TabsList className={`grid w-full ${isOwnProfile ? "grid-cols-6" : "grid-cols-5"}`}>
           <TabsTrigger value="stats" data-testid="tab-stats">الإحصائيات</TabsTrigger>
           <TabsTrigger value="cases" data-testid="tab-cases">القضايا</TabsTrigger>
           <TabsTrigger value="vacations" data-testid="tab-vacations">الإجازات</TabsTrigger>
-          <TabsTrigger value="delegations" data-testid="tab-delegations">التفويضات</TabsTrigger>
           <TabsTrigger value="activity" data-testid="tab-activity">سجل النشاط</TabsTrigger>
           <TabsTrigger value="permissions" data-testid="tab-permissions">الصلاحيات</TabsTrigger>
           {isOwnProfile && <TabsTrigger value="security" data-testid="tab-security">الأمان</TabsTrigger>}
@@ -358,66 +346,6 @@ export default function UserProfilePage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="delegations" className="mt-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">التفويضات الصادرة</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {outgoingDelegations.length > 0 ? (
-                  <div className="space-y-3">
-                    {outgoingDelegations.map((d) => {
-                      const toUser = users.find(u => u.id === d.toUserId);
-                      return (
-                        <div key={d.id} className="flex items-center justify-between p-3 border rounded-md">
-                          <div>
-                            <p className="font-medium">{toUser?.name}</p>
-                            <div className="text-sm text-muted-foreground flex flex-wrap items-center gap-1">
-                              <DualDateDisplay date={d.startDate} compact /> - <DualDateDisplay date={d.endDate} compact />
-                            </div>
-                          </div>
-                          <Badge>{DelegationTypeLabels[d.type as DelegationTypeValue]}</Badge>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">لا توجد تفويضات صادرة</p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">التفويضات الواردة</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {incomingDelegations.length > 0 ? (
-                  <div className="space-y-3">
-                    {incomingDelegations.map((d) => {
-                      const fromUser = users.find(u => u.id === d.fromUserId);
-                      return (
-                        <div key={d.id} className="flex items-center justify-between p-3 border rounded-md">
-                          <div>
-                            <p className="font-medium">{fromUser?.name}</p>
-                            <div className="text-sm text-muted-foreground flex flex-wrap items-center gap-1">
-                              <DualDateDisplay date={d.startDate} compact /> - <DualDateDisplay date={d.endDate} compact />
-                            </div>
-                          </div>
-                          <Badge>{DelegationTypeLabels[d.type as DelegationTypeValue]}</Badge>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">لا توجد تفويضات واردة</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
         <TabsContent value="activity" className="mt-4">
           <Card>
             <CardContent className="pt-4">
@@ -546,11 +474,6 @@ export default function UserProfilePage() {
       <VacationDialog
         open={showVacationDialog}
         onOpenChange={setShowVacationDialog}
-        user={user}
-      />
-      <DelegationDialog
-        open={showDelegationDialog}
-        onOpenChange={setShowDelegationDialog}
         user={user}
       />
     </div>

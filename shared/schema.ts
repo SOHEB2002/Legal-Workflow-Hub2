@@ -4536,19 +4536,6 @@ export interface UserVacation {
   createdAt: string;
 }
 
-export interface Delegation {
-  id: string;
-  fromUserId: string;
-  toUserId: string;
-  startDate: string;
-  endDate: string;
-  type: DelegationTypeValue;
-  permissions: string[];
-  reason: string;
-  isActive: boolean;
-  createdAt: string;
-}
-
 export interface Team {
   id: string;
   name: string;
@@ -4623,7 +4610,6 @@ export interface ExtendedUser extends User {
   hireDate: string;
   lastLoginAt: string | null;
   currentVacation: UserVacation | null;
-  activeDelegations: Delegation[];
   customPermissions: UserCustomPermission | null;
   stats: UserStats;
 }
