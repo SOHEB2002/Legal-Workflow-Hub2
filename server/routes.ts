@@ -2048,14 +2048,19 @@ export async function registerRoutes(
           }
         }
 
-        // Accepting out of a najiz/moeen review stage: the lawyer must enter
-        // the court-issued case number, which then replaces caseNumber.
-        // (تراضي doesn't require this — the taradi number itself is the
-        // platform's case number.)
+        // Accepting out of a najiz/moeen review stage INTO COURT (منظورة): the
+        // lawyer must enter the court-issued case number, which then replaces
+        // caseNumber. (تراضي doesn't require this — the taradi number itself is
+        // the platform's case number.)
+        // General-dept audit (2026-06-14) — gate on the DESTINATION being
+        // منظورة, not merely on leaving najiz. Commercial najiz→منظورة and
+        // Admin معين→منظورة still require it; General's najiz→مداولة_الصلح
+        // (conciliation, still pre-trial) must NOT — the case isn't in court
+        // yet. (Also stops a rollback out of najiz from wrongly demanding it.)
         if (
           (existing.currentStage === "قيد_التدقيق_في_ناجز" ||
             existing.currentStage === "قيد_التدقيق_في_معين") &&
-          targetStage !== existing.currentStage
+          targetStage === "منظورة"
         ) {
           const courtCaseNumber = typeof req.body.courtCaseNumber === "string"
             ? req.body.courtCaseNumber.trim()

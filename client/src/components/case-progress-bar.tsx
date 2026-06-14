@@ -196,13 +196,18 @@ export function CaseProgressBar({
   const isHeadOrManagerRole = userRole === "department_head" || userRole === "branch_manager";
   const canActOnCommitteeNotes = isAtCommitteeNotes && (isAssignedLawyer || isHeadOrManagerRole);
 
+  // General-dept audit (2026-06-14) — requireCourtNumber is driven by the
+  // ACTUAL next stage in the resolved dept stages array, not the platform
+  // kind. A court case number is demanded only when accept moves the case INTO
+  // court (منظورة): Commercial najiz→منظورة and Admin معين→منظورة keep it;
+  // General najiz→مداولة_الصلح (conciliation, still pre-trial) does NOT.
   const platformReviewInfo: { kind: "تراضي" | "ناجز" | "معين"; requireCourtNumber: boolean } | null =
     normalizedStage === "قيد_التدقيق_في_تراضي"
-      ? { kind: "تراضي", requireCourtNumber: false }
+      ? { kind: "تراضي", requireCourtNumber: nextStage === "منظورة" }
       : normalizedStage === "قيد_التدقيق_في_ناجز"
-      ? { kind: "ناجز", requireCourtNumber: true }
+      ? { kind: "ناجز", requireCourtNumber: nextStage === "منظورة" }
       : normalizedStage === "قيد_التدقيق_في_معين"
-      ? { kind: "معين", requireCourtNumber: true }
+      ? { kind: "معين", requireCourtNumber: nextStage === "منظورة" }
       : null;
   const isAtPlatformReview = !!platformReviewInfo;
   const canActOnPlatformReview =
@@ -265,17 +270,13 @@ export function CaseProgressBar({
     const extraFields = platformReviewInfo.requireCourtNumber
       ? { courtCaseNumber: courtCaseNumber.trim() }
       : undefined;
-    // Explicit target per platform — don't let moveToNextStage guess from
-    // the stages array, because the client-side stage resolver has been
-    // unreliable for commercial paths.
-    const target =
-      normalizedStage === "قيد_التدقيق_في_تراضي"
-        ? "مداولة_الصلح"
-        : normalizedStage === "قيد_التدقيق_في_ناجز"
-        ? "منظورة"
-        : normalizedStage === "قيد_التدقيق_في_معين"
-        ? "منظورة"
-        : undefined;
+    // General-dept audit (2026-06-14) — the accept target is the NEXT stage in
+    // the resolved dept stages array (nextStage), passed EXPLICITLY so
+    // moveToNextStage never re-guesses the path. Correct for every department
+    // by construction: General najiz→مداولة_الصلح, Commercial najiz→منظورة /
+    // تراضي→مداولة_الصلح, Admin معين→منظورة. (Was hard-coded to Commercial's
+    // najiz→منظورة semantics, which wrongly skipped General's conciliation.)
+    const target = nextStage;
     onMoveToNext("", undefined, undefined, extraFields, target);
     setCourtCaseNumber("");
   };
