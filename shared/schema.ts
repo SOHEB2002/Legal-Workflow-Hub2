@@ -3876,6 +3876,10 @@ export const insertNotificationSchema = z.object({
   escalatedTo: z.string().nullable().optional(),
 }).passthrough();
 
+// Phase 5 A1/H2 — tightened to the owner-mutable allowlist. title/message/
+// priority (never sent on PATCH by any FE caller) and the identity/routing
+// danger set are intentionally absent; the route also hard-allowlists these
+// same fields before writing, so unknown body keys never reach storage.
 export const updateNotificationSchema = z.object({
   isRead: z.boolean().optional(),
   readAt: z.string().nullable().optional(),
@@ -3883,10 +3887,7 @@ export const updateNotificationSchema = z.object({
   response: z.object({}).passthrough().nullable().optional(),
   escalationLevel: z.number().optional(),
   escalatedTo: z.string().nullable().optional(),
-  title: z.string().optional(),
-  message: z.string().optional(),
-  priority: z.string().optional(),
-}).passthrough();
+});
 
 // POST /api/delegations body — fromUserId is injected from req.user by the
 // route, so the request schema omits it.

@@ -114,6 +114,7 @@ import {
   type TicketComment,
   type ConsultationTypeValue,
   type ContractTypeValue,
+  type Notification,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -7760,13 +7761,35 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/notifications", requireAuth, async (req, res) => {
+  // Phase 5 A1/H2 — the only fields a notification's owner (or an admin) may
+  // mutate via PATCH. Mirrors updateNotificationSchema; deliberately excludes
+  // the identity/routing/content danger set.
+  const NOTIFICATION_UPDATE_ALLOWLIST = [
+    "isRead", "readAt", "status", "response", "escalationLevel", "escalatedTo",
+  ] as const satisfies readonly (keyof Notification)[];
+
+  app.post("/api/notifications", requireAuth, async (req: AuthRequest, res) => {
     try {
       const parsed = insertNotificationSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors });
       }
-      const newNotification = await storage.createNotification(req.body);
+      // Phase 5 A1/H1 — sender identity is ALWAYS derived server-side, never
+      // trusted from the body (anti-impersonation). The sole exception is an
+      // explicit senderId:null, the contract for automatic/system
+      // notifications (event-rule triggers), which stay sender-less. Any
+      // non-null body senderId/senderName is ignored and overwritten with the
+      // authenticated user — closing the spoofing hole while keeping every
+      // legitimate FE send byte-identical (the FE already sends the current
+      // user's own id/name, or null for system notifications).
+      const user = req.user!;
+      const isSystemNotification = req.body.senderId === null;
+      const notificationPayload = {
+        ...req.body,
+        senderId: isSystemNotification ? null : user.id,
+        senderName: isSystemNotification ? null : user.name,
+      };
+      const newNotification = await storage.createNotification(notificationPayload);
       // Real-time push to recipient + admins
       const wsEvent = { type: "notification:new", payload: newNotification };
       if (newNotification.recipientId) {
@@ -7797,7 +7820,17 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
-      const updated = await storage.updateNotification(String(req.params.id), req.body);
+      // Phase 5 A1/H2 — field allowlist. ONLY owner-mutable workflow fields may
+      // be written; the danger set (recipientId / senderId / senderName /
+      // title / message / relatedId / relatedType) is NEVER accepted from the
+      // body — no re-pointing, no identity/content forgery — for EVERY role,
+      // including the admins that skip the ownership check above. Pass the
+      // allowlisted object, never raw req.body.
+      const allowlisted: Partial<Notification> = {};
+      for (const key of NOTIFICATION_UPDATE_ALLOWLIST) {
+        if (req.body[key] !== undefined) allowlisted[key] = req.body[key];
+      }
+      const updated = await storage.updateNotification(String(req.params.id), allowlisted);
       if (!updated) {
         return res.status(404).json({ error: "الإشعار غير موجود" });
       }
