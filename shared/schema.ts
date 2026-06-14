@@ -141,6 +141,17 @@ export const lawCases = pgTable("law_cases", {
   // Phase-7 P7-2 — the cases list (getAllCases + role branches) orders by
   // updatedAt; createdAt above stays for getSidebarCounts' createdAt range.
   updatedAtIdx:        index("law_cases_updated_at_idx").on(t.updatedAt),
+  // Batch M FKs — applied via script/apply-fk-constraints.sql (NOT VALID +
+  // VALIDATE); kept commented so Republish/drizzle-push never emits the
+  // validating ADD CONSTRAINT that timed out the deploy:
+  // clientFk: foreignKey({ name: "law_cases_client_id_fkey",
+  //   columns: [t.clientId], foreignColumns: [clients.id] }).onDelete("restrict"),
+  // departmentFk: foreignKey({ name: "law_cases_department_id_fkey",
+  //   columns: [t.departmentId], foreignColumns: [departments.id] }).onDelete("restrict"),
+  // primaryLawyerFk: foreignKey({ name: "law_cases_primary_lawyer_id_fkey",
+  //   columns: [t.primaryLawyerId], foreignColumns: [users.id] }).onDelete("set null"),
+  // responsibleLawyerFk: foreignKey({ name: "law_cases_responsible_lawyer_id_fkey",
+  //   columns: [t.responsibleLawyerId], foreignColumns: [users.id] }).onDelete("set null"),
 }));
 
 export const consultations = pgTable("consultations", {
@@ -215,6 +226,12 @@ export const consultations = pgTable("consultations", {
   departmentIdx: index("consultations_department_idx").on(t.departmentId),
   assignedIdx:   index("consultations_assigned_idx").on(t.assignedTo),
   createdAtIdx:  index("consultations_created_at_idx").on(t.createdAt),
+  // Batch M FKs — applied via script/apply-fk-constraints.sql (commented;
+  // see law_cases note). created_by is OMITTED (NOT NULL → SET NULL invalid).
+  // departmentFk: foreignKey({ name: "consultations_department_id_fkey",
+  //   columns: [t.departmentId], foreignColumns: [departments.id] }).onDelete("restrict"),
+  // assignedToFk: foreignKey({ name: "consultations_assigned_to_fkey",
+  //   columns: [t.assignedTo], foreignColumns: [users.id] }).onDelete("set null"),
 }));
 
 export const consultationStudies = pgTable("consultation_studies", {
@@ -389,6 +406,11 @@ export const contracts = pgTable("contracts", {
   departmentIdx: index("contracts_department_idx").on(t.departmentId),
   assignedIdx:   index("contracts_assigned_idx").on(t.assignedTo),
   stageIdx:      index("contracts_stage_idx").on(t.currentStage),
+  // Batch M FKs — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
+  // departmentFk: foreignKey({ name: "contracts_department_id_fkey",
+  //   columns: [t.departmentId], foreignColumns: [departments.id] }).onDelete("restrict"),
+  // assignedToFk: foreignKey({ name: "contracts_assigned_to_fkey",
+  //   columns: [t.assignedTo], foreignColumns: [users.id] }).onDelete("set null"),
   statusIdx:     index("contracts_status_idx").on(t.status),
 }));
 
@@ -482,6 +504,9 @@ export const hearings = pgTable("hearings", {
   caseIdx: index("hearings_case_idx").on(t.caseId),
   // Phase-7 P7-2 — getAllHearings/getHearingsByCase order by (hearingDate, hearingTime).
   hearingDateIdx: index("hearings_hearing_date_idx").on(t.hearingDate, t.hearingTime),
+  // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
+  // caseFk: foreignKey({ name: "hearings_case_id_fkey",
+  //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
 export const fieldTasks = pgTable("field_tasks", {
@@ -505,6 +530,9 @@ export const fieldTasks = pgTable("field_tasks", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("field_tasks_case_idx").on(t.caseId),
+  // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
+  // caseFk: foreignKey({ name: "field_tasks_case_id_fkey",
+  //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
 export const contactLogs = pgTable("contact_logs", {
@@ -556,6 +584,9 @@ export const notifications = pgTable("notifications", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   recipientIdx: index("notifications_recipient_idx").on(t.recipientId),
+  // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
+  // recipientFk: foreignKey({ name: "notifications_recipient_id_fkey",
+  //   columns: [t.recipientId], foreignColumns: [users.id] }).onDelete("cascade"),
   // Phase-7 P7-2 — getRecentNotifications(200) orders by createdAt DESC.
   createdAtIdx: index("notifications_created_at_idx").on(t.createdAt),
 }));
@@ -647,6 +678,9 @@ export const memos = pgTable("memos", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("memos_case_idx").on(t.caseId),
+  // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
+  // caseFk: foreignKey({ name: "memos_case_id_fkey",
+  //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
   // Phase-7 P7-2 — getAllMemos orders by deadline.
   deadlineIdx: index("memos_deadline_idx").on(t.deadline),
 }));
@@ -761,6 +795,9 @@ export const caseNotes = pgTable("case_notes", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("case_notes_case_idx").on(t.caseId),
+  // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
+  // caseFk: foreignKey({ name: "case_notes_case_id_fkey",
+  //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
 export const caseComments = pgTable("case_comments", {
@@ -773,6 +810,10 @@ export const caseComments = pgTable("case_comments", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("case_comments_case_idx").on(t.caseId),
+  // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note).
+  // CASCADE here ALSO closes the deleteCase gap (it doesn't delete case_comments today):
+  // caseFk: foreignKey({ name: "case_comments_case_id_fkey",
+  //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
 export const legalDeadlines = pgTable("legal_deadlines", {
@@ -794,6 +835,9 @@ export const legalDeadlines = pgTable("legal_deadlines", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("legal_deadlines_case_idx").on(t.caseId),
+  // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
+  // caseFk: foreignKey({ name: "legal_deadlines_case_id_fkey",
+  //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
 export const delegationsTable = pgTable("delegations_table", {
@@ -810,7 +854,14 @@ export const delegationsTable = pgTable("delegations_table", {
   approvedBy: varchar("approved_by", { length: 255 }),
   approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  // Batch M FKs — applied via script/apply-fk-constraints.sql (commented; see law_cases note).
+  // Both mirror deleteUser, which deletes a user's delegations on delete:
+  // fromUserFk: foreignKey({ name: "delegations_table_from_user_id_fkey",
+  //   columns: [t.fromUserId], foreignColumns: [users.id] }).onDelete("cascade"),
+  // toUserFk: foreignKey({ name: "delegations_table_to_user_id_fkey",
+  //   columns: [t.toUserId], foreignColumns: [users.id] }).onDelete("cascade"),
+}));
 
 export const savedFilters = pgTable("saved_filters", {
   id: varchar("id", { length: 255 }).primaryKey(),
