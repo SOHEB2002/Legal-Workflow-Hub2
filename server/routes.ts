@@ -124,6 +124,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { sendToUser, broadcastToAdmins } from "./websocket";
+import { invalidateUserCache } from "./index";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
 
 // Contract attachments live in Replit Object Storage now — the
@@ -1075,6 +1076,13 @@ export async function registerRoutes(
       const updated = await storage.updateUser(String(req.params.id), validatedData);
       if (!updated) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
+      }
+      // Phase 5 A2/L2 — on deactivation, drop the cached active-status so the
+      // user loses authorization on their very next request instead of up to
+      // 30s later (the activeUserCache TTL). Only fires when isActive is
+      // explicitly set to false; password/reset logic above is untouched.
+      if (validatedData.isActive === false) {
+        invalidateUserCache(String(req.params.id));
       }
       res.json(sanitizeUser(updated));
     } catch (error) {
