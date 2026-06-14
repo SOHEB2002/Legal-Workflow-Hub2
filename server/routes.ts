@@ -736,8 +736,15 @@ function validateStageTransition(
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
-      if (isHeadOrManager) return { allowed: true };
+      // Phase 5 B/M4 — dept_head scoped to the parent case's dept (threaded
+      // onto entityData.departmentId by the memo handlers, since memos carry
+      // no departmentId); branch_manager global. Mirrors contract rollback.
+      const isBranchManager = userRole === "branch_manager";
+      const isOwnDeptHead =
+        userRole === "department_head"
+        && !!user?.departmentId
+        && entityData.departmentId === user.departmentId;
+      if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
         return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
@@ -3480,6 +3487,13 @@ export async function registerRoutes(
       if (consultation.status !== "active") {
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
       }
+      // Phase 5 B/M4 — department_head can only convert consultations in their
+      // OWN department; branch_manager / admin_support stay global. The FE only
+      // surfaces own-dept consultations to a dept_head (canModifyConsultation
+      // scopes them), so legitimate use is unaffected.
+      if (reqUser.role === "department_head" && consultation.departmentId !== reqUser.departmentId) {
+        return res.status(403).json({ error: "لا يمكنك تحويل استشارة من قسم آخر" });
+      }
       // COMPLETED is PHONE/PROCEDURAL-only now (WRITTEN no longer passes
       // through it — it closes READY → CLOSED_FINAL). Guard is inert for
       // WRITTEN; still blocks PHONE/PROCEDURAL at COMPLETED. Storage
@@ -5907,13 +5921,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
       }
 
+      // Phase 5 B/M4 — memos carry no departmentId; resolve the parent case's
+      // department and thread it onto entityData so the rollback dept-scope
+      // (department_head → own dept only) works, mirroring the case/contract
+      // idiom. Harmless for forward transitions (departmentId unused there).
+      const memoParentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
       const check = validateStageTransition(
         memo.currentStage,
         targetStage,
         reqUser.role,
         "memo",
         reqUser,
-        memo,
+        { ...memo, departmentId: memoParentCase?.departmentId ?? null },
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -6005,13 +6024,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
       }
 
+      // Phase 5 B/M4 — memos carry no departmentId; resolve the parent case's
+      // department and thread it onto entityData so the rollback dept-scope
+      // (department_head → own dept only) works, mirroring the case/contract
+      // idiom. Harmless for forward transitions (departmentId unused there).
+      const memoParentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
       const check = validateStageTransition(
         memo.currentStage,
         targetStage,
         reqUser.role,
         "memo",
         reqUser,
-        memo,
+        { ...memo, departmentId: memoParentCase?.departmentId ?? null },
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
