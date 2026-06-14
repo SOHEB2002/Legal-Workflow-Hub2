@@ -261,9 +261,12 @@ function canDoInternalReview(
   if (consultation.status !== "active") return false;
   if (consultation.currentStage !== ConsultationStage.INTERNAL_REVIEW) return false;
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return false;
+  // Phase 5 B/M1 (four-eyes) — the assigned (answering) lawyer cannot clear
+  // their own consultation's internal review; a different reviewer must.
+  // Mirrors the server gate on POST /api/consultations/:id/internal-review.
+  if (consultation.assignedTo && consultation.assignedTo === userId) return false;
   const baseRoles = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
-  if (baseRoles.includes(userRole)) return true;
-  return !!consultation.assignedTo && consultation.assignedTo === userId;
+  return baseRoles.includes(userRole);
 }
 
 // Mirrors the role gate on POST /api/consultations/:id/committee-decision.

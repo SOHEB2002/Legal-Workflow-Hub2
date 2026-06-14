@@ -232,7 +232,16 @@ function canModifyConsultation(user: { id: string; role: string; departmentId: s
 }
 
 function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
-  if (["branch_manager", "admin_support", "department_head", "viewer"].includes(user.role)) return true;
+  // Phase 5 B/M4 — department_head removed so the server mirrors the FE
+  // hearing-action contract (hearings.tsx canActOnHearing = attending lawyer /
+  // branch_manager / admin_support). The UI never surfaces a hearing action to
+  // a dept_head, so the earlier global dept_head grant was UI-dead and only
+  // reachable via direct API. viewer is kept per the codebase's
+  // viewer-in-can*-helpers convention; it is inert here — the viewerWriteGuard
+  // 403s every viewer write before the handler, and result/report/close are
+  // the only (write) call sites. Effective write-actors: attending lawyer /
+  // branch_manager / admin_support.
+  if (["branch_manager", "admin_support", "viewer"].includes(user.role)) return true;
   if (hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
   return false;
 }
@@ -665,9 +674,18 @@ function validateStageTransition(
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       // This is a rollback
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+      // Phase 5 B/M4 — dept_head rollback is scoped to their OWN department
+      // (mirrors the contract rollback idiom below); branch_manager stays
+      // global. The FE already only surfaces other-dept cases to
+      // branch_manager (canViewCase scopes dept_head to own dept), so this
+      // enforces server-side what the UI already constrains.
+      const isBranchManager = userRole === "branch_manager";
+      const isOwnDeptHead =
+        userRole === "department_head"
+        && !!user?.departmentId
+        && entityData.departmentId === user.departmentId;
 
-      if (isHeadOrManager) {
+      if (isBranchManager || isOwnDeptHead) {
         return { allowed: true }; // can go back to ANY previous stage
       }
       if (isInternalReviewer && targetIdx === currentIdx - 1) {
@@ -703,8 +721,14 @@ function validateStageTransition(
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
-      if (isHeadOrManager) return { allowed: true };
+      // Phase 5 B/M4 — dept_head scoped to own dept (mirrors contract rollback);
+      // branch_manager global. consultation entityData carries departmentId.
+      const isBranchManager = userRole === "branch_manager";
+      const isOwnDeptHead =
+        userRole === "department_head"
+        && !!user?.departmentId
+        && entityData.departmentId === user.departmentId;
+      if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
         return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
@@ -721,8 +745,15 @@ function validateStageTransition(
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
-      if (isHeadOrManager) return { allowed: true };
+      // Phase 5 B/M4 — dept_head scoped to the parent case's dept (threaded
+      // onto entityData.departmentId by the memo handlers, since memos carry
+      // no departmentId); branch_manager global. Mirrors contract rollback.
+      const isBranchManager = userRole === "branch_manager";
+      const isOwnDeptHead =
+        userRole === "department_head"
+        && !!user?.departmentId
+        && entityData.departmentId === user.departmentId;
+      if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
         return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
@@ -2456,10 +2487,22 @@ export async function registerRoutes(
         }
       }
 
-      // Cascade lawyer assignment to pending hearings and active memos
-      if (req.body.primaryLawyerId && req.body.primaryLawyerId !== existing.primaryLawyerId) {
+      // Cascade lawyer assignment to pending hearings and active memos.
+      // Phase 5 B/L4 — the cascade now keys off the EFFECTIVE lawyer
+      // (primaryLawyerId || responsibleLawyerId || "", the canonical
+      // resolution) instead of primaryLawyerId alone, so assigning a case by
+      // responsibleLawyerId only (no primary) also re-points its memos/hearings.
+      // For the primary-set path this is byte-identical to the old behavior
+      // (primary takes precedence); it only ADDS firing for the
+      // responsibleLawyerId-is-effective case. Fires only when the effective
+      // lawyer actually changes to a non-empty value.
+      const newPrimaryLawyerId = req.body.primaryLawyerId !== undefined ? req.body.primaryLawyerId : existing.primaryLawyerId;
+      const newResponsibleLawyerId = req.body.responsibleLawyerId !== undefined ? req.body.responsibleLawyerId : existing.responsibleLawyerId;
+      const oldEffectiveLawyerId = existing.primaryLawyerId || existing.responsibleLawyerId || "";
+      const newEffectiveLawyerId = newPrimaryLawyerId || newResponsibleLawyerId || "";
+      if (newEffectiveLawyerId && newEffectiveLawyerId !== oldEffectiveLawyerId) {
         const caseId = String(req.params.id);
-        const newLawyerId = req.body.primaryLawyerId;
+        const newLawyerId = newEffectiveLawyerId;
         try {
           const caseHearings = await storage.getHearingsByCase(caseId);
           for (const h of caseHearings) {
@@ -3033,9 +3076,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة المراجعة الداخلية" });
       }
 
+      // Phase 5 B/M1 (four-eyes) — the assigned (answering) lawyer cannot clear
+      // their OWN consultation's internal review, even though their role
+      // (employee) is in baseAllowed. A different reviewer — another employee,
+      // dept_head, review head, or branch_manager — must do it.
+      // internalReviewerId can't gate this: on consultations it's a
+      // committee-referral field, still null at the internal-review stage.
+      if (isAssignedLawyer(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا يمكن للمحامي المسند إليه اعتماد المراجعة الداخلية لاستشارته؛ يجب أن يقوم بها مراجع آخر" });
+      }
       const baseAllowed = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      if (!baseAllowed.includes(reqUser.role) && !isLawyer) {
+      if (!baseAllowed.includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
       }
 
@@ -3444,6 +3495,13 @@ export async function registerRoutes(
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
       if (consultation.status !== "active") {
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      // Phase 5 B/M4 — department_head can only convert consultations in their
+      // OWN department; branch_manager / admin_support stay global. The FE only
+      // surfaces own-dept consultations to a dept_head (canModifyConsultation
+      // scopes them), so legitimate use is unaffected.
+      if (reqUser.role === "department_head" && consultation.departmentId !== reqUser.departmentId) {
+        return res.status(403).json({ error: "لا يمكنك تحويل استشارة من قسم آخر" });
       }
       // COMPLETED is PHONE/PROCEDURAL-only now (WRITTEN no longer passes
       // through it — it closes READY → CLOSED_FINAL). Guard is inert for
@@ -5872,13 +5930,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
       }
 
+      // Phase 5 B/M4 — memos carry no departmentId; resolve the parent case's
+      // department and thread it onto entityData so the rollback dept-scope
+      // (department_head → own dept only) works, mirroring the case/contract
+      // idiom. Harmless for forward transitions (departmentId unused there).
+      const memoParentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
       const check = validateStageTransition(
         memo.currentStage,
         targetStage,
         reqUser.role,
         "memo",
         reqUser,
-        memo,
+        { ...memo, departmentId: memoParentCase?.departmentId ?? null },
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -5970,13 +6033,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة لم تدخل في مسار المراجعة بعد" });
       }
 
+      // Phase 5 B/M4 — memos carry no departmentId; resolve the parent case's
+      // department and thread it onto entityData so the rollback dept-scope
+      // (department_head → own dept only) works, mirroring the case/contract
+      // idiom. Harmless for forward transitions (departmentId unused there).
+      const memoParentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
       const check = validateStageTransition(
         memo.currentStage,
         targetStage,
         reqUser.role,
         "memo",
         reqUser,
-        memo,
+        { ...memo, departmentId: memoParentCase?.departmentId ?? null },
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
