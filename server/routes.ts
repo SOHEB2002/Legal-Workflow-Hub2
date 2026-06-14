@@ -8707,7 +8707,19 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
-      const delegation = await storage.updateDelegation(String(req.params.id), req.body);
+      // Phase 5 A2/H3 — status may ONLY be set to "ملغي" (cancel) via PATCH.
+      // Activation ("نشط") and every other status value flow EXCLUSIVELY
+      // through the role-gated /api/delegations/:id/approve route — this closes
+      // the self-activation bypass where a delegation's own creator PATCHed
+      // status:"نشط" to approve their own delegation. The sole legitimate FE
+      // PATCH (delegations.tsx cancel) sends status:"ملغي", so it still passes.
+      if (req.body.status !== undefined && req.body.status !== "ملغي") {
+        return res.status(403).json({ error: "لا يمكن تفعيل التفويض عبر هذا المسار؛ الاعتماد يتم عبر مسار الاعتماد المخصص فقط" });
+      }
+      // approvedBy/approvedAt are stamped only by the /approve route, never
+      // from the request body (destructure-omit, mirrors sanitizeUser).
+      const { approvedBy, approvedAt, ...delegationUpdate } = req.body;
+      const delegation = await storage.updateDelegation(String(req.params.id), delegationUpdate);
       if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
       res.json(delegation);
     } catch (error) {
