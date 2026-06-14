@@ -6333,6 +6333,14 @@ export async function registerRoutes(
       if (validatedData.caseId && validatedData.caseId !== "none") {
         const relatedCase = await storage.getCaseById(validatedData.caseId);
         if (relatedCase) {
+          // Phase 5 A2/M3 — creating a hearing auto-advances the parent case's
+          // stage, so it must be gated to someone who can modify that case
+          // (was requireAuth-only: any user could drive another dept's case
+          // forward). Hearings are always added from a case the user has open,
+          // so legitimate creation passes.
+          if (!canModifyCase(req.user!, relatedCase)) {
+            return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+          }
           if (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived) {
             return res.status(400).json({ error: "لا يمكن إضافة جلسات لقضية مغلقة أو مؤرشفة" });
           }
@@ -7281,13 +7289,33 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/field-tasks/:id", requireAuth, async (req, res) => {
+  app.patch("/api/field-tasks/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       // Validate assignedTo user is active if being changed
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
       const bodyCheck = updateFieldTaskSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      // Phase 5 A2/M2 — was requireAuth-only (any user could mutate any task).
+      // Permitted editors: the assignee (who legitimately starts/completes/
+      // cancels their own task — they may not be on the parent case, so the
+      // assignee check must come first), OR anyone who can modify the task's
+      // parent case/consultation (overseers + admins via canModify*). A random
+      // unrelated user now gets 403.
+      const user = req.user!;
+      const existingTask = await storage.getFieldTaskById(String(req.params.id));
+      if (!existingTask) return res.status(404).json({ error: "المهمة غير موجودة" });
+      let canModifyParent = false;
+      if (existingTask.caseId) {
+        const parentCase = await storage.getCaseById(existingTask.caseId);
+        canModifyParent = !!parentCase && canModifyCase(user, parentCase);
+      } else if (existingTask.consultationId) {
+        const parentConsultation = await storage.getConsultationById(existingTask.consultationId);
+        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation);
+      }
+      if (existingTask.assignedTo !== user.id && !canModifyParent) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       if (req.body.assignedTo) {
         const { valid } = await validateAssignedUsersActive([req.body.assignedTo]);
@@ -8525,6 +8553,17 @@ export async function registerRoutes(
   app.post("/api/legal-deadlines", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validated = insertLegalDeadlineSchema.parse(req.body);
+      // Phase 5 A2/M2 — a deadline may only be attached to a case the user can
+      // modify (was requireAuth-only: any user could attach a deadline to any
+      // case). The FE only ever POSTs from the case-detail view of a case the
+      // user already has open, so every legitimate caller passes.
+      const user = req.user!;
+      if (validated.caseId) {
+        const targetCase = await storage.getCaseById(validated.caseId);
+        if (targetCase && !canModifyCase(user, targetCase)) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+      }
       const deadline = await storage.createLegalDeadline(validated);
       if (validated.caseId) {
         const user = req.user!;
@@ -8552,6 +8591,17 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
+      // Phase 5 A2/M2 — only someone who can modify the parent case may edit
+      // its deadlines (was requireAuth-only IDOR).
+      const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
+      if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
+      const user = req.user!;
+      if (existingDeadline.caseId) {
+        const targetCase = await storage.getCaseById(existingDeadline.caseId);
+        if (targetCase && !canModifyCase(user, targetCase)) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+      }
       const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
       if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
       res.json(deadline);
@@ -8562,6 +8612,18 @@ export async function registerRoutes(
 
   app.delete("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
+      // Phase 5 A2/M2 — only someone who can modify the parent case may delete
+      // its deadlines (was requireAuth-only IDOR; deletes also previously
+      // returned success even for a non-existent id).
+      const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
+      if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
+      const user = req.user!;
+      if (existingDeadline.caseId) {
+        const targetCase = await storage.getCaseById(existingDeadline.caseId);
+        if (targetCase && !canModifyCase(user, targetCase)) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+      }
       await storage.deleteLegalDeadline(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
