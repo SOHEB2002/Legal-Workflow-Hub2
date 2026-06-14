@@ -166,6 +166,7 @@ export interface IStorage {
   // Legal Deadlines
   getAllLegalDeadlines(): Promise<LegalDeadline[]>;
   getLegalDeadlinesByCase(caseId: string): Promise<LegalDeadline[]>;
+  getLegalDeadlineById(id: string): Promise<LegalDeadline | undefined>;
   createLegalDeadline(data: InsertLegalDeadline): Promise<LegalDeadline>;
   updateLegalDeadline(id: string, data: Partial<LegalDeadline>): Promise<LegalDeadline | undefined>;
   deleteLegalDeadline(id: string): Promise<boolean>;
@@ -3738,6 +3739,12 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(legalDeadlines)
       .where(eq(legalDeadlines.caseId, caseId))
       .orderBy(legalDeadlines.deadlineDate);
+  }
+
+  async getLegalDeadlineById(id: string): Promise<LegalDeadline | undefined> {
+    const [deadline] = await db.select().from(legalDeadlines)
+      .where(eq(legalDeadlines.id, id));
+    return deadline;
   }
 
   async createLegalDeadline(data: InsertLegalDeadline): Promise<LegalDeadline> {

@@ -114,6 +114,7 @@ import {
   type TicketComment,
   type ConsultationTypeValue,
   type ContractTypeValue,
+  type Notification,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -123,6 +124,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { sendToUser, broadcastToAdmins } from "./websocket";
+import { invalidateUserCache } from "./index";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
 
 // Contract attachments live in Replit Object Storage now — the
@@ -1075,6 +1077,13 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "المستخدم غير موجود" });
       }
+      // Phase 5 A2/L2 — on deactivation, drop the cached active-status so the
+      // user loses authorization on their very next request instead of up to
+      // 30s later (the activeUserCache TTL). Only fires when isActive is
+      // explicitly set to false; password/reset logic above is untouched.
+      if (validatedData.isActive === false) {
+        invalidateUserCache(String(req.params.id));
+      }
       res.json(sanitizeUser(updated));
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1313,7 +1322,10 @@ export async function registerRoutes(
       // Carry clientRole forward explicitly — earlier the field wasn't in the
       // schema, so parse() stripped it and the case was inserted with null.
       validatedData.clientRole = validatedData.clientRole ?? req.body.clientRole ?? null;
-      const createdBy = req.body.createdBy || "unknown";
+      // Phase 5 A2/L3 — createdBy is the actor; derive from req.user, never the
+      // body (was req.body.createdBy, client-forgeable). The FE already sends
+      // its own user.id here, so the stored value is unchanged.
+      const createdBy = user.id;
       const newCase = await storage.createCase(validatedData as Partial<LawCase>, createdBy);
 
       // IN_COURT cases may begin at مداولة_الصلح instead of the default استلام.
@@ -2541,10 +2553,12 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/clients", requireAuth, async (req, res) => {
+  app.post("/api/clients", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertClientSchema.parse(req.body);
-      const createdBy = req.body.createdBy || "unknown";
+      // Phase 5 A2/L3 — createdBy is the actor; derive from req.user, never the
+      // body. The FE already sends user.id, so the stored value is unchanged.
+      const createdBy = req.user!.id;
       const newClient = await storage.createClient(validatedData, createdBy);
       res.status(201).json(newClient);
     } catch (error) {
@@ -6332,6 +6346,14 @@ export async function registerRoutes(
       if (validatedData.caseId && validatedData.caseId !== "none") {
         const relatedCase = await storage.getCaseById(validatedData.caseId);
         if (relatedCase) {
+          // Phase 5 A2/M3 — creating a hearing auto-advances the parent case's
+          // stage, so it must be gated to someone who can modify that case
+          // (was requireAuth-only: any user could drive another dept's case
+          // forward). Hearings are always added from a case the user has open,
+          // so legitimate creation passes.
+          if (!canModifyCase(req.user!, relatedCase)) {
+            return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+          }
           if (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived) {
             return res.status(400).json({ error: "لا يمكن إضافة جلسات لقضية مغلقة أو مؤرشفة" });
           }
@@ -7257,7 +7279,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/field-tasks", requireAuth, async (req, res) => {
+  app.post("/api/field-tasks", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertFieldTaskSchema.parse(req.body);
 
@@ -7269,7 +7291,10 @@ export async function registerRoutes(
         }
       }
 
-      const assignedBy = req.body.assignedBy || "unknown";
+      // Phase 5 A2/L3 — assignedBy is the actor (who assigned the task); derive
+      // from req.user, never the body. The FE already sends user.id, so the
+      // stored value is unchanged.
+      const assignedBy = req.user!.id;
       const newTask = await storage.createFieldTask(validatedData, assignedBy);
       res.status(201).json(newTask);
     } catch (error) {
@@ -7280,13 +7305,33 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/field-tasks/:id", requireAuth, async (req, res) => {
+  app.patch("/api/field-tasks/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       // Validate assignedTo user is active if being changed
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
       const bodyCheck = updateFieldTaskSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      // Phase 5 A2/M2 — was requireAuth-only (any user could mutate any task).
+      // Permitted editors: the assignee (who legitimately starts/completes/
+      // cancels their own task — they may not be on the parent case, so the
+      // assignee check must come first), OR anyone who can modify the task's
+      // parent case/consultation (overseers + admins via canModify*). A random
+      // unrelated user now gets 403.
+      const user = req.user!;
+      const existingTask = await storage.getFieldTaskById(String(req.params.id));
+      if (!existingTask) return res.status(404).json({ error: "المهمة غير موجودة" });
+      let canModifyParent = false;
+      if (existingTask.caseId) {
+        const parentCase = await storage.getCaseById(existingTask.caseId);
+        canModifyParent = !!parentCase && canModifyCase(user, parentCase);
+      } else if (existingTask.consultationId) {
+        const parentConsultation = await storage.getConsultationById(existingTask.consultationId);
+        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation);
+      }
+      if (existingTask.assignedTo !== user.id && !canModifyParent) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       if (req.body.assignedTo) {
         const { valid } = await validateAssignedUsersActive([req.body.assignedTo]);
@@ -7760,13 +7805,35 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/notifications", requireAuth, async (req, res) => {
+  // Phase 5 A1/H2 — the only fields a notification's owner (or an admin) may
+  // mutate via PATCH. Mirrors updateNotificationSchema; deliberately excludes
+  // the identity/routing/content danger set.
+  const NOTIFICATION_UPDATE_ALLOWLIST = [
+    "isRead", "readAt", "status", "response", "escalationLevel", "escalatedTo",
+  ] as const satisfies readonly (keyof Notification)[];
+
+  app.post("/api/notifications", requireAuth, async (req: AuthRequest, res) => {
     try {
       const parsed = insertNotificationSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors });
       }
-      const newNotification = await storage.createNotification(req.body);
+      // Phase 5 A1/H1 — sender identity is ALWAYS derived server-side, never
+      // trusted from the body (anti-impersonation). The sole exception is an
+      // explicit senderId:null, the contract for automatic/system
+      // notifications (event-rule triggers), which stay sender-less. Any
+      // non-null body senderId/senderName is ignored and overwritten with the
+      // authenticated user — closing the spoofing hole while keeping every
+      // legitimate FE send byte-identical (the FE already sends the current
+      // user's own id/name, or null for system notifications).
+      const user = req.user!;
+      const isSystemNotification = req.body.senderId === null;
+      const notificationPayload = {
+        ...req.body,
+        senderId: isSystemNotification ? null : user.id,
+        senderName: isSystemNotification ? null : user.name,
+      };
+      const newNotification = await storage.createNotification(notificationPayload);
       // Real-time push to recipient + admins
       const wsEvent = { type: "notification:new", payload: newNotification };
       if (newNotification.recipientId) {
@@ -7797,7 +7864,17 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
-      const updated = await storage.updateNotification(String(req.params.id), req.body);
+      // Phase 5 A1/H2 — field allowlist. ONLY owner-mutable workflow fields may
+      // be written; the danger set (recipientId / senderId / senderName /
+      // title / message / relatedId / relatedType) is NEVER accepted from the
+      // body — no re-pointing, no identity/content forgery — for EVERY role,
+      // including the admins that skip the ownership check above. Pass the
+      // allowlisted object, never raw req.body.
+      const allowlisted: Partial<Notification> = {};
+      for (const key of NOTIFICATION_UPDATE_ALLOWLIST) {
+        if (req.body[key] !== undefined) allowlisted[key] = req.body[key];
+      }
+      const updated = await storage.updateNotification(String(req.params.id), allowlisted);
       if (!updated) {
         return res.status(404).json({ error: "الإشعار غير موجود" });
       }
@@ -8492,6 +8569,17 @@ export async function registerRoutes(
   app.post("/api/legal-deadlines", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validated = insertLegalDeadlineSchema.parse(req.body);
+      // Phase 5 A2/M2 — a deadline may only be attached to a case the user can
+      // modify (was requireAuth-only: any user could attach a deadline to any
+      // case). The FE only ever POSTs from the case-detail view of a case the
+      // user already has open, so every legitimate caller passes.
+      const user = req.user!;
+      if (validated.caseId) {
+        const targetCase = await storage.getCaseById(validated.caseId);
+        if (targetCase && !canModifyCase(user, targetCase)) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+      }
       const deadline = await storage.createLegalDeadline(validated);
       if (validated.caseId) {
         const user = req.user!;
@@ -8519,6 +8607,17 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
+      // Phase 5 A2/M2 — only someone who can modify the parent case may edit
+      // its deadlines (was requireAuth-only IDOR).
+      const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
+      if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
+      const user = req.user!;
+      if (existingDeadline.caseId) {
+        const targetCase = await storage.getCaseById(existingDeadline.caseId);
+        if (targetCase && !canModifyCase(user, targetCase)) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+      }
       const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
       if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
       res.json(deadline);
@@ -8529,6 +8628,18 @@ export async function registerRoutes(
 
   app.delete("/api/legal-deadlines/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
+      // Phase 5 A2/M2 — only someone who can modify the parent case may delete
+      // its deadlines (was requireAuth-only IDOR; deletes also previously
+      // returned success even for a non-existent id).
+      const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
+      if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
+      const user = req.user!;
+      if (existingDeadline.caseId) {
+        const targetCase = await storage.getCaseById(existingDeadline.caseId);
+        if (targetCase && !canModifyCase(user, targetCase)) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+      }
       await storage.deleteLegalDeadline(String(req.params.id));
       res.json({ success: true });
     } catch (error) {
@@ -8596,7 +8707,19 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
-      const delegation = await storage.updateDelegation(String(req.params.id), req.body);
+      // Phase 5 A2/H3 — status may ONLY be set to "ملغي" (cancel) via PATCH.
+      // Activation ("نشط") and every other status value flow EXCLUSIVELY
+      // through the role-gated /api/delegations/:id/approve route — this closes
+      // the self-activation bypass where a delegation's own creator PATCHed
+      // status:"نشط" to approve their own delegation. The sole legitimate FE
+      // PATCH (delegations.tsx cancel) sends status:"ملغي", so it still passes.
+      if (req.body.status !== undefined && req.body.status !== "ملغي") {
+        return res.status(403).json({ error: "لا يمكن تفعيل التفويض عبر هذا المسار؛ الاعتماد يتم عبر مسار الاعتماد المخصص فقط" });
+      }
+      // approvedBy/approvedAt are stamped only by the /approve route, never
+      // from the request body (destructure-omit, mirrors sanitizeUser).
+      const { approvedBy, approvedAt, ...delegationUpdate } = req.body;
+      const delegation = await storage.updateDelegation(String(req.params.id), delegationUpdate);
       if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
       res.json(delegation);
     } catch (error) {

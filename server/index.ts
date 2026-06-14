@@ -59,6 +59,14 @@ app.use(
 const activeUserCache = new Map<string, { isActive: boolean; ts: number }>();
 const USER_CACHE_TTL_MS = 30_000;
 
+// Phase 5 A2/L2 — drop a user's cached active-status so the next request
+// re-reads it from the DB. Called from the user-deactivation path so a
+// disabled account loses authorization immediately instead of up to
+// USER_CACHE_TTL_MS (30s) later.
+export function invalidateUserCache(userId: string): void {
+  activeUserCache.delete(userId);
+}
+
 
 declare module "http" {
   interface IncomingMessage {

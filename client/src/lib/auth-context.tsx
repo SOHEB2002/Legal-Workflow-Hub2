@@ -53,11 +53,11 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 async function fetchUsersFromAPI(): Promise<User[]> {
   try {
-    const res = await fetch("/api/users", {
-      headers: getAuthHeaders(),
-      credentials: "include",
-    });
-    if (!res.ok) return [];
+    // Phase 5 A2/L5 — route through apiRequest so this read shares the
+    // single-flight refreshAuthToken / 401-retry path instead of a raw fetch
+    // that silently returned [] on an expired token. No data/authz change
+    // (the server already sanitizes /api/users via sanitizeUser).
+    const res = await apiRequest("GET", "/api/users");
     return await res.json();
   } catch (error) {
     console.error("Error fetching users:", error);
