@@ -3060,9 +3060,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة المراجعة الداخلية" });
       }
 
+      // Phase 5 B/M1 (four-eyes) — the assigned (answering) lawyer cannot clear
+      // their OWN consultation's internal review, even though their role
+      // (employee) is in baseAllowed. A different reviewer — another employee,
+      // dept_head, review head, or branch_manager — must do it.
+      // internalReviewerId can't gate this: on consultations it's a
+      // committee-referral field, still null at the internal-review stage.
+      if (isAssignedLawyer(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا يمكن للمحامي المسند إليه اعتماد المراجعة الداخلية لاستشارته؛ يجب أن يقوم بها مراجع آخر" });
+      }
       const baseAllowed = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      if (!baseAllowed.includes(reqUser.role) && !isLawyer) {
+      if (!baseAllowed.includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
       }
 
