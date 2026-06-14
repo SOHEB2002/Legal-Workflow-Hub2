@@ -1322,7 +1322,10 @@ export async function registerRoutes(
       // Carry clientRole forward explicitly — earlier the field wasn't in the
       // schema, so parse() stripped it and the case was inserted with null.
       validatedData.clientRole = validatedData.clientRole ?? req.body.clientRole ?? null;
-      const createdBy = req.body.createdBy || "unknown";
+      // Phase 5 A2/L3 — createdBy is the actor; derive from req.user, never the
+      // body (was req.body.createdBy, client-forgeable). The FE already sends
+      // its own user.id here, so the stored value is unchanged.
+      const createdBy = user.id;
       const newCase = await storage.createCase(validatedData as Partial<LawCase>, createdBy);
 
       // IN_COURT cases may begin at مداولة_الصلح instead of the default استلام.
@@ -2550,10 +2553,12 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/clients", requireAuth, async (req, res) => {
+  app.post("/api/clients", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertClientSchema.parse(req.body);
-      const createdBy = req.body.createdBy || "unknown";
+      // Phase 5 A2/L3 — createdBy is the actor; derive from req.user, never the
+      // body. The FE already sends user.id, so the stored value is unchanged.
+      const createdBy = req.user!.id;
       const newClient = await storage.createClient(validatedData, createdBy);
       res.status(201).json(newClient);
     } catch (error) {
@@ -7274,7 +7279,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/field-tasks", requireAuth, async (req, res) => {
+  app.post("/api/field-tasks", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertFieldTaskSchema.parse(req.body);
 
@@ -7286,7 +7291,10 @@ export async function registerRoutes(
         }
       }
 
-      const assignedBy = req.body.assignedBy || "unknown";
+      // Phase 5 A2/L3 — assignedBy is the actor (who assigned the task); derive
+      // from req.user, never the body. The FE already sends user.id, so the
+      // stored value is unchanged.
+      const assignedBy = req.user!.id;
       const newTask = await storage.createFieldTask(validatedData, assignedBy);
       res.status(201).json(newTask);
     } catch (error) {
