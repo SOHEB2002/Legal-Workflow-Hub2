@@ -232,7 +232,16 @@ function canModifyConsultation(user: { id: string; role: string; departmentId: s
 }
 
 function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
-  if (["branch_manager", "admin_support", "department_head", "viewer"].includes(user.role)) return true;
+  // Phase 5 B/M4 — department_head removed so the server mirrors the FE
+  // hearing-action contract (hearings.tsx canActOnHearing = attending lawyer /
+  // branch_manager / admin_support). The UI never surfaces a hearing action to
+  // a dept_head, so the earlier global dept_head grant was UI-dead and only
+  // reachable via direct API. viewer is kept per the codebase's
+  // viewer-in-can*-helpers convention; it is inert here — the viewerWriteGuard
+  // 403s every viewer write before the handler, and result/report/close are
+  // the only (write) call sites. Effective write-actors: attending lawyer /
+  // branch_manager / admin_support.
+  if (["branch_manager", "admin_support", "viewer"].includes(user.role)) return true;
   if (hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
   return false;
 }
