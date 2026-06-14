@@ -665,9 +665,18 @@ function validateStageTransition(
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       // This is a rollback
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
+      // Phase 5 B/M4 — dept_head rollback is scoped to their OWN department
+      // (mirrors the contract rollback idiom below); branch_manager stays
+      // global. The FE already only surfaces other-dept cases to
+      // branch_manager (canViewCase scopes dept_head to own dept), so this
+      // enforces server-side what the UI already constrains.
+      const isBranchManager = userRole === "branch_manager";
+      const isOwnDeptHead =
+        userRole === "department_head"
+        && !!user?.departmentId
+        && entityData.departmentId === user.departmentId;
 
-      if (isHeadOrManager) {
+      if (isBranchManager || isOwnDeptHead) {
         return { allowed: true }; // can go back to ANY previous stage
       }
       if (isInternalReviewer && targetIdx === currentIdx - 1) {
@@ -703,8 +712,14 @@ function validateStageTransition(
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isHeadOrManager = effectiveRoles.includes("department_head") || effectiveRoles.includes("branch_manager");
-      if (isHeadOrManager) return { allowed: true };
+      // Phase 5 B/M4 — dept_head scoped to own dept (mirrors contract rollback);
+      // branch_manager global. consultation entityData carries departmentId.
+      const isBranchManager = userRole === "branch_manager";
+      const isOwnDeptHead =
+        userRole === "department_head"
+        && !!user?.departmentId
+        && entityData.departmentId === user.departmentId;
+      if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
         return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
@@ -2456,10 +2471,22 @@ export async function registerRoutes(
         }
       }
 
-      // Cascade lawyer assignment to pending hearings and active memos
-      if (req.body.primaryLawyerId && req.body.primaryLawyerId !== existing.primaryLawyerId) {
+      // Cascade lawyer assignment to pending hearings and active memos.
+      // Phase 5 B/L4 — the cascade now keys off the EFFECTIVE lawyer
+      // (primaryLawyerId || responsibleLawyerId || "", the canonical
+      // resolution) instead of primaryLawyerId alone, so assigning a case by
+      // responsibleLawyerId only (no primary) also re-points its memos/hearings.
+      // For the primary-set path this is byte-identical to the old behavior
+      // (primary takes precedence); it only ADDS firing for the
+      // responsibleLawyerId-is-effective case. Fires only when the effective
+      // lawyer actually changes to a non-empty value.
+      const newPrimaryLawyerId = req.body.primaryLawyerId !== undefined ? req.body.primaryLawyerId : existing.primaryLawyerId;
+      const newResponsibleLawyerId = req.body.responsibleLawyerId !== undefined ? req.body.responsibleLawyerId : existing.responsibleLawyerId;
+      const oldEffectiveLawyerId = existing.primaryLawyerId || existing.responsibleLawyerId || "";
+      const newEffectiveLawyerId = newPrimaryLawyerId || newResponsibleLawyerId || "";
+      if (newEffectiveLawyerId && newEffectiveLawyerId !== oldEffectiveLawyerId) {
         const caseId = String(req.params.id);
-        const newLawyerId = req.body.primaryLawyerId;
+        const newLawyerId = newEffectiveLawyerId;
         try {
           const caseHearings = await storage.getHearingsByCase(caseId);
           for (const h of caseHearings) {
