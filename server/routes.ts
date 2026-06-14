@@ -2007,10 +2007,30 @@ export async function registerRoutes(
         if (targetStage === "قيد_التدقيق_في_ناجز") {
           const najiz = req.body.najizNumber || existing.najizNumber;
           if (!najiz) return res.status(400).json({ error: "يجب إدخال رقم القيد في ناجز" });
+          // General-dept audit (2026-06-14) — General enters najiz from
+          // جاهزة_للرفع (its FIRST platform stage), so the najiz number becomes
+          // the displayed case number while in najiz (mirrors Commercial's
+          // caseNumber := taradi on تراضي-entry). Commercial enters najiz from
+          // أغلق_طلب_الصلح and keeps its settlement number — left untouched.
+          if (existing.currentStage === "جاهزة_للرفع") {
+            req.body.caseNumber = String(najiz).trim();
+          }
         }
         if (targetStage === "قيد_التدقيق_في_معين") {
           const moeen = req.body.moeenNumber || existing.moeenNumber;
           if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
+        }
+        // General-dept audit (2026-06-14) — General moves najiz → settlement
+        // (مداولة_الصلح) directly; the case enters the تراضي/settlement platform
+        // here, so capture the settlement number and surface it as the displayed
+        // case number (mirrors Commercial's caseNumber := taradi on تراضي-entry).
+        // Reuses the taradiNumber field — the settlement IS the تراضي stage.
+        // General-only: Commercial's najiz goes to منظورة, Labor's settlement
+        // comes from بانتظار_رفع_العميل_للتسوية (handled by the mohr block below).
+        if (existing.currentStage === "قيد_التدقيق_في_ناجز" && targetStage === "مداولة_الصلح") {
+          const settlementNumber = req.body.taradiNumber || existing.taradiNumber;
+          if (!settlementNumber) return res.status(400).json({ error: "يجب إدخال رقم الصلح في منصة تراضي" });
+          req.body.caseNumber = String(settlementNumber).trim();
         }
 
         // Auto-promote classification from قيد_الدراسة → منظورة_بالمحكمة only
@@ -2058,9 +2078,14 @@ export async function registerRoutes(
         // (conciliation, still pre-trial) must NOT — the case isn't in court
         // yet. (Also stops a rollback out of najiz from wrongly demanding it.)
         if (
-          (existing.currentStage === "قيد_التدقيق_في_ناجز" ||
+          ((existing.currentStage === "قيد_التدقيق_في_ناجز" ||
             existing.currentStage === "قيد_التدقيق_في_معين") &&
-          targetStage === "منظورة"
+            targetStage === "منظورة") ||
+          // General-dept audit (2026-06-14) — General reaches court via
+          // أغلق_طلب_الصلح → منظورة (its court-entry); capture the court case
+          // number here the same way Commercial captures it on najiz → منظورة.
+          // General-only: this from→to pair is not used by any other path.
+          (existing.currentStage === "أغلق_طلب_الصلح" && targetStage === "منظورة")
         ) {
           const courtCaseNumber = typeof req.body.courtCaseNumber === "string"
             ? req.body.courtCaseNumber.trim()
