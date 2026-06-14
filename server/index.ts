@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -13,6 +14,43 @@ import { setupWebSocket } from "./websocket";
 const app = express();
 app.set("trust proxy", 1);
 const httpServer = createServer(app);
+
+// ==================== Security headers (helmet + CSP) ====================
+// Auth tokens live in localStorage, so an XSS injection = session theft. The
+// Content-Security-Policy below is the mitigation: script-src is kept strict
+// ('self' only — the built index.html has NO inline scripts, just a hashed
+// /assets module bundle), so an injected inline/remote script cannot execute.
+//
+// Everything else is deliberately permissive to avoid a white-screen, with the
+// app's real needs audited from the build output:
+//   - styleSrc 'unsafe-inline'  -> Radix UI / Recharts set inline style= attrs
+//   - styleSrc fonts.googleapis -> the Cairo/Tajawal stylesheet (index.html)
+//   - fontSrc  fonts.gstatic    -> the actual Arabic font files
+//   - connectSrc ws:/wss:       -> the /ws notification WebSocket
+//   - imgSrc data:/blob:/https: -> avatars, base64 previews, file blobs
+// useDefaults keeps helmet's safe directives (frame-ancestors 'self',
+// base-uri 'self', object-src 'none', upgrade-insecure-requests, etc.).
+// COEP is disabled so cross-origin Google Fonts load without a CORP handshake.
+//
+// REQUIRES a post-deploy preview smoke-test (open the site, confirm pages
+// render + no CSP errors in the browser console). If anything is blocked,
+// this commit can be reverted in isolation.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+        imgSrc: ["'self'", "data:", "blob:", "https:"],
+        connectSrc: ["'self'", "ws:", "wss:"],
+        objectSrc: ["'none'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  }),
+);
 
 // Short-lived cache for the "is this user still active?" DB check.
 // We verify once per request, but at 10+ parallel API calls on login the
