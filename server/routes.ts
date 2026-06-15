@@ -266,6 +266,64 @@ function canModifyConsultation(user: CaseActorIdentity, consultation: any, ctx?:
   return identities.some((u) => canModifyConsultationIdentity(u, consultation));
 }
 
+// 4c-5 (memos) — per-identity act-as for the memo workflow state endpoints
+// (pause / unpause / await-completion / resume-from-completion /
+// return-to-committee / cancel), which all share the same inline access gate:
+//   branch_manager || admin_support [|| cases_review_head] ||
+//   (department_head whose dept === the PARENT case's dept) || the memo assignee.
+// Memos carry no departmentId, so department_head is scoped against the PARENT
+// case's department; specific_cases delegations reach a memo via its parent
+// caseId (actingIdentitiesFor(ctx, memo.caseId)) — unlike consultations/
+// contracts, which have no case id and so are reached only by all_cases. The
+// admin-role list is passed per call site (cancel additionally allows
+// cases_review_head). With no ctx the identity set is exactly [self] and the
+// parent case is fetched only when a department_head identity is present — so
+// this is byte-identical to the original inline gate for non-delegated users.
+// Four-eyes is NOT routed through here: the INTERNAL_REVIEW lock (in
+// validateStageTransition) and the dedicated /internal-review reviewer guard
+// stay HUMAN. The dedicated committee/take-notes role gates are left un-expanded
+// (deferred with the requireRole role-gate pass).
+async function canActOnMemo(
+  user: CaseActorIdentity,
+  memo: any,
+  ctx: ActingContext | undefined,
+  adminRoles: string[],
+): Promise<boolean> {
+  const identities = ctx
+    ? actingIdentitiesFor(ctx, memo.caseId ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  // Admin roles + the memo assignee don't depend on the parent case.
+  if (identities.some((u) => adminRoles.includes(u.role) || (!!memo.assignedTo && memo.assignedTo === u.id))) {
+    return true;
+  }
+  // department_head is scoped to the parent case's department. Fetch the parent
+  // case only when there is a department_head identity to evaluate (matches the
+  // original gate, which fetched it only for a department_head actor).
+  const deptHeads = identities.filter((u) => u.role === "department_head");
+  if (deptHeads.length === 0) return false;
+  const parentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+  if (!parentCase) return false;
+  return deptHeads.some((u) => parentCase.departmentId === u.departmentId);
+}
+
+// 4c-5 (memos) — per-identity predicate for the memo /activities READ gate
+// (richer than the modify gate: admin incl. cases_review_head, the memo
+// assignee, the parent case's lawyers, and the parent case's dept_head). The
+// parent case is always loaded by that endpoint, so it's passed in. Mirrors the
+// consultation/contract /activities gates, which already read req.actingContext
+// via canModify*. No ctx → [self] → byte-identical.
+function canViewMemoActivitiesIdentity(u: CaseActorIdentity, memo: any, parentCase: any): boolean {
+  if (["branch_manager", "admin_support", "cases_review_head"].includes(u.role)) return true;
+  if (memo.assignedTo === u.id) return true;
+  if (!!parentCase && (
+    parentCase.primaryLawyerId === u.id ||
+    parentCase.responsibleLawyerId === u.id ||
+    (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(u.id))
+  )) return true;
+  if (u.role === "department_head" && !!parentCase && parentCase.departmentId === u.departmentId) return true;
+  return false;
+}
+
 function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
   // Phase 5 B/M4 — department_head removed so the server mirrors the FE
   // hearing-action contract (hearings.tsx canActOnHearing = attending lawyer /
@@ -4169,15 +4227,9 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      // Department-scope check needs the parent case for dept_head.
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as. No delegation → exactly the actor's own
+      // branch_manager/admin_support/own-dept-head/assignee check.
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه المذكرة" });
 
       if (memo.pausedAt) {
@@ -4220,14 +4272,8 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه المذكرة" });
 
       if (!memo.pausedAt) {
@@ -4265,17 +4311,16 @@ export async function registerRoutes(
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
       // Visibility — anyone who can act on the memo can read its log.
+      // 4c-5: per-identity act-as, mirroring the consultation/contract
+      // /activities gates (which read req.actingContext via canModify*).
+      // specific_cases delegations reach the memo via its parent caseId.
+      // No delegation → exactly the actor's own assignee/case-lawyer/
+      // own-dept-head/admin check.
       const parentCase = await storage.getCaseById(memo.caseId);
-      const isAssigned = memo.assignedTo === reqUser.id;
-      const isCaseLawyer = !!parentCase && (
-        parentCase.primaryLawyerId === reqUser.id ||
-        parentCase.responsibleLawyerId === reqUser.id ||
-        (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(reqUser.id))
-      );
-      const isDeptHead = reqUser.role === "department_head"
-        && !!parentCase && parentCase.departmentId === reqUser.departmentId;
-      const isAdmin = ["branch_manager", "admin_support", "cases_review_head"].includes(reqUser.role);
-      if (!(isAssigned || isCaseLawyer || isDeptHead || isAdmin)) {
+      const viewerIdentities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, memo.caseId ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+        : [reqUser];
+      if (!viewerIdentities.some((u) => canViewMemoActivitiesIdentity(u, memo, parentCase))) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه المذكرة" });
       }
 
@@ -6025,14 +6070,8 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
 
       if (memo.pausedAt) {
@@ -6077,14 +6116,8 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
 
       if (!memo.awaitingCompletion) {
@@ -6153,10 +6186,11 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
-        // 4c-0: INERT — pass undefined so a delegate gains NO memo transition
-        // act-as yet. 4c-5 (memos) flips this to req.actingContext alongside
-        // expanding canModifyCase (memos gate via their parent case).
-        undefined,
+        // 4c-5: memos act-as enabled. entityData carries memo.caseId, so
+        // scopeCaseId = the memo's PARENT case id — specific_cases delegations
+        // reach a memo via its parent case. Four-eyes stays human (INTERNAL_REVIEW
+        // lock + the dedicated /internal-review reviewer guard).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -6260,10 +6294,11 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
-        // 4c-0: INERT — pass undefined so a delegate gains NO memo transition
-        // act-as yet. 4c-5 (memos) flips this to req.actingContext alongside
-        // expanding canModifyCase (memos gate via their parent case).
-        undefined,
+        // 4c-5: memos act-as enabled. entityData carries memo.caseId, so
+        // scopeCaseId = the memo's PARENT case id — specific_cases delegations
+        // reach a memo via its parent case. Four-eyes stays human (INTERNAL_REVIEW
+        // lock + the dedicated /internal-review reviewer guard).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -6513,19 +6548,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
-      const parentCase = reqUser.role === "department_head" && memo.caseId
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!parentCase
-        && parentCase.departmentId === reqUser.departmentId;
-      const isAssigned = !!memo.assignedTo && memo.assignedTo === reqUser.id;
-      const allowed =
-        reqUser.role === "branch_manager"
-        || reqUser.role === "admin_support"
-        || isOwnDeptHead
-        || isAssigned;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإعادة المذكرة للجنة" });
       }
@@ -6574,20 +6598,9 @@ export async function registerRoutes(
         return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
       }
 
-      const parentCase = reqUser.role === "department_head" && memo.caseId
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!parentCase
-        && parentCase.departmentId === reqUser.departmentId;
-      const isAssigned = !!memo.assignedTo && memo.assignedTo === reqUser.id;
-      const allowed =
-        reqUser.role === "branch_manager"
-        || reqUser.role === "cases_review_head"
-        || reqUser.role === "admin_support"
-        || isOwnDeptHead
-        || isAssigned;
+      // 4c-5: per-identity act-as (see /pause). cancel additionally allows
+      // cases_review_head (the memo committee chair).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support", "cases_review_head"]);
       if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء المذكرة" });
       }
