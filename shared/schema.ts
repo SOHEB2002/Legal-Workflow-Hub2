@@ -145,6 +145,13 @@ export const lawCases = pgTable("law_cases", {
   // Phase-7 P7-2 — the cases list (getAllCases + role branches) orders by
   // updatedAt; createdAt above stays for getSidebarCounts' createdAt range.
   updatedAtIdx:        index("law_cases_updated_at_idx").on(t.updatedAt),
+  // Unified-tasks I3 — GIN index on the assignedLawyers jsonb for the
+  // `assigned_lawyers @> [uid]` containment in getMyTasks (case_work /
+  // legal_deadline member branches). Kept COMMENTED (like the Batch-M FKs) so
+  // drizzle-push never manages it; applied out-of-band on BOTH dev + prod via
+  // script/apply-tasks-gin-index.sql (CREATE INDEX CONCURRENTLY IF NOT EXISTS).
+  // assignedLawyersGin: index("law_cases_assigned_lawyers_gin_idx")
+  //   .using("gin", t.assignedLawyers),
   // Batch M FKs — applied via script/apply-fk-constraints.sql (NOT VALID +
   // VALIDATE); kept commented so Republish/drizzle-push never emits the
   // validating ADD CONSTRAINT that timed out the deploy:
@@ -511,6 +518,9 @@ export const hearings = pgTable("hearings", {
   caseIdx: index("hearings_case_idx").on(t.caseId),
   // Phase-7 P7-2 — getAllHearings/getHearingsByCase order by (hearingDate, hearingTime).
   hearingDateIdx: index("hearings_hearing_date_idx").on(t.hearingDate, t.hearingTime),
+  // Unified-tasks I3 — per-user feed filters hearings by attendingLawyerId
+  // (getMyTasks member branch). Additive.
+  attendingLawyerIdx: index("hearings_attending_lawyer_idx").on(t.attendingLawyerId),
   // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
   // caseFk: foreignKey({ name: "hearings_case_id_fkey",
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
@@ -537,6 +547,9 @@ export const fieldTasks = pgTable("field_tasks", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("field_tasks_case_idx").on(t.caseId),
+  // Unified-tasks I3 — per-user feed filters field tasks by assignee
+  // (getMyTasks: assignedTo = uid, and the unassigned "" pool). Additive.
+  assignedToIdx: index("field_tasks_assigned_to_idx").on(t.assignedTo),
   // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
   // caseFk: foreignKey({ name: "field_tasks_case_id_fkey",
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
@@ -690,6 +703,10 @@ export const memos = pgTable("memos", {
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
   // Phase-7 P7-2 — getAllMemos orders by deadline.
   deadlineIdx: index("memos_deadline_idx").on(t.deadline),
+  // Unified-tasks I3 — per-user feed filters memos by assignee (memo_pending)
+  // and by designated reviewer (review_pending). Both additive.
+  assignedToIdx: index("memos_assigned_to_idx").on(t.assignedTo),
+  internalReviewerIdx: index("memos_internal_reviewer_idx").on(t.internalReviewerId),
 }));
 
 export const caseActivityLog = pgTable("case_activity_log", {
