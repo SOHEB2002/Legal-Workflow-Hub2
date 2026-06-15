@@ -2396,6 +2396,19 @@ export default function CasesPage() {
                       setStageTransitioning(false);
                     }
                   }}
+                  // Committee-review (إحالة_للجنة_المراجعة) decisions surfaced on
+                  // the progress bar — identical to the إجراءات-tab handlers
+                  // (handleApprove / handleReject): same context mutations, same
+                  // toasts, same dialog-close. The bar only renders these when
+                  // canReviewCases(userRole) holds, matching canReview inside.
+                  onReviewCommitteeApprove={() => {
+                    handleApprove(selectedCase);
+                  }}
+                  onReviewCommitteeAddNotes={(committeeNotes) => {
+                    rejectCase(selectedCase.id, committeeNotes || "تم إضافة ملاحظات من لجنة المراجعة", "rejected");
+                    toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
+                    setSelectedCaseId(null);
+                  }}
                   onSkipDataCompletion={
                     // Skip-completion is allowed for the same 4 roles
                     // the server permits: branch_manager, admin_support,
