@@ -120,7 +120,7 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { requireAuth, requireRole, generateToken, verifyTokenForRefresh, validatePassword, hashPassword, comparePassword, generateCsrfToken } from "./auth";
+import { requireAuth, requireRole, requireRealRole, generateToken, verifyTokenForRefresh, validatePassword, hashPassword, comparePassword, generateCsrfToken } from "./auth";
 import rateLimit from "express-rate-limit";
 import multer from "multer";
 import path from "path";
@@ -1172,7 +1172,13 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/users/:id/reset-password", requireAuth, requireRole("branch_manager"), async (req, res) => {
+  // 4c-6 (takeover-class) — resetting another account's password is an
+  // account-takeover vector (reset the delegator's or any admin's password →
+  // full login as them), which outlasts the delegation window. requireRealRole
+  // → real own role only. JUDGMENT CALL (flagged in report): not one of the two
+  // literal exclusions, but same escalation rationale; relax to requireRole if
+  // password reset should inherit.
+  app.post("/api/users/:id/reset-password", requireAuth, requireRealRole("branch_manager"), async (req, res) => {
     try {
       const userId = String(req.params.id);
       const { newPassword } = resetUserPasswordSchema.parse(req.body);
@@ -1218,7 +1224,13 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/users", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
+  // 4c-6 EXCLUSION 2 (provisioning) — creating a user account assigns a role
+  // to a new account and is an escalation backdoor (a delegate could mint a
+  // branch_manager that outlasts the window). requireRealRole → real own role
+  // only. JUDGMENT CALL (flagged in report): not one of the two literal
+  // exclusions, but squarely within their "no escalation that outlasts the
+  // window" rationale; relax to requireRole if account creation should inherit.
+  app.post("/api/users", requireAuth, requireRealRole("branch_manager", "admin_support"), async (req, res) => {
     try {
       const validatedData = insertUserSchema.parse(req.body);
       const pwValidation = validatePassword(validatedData.password);
@@ -1236,9 +1248,32 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
+  // PATCH stays delegation-inheritable for profile MANAGEMENT (name/email/
+  // phone/username/canBeAssigned*/taskSpecialties/mustChangePassword), but three
+  // sub-operations are EXCLUDED from inherited authority and require the actor's
+  // OWN real manager role: role change (EXCLUSION 2), deactivation isActive=false
+  // (EXCLUSION 1 — "delete/deactivate"), and password set (takeover-class).
+  app.patch("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
     try {
       const validatedData = updateUserSchema.parse(req.body);
+
+      // 4c-6 — distinguish OWN-role authority from delegation-derived authority.
+      // The route admits an actor whose EFFECTIVE roles include branch_manager/
+      // admin_support; the actor reached here by their own role iff their REAL
+      // (JWT) role is one of those. If not, they passed only via an inherited
+      // role → block the escalation/destruction-class sub-operations. A real
+      // branch_manager/admin_support is unaffected (parity).
+      const ownRoleManagesUsers = ["branch_manager", "admin_support"].includes(req.user!.role);
+      if (!ownRoleManagesUsers) {
+        const isRoleChange = validatedData.role !== undefined;
+        const isDeactivation = validatedData.isActive === false;
+        const isPasswordSet = validatedData.password !== undefined;
+        if (isRoleChange || isDeactivation || isPasswordSet) {
+          return res.status(403).json({
+            error: "لا يمكن تغيير الدور أو تعطيل الحساب أو إعادة تعيين كلمة المرور عبر التفويض",
+          });
+        }
+      }
       if (validatedData.username) {
         const allUsers = await storage.getAllUsers();
         const duplicate = allUsers.find(u => u.username === validatedData.username && String(u.id) !== String(req.params.id));
@@ -1338,7 +1373,12 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
+  // 4c-6 EXCLUSION 1 — user-account DELETE is NOT delegation-inheritable.
+  // requireRealRole → only a real branch_manager/admin_support (own role)
+  // can delete a user; a delegate with an inherited admin role is blocked
+  // (account destruction would outlast the delegation window and could orphan
+  // the delegation itself). The self-delete guard below stays (real id).
+  app.delete("/api/users/:id", requireAuth, requireRealRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
     try {
       const userId = String(req.params.id);
       const currentUser = req.user!;
@@ -9081,6 +9121,16 @@ export async function registerRoutes(
       // Check the delegation exists first and validate users are active
       const existingDelegation = await storage.getDelegation(String(req.params.id));
       if (!existingDelegation) return res.status(404).json({ message: "تفويض غير موجود" });
+
+      // 4c-6 guardrail (privilege self-cycle, real id) — nobody may approve a
+      // delegation they are personally a party to. Compares the REAL human id,
+      // so an inherited approve role (now that requireRole is delegation-aware)
+      // cannot be used to self-approve one's own incoming/outgoing delegation
+      // (which would let a delegate activate/perpetuate their own act-as). Also
+      // closes the long-standing self-approval hole for real approvers.
+      if (existingDelegation.fromUserId === user.id || existingDelegation.toUserId === user.id) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد تفويض أنت طرف فيه" });
+      }
 
       // Validate both fromUser and toUser are active before approving
       const { valid } = await validateAssignedUsersActive([existingDelegation.fromUserId, existingDelegation.toUserId]);

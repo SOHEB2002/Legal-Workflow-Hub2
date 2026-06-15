@@ -119,16 +119,26 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-// 4c-0: the delegation-effective-role WIRING for requireRole is in place but
-// GATED OFF, so 4c-0 grants ZERO act-as via requireRole (strict per-resource
-// staging). While off, effectiveRoles === {own role} for everyone — byte-
-// identical to the original roles.includes(user.role). Flipping this to true
-// (its own reviewable sub-step) lets a delegate inherit the delegator's role on
-// the ENTITY-AGNOSTIC requireRole gates: deletes (case/client/consultation/
-// contract/hearing/field-task/contact-log/memo/notification/attachment), user
-// CRUD, and delegation-approve. Turn on only when those are intentionally
-// staged. globalActingRoles uses all_cases delegators only.
-const DELEGATION_REQUIREROLE_ENABLED = false;
+// 4c-6: delegation role-inheritance for the ENTITY-AGNOSTIC requireRole gates is
+// now ENABLED. A delegate inherits the delegator's role (all_cases delegators
+// only — globalActingRoles) on the requireRole gates: entity deletes
+// (case/client/consultation/contract/hearing/field-task/contact-log/memo/
+// notification/attachment), the lawyer-performance / court-analytics stats, and
+// delegation-approve. The activity log records the real human actor, which is
+// the accountability deterrent for the inherited (scope-bound, reversible-in-
+// spirit) operations.
+//
+// Two operation CLASSES are deliberately EXCLUDED from delegation inheritance
+// because they are destructive / privilege-escalating and would outlast the
+// delegation window: (1) user-account create/delete/deactivate, (2) any
+// role/permission change, plus the takeover-class password reset. Those routes
+// use requireRealRole (below) or an inline real-role check so they require the
+// actor's OWN role — never an inherited one. See server/routes.ts.
+//
+// PARITY: for a user with no active delegations, ctx.delegators === [] so
+// globalActingRoles(ctx) === { ctx.self.role } === { user.role } — byte-
+// identical to the pre-flip new Set([user.role]).
+const DELEGATION_REQUIREROLE_ENABLED = true;
 
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -142,6 +152,29 @@ export function requireRole(...roles: string[]) {
       ? globalActingRoles(ctx)
       : new Set<string>([user.role]);
     if (!roles.some((r) => effectiveRoles.has(r))) {
+      res.status(403).json({ error: "لا تملك صلاحية" });
+      return;
+    }
+    next();
+  };
+}
+
+// requireRealRole — like requireRole but NEVER delegation-expanded. It checks
+// the actor's OWN (real, JWT) role only, so an inherited/delegated role can
+// never satisfy it. Used for the delegation-EXCLUDED operation classes
+// (user-account create / delete / deactivate, password reset) so a delegate
+// cannot perform account-destruction or privilege-escalation that would outlast
+// the delegation window. Behaviorally this is exactly what requireRole was
+// before the flag flip — so a real branch_manager/admin_support is unaffected
+// (full parity), and a delegate is blocked exactly as they were pre-4c-6.
+export function requireRealRole(...roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const user = (req as any).user;
+    if (!user) {
+      res.status(403).json({ error: "لا تملك صلاحية" });
+      return;
+    }
+    if (!roles.includes(user.role)) {
       res.status(403).json({ error: "لا تملك صلاحية" });
       return;
     }
