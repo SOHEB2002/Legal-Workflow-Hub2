@@ -11,7 +11,6 @@ import {
   Plus,
   Search,
   Eye,
-  Send,
   CheckCircle,
   XCircle,
   Archive,
@@ -336,7 +335,6 @@ export default function CasesPage() {
     addCase,
     updateCase,
     assignCase,
-    sendToReviewCommittee,
     approveCase,
     rejectCase,
     deleteCase,
@@ -880,11 +878,6 @@ export default function CasesPage() {
     setAssignData({ lawyerId: "", departmentId: "", internalReviewerId: "" });
   };
 
-  const handleSendToReview = (caseItem: LawCase) => {
-    sendToReviewCommittee(caseItem.id);
-    toast({ title: "تم إرسال القضية للمراجعة" });
-  };
-
   const handleApprove = (caseItem: LawCase) => {
     approveCase(caseItem.id);
     toast({ title: "تم اعتماد القضية — جاهزة للرفع" });
@@ -1166,11 +1159,7 @@ export default function CasesPage() {
      user?.role === "admin_support" ||
      (permissions.canAssignInDepartment && c.departmentId === user?.departmentId));
 
-  const canSendToReview = (c: LawCase) => 
-    permissions.canManageDepartment && 
-    (c.currentStage === CaseStage.STUDY || c.currentStage === CaseStage.DRAFTING || c.currentStage === CaseStage.TAKING_NOTES);
-
-  const canReview = (c: LawCase) => 
+  const canReview = (c: LawCase) =>
     permissions.canReviewCases && 
     c.currentStage === CaseStage.REVIEW_COMMITTEE;
 
@@ -3277,10 +3266,23 @@ export default function CasesPage() {
                   <div className="space-y-3">
                     {(() => {
                       const history = [...(selectedCase.stageHistory || [])].reverse();
-                      const internalEntry = history.find((h: any) =>
-                        (h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم") &&
-                        h.notes && String(h.notes).trim()
+                      // "إرجاع من المراجعة الداخلية" must only show when the case
+                      // ACTUALLY went through internal review and came back. A
+                      // drafting-stage history entry with notes alone is NOT
+                      // sufficient — data migration writes an initial drafting
+                      // entry (userName "النظام", notes "تهجير البيانات") that
+                      // was being mislabeled as a return-from-review on cases
+                      // that never entered review. Require a real internal-review
+                      // stage (REVIEW_LOOP_STAGES) somewhere in the history.
+                      const wentToInternalReview = (selectedCase.stageHistory || []).some(
+                        (h: any) => REVIEW_LOOP_STAGES.has(h?.stage)
                       );
+                      const internalEntry = wentToInternalReview
+                        ? history.find((h: any) =>
+                            (h.stage === "تحرير_صحيفة_الدعوى" || h.stage === "تحرير_صيغة_التظلم") &&
+                            h.notes && String(h.notes).trim()
+                          )
+                        : null;
                       const committeeEntry = history.find((h: any) =>
                         h.stage === "الأخذ_بالملاحظات" && h.notes && String(h.notes).trim()
                       ) || (selectedCase.currentStage === "الأخذ_بالملاحظات" && selectedCase.reviewNotes
@@ -3513,17 +3515,6 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {canSendToReview(selectedCase) && (
-                      <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
-                        <div>
-                          <p className="font-medium text-sm">إرسال للمراجعة</p>
-                          <p className="text-xs text-muted-foreground">إرسال القضية للجنة المراجعة للاعتماد</p>
-                        </div>
-                        <Button size="sm" variant="outline" data-testid={`button-send-review-details-${selectedCase.id}`} onClick={() => { handleSendToReview(selectedCase); }}>
-                          <Send className="w-4 h-4 ml-1" />إرسال للمراجعة
-                        </Button>
-                      </div>
-                    )}
                     {canReview(selectedCase) && (
                       <>
                         <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
@@ -3611,7 +3602,7 @@ export default function CasesPage() {
                         </Button>
                       </div>
                     )}
-                    {!canAssign(selectedCase) && !canSendToReview(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(() => {
+                    {!canAssign(selectedCase) && !canReview(selectedCase) && !canClose(selectedCase) && !canEarlyCloseCase(selectedCase) && !(() => {
                       if (!user) return false;
                       if (user.role === "branch_manager" || user.role === "admin_support") return true;
                       if (user.role === "department_head" && selectedCase.departmentId === user.departmentId) return true;
