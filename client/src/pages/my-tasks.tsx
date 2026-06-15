@@ -61,6 +61,17 @@ function byTime(a: MyTaskItem, b: MyTaskItem): number {
   return a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0;
 }
 
+// The single ordering used EVERYWHERE (own feed, every team member group, every
+// firm department→member group): pinned kinds first, then the rest — each band
+// internally overdue-first by time. So a member's group reads the same way the
+// employee's own list does.
+function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
+  return [...tasks].sort((a, b) => {
+    const pr = (PINNED_KINDS.has(a.kind) ? 0 : 1) - (PINNED_KINDS.has(b.kind) ? 0 : 1);
+    return pr !== 0 ? pr : byTime(a, b);
+  });
+}
+
 // One task row. PART 1 is read-only: the action button is a disabled placeholder
 // (real in-page actions land in PART 2). No navigation links — this is an
 // action hub, not a directory.
@@ -219,7 +230,7 @@ export default function MyTasksPage() {
               {Array.from(teamByMember.entries()).map(([ownerId, items]) => (
                 <div key={ownerId} className="space-y-2">
                   <h3 className="text-xs font-semibold"><BidiText>{userName(ownerId)}</BidiText></h3>
-                  <div className="space-y-2">{items.sort(byTime).map((t) => <TaskRow key={t.id} task={t} />)}</div>
+                  <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} />)}</div>
                 </div>
               ))}
             </section>
@@ -236,7 +247,7 @@ export default function MyTasksPage() {
                   {Array.from(members.entries()).map(([ownerId, items]) => (
                     <div key={ownerId} className="space-y-2 ps-2">
                       <h4 className="text-xs font-semibold text-muted-foreground"><BidiText>{userName(ownerId)}</BidiText></h4>
-                      <div className="space-y-2">{items.sort(byTime).map((t) => <TaskRow key={t.id} task={t} />)}</div>
+                      <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} />)}</div>
                     </div>
                   ))}
                 </div>
