@@ -3057,6 +3057,38 @@ export async function registerRoutes(
         stageUpdate.status = "closed";
         stageUpdate.closedAt = new Date();
       }
+
+      // Entering internal review requires a designated reviewer — mirrors the
+      // case flow (PATCH /api/cases/:id, "موعد للمرحلة"): use the one already on
+      // the consultation if set, else the one chosen now (req.body), and
+      // persist it so the internal-review action is gated to that reviewer
+      // below. Four-eyes: the reviewer can't be the assigned (answering) lawyer.
+      if (targetStage === ConsultationStage.INTERNAL_REVIEW) {
+        const overrideReviewer =
+          (typeof req.body?.internalReviewerId === "string" && req.body.internalReviewerId)
+            ? req.body.internalReviewerId
+            : undefined;
+        const reviewerId = overrideReviewer || consultation.internalReviewerId || undefined;
+        if (!reviewerId) {
+          return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
+        }
+        const reviewer = await storage.getUser(reviewerId);
+        if (!reviewer || !reviewer.isActive) {
+          return res.status(400).json({ error: "المراجع الداخلي المختار غير صالح" });
+        }
+        if (reviewer.role === "admin_support") {
+          return res.status(400).json({ error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" });
+        }
+        if (reviewer.departmentId !== consultation.departmentId) {
+          return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم الاستشارة" });
+        }
+        if (reviewerId === consultation.assignedTo) {
+          return res.status(400).json({ error: "لا يمكن أن يكون المراجع الداخلي هو المحامي المسند إليه للاستشارة" });
+        }
+        // Persist (bootstrap or re-designate) so the internal-review gate works.
+        stageUpdate.internalReviewerId = reviewerId;
+      }
+
       const updated = await storage.updateConsultationAndLog(
         consultation.id,
         stageUpdate,
@@ -3164,18 +3196,21 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة المراجعة الداخلية" });
       }
 
-      // Phase 5 B/M1 (four-eyes) — the assigned (answering) lawyer cannot clear
-      // their OWN consultation's internal review, even though their role
-      // (employee) is in baseAllowed. A different reviewer — another employee,
-      // dept_head, review head, or branch_manager — must do it.
-      // internalReviewerId can't gate this: on consultations it's a
-      // committee-referral field, still null at the internal-review stage.
+      // Four-eyes (Phase 5 B/M1) — the assigned (answering) lawyer can never
+      // clear their own consultation's internal review. Kept as belt-and-braces
+      // (the reviewer designation below already excludes the assignee).
       if (isAssignedLawyer(reqUser, consultation)) {
         return res.status(403).json({ error: "لا يمكن للمحامي المسند إليه اعتماد المراجعة الداخلية لاستشارته؛ يجب أن يقوم بها مراجع آخر" });
       }
-      const baseAllowed = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
-      if (!baseAllowed.includes(reqUser.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
+      // Mirror cases (validateStageTransition INTERNAL_REVIEW lock): only the
+      // DESIGNATED internal reviewer or branch_manager may act. internalReviewerId
+      // is now required when entering this stage (see /advance-stage), so a
+      // normally-routed consultation always has one; a legacy row with no
+      // reviewer stays actionable by branch_manager (who can also re-route it).
+      const isDesignatedReviewer =
+        !!consultation.internalReviewerId && consultation.internalReviewerId === reqUser.id;
+      if (!isDesignatedReviewer && reqUser.role !== "branch_manager") {
+        return res.status(403).json({ error: "فقط المراجع الداخلي المعيَّن أو مدير الفرع يمكنه اعتماد المراجعة الداخلية لهذه الاستشارة" });
       }
 
       const nextStage = decision === InternalReviewDecision.PASSED

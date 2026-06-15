@@ -2937,6 +2937,15 @@ export class DatabaseStorage implements IStorage {
         title: `مراجعة داخلية بانتظارك — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
         ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
 
+      // Consultations now carry a designated reviewer at internal review too
+      // (mirrors cases) — surface to that reviewer.
+      const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType })
+        .from(consultations).where(and(eq(consultations.internalReviewerId, uid),
+          eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية")));
+      for (const r of consultReviewRows) tasks.push({ id: `review_pending:consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+        title: `مراجعة داخلية بانتظارك — استشارة (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+
       // Committee: cases_review_head chairs cases + memos; consultations_review_head chairs consultations + contracts.
       if (isCasesReviewHead) {
         const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
