@@ -4889,3 +4889,53 @@ export const SIDEBAR_SECTIONS: SidebarSectionValue[] = [
 ];
 
 export type SidebarCounts = Record<SidebarSectionValue, number>;
+
+// ==================== Unified Tasks (My Tasks feed) ====================
+// A single typed item in the per-user "my tasks" aggregation (GET /api/my-tasks).
+// Each item points at a source entity so the FE can deep-link, and carries the
+// responsible owner + scope so a dept_head's view can split "my" vs "team".
+export const MyTaskKind = {
+  CASE_WORK: "case_work",                 // assigned lawyer must act at a lawyer-work stage
+  CASE_UNASSIGNED: "case_unassigned",     // unassigned case in dept (dept_head assigns)
+  HEARING_ATTEND: "hearing_attend",       // upcoming hearing to attend
+  HEARING_UNRECORDED: "hearing_unrecorded", // hearing date passed, result not recorded
+  HEARING_REPORT: "hearing_report",       // result recorded, report not completed
+  MEMO_PENDING: "memo_pending",           // assigned memo not yet filed
+  REVIEW_PENDING: "review_pending",       // internal/committee review awaiting this reviewer
+  COLLECTION: "collection",               // collection (تحصيل) field task, incl. unassigned ""
+  LEGAL_DEADLINE: "legal_deadline",       // approaching/overdue legal deadline
+  FIELD_TASK: "field_task",               // assigned field task
+  CONTACT_FOLLOWUP: "contact_followup",   // contact follow-up due
+  DELEGATION_APPROVAL: "delegation_approval", // pending delegation approval (dept_head)
+  CONSULTATION_CLOSING: "consultation_closing", // consultation ready to close (admin_support)
+  DATA_COMPLETION: "data_completion",     // case at data-completion stage (admin_support)
+  AGENCY_VERIFICATION: "agency_verification", // verify agency before a near hearing
+} as const;
+
+export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
+
+export type MyTaskEntityType =
+  | "case" | "consultation" | "contract" | "memo"
+  | "hearing" | "field_task" | "legal_deadline" | "contact_log" | "delegation";
+
+export type MyTaskActionHint =
+  | "review" | "attend" | "draft" | "assign" | "export" | "approve"
+  | "record" | "complete" | "follow_up" | "verify" | "close";
+
+// "self" = the current user is the owner; "team" = a department member's task
+// surfaced to their department_head (supervisory view).
+export type MyTaskOwnerScope = "self" | "team";
+
+export interface MyTaskItem {
+  id: string;                  // stable, unique within the feed (kind:entityId)
+  kind: MyTaskKindValue;       // the task type
+  title: string;               // Arabic, human-readable
+  entityType: MyTaskEntityType;// source entity type (for deep-linking)
+  entityId: string;            // source entity id
+  caseId: string | null;       // parent case id when relevant (cross-entity context)
+  ownerId: string;             // responsible user id ("" when unassigned)
+  ownerScope: MyTaskOwnerScope;
+  dueDate: string | null;      // relevant/due date if any
+  isOverdue: boolean;          // server-computed where a backend signal exists
+  actionHint: MyTaskActionHint;// what the user does
+}
