@@ -66,7 +66,7 @@ import { useHearings } from "@/lib/hearings-context";
 import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
-import { useFieldTasks } from "@/lib/field-tasks-context";
+import { useCaseFieldTasks } from "@/hooks/use-case-field-tasks";
 import { MemoStatusLabels, MemoType, FieldTaskStatus, CaseStageLabels, HearingStatusLabels, HearingResultLabels, ObjectionStatusLabels } from "@shared/schema";
 import type { CaseStageValue, ObjectionStatusValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
@@ -144,7 +144,6 @@ export default function HearingsPage() {
   } = useHearings();
   const { cases, getCaseById } = useCases();
   const { getMemosByCase, getMemosByHearing } = useMemos();
-  const { getTasksByCase } = useFieldTasks();
   const { getClientName } = useClients();
   const { user, users, isViewer } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
@@ -159,6 +158,9 @@ export default function HearingsPage() {
   const [caseComboOpen, setCaseComboOpen] = useState(false);
   const [detailHearingId, setDetailHearingId] = useState<string | null>(null);
   const detailHearing = detailHearingId ? hearings.find(h => h.id === detailHearingId) || null : null;
+  // ITEM 1 — case-scoped field tasks for the open hearing's case (case-access
+  // gated), so the hearing detail shows every linked task on the case.
+  const { data: detailHearingTasks = [] } = useCaseFieldTasks(detailHearing?.caseId);
   const [resultDialogHearing, setResultDialogHearing] = useState<Hearing | null>(null);
   const [reportDialogHearing, setReportDialogHearing] = useState<Hearing | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -1933,7 +1935,7 @@ export default function HearingsPage() {
                     return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
                   });
                   const linkedMemos = directLinked.length > 0 ? directLinked : dateLinked;
-                  const linkedTasks = getTasksByCase(detailHearing.caseId).filter((t) => {
+                  const linkedTasks = detailHearingTasks.filter((t) => {
                     const ts = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
                     return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
                   });

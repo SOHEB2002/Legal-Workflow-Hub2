@@ -7792,11 +7792,55 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/field-tasks/:id", requireAuth, async (req, res) => {
+  // ITEM 1 — case-scoped field tasks: ALL field tasks on a case, gated by CASE
+  // ACCESS (canViewCase, delegation-aware via req.actingContext — 4c-1). Whoever
+  // can VIEW the case sees the case's complete task picture (the assigned lawyer
+  // sees every task on their case, dept_head sees their dept's cases, managers
+  // see all). This does NOT reopen D5: access is per-caseId, so a user still
+  // can't reach tasks on cases they can't see. The general /api/field-tasks list
+  // stays per-user scoped. (Path has 2 segments after field-tasks, so it never
+  // collides with /api/field-tasks/:id.)
+  app.get("/api/field-tasks/case/:caseId", requireAuth, async (req: AuthRequest, res) => {
     try {
+      const user = req.user!;
+      const caseId = String(req.params.caseId);
+      const parentCase = await storage.getCaseById(caseId);
+      if (!parentCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!canViewCase(user, parentCase, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض مهام هذه القضية" });
+      }
+      const tasks = await storage.getFieldTasksByCase(caseId);
+      res.json(tasks);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب مهام القضية" });
+    }
+  });
+
+  app.get("/api/field-tasks/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
       const task = await storage.getFieldTaskById(String(req.params.id));
       if (!task) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
+      }
+      // ITEM 2 — access check (was requireAuth-only, any user could fetch any
+      // task by UUID). Allowed: the assignee, the creator, a manager
+      // (canAssignFieldTasks), or anyone who can access the task's parent
+      // case/consultation (delegation-aware). Mirrors the PATCH gate.
+      let allowed =
+        task.assignedTo === user.id ||
+        task.assignedBy === user.id ||
+        canAssignFieldTasks(user.role);
+      if (!allowed && task.caseId) {
+        const parentCase = await storage.getCaseById(task.caseId);
+        allowed = !!parentCase && canViewCase(user, parentCase, req.actingContext);
+      }
+      if (!allowed && task.consultationId) {
+        const parentConsultation = await storage.getConsultationById(task.consultationId);
+        allowed = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
+      }
+      if (!allowed) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه المهمة" });
       }
       res.json(task);
     } catch (error) {

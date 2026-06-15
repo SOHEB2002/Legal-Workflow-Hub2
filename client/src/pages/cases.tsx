@@ -109,7 +109,6 @@ import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
-import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useStandards } from "@/lib/standards-context";
 import { ReviewChecklist } from "@/components/review-checklist";
 import {
@@ -352,7 +351,6 @@ export default function CasesPage() {
   const { user, permissions, users } = useAuth();
   const { getHearingsByCase } = useHearings();
   const { memos, getMemosByCase } = useMemos();
-  const { getTasksByCase } = useFieldTasks();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
   const lawyers = users.filter(u => u.canBeAssignedCases);
@@ -3257,7 +3255,6 @@ export default function CasesPage() {
                     caseId={selectedCase?.id || ""}
                     hearings={selectedCase ? getHearingsByCase(selectedCase.id) : []}
                     memos={selectedCase ? getMemosByCase(selectedCase.id) : []}
-                    fieldTasks={selectedCase ? getTasksByCase(selectedCase.id) : []}
                     responseDeadline={selectedCase?.responseDeadline ?? null}
                   />
                 </TabsContent>
