@@ -2251,6 +2251,17 @@ export default function CasesPage() {
                       (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
                     )
                   }
+                  // Broader than isAssignedLawyer (adds responsibleLawyerId) so
+                  // the bar's next-stage enable check matches the server's
+                  // isAssignedLawyer rule exactly. Drives only the disabled
+                  // state of the "next stage" button.
+                  isCaseAssignee={
+                    !!user && (
+                      selectedCase.primaryLawyerId === user.id ||
+                      selectedCase.responsibleLawyerId === user.id ||
+                      (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
+                    )
+                  }
                   hasReturnedFromReview={caseHasReturnedFromReview(selectedCase)}
                   eligibleInternalReviewers={users
                     .filter(u =>
@@ -2395,6 +2406,19 @@ export default function CasesPage() {
                     } finally {
                       setStageTransitioning(false);
                     }
+                  }}
+                  // Committee-review (إحالة_للجنة_المراجعة) decisions surfaced on
+                  // the progress bar — identical to the إجراءات-tab handlers
+                  // (handleApprove / handleReject): same context mutations, same
+                  // toasts, same dialog-close. The bar only renders these when
+                  // canReviewCases(userRole) holds, matching canReview inside.
+                  onReviewCommitteeApprove={() => {
+                    handleApprove(selectedCase);
+                  }}
+                  onReviewCommitteeAddNotes={(committeeNotes) => {
+                    rejectCase(selectedCase.id, committeeNotes || "تم إضافة ملاحظات من لجنة المراجعة", "rejected");
+                    toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
+                    setSelectedCaseId(null);
                   }}
                   onSkipDataCompletion={
                     // Skip-completion is allowed for the same 4 roles

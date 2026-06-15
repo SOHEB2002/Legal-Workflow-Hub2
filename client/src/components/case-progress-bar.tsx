@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, canReviewCases, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,6 +23,12 @@ interface CaseProgressBarProps {
   onSkipDataCompletion?: (notes: string) => void;
   onInternalReviewSendBack?: (notes: string) => void;
   onReturnToCommittee?: (notes: string) => void;
+  // Committee-review (إحالة_للجنة_المراجعة) decisions, surfaced here so the
+  // reviewer can act from the progress bar instead of only the إجراءات tab.
+  // Mirror of the inside-detail canReview logic: approve → جاهزة للرفع,
+  // add-notes → الأخذ بالملاحظات. Gated by canReviewCases(userRole) below.
+  onReviewCommitteeApprove?: () => void;
+  onReviewCommitteeAddNotes?: (notes: string) => void;
   onPlatformReviewAddNotes?: (notes: string) => void;
   onPlatformReviewResubmit?: () => void;
   hasPlatformNotes?: boolean;
@@ -42,6 +49,11 @@ interface CaseProgressBarProps {
   caseInternalReviewerId?: string | null;
   currentUserId?: string;
   isAssignedLawyer?: boolean;
+  // True when the current user is an assignee of THIS case by the same rule
+  // the server uses (primaryLawyerId | responsibleLawyerId | assignedLawyers).
+  // Broader than isAssignedLawyer (which omits responsibleLawyerId) — used
+  // only to decide whether the generic "next stage" button is enabled.
+  isCaseAssignee?: boolean;
   // True when the case is on a drafting stage AND has bounced through
   // internal review at least once (derived in the parent from
   // stageHistory). Drives a "تعديلات بعد المراجعة" hint under the
@@ -56,10 +68,12 @@ export function CaseProgressBar({
   onSkipDataCompletion,
   onInternalReviewSendBack,
   onReturnToCommittee,
+  onReviewCommitteeApprove,
+  onReviewCommitteeAddNotes,
   onPlatformReviewAddNotes,
   onPlatformReviewResubmit,
   hasPlatformNotes = false,
-  userRole,
+  userRole: userRoleRaw,
   disabled = false,
   caseClassification,
   departmentName,
@@ -72,8 +86,17 @@ export function CaseProgressBar({
   caseInternalReviewerId,
   currentUserId,
   isAssignedLawyer = false,
+  isCaseAssignee = false,
   hasReturnedFromReview = false,
 }: CaseProgressBarProps) {
+  // Normalize the role ONCE at the source so EVERY permission gate below
+  // (canActOnInternalReview, canReviewCases for committee review, the
+  // next-stage enable check, platform/settlement, rollback) sees a clean
+  // value. Defends against any stray whitespace/CRLF on the role string so a
+  // global role like branch_manager can never fall through a `===`/`includes`
+  // check and get wrongly dimmed. Server role is the authority and is clean;
+  // this is belt-and-braces applied in one place rather than per call site.
+  const userRole = (typeof userRoleRaw === "string" ? userRoleRaw.trim() : userRoleRaw) as UserRoleType;
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
   const [selectedReviewerId, setSelectedReviewerId] = useState("");
@@ -85,6 +108,7 @@ export function CaseProgressBar({
   const [platformAcceptNumber, setPlatformAcceptNumber] = useState("");
   const [platformNotes, setPlatformNotes] = useState("");
   const [returnToCommitteeNotes, setReturnToCommitteeNotes] = useState("");
+  const [committeeReviewNotes, setCommitteeReviewNotes] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قيد_الدراسة";
   let stagesOrder = getStagesForClassification(
@@ -206,6 +230,16 @@ export function CaseProgressBar({
   const isHeadOrManagerRole = userRole === "department_head" || userRole === "branch_manager";
   const canActOnCommitteeNotes = isAtCommitteeNotes && (isAssignedLawyer || isHeadOrManagerRole);
 
+  // Committee-review stage (إحالة_للجنة_المراجعة). Mirror the inside-detail
+  // gate EXACTLY: cases.tsx canReview = permissions.canReviewCases &&
+  // currentStage === REVIEW_COMMITTEE. canReviewCases(role) is the same
+  // shared helper the actions tab resolves through, so the bar shows the
+  // decision buttons to exactly the roles the server lets review (and the
+  // PATCH it issues is the same one the inside buttons issue).
+  const isAtReviewCommittee = normalizedStage === "إحالة_للجنة_المراجعة";
+  const showReviewCommitteeActions =
+    isAtReviewCommittee && canReviewCases(userRole) && !!onReviewCommitteeApprove;
+
   // General-dept audit (2026-06-14) — the accept dialog captures the number for
   // the stage the case is MOVING INTO (array-driven nextStage): a court case
   // number when entering court (منظورة) — Commercial najiz→منظورة / Admin
@@ -237,6 +271,31 @@ export function CaseProgressBar({
     isAtSettlement && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
   const canActOnInternalReview = isReviewerActor || userRole === "branch_manager";
+
+  // Permission-aware enable state for the generic "المرحلة التالية" button —
+  // the one button that previously always rendered and only failed AFTER a
+  // click (server 403 → error toast).
+  //
+  // This is a DENYLIST, not an allowlist: we only disable the roles that can
+  // PROVABLY never advance any case, and enable everyone else. The previous
+  // allowlist (branch_manager/department_head/admin_support/…) had a real
+  // hazard — any management role NOT listed (or a role-string mismatch) would
+  // be wrongly DIMMED even though the server allows it. A global role like
+  // branch_manager must NEVER see a disabled stage button. So instead we
+  // disable only when the user is a read-only / non-actor role AND is not an
+  // assignee/designated reviewer of THIS case. On the server's actor model
+  // (validateStageTransition) the real roles employee / hr / technical_support
+  // / viewer appear in NO forward case-transition rule — they can only act via
+  // the assigned_lawyer / internal_reviewer synthetic roles — so disabling
+  // them when neither holds is always correct and never blocks a real actor.
+  // Every management role (branch_manager, department_head, admin_support,
+  // cases_review_head, consultations_review_head) is enabled by construction.
+  const isNonActorRole =
+    userRole === "employee" ||
+    userRole === "hr" ||
+    userRole === "technical_support" ||
+    userRole === "viewer";
+  const nextStageActionAllowed = !isNonActorRole || isCaseAssignee || isReviewerActor;
 
   const handleMoveNext = () => {
     // For the internal-review transition the dropdown is pre-filled from the
@@ -281,6 +340,14 @@ export function CaseProgressBar({
     if (!onReturnToCommittee || !returnToCommitteeNotes.trim()) return;
     onReturnToCommittee(returnToCommitteeNotes.trim());
     setReturnToCommitteeNotes("");
+  };
+
+  const handleReviewCommitteeAddNotes = () => {
+    // Mirror inside-detail handleReject: notes are OPTIONAL here (the parent
+    // supplies the same "تم إضافة ملاحظات من لجنة المراجعة" default when blank).
+    if (!onReviewCommitteeAddNotes) return;
+    onReviewCommitteeAddNotes(committeeReviewNotes.trim());
+    setCommitteeReviewNotes("");
   };
 
   const handlePlatformReviewAccept = () => {
@@ -639,6 +706,77 @@ export function CaseProgressBar({
         </div>
       )}
 
+      {showReviewCommitteeActions && (
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                disabled={disabled}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                data-testid="button-review-committee-approve"
+              >
+                <Check className="w-4 h-4 ml-1" />
+                لا يوجد ملاحظات
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>اعتماد قرار لجنة المراجعة</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم اعتماد القضية والانتقال مباشرةً إلى <strong>جاهزة للرفع</strong>.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogAction onClick={() => onReviewCommitteeApprove?.()}>
+                  تأكيد الاعتماد
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {onReviewCommitteeAddNotes && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={disabled}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  data-testid="button-review-committee-add-notes"
+                >
+                  <AlertTriangle className="w-4 h-4 ml-1" />
+                  تم إضافة ملاحظات
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>تم إضافة ملاحظات — الأخذ بملاحظات اللجنة</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    سيتم إرجاع القضية إلى مرحلة <strong>الأخذ بالملاحظات</strong> وإشعار المحامي المسؤول. الملاحظات اختيارية.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <Textarea
+                  placeholder="ملاحظات اللجنة للمحامي المسؤول..."
+                  value={committeeReviewNotes}
+                  onChange={(e) => setCommitteeReviewNotes(e.target.value)}
+                  className="mt-2"
+                  data-testid="input-review-committee-notes"
+                />
+                <AlertDialogFooter className="gap-2">
+                  <AlertDialogCancel onClick={() => setCommitteeReviewNotes("")}>إلغاء</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleReviewCommitteeAddNotes}>
+                    تأكيد
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+        </div>
+      )}
+
       {canActOnCommitteeNotes && (
         <div className="flex items-center justify-center gap-3 flex-wrap">
           <AlertDialog>
@@ -951,7 +1089,33 @@ export function CaseProgressBar({
           </AlertDialog>
         )}
 
-        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtPlatformReview && !isAtSettlement && (
+        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtReviewCommittee && !isAtPlatformReview && !isAtSettlement && !nextStageActionAllowed && (
+          // Permission-gated: the move would 403 server-side, so instead of the
+          // old click-then-error flow show the action disabled with a tooltip
+          // explaining who can perform it. The span wrapper is required because
+          // disabled buttons don't emit the hover events the tooltip needs.
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex" data-testid="button-next-stage-disabled-wrap">
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled
+                  className="opacity-50 cursor-not-allowed"
+                  data-testid="button-next-stage-disabled"
+                >
+                  المرحلة التالية
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-[260px] text-center">
+              ليس لديك صلاحية لنقل القضية للمرحلة التالية. هذا الإجراء يقوم به المحامي المسؤول عن القضية أو إدارة القسم (رئيس القسم / الدعم الإداري / مدير الفرع).
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtReviewCommittee && !isAtPlatformReview && !isAtSettlement && nextStageActionAllowed && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
