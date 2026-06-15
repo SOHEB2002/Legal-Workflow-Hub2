@@ -15,7 +15,6 @@ interface CasesContextType {
   updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
   deleteCase: (id: string) => Promise<void>;
   assignCase: (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null) => void;
-  sendToReviewCommittee: (id: string) => void;
   approveCase: (id: string, notes?: string) => void;
   rejectCase: (id: string, notes: string, decision: ReviewDecisionType) => void;
   markReadyToSubmit: (id: string) => void;
@@ -283,12 +282,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     notifyCaseAssigned(id, lawCase?.caseNumber || "", lawyerId).catch(() => {});
   };
 
-  const sendToReviewCommittee = (id: string) => {
-    const lawCase = cases.find(c => c.id === id);
-    updateCase(id, { status: CaseStatus.REVIEW_COMMITTEE as CaseStatusValue });
-    notifyCaseSentToReview(id, lawCase?.caseNumber || "").catch(() => {});
-  };
-
   const approveCase = (id: string, notes?: string) => {
     const lawCase = cases.find(c => c.id === id);
     if (!lawCase || !user) return;
@@ -352,8 +345,18 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const getActiveCases = () =>
     cases.filter((c) => c.status !== CaseStatus.CLOSED);
 
+  // Count cases at the review committee by the CURRENT-STAGE convention
+  // (إحالة_للجنة_المراجعة) — the real workflow signal — OR'd with the legacy
+  // status="لجنة_المراجعة" for backward-compat with older rows. The redundant
+  // "إرسال للمراجعة" button that used to write only the legacy status was
+  // removed; advancing the stage is now the single path into committee review.
+  // Mirrors the dashboard's own committee predicate (dashboard.tsx).
   const getReviewCases = () =>
-    cases.filter((c) => c.status === CaseStatus.REVIEW_COMMITTEE);
+    cases.filter(
+      (c) =>
+        c.currentStage === CaseStage.REVIEW_COMMITTEE ||
+        c.status === CaseStatus.REVIEW_COMMITTEE,
+    );
 
   const getReadyCases = () =>
     cases.filter((c) => c.status === CaseStatus.READY_TO_SUBMIT);
@@ -534,7 +537,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         updateCase,
         deleteCase,
         assignCase,
-        sendToReviewCommittee,
         approveCase,
         rejectCase,
         markReadyToSubmit,
