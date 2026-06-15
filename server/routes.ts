@@ -11,6 +11,8 @@ import {
   extendConsultationDeliverySchema,
   insertHearingSchema,
   insertFieldTaskSchema,
+  TaskSpecialty,
+  type TaskSpecialtyValue,
   insertAttachmentSchema,
   insertMemoSchema,
   hearingResultSchema,
@@ -558,6 +560,23 @@ function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   if (entityData.assignedTo === user.id) return true;
   if (Array.isArray(entityData.assignedLawyers) && entityData.assignedLawyers.includes(user.id)) return true;
   return false;
+}
+
+// Route an auto-created admin_support task to the active admin_support whose
+// taskSpecialties includes the task's class. Returns the unassigned sentinel
+// "" (the system's canonical "غير مسند" value, e.g. auto-memos write
+// primaryLawyerId || responsibleLawyerId || "") when no matching active
+// specialist exists, so the task lands unassigned for a manager/admin_support
+// to distribute manually — instead of the old arbitrary "first admin_support".
+function selectSpecialistAssignee(allUsers: any[], specialty: TaskSpecialtyValue): string {
+  const match = allUsers.find(
+    (u: any) =>
+      u.role === "admin_support" &&
+      u.isActive &&
+      Array.isArray(u.taskSpecialties) &&
+      u.taskSpecialties.includes(specialty),
+  );
+  return match?.id || "";
 }
 
 function validateStageTransition(
@@ -2393,10 +2412,9 @@ export async function registerRoutes(
       if (shouldCreateCollectionTask) {
         try {
           const allUsers = await storage.getAllUsers();
-          const adminSupport = allUsers.find(
-            (u: any) => u.role === "admin_support" && u.isActive,
-          );
-          const assignee = adminSupport?.id || user.id;
+          // Collection (تحصيل) is litigation-class work → route to the
+          // litigation admin_support specialist; "" (unassigned) if none.
+          const assignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
           await storage.createFieldTask(
             {
               title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
@@ -7025,15 +7043,15 @@ export async function registerRoutes(
               caseUpdate.currentStage = "محكوم_حكم_نهائي";
               await storage.updateCase(effectiveCaseId, caseUpdate);
 
-              // Auto-create collection task
+              // Auto-create collection task → litigation specialist ("" if none)
               const allUsers = await storage.getAllUsers();
-              const adminSupport = allUsers.find((u: any) => u.role === "admin_support" && u.isActive);
+              const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
               const collectionTask = await storage.createFieldTask({
                 title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
                 description: `صدر حكم نهائي ${judgmentType} - يرجى إعداد خطاب تحصيل`,
                 taskType: "متابعة_محكمة",
                 caseId: effectiveCaseId,
-                assignedTo: adminSupport?.id || reqUser.id,
+                assignedTo: collectionAssignee,
                 priority: "عاجل",
                 dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
               }, reqUser.id);
@@ -7193,15 +7211,15 @@ export async function registerRoutes(
 
         // ==================== CONCILIATION: SETTLEMENT REACHED (تم_الصلح) ====================
         else if (data.result === HearingResult.SETTLEMENT_REACHED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "تم_الصلح")) {
-          // Auto-create collection task
+          // Auto-create collection task → litigation specialist ("" if none)
           const allUsers = await storage.getAllUsers();
-          const adminSupport = allUsers.find((u: any) => u.role === "admin_support" && u.isActive);
+          const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
           const collectionTask = await storage.createFieldTask({
             title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
             description: `تم الصلح - يرجى إعداد خطاب تحصيل`,
             taskType: "متابعة_محكمة",
             caseId: effectiveCaseId,
-            assignedTo: adminSupport?.id || reqUser.id,
+            assignedTo: collectionAssignee,
             priority: "عاجل",
             dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
           }, reqUser.id);

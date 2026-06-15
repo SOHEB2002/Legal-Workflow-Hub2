@@ -17,6 +17,10 @@ export const users = pgTable("users", {
   isActive: boolean("is_active").default(true),
   canBeAssignedCases: boolean("can_be_assigned_cases").default(false),
   canBeAssignedConsultations: boolean("can_be_assigned_consultations").default(false),
+  // Task-routing specialty (ترافع / استشارات; see TaskSpecialty). Nullable
+  // jsonb array — a user may hold several. Auto-created admin_support tasks
+  // route to the matching active specialist. Purely additive (ADD COLUMN).
+  taskSpecialties: jsonb("task_specialties").$type<TaskSpecialtyValue[]>(),
   mustChangePassword: boolean("must_change_password").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -1948,6 +1952,25 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
   "أخرى": "أخرى",
 };
 
+// ==================== تخصص المهام (Task-routing specialty) ====================
+// Primary work-class buckets used to route auto-created admin_support tasks to
+// the right specialist (the 4 admin_support staff have different specialties).
+// Stored as a jsonb string array on the user (users.taskSpecialties) so a user
+// can hold MULTIPLE classes (e.g. both ترافع and استشارات). Sub-classes can be
+// added under a primary class later by extending this enum — no schema change,
+// since the column is just a string array.
+export const TaskSpecialty = {
+  LITIGATION: "ترافع",
+  CONSULTATIONS: "استشارات",
+} as const;
+
+export type TaskSpecialtyValue = typeof TaskSpecialty[keyof typeof TaskSpecialty];
+
+export const TaskSpecialtyLabels: Record<TaskSpecialtyValue, string> = {
+  "ترافع": "ترافع",
+  "استشارات": "استشارات",
+};
+
 // ==================== أنواع المحاكم ====================
 export const CourtType = {
   GENERAL: "المحكمة العامة",
@@ -2093,6 +2116,7 @@ export interface User {
   isActive: boolean;
   canBeAssignedCases: boolean;
   canBeAssignedConsultations: boolean;
+  taskSpecialties: TaskSpecialtyValue[] | null;
   mustChangePassword: boolean;
   createdAt: string;
   updatedAt: string;
@@ -3053,6 +3077,7 @@ export const updateUserSchema = z.object({
   mustChangePassword: z.boolean().optional(),
   canBeAssignedCases: z.boolean().optional(),
   canBeAssignedConsultations: z.boolean().optional(),
+  taskSpecialties: z.array(z.enum(["ترافع", "استشارات"])).nullable().optional(),
 }).strict();
 
 export type UpdateUser = z.infer<typeof updateUserSchema>;
