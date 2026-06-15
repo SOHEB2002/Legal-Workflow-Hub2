@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, canReviewCases, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
 import {
   AlertDialog,
@@ -48,6 +49,11 @@ interface CaseProgressBarProps {
   caseInternalReviewerId?: string | null;
   currentUserId?: string;
   isAssignedLawyer?: boolean;
+  // True when the current user is an assignee of THIS case by the same rule
+  // the server uses (primaryLawyerId | responsibleLawyerId | assignedLawyers).
+  // Broader than isAssignedLawyer (which omits responsibleLawyerId) — used
+  // only to decide whether the generic "next stage" button is enabled.
+  isCaseAssignee?: boolean;
   // True when the case is on a drafting stage AND has bounced through
   // internal review at least once (derived in the parent from
   // stageHistory). Drives a "تعديلات بعد المراجعة" hint under the
@@ -80,6 +86,7 @@ export function CaseProgressBar({
   caseInternalReviewerId,
   currentUserId,
   isAssignedLawyer = false,
+  isCaseAssignee = false,
   hasReturnedFromReview = false,
 }: CaseProgressBarProps) {
   const [notes, setNotes] = useState("");
@@ -256,6 +263,25 @@ export function CaseProgressBar({
     isAtSettlement && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
   const canActOnInternalReview = isReviewerActor || userRole === "branch_manager";
+
+  // Permission-aware enable state for the generic "المرحلة التالية" button —
+  // the one button that previously always rendered and only failed AFTER a
+  // click (server 403 → error toast). This is a deliberately CONSERVATIVE,
+  // fail-OPEN mirror of the server's actor model (validateStageTransition):
+  // a user is an actor on a forward case transition only as branch_manager /
+  // department_head / admin_support, or via the assigned_lawyer / internal_
+  // reviewer synthetic roles. The real roles employee / hr / technical_support
+  // / viewer appear in NO forward case-transition rule, so when none of these
+  // hold the move can never succeed and disabling is always correct. When in
+  // doubt we leave it ENABLED (no regression vs today). The exact per-stage
+  // role set is NOT replicated here — see report (the client transitions table
+  // is stale); this gate only removes the guaranteed-to-fail clicks.
+  const nextStageActionAllowed =
+    userRole === "branch_manager" ||
+    userRole === "department_head" ||
+    userRole === "admin_support" ||
+    isCaseAssignee ||
+    isReviewerActor;
 
   const handleMoveNext = () => {
     // For the internal-review transition the dropdown is pre-filled from the
@@ -1049,7 +1075,33 @@ export function CaseProgressBar({
           </AlertDialog>
         )}
 
-        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtReviewCommittee && !isAtPlatformReview && !isAtSettlement && (
+        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtReviewCommittee && !isAtPlatformReview && !isAtSettlement && !nextStageActionAllowed && (
+          // Permission-gated: the move would 403 server-side, so instead of the
+          // old click-then-error flow show the action disabled with a tooltip
+          // explaining who can perform it. The span wrapper is required because
+          // disabled buttons don't emit the hover events the tooltip needs.
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex" data-testid="button-next-stage-disabled-wrap">
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled
+                  className="opacity-50 cursor-not-allowed"
+                  data-testid="button-next-stage-disabled"
+                >
+                  المرحلة التالية
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-[260px] text-center">
+              ليس لديك صلاحية لنقل القضية للمرحلة التالية. هذا الإجراء يقوم به المحامي المسؤول عن القضية أو إدارة القسم (رئيس القسم / الدعم الإداري / مدير الفرع).
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {canGoNext && !isAtInternalReview && !canActOnCommitteeNotes && !isAtReviewCommittee && !isAtPlatformReview && !isAtSettlement && nextStageActionAllowed && (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button

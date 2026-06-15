@@ -2251,6 +2251,17 @@ export default function CasesPage() {
                       (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
                     )
                   }
+                  // Broader than isAssignedLawyer (adds responsibleLawyerId) so
+                  // the bar's next-stage enable check matches the server's
+                  // isAssignedLawyer rule exactly. Drives only the disabled
+                  // state of the "next stage" button.
+                  isCaseAssignee={
+                    !!user && (
+                      selectedCase.primaryLawyerId === user.id ||
+                      selectedCase.responsibleLawyerId === user.id ||
+                      (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
+                    )
+                  }
                   hasReturnedFromReview={caseHasReturnedFromReview(selectedCase)}
                   eligibleInternalReviewers={users
                     .filter(u =>
