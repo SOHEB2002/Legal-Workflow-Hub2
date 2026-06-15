@@ -746,6 +746,7 @@ function mapDbHearing(dbHearing: any): Hearing {
     nextSteps: dbHearing.nextSteps || "",
     contactCompleted: dbHearing.contactCompleted ?? false,
     reportCompleted: dbHearing.reportCompleted ?? false,
+    sessionReportExported: dbHearing.sessionReportExported ?? false,
     adminTasksCreated: dbHearing.adminTasksCreated ?? false,
     opponentMemos: dbHearing.opponentMemos || "",
     hearingMinutes: dbHearing.hearingMinutes || "",
@@ -757,6 +758,22 @@ function mapDbHearing(dbHearing: any): Hearing {
     createdAt: toISOString(dbHearing.createdAt),
     updatedAt: toISOString(dbHearing.updatedAt),
   };
+}
+
+// Weekend-aware lead date for the agency-verification reminder. The lead is
+// "2 days before the hearing", but the Saudi weekend (Friday + Saturday) is
+// skipped: if hearingDate − 2 calendar days lands on Friday/Saturday, step
+// back to the working day before the weekend (Thursday). So a Sunday hearing
+// surfaces from Thursday, not Friday/Saturday. All math is in UTC so it never
+// drifts a day by local timezone. Working days = Sun–Thu; weekend = Fri(5)/Sat(6)
+// by getUTCDay(). Returns the surface-start date as "YYYY-MM-DD".
+function agencyVerificationLeadDate(hearingDate: string): string {
+  const d = new Date(`${hearingDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 2);
+  while (d.getUTCDay() === 5 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+  return d.toISOString().split("T")[0];
 }
 
 // Map DB field task to interface FieldTask
@@ -1609,6 +1626,7 @@ export class DatabaseStorage implements IStorage {
       nextSteps: "",
       contactCompleted: false,
       reportCompleted: false,
+      sessionReportExported: false,
       adminTasksCreated: false,
       opponentMemos: "",
       hearingMinutes: "",
@@ -2852,8 +2870,6 @@ export class DatabaseStorage implements IStorage {
         result: hearings.result, reportCompleted: hearings.reportCompleted,
         attendingLawyerId: hearings.attendingLawyerId, caseNumber: lawCases.caseNumber,
       }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id)).where(where);
-      const twoDays = new Date(); twoDays.setDate(twoDays.getDate() + 2);
-      const twoDaysStr = twoDays.toISOString().split("T")[0];
       for (const r of rows) {
         const ownerId = r.attendingLawyerId || "";
         const ownerScope = scopeOf(ownerId);
@@ -2870,8 +2886,9 @@ export class DatabaseStorage implements IStorage {
             tasks.push({ id: `hearing_attend:${r.id}`, kind: MyTaskKind.HEARING_ATTEND,
               title: `حضور جلسة — قضية ${r.caseNumber} بتاريخ ${r.date}`, entityType: "hearing", entityId: r.id,
               caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
-            // Agency verification — simple 2-day lead (weekend-aware lead is a refinement, see report).
-            if (r.date <= twoDaysStr) {
+            // Agency verification — surfaces once we reach the weekend-aware
+            // "2 days before" lead (Fri/Sat skipped; Sunday hearing → Thursday).
+            if (agencyVerificationLeadDate(r.date) <= today) {
               tasks.push({ id: `agency_verification:${r.id}`, kind: MyTaskKind.AGENCY_VERIFICATION,
                 title: `التحقق من الوكالة قبل الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
                 caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "verify" });
@@ -3042,6 +3059,21 @@ export class DatabaseStorage implements IStorage {
         tasks.push({ id: `data_completion:${r.id}`, kind: MyTaskKind.DATA_COMPLETION,
           title: `استكمال البيانات والتواصل مع العميل — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
           ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "complete" });
+      }
+    }
+
+    // ---- 15. Session-report PDF export (admin_support) — after the lawyer ----
+    // wrote the hearing report (reportCompleted) and it hasn't been exported yet.
+    // Litigation class (hearing). Clears when sessionReportExported flips true.
+    if (isAdminSupport) {
+      const rows = await db.select({ id: hearings.id, caseId: hearings.caseId, caseNumber: lawCases.caseNumber })
+        .from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
+        .where(and(eq(hearings.reportCompleted, true),
+          sql`COALESCE(${hearings.sessionReportExported}, false) = false`));
+      for (const r of rows) {
+        tasks.push({ id: `session_report_export:${r.id}`, kind: MyTaskKind.SESSION_REPORT_EXPORT,
+          title: `تصدير تقرير الجلسة (PDF) — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
+          caseId: r.caseId, ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "export" });
       }
     }
 

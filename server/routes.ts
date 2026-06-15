@@ -7384,6 +7384,31 @@ export async function registerRoutes(
     }
   });
 
+  // Mark the session report as exported — clears the admin_support
+  // SESSION_REPORT_EXPORT task. This is the done-state toggle only; actual PDF
+  // generation is a separate concern (see report). Allowed for the same actors
+  // as the other hearing actions (attending lawyer / admin_support / branch_manager).
+  app.post("/api/hearings/:id/mark-report-exported", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!canActOnHearing(req.user!, hearing)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
+      if (!hearing.reportCompleted) {
+        return res.status(400).json({ error: "يجب إكمال تقرير الجلسة أولاً" });
+      }
+      const updated = await storage.updateHearing(hearingId, { sessionReportExported: true });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error marking session report exported:", error);
+      res.status(500).json({ error: "حدث خطأ في تحديث حالة تصدير التقرير" });
+    }
+  });
+
   app.post("/api/hearings/:id/close", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);

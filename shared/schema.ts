@@ -493,6 +493,9 @@ export const hearings = pgTable("hearings", {
   nextSteps: text("next_steps").default(""),
   contactCompleted: boolean("contact_completed").default(false),
   reportCompleted: boolean("report_completed").default(false),
+  // Done-state for the admin_support "export session report PDF" task — set
+  // true once the report has been exported. Purely additive (ADD COLUMN).
+  sessionReportExported: boolean("session_report_exported").default(false),
   adminTasksCreated: boolean("admin_tasks_created").default(false),
   opponentMemos: text("opponent_memos").default(""),
   hearingMinutes: text("hearing_minutes").default(""),
@@ -2840,6 +2843,7 @@ export interface Hearing {
   nextSteps: string;
   contactCompleted: boolean;
   reportCompleted: boolean;
+  sessionReportExported: boolean;
   adminTasksCreated: boolean;
   opponentMemos: string;
   hearingMinutes: string;
@@ -4910,6 +4914,7 @@ export const MyTaskKind = {
   CONSULTATION_CLOSING: "consultation_closing", // consultation ready to close (admin_support)
   DATA_COMPLETION: "data_completion",     // case at data-completion stage (admin_support)
   AGENCY_VERIFICATION: "agency_verification", // verify agency before a near hearing
+  SESSION_REPORT_EXPORT: "session_report_export", // export session-report PDF (admin_support)
 } as const;
 
 export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
