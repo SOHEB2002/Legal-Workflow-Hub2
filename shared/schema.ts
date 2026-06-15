@@ -4938,4 +4938,34 @@ export interface MyTaskItem {
   dueDate: string | null;      // relevant/due date if any
   isOverdue: boolean;          // server-computed where a backend signal exists
   actionHint: MyTaskActionHint;// what the user does
+  // Specialty class (ترافع / استشارات) of the task. The organizing principle
+  // for admin_support: EVERY admin_support task falls under one class so it
+  // routes to the right specialist and nothing is unclassified. null only for
+  // entities outside the two-class domain (contracts, delegations) or a
+  // field task with no entity link (see taskSpecialtyClass).
+  specialtyClass: TaskSpecialtyValue | null;
+}
+
+// Classify a task into its specialty domain (ترافع litigation / استشارات
+// consultations). Rule: anything tied to a case / hearing / memo / legal
+// deadline (litigation workflow) → ترافع; anything tied to a consultation →
+// استشارات. field_task / contact_log are classified by their case link
+// (case-linked → ترافع; consultation-linked or entity-less → null until a
+// consultationId is carried). Contracts/delegations are outside the two-class
+// admin_support domain → null. Shared by the auto-task router and the feed.
+export function taskSpecialtyClass(entityType: MyTaskEntityType, caseId: string | null): TaskSpecialtyValue | null {
+  switch (entityType) {
+    case "consultation":
+      return TaskSpecialty.CONSULTATIONS;
+    case "case":
+    case "hearing":
+    case "memo":
+    case "legal_deadline":
+      return TaskSpecialty.LITIGATION;
+    case "field_task":
+    case "contact_log":
+      return caseId ? TaskSpecialty.LITIGATION : null;
+    default: // contract, delegation
+      return null;
+  }
 }

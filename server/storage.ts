@@ -8,7 +8,7 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
-  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind,
+  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, taskSpecialtyClass,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -2790,7 +2790,9 @@ export class DatabaseStorage implements IStorage {
     const userDept = user.departmentId && user.departmentId.length > 0 ? user.departmentId : null;
     const deptHeadScoped = isDeptHead && !!userDept;
     const today = new Date().toISOString().split("T")[0];
-    const tasks: MyTaskItem[] = [];
+    // Built without specialtyClass; it's stamped uniformly on return via
+    // taskSpecialtyClass so every item (esp. admin_support's) carries its class.
+    const tasks: Omit<MyTaskItem, "specialtyClass">[] = [];
     const scopeOf = (ownerId: string): "self" | "team" =>
       deptHeadScoped && ownerId !== uid ? "team" : "self";
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
@@ -3043,7 +3045,9 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    return tasks;
+    // Stamp the specialty class (ترافع/استشارات) on every item so admin_support
+    // tasks group cleanly and nothing is left unclassified.
+    return tasks.map((t) => ({ ...t, specialtyClass: taskSpecialtyClass(t.entityType, t.caseId) }));
   }
 
   async markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void> {
