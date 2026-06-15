@@ -8420,6 +8420,25 @@ export async function registerRoutes(
     }
   });
 
+  // Unified Tasks feed — everything requiring THIS user's action across the
+  // system (cases/hearings/memos/reviews/collection/deadlines/field-tasks/
+  // delegations/consultations). Per-user SQL aggregation (see storage.getMyTasks);
+  // a department_head also sees their department's tasks tagged ownerScope:"team".
+  app.get("/api/my-tasks", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const myTasks = await storage.getMyTasks({
+        id: reqUser.id,
+        role: reqUser.role,
+        departmentId: reqUser.departmentId ?? null,
+      });
+      res.json(myTasks);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post("/api/sidebar-counts/mark-viewed", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
