@@ -3431,7 +3431,13 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
-      if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
+      // 4c-7: committee decisions INHERIT. A delegate inheriting the committee
+      // chair role (consultations_review_head) or branch_manager may decide.
+      // Scope is null — consultations carry no caseId, so only all_cases
+      // delegations apply. No delegation → exactly the own-role check (parity).
+      const ctx = req.actingContext;
+      const ownRoleDecides = ["consultations_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "branch_manager"))) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
 
@@ -3454,6 +3460,15 @@ export async function registerRoutes(
 
       if (consultation.currentStage !== ConsultationStage.COMMITTEE) {
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
+      // standing in for the review head may NOT decide a committee on a
+      // consultation they (REAL id) authored / are the assigned lawyer of.
+      // Gated on !ownRoleDecides so a real review head is byte-identical
+      // (this endpoint has no own-role author-exclusion today). Real human id.
+      if (!ownRoleDecides && isAssignedLawyer(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد قرار اللجنة على عمل أنت محرّره" });
       }
 
       const nextStage = decision === CommitteeDecision.APPROVED
@@ -3514,8 +3529,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      // 4c-7: take-notes-outcome INHERITS. The assigned lawyer applies the
+      // committee's notes and records the outcome — their OWN follow-up work,
+      // NOT a review — so a delegate inheriting the assigned-lawyer identity OR a
+      // dept_head/branch_manager role may record it. No author/self exclusion
+      // (not a review). Scope null. No delegation → own identity+role (parity).
+      const ctx = req.actingContext;
+      const isLawyer = ctx
+        ? Array.from(effectiveIdsFor(ctx, null)).some((id) => isAssignedLawyer({ id }, consultation))
+        : isAssignedLawyer(reqUser, consultation);
+      const isHead = ctx
+        ? hasEffectiveRole(ctx, null, "department_head", "branch_manager")
+        : ["department_head", "branch_manager"].includes(reqUser.role);
       if (!isLawyer && !isHead) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
       }
@@ -5183,7 +5208,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       // Committee chair = consultations_review_head per spec.
-      if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
+      // 4c-7: committee decisions INHERIT (scope null — contracts carry no
+      // caseId → all_cases delegations only). No delegation → own-role (parity).
+      const ctx = req.actingContext;
+      const ownRoleDecides = ["consultations_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "branch_manager"))) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
@@ -5207,6 +5236,13 @@ export async function registerRoutes(
       }
       if (contract.currentStage !== ContractStage.COMMITTEE) {
         return res.status(400).json({ error: "العقد ليس في مرحلة لجنة المراجعة" });
+      }
+      // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
+      // standing in for the review head may NOT decide a committee on a contract
+      // they (REAL id) authored / are the assigned lawyer of. Real review head
+      // unaffected (parity). Real human id.
+      if (!ownRoleDecides && isAssignedLawyer(reqUser, contract)) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد قرار اللجنة على عمل أنت محرّره" });
       }
       const nextStage = decision === CommitteeDecision.APPROVED
         ? ContractStage.READY
@@ -5250,8 +5286,16 @@ export async function registerRoutes(
       if (contract.currentStage !== ContractStage.TAKING_NOTES) {
         return res.status(400).json({ error: "العقد ليس في مرحلة الأخذ بالملاحظات" });
       }
-      const isLawyer = isAssignedLawyer(reqUser, contract);
-      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      // 4c-7: take-notes-outcome INHERITS (lawyer's own follow-up work applying
+      // committee notes, NOT a review → no author/self exclusion). Scope null.
+      // No delegation → own identity+role only (parity).
+      const ctx = req.actingContext;
+      const isLawyer = ctx
+        ? Array.from(effectiveIdsFor(ctx, null)).some((id) => isAssignedLawyer({ id }, contract))
+        : isAssignedLawyer(reqUser, contract);
+      const isHead = ctx
+        ? hasEffectiveRole(ctx, null, "department_head", "branch_manager")
+        : ["department_head", "branch_manager"].includes(reqUser.role);
       if (!isLawyer && !isHead) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
       }
@@ -6450,7 +6494,14 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
-      if (!["cases_review_head", "branch_manager"].includes(reqUser.role)) {
+      // 4c-7: committee decisions INHERIT. Memos scope by their PARENT caseId
+      // (specific_cases delegations reach a memo via its parent case), so the
+      // authoritative grant runs after the memo is loaded. This fast-deny keeps
+      // the pre-fetch 403 byte-identical for non-delegated users; a user with an
+      // active delegation defers to the scoped check below.
+      const ctx = req.actingContext;
+      const ownRoleDecides = ["cases_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && (!ctx || ctx.delegators.length === 0)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
 
@@ -6472,6 +6523,20 @@ export async function registerRoutes(
       }
       if (memo.currentStage !== MemoStage.COMMITTEE) {
         return res.status(400).json({ error: "المذكرة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      // 4c-7: scoped committee grant — a delegate inheriting cases_review_head/
+      // branch_manager for this memo's PARENT case may decide. Non-delegated
+      // users already resolved at the fast-deny above (this is a no-op for them).
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, memo.caseId, "cases_review_head", "branch_manager"))) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+      // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
+      // standing in for the review head may NOT decide a committee on a memo
+      // they (REAL id) authored / are the assigned lawyer of. Real review head
+      // unaffected (parity). Real human id.
+      if (!ownRoleDecides && isAssignedLawyer(reqUser, memo)) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد قرار اللجنة على مذكرة أنت محرّرها" });
       }
 
       const nextStage = decision === CommitteeDecision.APPROVED
@@ -6531,8 +6596,16 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
-      const isLawyer = !!memo.assignedTo && memo.assignedTo === reqUser.id;
-      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      // 4c-7: take-notes-outcome INHERITS (lawyer's own follow-up work applying
+      // committee notes, NOT a review → no author/self exclusion). Scope = the
+      // memo's PARENT caseId. No delegation → own identity+role only (parity).
+      const ctx = req.actingContext;
+      const isLawyer = ctx
+        ? Array.from(effectiveIdsFor(ctx, memo.caseId)).some((id) => isAssignedLawyer({ id }, memo))
+        : (!!memo.assignedTo && memo.assignedTo === reqUser.id);
+      const isHead = ctx
+        ? hasEffectiveRole(ctx, memo.caseId, "department_head", "branch_manager")
+        : ["department_head", "branch_manager"].includes(reqUser.role);
       if (!isLawyer && !isHead) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
       }
