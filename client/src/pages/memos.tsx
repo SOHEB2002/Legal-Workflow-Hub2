@@ -104,6 +104,7 @@ import type {
   InternalReviewDecisionValue, CommitteeDecisionValue, NoteOutcomeValue,
 } from "@shared/schema";
 import { MemoStagesBar } from "@/components/memo-stages-bar";
+import { MemoAdvancePanel } from "@/components/memo-advance-panel";
 import { ClipboardCheck, FileText } from "lucide-react";
 import { differenceInDays } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -813,87 +814,10 @@ export default function MemosPage() {
     }
   };
 
-  // Phase-9 — generic stage advance for the linear-path transitions
-  // (RECEIVED → DRAFTING, READY → FILED). DRAFTING → INTERNAL_REVIEW
-  // goes through the dedicated dialog below since it requires a
-  // reviewer selection.
-  const handleAdvanceMemoStage = async (
-    memo: Memo,
-    targetStage: MemoStageValue,
-    extraBody: Record<string, unknown> = {},
-  ) => {
-    setSubmitting(true);
-    try {
-      await apiRequest("POST", `/api/memos/${memo.id}/advance-stage`, { targetStage, ...extraBody });
-      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
-      toast({ title: "تم تحديث المرحلة" });
-    } catch (err) {
-      toast({ title: "فشل تحديث المرحلة", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // Phase-9.1 — DRAFTING → INTERNAL_REVIEW dialog state. Mirrors the
-  // cases-side internal-reviewer picker (case-progress-bar.tsx). The
-  // dropdown is sourced from users in the same department as the
-  // memo's parent case (computed at render time in the dialog).
-  const [showSendToReviewDialog, setShowSendToReviewDialog] = useState(false);
-  const [sendToReviewMemo, setSendToReviewMemo] = useState<Memo | null>(null);
-  const [sendToReviewReviewerId, setSendToReviewReviewerId] = useState("");
-  const openSendToReviewDialog = (memo: Memo) => {
-    setSendToReviewMemo(memo);
-    // Pre-select the previous reviewer on loop-back rounds so the
-    // user doesn't have to re-pick after يوجد ملاحظات.
-    setSendToReviewReviewerId(memo.internalReviewerId || "");
-    setShowSendToReviewDialog(true);
-  };
-  const closeSendToReviewDialog = () => {
-    setShowSendToReviewDialog(false);
-    setSendToReviewMemo(null);
-    setSendToReviewReviewerId("");
-  };
-  const handleSendToReview = async () => {
-    if (!sendToReviewMemo) return;
-    if (!sendToReviewReviewerId) {
-      toast({ title: "اختر المراجع الداخلي", variant: "destructive" });
-      return;
-    }
-    await handleAdvanceMemoStage(
-      sendToReviewMemo,
-      MemoStage.INTERNAL_REVIEW,
-      { internalReviewerId: sendToReviewReviewerId },
-    );
-    closeSendToReviewDialog();
-  };
-
-  // FE-side gate for the 3 linear-path stage advances. Server still
-  // re-enforces via validateStageTransition; this just decides whether
-  // to render the button. Mirrors the per-stage role lists in
-  // ALLOWED_MEMO_TRANSITIONS (server/routes.ts).
-  const canAdvanceMemoStage = (memo: Memo, targetStage: MemoStageValue): boolean => {
-    if (!user) return false;
-    if (memo.awaitingCompletion || memo.pausedAt) return false;
-    const memoCase = getMemoCase(memo);
-    if (
-      user.role === "department_head" &&
-      memoCase &&
-      memoCase.departmentId !== user.departmentId
-    ) return false;
-    const isLawyer = !!memo.assignedTo && memo.assignedTo === user.id;
-    const isHeadOrManager = user.role === "department_head" || user.role === "branch_manager";
-    const isAdminSupport = user.role === "admin_support";
-    if (memo.currentStage === MemoStage.RECEIVED && targetStage === MemoStage.DRAFTING) {
-      return isLawyer || isHeadOrManager || isAdminSupport;
-    }
-    if (memo.currentStage === MemoStage.DRAFTING && targetStage === MemoStage.INTERNAL_REVIEW) {
-      return isLawyer || isHeadOrManager;
-    }
-    if (memo.currentStage === MemoStage.READY && targetStage === MemoStage.FILED) {
-      return isLawyer || isHeadOrManager || isAdminSupport;
-    }
-    return false;
-  };
+  // Memo lawyer-side advance (linear advances + DRAFTING→INTERNAL_REVIEW
+  // send-to-review) now lives in the shared <MemoAdvancePanel> (used by this
+  // page and the مهامي hub). The internal-review / committee / take-notes
+  // decision dialogs below stay here.
 
   const handleTakeNotesOutcome = async (outcome: NoteOutcomeValue) => {
     if (!takeNotesMemo) return;
@@ -1924,41 +1848,14 @@ export default function MemosPage() {
                       نتيجة الأخذ بالملاحظات
                     </Button>
                   )}
-                  {/* Phase-9 — stage-driven linear-path advances. Each
-                      button is gated on the memo's currentStage; the
-                      branching transitions (internal-review / committee
-                      / take-notes) live in the dialog buttons above. */}
-                  {detailMemo.currentStage === MemoStage.RECEIVED && canAdvanceMemoStage(detailMemo, MemoStage.DRAFTING) && (
-                    <Button
-                      data-testid="button-memo-advance-to-drafting"
-                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.DRAFTING)}
-                      disabled={submitting}
-                    >
-                      <Clock className="w-4 h-4 ml-2" />
-                      بدء التحرير
-                    </Button>
-                  )}
-                  {detailMemo.currentStage === MemoStage.DRAFTING && canAdvanceMemoStage(detailMemo, MemoStage.INTERNAL_REVIEW) && (
-                    <Button
-                      data-testid="button-memo-advance-to-internal-review"
-                      onClick={() => openSendToReviewDialog(detailMemo)}
-                      disabled={submitting}
-                    >
-                      <AlertTriangle className="w-4 h-4 ml-2" />
-                      إرسال للمراجعة الداخلية
-                    </Button>
-                  )}
-                  {detailMemo.currentStage === MemoStage.READY && canAdvanceMemoStage(detailMemo, MemoStage.FILED) && (
-                    <Button
-                      data-testid="button-memo-advance-to-filed"
-                      onClick={() => handleAdvanceMemoStage(detailMemo, MemoStage.FILED)}
-                      disabled={submitting}
-                      className="bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-700"
-                    >
-                      <CheckCircle className="w-4 h-4 ml-2" />
-                      تم الرفع
-                    </Button>
-                  )}
+                  {/* Phase-9 — stage-driven linear-path advances + the
+                      DRAFTING→INTERNAL_REVIEW send-to-review picker, now in the
+                      shared <MemoAdvancePanel>. The branching transitions
+                      (internal-review / committee / take-notes) live in the
+                      dialog buttons above. busy/onBusyChange keep this page's
+                      shared `submitting` in sync so sibling buttons disable
+                      during an advance exactly as before. */}
+                  <MemoAdvancePanel memo={detailMemo} busy={submitting} onBusyChange={setSubmitting} />
 
                   {/* Legacy MemoStatus stage-flow buttons. Hidden once
                       the memo is on the new currentStage axis. */}
@@ -2257,81 +2154,8 @@ export default function MemosPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Phase-9.1 — send-to-internal-review dialog. Mirrors the cases
-          internal-reviewer picker. The dropdown is sourced from users
-          in the same department as the memo's parent case, excluding
-          admin_support / branch_manager (universal access) / hr /
-          technical_support / the current user. */}
-      <Dialog
-        open={showSendToReviewDialog}
-        onOpenChange={(open) => { if (!open) closeSendToReviewDialog(); }}
-      >
-        <DialogContent dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ClipboardCheck className="w-5 h-5" />
-              إرسال للمراجعة الداخلية
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              اختر المراجع الداخلي. ستُحال المذكرة إليه ليُسجل قراره
-              (اعتماد / يوجد ملاحظات).
-            </p>
-            <div className="space-y-2">
-              <Label>المراجع الداخلي <span className="text-red-500">*</span></Label>
-              {(() => {
-                const memoCase = sendToReviewMemo ? cases.find(c => c.id === sendToReviewMemo.caseId) : null;
-                const eligibleReviewers = users.filter(u =>
-                  u.isActive
-                  && u.role !== "admin_support"
-                  && u.role !== "branch_manager"
-                  && u.role !== "hr"
-                  && u.role !== "technical_support"
-                  && u.id !== user?.id
-                  && (!memoCase?.departmentId || u.departmentId === memoCase.departmentId)
-                );
-                return (
-                  <>
-                    <select
-                      value={sendToReviewReviewerId}
-                      onChange={(e) => setSendToReviewReviewerId(e.target.value)}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      data-testid="select-memo-internal-reviewer"
-                    >
-                      <option value="">-- اختر مراجعاً --</option>
-                      {eligibleReviewers.map(u => (
-                        <option key={u.id} value={u.id}>{u.name}</option>
-                      ))}
-                    </select>
-                    {eligibleReviewers.length === 0 && (
-                      <p className="text-xs text-red-600">لا يوجد مراجعون مؤهلون في قسم القضية</p>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-          <DialogFooter className="gap-2 flex-wrap">
-            <Button
-              variant="outline"
-              onClick={closeSendToReviewDialog}
-              data-testid="button-cancel-memo-send-to-review"
-            >
-              إلغاء
-            </Button>
-            <Button
-              data-testid="button-confirm-memo-send-to-review"
-              onClick={handleSendToReview}
-              disabled={submitting || !sendToReviewReviewerId}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              <ClipboardCheck className="w-4 h-4 ml-2" />
-              تأكيد الإرسال
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Phase-9.1 send-to-internal-review dialog moved into the shared
+          <MemoAdvancePanel> (rendered in the memo detail above). */}
 
       {/* Phase-9 — internal-review dialog. 2 outcomes: PASSED → COMMITTEE,
           NEEDS_NOTES → DRAFTING. */}

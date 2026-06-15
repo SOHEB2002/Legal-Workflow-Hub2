@@ -23,11 +23,12 @@ import { extractApiError } from "@/lib/utils";
 import { OnBehalfBadge } from "@/components/acting-for-banner";
 import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { CaseStagePanel } from "@/components/case-stage-panel";
+import { MemoAdvancePanel } from "@/components/memo-advance-panel";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, InternalReviewDecision,
-  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase,
+  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
 } from "@shared/schema";
 
 // hearing_attend / hearing_unrecorded open the SHARED hearing-result dialog
@@ -170,7 +171,8 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
 function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
-  const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind) || isCaseStageKind(task);
+  const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind)
+    || isCaseStageKind(task) || task.kind === MyTaskKind.MEMO_PENDING;
   return (
     <div
       dir="rtl"
@@ -233,6 +235,8 @@ export default function MyTasksPage() {
   const [resultHearing, setResultHearing] = useState<Hearing | null>(null);
   // Case stage panel (the shared component) target
   const [stageCase, setStageCase] = useState<LawCase | null>(null);
+  // Memo advance panel (the shared component) target
+  const [advanceMemo, setAdvanceMemo] = useState<Memo | null>(null);
 
   // Create-task dialog
   const [showCreate, setShowCreate] = useState(false);
@@ -295,6 +299,16 @@ export default function MyTasksPage() {
         setStageCase(await res.json());
       } catch (err) {
         toast({ title: "تعذّر فتح القضية", description: extractApiError(err), variant: "destructive" });
+      }
+      return;
+    }
+    if (task.kind === MyTaskKind.MEMO_PENDING) {
+      // memo_pending → fetch the memo and open the SHARED MemoAdvancePanel.
+      try {
+        const res = await apiRequest("GET", `/api/memos/${task.entityId}`);
+        setAdvanceMemo(await res.json());
+      } catch (err) {
+        toast({ title: "تعذّر فتح المذكرة", description: extractApiError(err), variant: "destructive" });
       }
       return;
     }
@@ -573,6 +587,18 @@ export default function MyTasksPage() {
           <DialogHeader><DialogTitle>مسار القضية</DialogTitle></DialogHeader>
           {stageCase && (
             <CaseStagePanel caseItem={stageCase} onChanged={refreshAfterAction} />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Memo advance panel (shared with the memos page) ===== */}
+      <Dialog open={!!advanceMemo} onOpenChange={(o) => !o && setAdvanceMemo(null)}>
+        <DialogContent dir="rtl" data-testid="dialog-memo-advance">
+          <DialogHeader><DialogTitle>تقدّم المذكرة</DialogTitle></DialogHeader>
+          {advanceMemo && (
+            <div className="flex flex-wrap gap-2">
+              <MemoAdvancePanel memo={advanceMemo} onChanged={refreshAfterAction} />
+            </div>
           )}
         </DialogContent>
       </Dialog>
