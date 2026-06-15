@@ -21,12 +21,19 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { OnBehalfBadge } from "@/components/acting-for-banner";
+import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, InternalReviewDecision,
-  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue,
+  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing,
 } from "@shared/schema";
+
+// hearing_attend / hearing_unrecorded open the SHARED hearing-result dialog
+// (same component the hearings page uses) — not the generic action modal.
+const HEARING_RESULT_KINDS = new Set<MyTaskKindValue>([
+  MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED,
+]);
 
 // Each task kind → an icon and a short Arabic type label (shown under the title).
 const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> = {
@@ -154,7 +161,7 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
 function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
-  const actionable = actionModeFor(task) !== null;
+  const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind);
   return (
     <div
       dir="rtl"
@@ -213,6 +220,8 @@ export default function MyTasksPage() {
   const [actionTask, setActionTask] = useState<MyTaskItem | null>(null);
   const [form, setForm] = useState<ActionForm>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  // Hearing-result dialog (the shared component) target
+  const [resultHearing, setResultHearing] = useState<Hearing | null>(null);
 
   // Create-task dialog
   const [showCreate, setShowCreate] = useState(false);
@@ -251,6 +260,22 @@ export default function MyTasksPage() {
   function openAction(task: MyTaskItem) {
     setForm({ ...EMPTY_FORM });
     setActionTask(task);
+  }
+
+  // Route the row button: hearing-result kinds open the shared result dialog
+  // (fetch the full hearing first, since the feed item only carries the id);
+  // everything else opens the generic action modal.
+  async function handleAction(task: MyTaskItem) {
+    if (HEARING_RESULT_KINDS.has(task.kind)) {
+      try {
+        const res = await apiRequest("GET", `/api/hearings/${task.entityId}`);
+        setResultHearing(await res.json());
+      } catch (err) {
+        toast({ title: "تعذّر فتح الجلسة", description: extractApiError(err), variant: "destructive" });
+      }
+      return;
+    }
+    openAction(task);
   }
 
   async function refreshAfterAction() {
@@ -383,7 +408,7 @@ export default function MyTasksPage() {
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Pin className="h-4 w-4" /> مثبتة — جلسات وإسناد قضايا
               </h2>
-              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={openAction} />)}</div>
+              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
             </section>
           )}
 
@@ -392,7 +417,7 @@ export default function MyTasksPage() {
             {rest.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">لا توجد مهام أخرى.</p>
             ) : (
-              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={openAction} />)}</div>
+              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
             )}
           </section>
 
@@ -404,7 +429,7 @@ export default function MyTasksPage() {
               {Array.from(teamByMember.entries()).map(([ownerId, items]) => (
                 <div key={ownerId} className="space-y-2">
                   <h3 className="text-xs font-semibold"><BidiText>{userName(ownerId)}</BidiText></h3>
-                  <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={openAction} />)}</div>
+                  <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
                 </div>
               ))}
             </section>
@@ -421,7 +446,7 @@ export default function MyTasksPage() {
                   {Array.from(members.entries()).map(([ownerId, items]) => (
                     <div key={ownerId} className="space-y-2 ps-2">
                       <h4 className="text-xs font-semibold text-muted-foreground"><BidiText>{userName(ownerId)}</BidiText></h4>
-                      <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={openAction} />)}</div>
+                      <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
                     </div>
                   ))}
                 </div>
@@ -511,6 +536,13 @@ export default function MyTasksPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ===== Hearing-result dialog (shared with the hearings page) ===== */}
+      <HearingResultDialog
+        hearing={resultHearing}
+        onClose={() => setResultHearing(null)}
+        onSuccess={refreshAfterAction}
+      />
 
       {/* ===== Create dialog ===== */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
