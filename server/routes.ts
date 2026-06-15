@@ -2041,7 +2041,10 @@ export async function registerRoutes(
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
-        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, req.actingContext);
+        // 4c-0: INERT — pass undefined so a delegate gains NO case transition
+        // act-as yet (even an admin-class delegate who passes canModifyCase on
+        // their own merit). 4c-1 (cases) flips this to req.actingContext.
+        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, undefined);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -2845,7 +2848,9 @@ export async function registerRoutes(
 
       // Validate stage transition if changing status
       if (req.body.status && req.body.status !== existing.status) {
-        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing, req.actingContext);
+        // 4c-0: INERT — pass undefined (zero act-as). 4c-3 (consultations)
+        // flips this to req.actingContext alongside expanding canModifyConsultation.
+        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing, undefined);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -3066,7 +3071,10 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
-        req.actingContext,
+        // 4c-0: INERT — pass undefined so a delegate gains NO consultation
+        // transition act-as yet. 4c-3 (consultations) flips this to
+        // req.actingContext alongside expanding canModifyConsultation.
+        undefined,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -3163,7 +3171,10 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
-        req.actingContext,
+        // 4c-0: INERT — pass undefined so a delegate gains NO consultation
+        // transition act-as yet. 4c-3 (consultations) flips this to
+        // req.actingContext alongside expanding canModifyConsultation.
+        undefined,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -4803,7 +4814,10 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
-        req.actingContext,
+        // 4c-0: INERT — pass undefined so a delegate gains NO contract
+        // transition act-as yet. 4c-4 (contracts) flips this to
+        // req.actingContext alongside expanding canModifyContract.
+        undefined,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       // Slot-validation gate per ContractSlotsByType. Required slots
@@ -4959,7 +4973,10 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
-        req.actingContext,
+        // 4c-0: INERT — pass undefined so a delegate gains NO contract
+        // transition act-as yet. 4c-4 (contracts) flips this to
+        // req.actingContext alongside expanding canModifyContract.
+        undefined,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       const fromLabel = ContractStageLabels[contract.currentStage] || contract.currentStage;
@@ -6094,7 +6111,10 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
-        req.actingContext,
+        // 4c-0: INERT — pass undefined so a delegate gains NO memo transition
+        // act-as yet. 4c-5 (memos) flips this to req.actingContext alongside
+        // expanding canModifyCase (memos gate via their parent case).
+        undefined,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -6198,7 +6218,10 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
-        req.actingContext,
+        // 4c-0: INERT — pass undefined so a delegate gains NO memo transition
+        // act-as yet. 4c-5 (memos) flips this to req.actingContext alongside
+        // expanding canModifyCase (memos gate via their parent case).
+        undefined,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 

@@ -119,6 +119,17 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
+// 4c-0: the delegation-effective-role WIRING for requireRole is in place but
+// GATED OFF, so 4c-0 grants ZERO act-as via requireRole (strict per-resource
+// staging). While off, effectiveRoles === {own role} for everyone — byte-
+// identical to the original roles.includes(user.role). Flipping this to true
+// (its own reviewable sub-step) lets a delegate inherit the delegator's role on
+// the ENTITY-AGNOSTIC requireRole gates: deletes (case/client/consultation/
+// contract/hearing/field-task/contact-log/memo/notification/attachment), user
+// CRUD, and delegation-approve. Turn on only when those are intentionally
+// staged. globalActingRoles uses all_cases delegators only.
+const DELEGATION_REQUIREROLE_ENABLED = false;
+
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const user = (req as any).user;
@@ -126,12 +137,10 @@ export function requireRole(...roles: string[]) {
       res.status(403).json({ error: "لا تملك صلاحية" });
       return;
     }
-    // 4c-0: consult the delegation-effective roles (entity-agnostic →
-    // globalActingRoles uses all_cases delegators only). With NO active
-    // delegation this is exactly {own role}, so the check is byte-identical to
-    // roles.includes(user.role). Four-eyes/identity guards are unaffected.
     const ctx = req.actingContext;
-    const effectiveRoles = ctx ? globalActingRoles(ctx) : new Set<string>([user.role]);
+    const effectiveRoles = (DELEGATION_REQUIREROLE_ENABLED && ctx)
+      ? globalActingRoles(ctx)
+      : new Set<string>([user.role]);
     if (!roles.some((r) => effectiveRoles.has(r))) {
       res.status(403).json({ error: "لا تملك صلاحية" });
       return;
