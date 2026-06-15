@@ -836,6 +836,20 @@ function validateStageTransition(
   }
 
   if (!effectiveRoles.some(role => rule.allowedRoles.includes(role))) {
+    // Diagnostic: a transition reached the forward role-match and was denied.
+    // The branch_manager bypass above ALREADY returns allowed for a real
+    // branch_manager, so if this logs userRole:"branch_manager" the running
+    // process predates that bypass (stale server) — otherwise it prints the
+    // actual JWT role doing the action (e.g. admin_support), which is the true
+    // reason a non-branch_manager modify-capable user is blocked here.
+    console.warn("[validateStageTransition] forward transition denied", {
+      entityType,
+      userRole,
+      from: currentStage,
+      to: targetStage,
+      effectiveRoles,
+      allowedRoles: rule.allowedRoles,
+    });
     return { allowed: false, reason: "ليس لديك صلاحية لتنفيذ هذا الانتقال" };
   }
 
