@@ -79,7 +79,10 @@ export function CaseProgressBar({
   const [selectedReviewerId, setSelectedReviewerId] = useState("");
   const [sendBackNotes, setSendBackNotes] = useState("");
   const [platformNumber, setPlatformNumber] = useState("");
-  const [courtCaseNumber, setCourtCaseNumber] = useState("");
+  // Holds the number captured on a platform-review ACCEPT — a court case number
+  // when entering court (منظورة), or a settlement (تراضي) number when General
+  // enters the settlement stage (najiz → مداولة_الصلح).
+  const [platformAcceptNumber, setPlatformAcceptNumber] = useState("");
   const [platformNotes, setPlatformNotes] = useState("");
   const [returnToCommitteeNotes, setReturnToCommitteeNotes] = useState("");
   const normalizedStage = currentStage;
@@ -169,13 +172,20 @@ export function CaseProgressBar({
   // platform number, regardless of which source stage we're moving from
   // (جاهزة_للرفع for the first review, أغلق_طلب_الصلح for the post-settlement
   // najiz/moeen review, etc.).
-  const platformFieldInfo: { field: "taradiNumber" | "najizNumber" | "moeenNumber"; label: string; placeholder: string } | null =
+  const platformFieldInfo: { field: "taradiNumber" | "najizNumber" | "moeenNumber" | "courtCaseNumber"; label: string; placeholder: string } | null =
     nextStage === "قيد_التدقيق_في_تراضي"
       ? { field: "taradiNumber", label: "رقم الطلب في تراضي", placeholder: "أدخل رقم الطلب في منصة تراضي" }
       : nextStage === "قيد_التدقيق_في_ناجز"
       ? { field: "najizNumber", label: "رقم القيد في ناجز", placeholder: "أدخل رقم القيد في ناجز" }
       : nextStage === "قيد_التدقيق_في_معين"
       ? { field: "moeenNumber", label: "رقم القيد في معين", placeholder: "أدخل رقم القيد في معين" }
+      // General-dept audit (2026-06-14) — General reaches court via
+      // أغلق_طلب_الصلح → منظورة (no najiz-accept step that would otherwise
+      // capture the court number, since General's najiz precedes conciliation).
+      // Capture the court case number on this move, mirroring how Commercial
+      // captures it on najiz → منظورة. General-only (this from→to pair).
+      : normalizedStage === "أغلق_طلب_الصلح" && nextStage === "منظورة"
+      ? { field: "courtCaseNumber", label: "رقم الدعوى في المحكمة", placeholder: "أدخل رقم الدعوى الصادر من المحكمة" }
       : null;
 
   // Reception → data-completion is the one transition where the notes
@@ -196,13 +206,27 @@ export function CaseProgressBar({
   const isHeadOrManagerRole = userRole === "department_head" || userRole === "branch_manager";
   const canActOnCommitteeNotes = isAtCommitteeNotes && (isAssignedLawyer || isHeadOrManagerRole);
 
-  const platformReviewInfo: { kind: "تراضي" | "ناجز" | "معين"; requireCourtNumber: boolean } | null =
+  // General-dept audit (2026-06-14) — the accept dialog captures the number for
+  // the stage the case is MOVING INTO (array-driven nextStage): a court case
+  // number when entering court (منظورة) — Commercial najiz→منظورة / Admin
+  // معين→منظورة — and a settlement (تراضي) number when General enters the
+  // settlement stage (najiz→مداولة_الصلح, the تراضي platform). Commercial
+  // تراضي→مداولة_الصلح captures nothing (its taradi number was already taken on
+  // تراضي-entry, so this stays byte-identical).
+  const courtCapture = { field: "courtCaseNumber" as const, label: "رقم الدعوى في المحكمة" };
+  const platformReviewInfo: {
+    kind: "تراضي" | "ناجز" | "معين";
+    acceptCapture: { field: "courtCaseNumber" | "taradiNumber"; label: string } | null;
+  } | null =
     normalizedStage === "قيد_التدقيق_في_تراضي"
-      ? { kind: "تراضي", requireCourtNumber: false }
+      ? { kind: "تراضي", acceptCapture: nextStage === "منظورة" ? courtCapture : null }
       : normalizedStage === "قيد_التدقيق_في_ناجز"
-      ? { kind: "ناجز", requireCourtNumber: true }
+      ? { kind: "ناجز", acceptCapture:
+            nextStage === "منظورة" ? courtCapture
+            : nextStage === "مداولة_الصلح" ? { field: "taradiNumber", label: "رقم الصلح في منصة تراضي" }
+            : null }
       : normalizedStage === "قيد_التدقيق_في_معين"
-      ? { kind: "معين", requireCourtNumber: true }
+      ? { kind: "معين", acceptCapture: nextStage === "منظورة" ? courtCapture : null }
       : null;
   const isAtPlatformReview = !!platformReviewInfo;
   const canActOnPlatformReview =
@@ -261,23 +285,18 @@ export function CaseProgressBar({
 
   const handlePlatformReviewAccept = () => {
     if (!platformReviewInfo) return;
-    if (platformReviewInfo.requireCourtNumber && !courtCaseNumber.trim()) return;
-    const extraFields = platformReviewInfo.requireCourtNumber
-      ? { courtCaseNumber: courtCaseNumber.trim() }
-      : undefined;
-    // Explicit target per platform — don't let moveToNextStage guess from
-    // the stages array, because the client-side stage resolver has been
-    // unreliable for commercial paths.
-    const target =
-      normalizedStage === "قيد_التدقيق_في_تراضي"
-        ? "مداولة_الصلح"
-        : normalizedStage === "قيد_التدقيق_في_ناجز"
-        ? "منظورة"
-        : normalizedStage === "قيد_التدقيق_في_معين"
-        ? "منظورة"
-        : undefined;
+    const cap = platformReviewInfo.acceptCapture;
+    if (cap && !platformAcceptNumber.trim()) return;
+    const extraFields = cap ? { [cap.field]: platformAcceptNumber.trim() } : undefined;
+    // General-dept audit (2026-06-14) — the accept target is the NEXT stage in
+    // the resolved dept stages array (nextStage), passed EXPLICITLY so
+    // moveToNextStage never re-guesses the path. Correct for every department
+    // by construction: General najiz→مداولة_الصلح, Commercial najiz→منظورة /
+    // تراضي→مداولة_الصلح, Admin معين→منظورة. (Was hard-coded to Commercial's
+    // najiz→منظورة semantics, which wrongly skipped General's conciliation.)
+    const target = nextStage;
     onMoveToNext("", undefined, undefined, extraFields, target);
-    setCourtCaseNumber("");
+    setPlatformAcceptNumber("");
   };
 
   const handleSettlementDecision = (
@@ -418,31 +437,31 @@ export function CaseProgressBar({
                   تأكيد قبول {platformReviewInfo.kind === "تراضي" ? "منصة تراضي" : platformReviewInfo.kind === "ناجز" ? "منصة ناجز" : "منصة معين"}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  {platformReviewInfo.requireCourtNumber
-                    ? "يرجى إدخال رقم الدعوى في المحكمة. سيتم استبدال رقم القضية بهذا الرقم."
+                  {platformReviewInfo.acceptCapture
+                    ? `يرجى إدخال ${platformReviewInfo.acceptCapture.label}. سيتم استبدال رقم القضية بهذا الرقم.`
                     : "سيتم الانتقال إلى المرحلة التالية."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              {platformReviewInfo.requireCourtNumber && (
+              {platformReviewInfo.acceptCapture && (
                 <div className="mt-3 space-y-1" dir="rtl">
                   <label className="text-sm font-semibold">
-                    رقم الدعوى في المحكمة <span className="text-red-500">*</span>
+                    {platformReviewInfo.acceptCapture.label} <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
-                    value={courtCaseNumber}
-                    onChange={(e) => setCourtCaseNumber(e.target.value)}
-                    placeholder="أدخل رقم الدعوى الصادر من المحكمة"
+                    value={platformAcceptNumber}
+                    onChange={(e) => setPlatformAcceptNumber(e.target.value)}
+                    placeholder={platformReviewInfo.acceptCapture.label}
                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    data-testid="input-court-case-number"
+                    data-testid={`input-${platformReviewInfo.acceptCapture.field}`}
                   />
                 </div>
               )}
               <AlertDialogFooter className="gap-2">
-                <AlertDialogCancel onClick={() => setCourtCaseNumber("")}>إلغاء</AlertDialogCancel>
+                <AlertDialogCancel onClick={() => setPlatformAcceptNumber("")}>إلغاء</AlertDialogCancel>
                 <AlertDialogAction
                   onClick={handlePlatformReviewAccept}
-                  disabled={platformReviewInfo.requireCourtNumber && !courtCaseNumber.trim()}
+                  disabled={!!platformReviewInfo.acceptCapture && !platformAcceptNumber.trim()}
                 >
                   تأكيد القبول
                 </AlertDialogAction>
