@@ -879,6 +879,9 @@ export const delegationsTable = pgTable("delegations_table", {
   approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
+  // Unified-tasks I4a — delegation enforcement resolver filters by the delegate
+  // (toUserId) on every authed request (getActingContext). Additive btree index.
+  toUserIdx: index("delegations_table_to_user_idx").on(t.toUserId),
   // Batch M FKs — applied via script/apply-fk-constraints.sql (commented; see law_cases note).
   // Both mirror deleteUser, which deletes a user's delegations on delete:
   // fromUserFk: foreignKey({ name: "delegations_table_from_user_id_fkey",
