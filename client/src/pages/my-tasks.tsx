@@ -22,11 +22,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { OnBehalfBadge } from "@/components/acting-for-banner";
 import { HearingResultDialog } from "@/components/hearing-result-dialog";
+import { CaseStagePanel } from "@/components/case-stage-panel";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, InternalReviewDecision,
-  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing,
+  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase,
 } from "@shared/schema";
 
 // hearing_attend / hearing_unrecorded open the SHARED hearing-result dialog
@@ -34,6 +35,14 @@ import {
 const HEARING_RESULT_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED,
 ]);
+
+// case_work + case review_pending open the SHARED CaseStagePanel (the same
+// case-progress-bar + workflow callbacks the cases page uses). memo/contract/
+// consultation review_pending stay on the generic decision modal.
+function isCaseStageKind(task: MyTaskItem): boolean {
+  return task.kind === MyTaskKind.CASE_WORK
+    || (task.kind === MyTaskKind.REVIEW_PENDING && task.entityType === "case");
+}
 
 // Each task kind → an icon and a short Arabic type label (shown under the title).
 const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> = {
@@ -161,7 +170,7 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
 function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
-  const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind);
+  const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind) || isCaseStageKind(task);
   return (
     <div
       dir="rtl"
@@ -222,6 +231,8 @@ export default function MyTasksPage() {
   const [submitting, setSubmitting] = useState(false);
   // Hearing-result dialog (the shared component) target
   const [resultHearing, setResultHearing] = useState<Hearing | null>(null);
+  // Case stage panel (the shared component) target
+  const [stageCase, setStageCase] = useState<LawCase | null>(null);
 
   // Create-task dialog
   const [showCreate, setShowCreate] = useState(false);
@@ -272,6 +283,18 @@ export default function MyTasksPage() {
         setResultHearing(await res.json());
       } catch (err) {
         toast({ title: "تعذّر فتح الجلسة", description: extractApiError(err), variant: "destructive" });
+      }
+      return;
+    }
+    if (isCaseStageKind(task)) {
+      // case_work / case review_pending → fetch the full case and open the
+      // SHARED CaseStagePanel (the feed item carries only the case id).
+      const caseId = task.caseId || task.entityId;
+      try {
+        const res = await apiRequest("GET", `/api/cases/${caseId}`);
+        setStageCase(await res.json());
+      } catch (err) {
+        toast({ title: "تعذّر فتح القضية", description: extractApiError(err), variant: "destructive" });
       }
       return;
     }
@@ -543,6 +566,16 @@ export default function MyTasksPage() {
         onClose={() => setResultHearing(null)}
         onSuccess={refreshAfterAction}
       />
+
+      {/* ===== Case stage panel (shared with the cases page) ===== */}
+      <Dialog open={!!stageCase} onOpenChange={(o) => !o && setStageCase(null)}>
+        <DialogContent dir="rtl" className="max-w-2xl" data-testid="dialog-case-stage">
+          <DialogHeader><DialogTitle>مسار القضية</DialogTitle></DialogHeader>
+          {stageCase && (
+            <CaseStagePanel caseItem={stageCase} onChanged={refreshAfterAction} />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* ===== Create dialog ===== */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>

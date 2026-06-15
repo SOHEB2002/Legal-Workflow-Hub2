@@ -104,7 +104,8 @@ import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, Attachment, 
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
-import { CaseProgressBar } from "@/components/case-progress-bar";
+import { CaseStagePanel } from "@/components/case-stage-panel";
+import { caseHasReturnedFromReview } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHearings } from "@/lib/hearings-context";
@@ -207,22 +208,6 @@ const REVIEW_LOOP_STAGES = new Set([
   "مراجعة_داخلية",
   "مراجعة_داخلية_للتظلم",
 ]);
-const DRAFTING_LOOP_STAGES = new Set([
-  "تحرير_صحيفة_الدعوى",
-  "تحرير_مذكرة_جوابية",
-  "تحرير_صيغة_التظلم",
-]);
-function caseHasReturnedFromReview(c: {
-  currentStage: string;
-  stageHistory?: any[] | null;
-  hasReturnedFromReview?: boolean;
-}): boolean {
-  if (!DRAFTING_LOOP_STAGES.has(c.currentStage)) return false;
-  if (c.hasReturnedFromReview) return true;
-  if (!Array.isArray(c.stageHistory)) return false;
-  return c.stageHistory.some((t) => REVIEW_LOOP_STAGES.has(t?.stage));
-}
-
 // Priority-group sort. The cases table puts urgent rows on top and
 // pushes terminal rows to the bottom so lawyers see what needs their
 // attention first. See getCasePriorityGroup below for the rules.
@@ -338,8 +323,6 @@ export default function CasesPage() {
     rejectCase,
     deleteCase,
     moveToNextStage,
-    moveToPreviousStage,
-    skipDataCompletion,
     addComment,
     fetchComments,
     getCommentsByCaseId,
@@ -2208,234 +2191,10 @@ export default function CasesPage() {
               )}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
-                <CaseProgressBar
-                  currentStage={selectedCase.currentStage}
-                  userRole={user?.role || "employee"}
-                  caseClassification={selectedCase.caseClassification as CaseClassificationValue}
-                  clientRole={selectedCase.clientRole || undefined}
-                  memoRequired={!!selectedCase.memoRequired}
-                  isSettlementCase={!!selectedCase.isSettlementCase}
-                  // Stage selection routes on the case's DEPARTMENT (a stable
-                  // FK to the departments table), not on caseType. caseType
-                  // is free-text user input that often holds a sub-type label
-                  // ("بيع وتوريد" / "نزاع تجاري" / etc.) and must not drive
-                  // workflow routing. The bar has its own defensive fallback
-                  // for cases where this resolves to "غير محدد" or "أخرى".
-                  departmentName={getDepartmentName(selectedCase.departmentId || "")}
-                  // Phase-8 — block all workflow actions while awaiting
-                  // completion or paused. Resume / unpause live in the row
-                  // icon area; the banner above explains the frozen state.
-                  disabled={
-                    stageTransitioning
-                    || selectedCase.awaitingCompletion
-                    || isCasePaused(selectedCase)
-                  }
-                  currentUserId={user?.id}
-                  caseInternalReviewerId={selectedCase.internalReviewerId || null}
-                  isAssignedLawyer={
-                    !!user && (
-                      selectedCase.primaryLawyerId === user.id ||
-                      (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
-                    )
-                  }
-                  // Broader than isAssignedLawyer (adds responsibleLawyerId) so
-                  // the bar's next-stage enable check matches the server's
-                  // isAssignedLawyer rule exactly. Drives only the disabled
-                  // state of the "next stage" button.
-                  isCaseAssignee={
-                    !!user && (
-                      selectedCase.primaryLawyerId === user.id ||
-                      selectedCase.responsibleLawyerId === user.id ||
-                      (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
-                    )
-                  }
-                  hasReturnedFromReview={caseHasReturnedFromReview(selectedCase)}
-                  eligibleInternalReviewers={users
-                    .filter(u =>
-                      u.isActive &&
-                      u.role !== "branch_manager" &&
-                      u.role !== "admin_support" &&
-                      u.role !== "hr" &&
-                      u.role !== "technical_support" &&
-                      u.departmentId === selectedCase.departmentId &&
-                      u.id !== selectedCase.primaryLawyerId &&
-                      u.id !== selectedCase.responsibleLawyerId
-                    )
-                    .map(u => ({ id: u.id, name: u.name }))}
-                  onMoveToNext={async (notes, internalReviewerId, reviewDecision, extraFields, explicitTargetStage) => {
-                    if (!user) return;
-                    const stageBefore = selectedCase.currentStage;
-                    setStageTransitioning(true);
-                    try {
-                      const success = await moveToNextStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields, explicitTargetStage);
-                      if (success) {
-                        toast({ title: "تم نقل القضية للمرحلة التالية" });
-                        // Prompt the user to add the hearing that the accepted
-                        // platform transition implies. Labor cases that have
-                        // already been through settlement (أغلق_طلب_الصلح in
-                        // history) don't need another hearing prompt at ناجز.
-                        const deptName = getDepartmentName(selectedCase.departmentId || "");
-                        const hasSettlementInHistory = Array.isArray(selectedCase.stageHistory) &&
-                          selectedCase.stageHistory.some((h: any) => h.stage === "أغلق_طلب_الصلح");
-                        const laborAlreadySettled = deptName === "عمالي" && hasSettlementInHistory;
-                        if (stageBefore === "قيد_التدقيق_في_تراضي") {
-                          setHearingPrompt({
-                            caseId: selectedCase.id,
-                            hearingType: "تراضي",
-                            title: "هل تريد إضافة موعد جلسة تراضي الآن؟",
-                            description: "تم قبول الطلب في منصة تراضي. يرجى إضافة موعد جلسة التراضي.",
-                          });
-                        } else if (
-                          (stageBefore === "قيد_التدقيق_في_ناجز" ||
-                            stageBefore === "قيد_التدقيق_في_معين") &&
-                          !laborAlreadySettled
-                        ) {
-                          setHearingPrompt({
-                            caseId: selectedCase.id,
-                            hearingType: "محكمة",
-                            title: "هل تريد إضافة موعد جلسة محكمة الآن؟",
-                            description: "تم قبول القضية في المحكمة. يرجى إضافة موعد الجلسة القادمة.",
-                          });
-                        }
-                      } else {
-                        toast({ title: "لا يمكن نقل القضية", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
-                      }
-                    } catch (err) {
-                      toast({ title: "فشل نقل القضية", description: extractApiError(err), variant: "destructive" });
-                    } finally {
-                      setStageTransitioning(false);
-                    }
-                  }}
-                  onMoveToPrevious={async (notes, internalReviewerId) => {
-                    if (!user) return;
-                    setStageTransitioning(true);
-                    try {
-                      const success = await moveToPreviousStage(selectedCase.id, user.id, user.name, notes, user.role, internalReviewerId);
-                      if (success) {
-                        toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
-                      } else {
-                        toast({ title: "لا يمكن إرجاع القضية", description: "ليس لديك صلاحية لهذا الإرجاع", variant: "destructive" });
-                      }
-                    } catch (err) {
-                      toast({ title: "فشل إرجاع القضية", description: extractApiError(err), variant: "destructive" });
-                    } finally {
-                      setStageTransitioning(false);
-                    }
-                  }}
-                  hasPlatformNotes={
-                    !!selectedCase.platformReviewNotes &&
-                    String(selectedCase.platformReviewNotes).trim().length > 0
-                  }
-                  onPlatformReviewAddNotes={async (platformNotes) => {
-                    if (!user) return;
-                    setStageTransitioning(true);
-                    try {
-                      await updateCase(selectedCase.id, {
-                        platformReviewNotes: platformNotes,
-                        platformReviewResubmitted: false,
-                      });
-                      toast({ title: "تم حفظ ملاحظات المنصة" });
-                    } catch (err) {
-                      toast({ title: "تعذّر حفظ الملاحظات", description: extractApiError(err), variant: "destructive" });
-                    } finally {
-                      setStageTransitioning(false);
-                    }
-                  }}
-                  onPlatformReviewResubmit={async () => {
-                    if (!user) return;
-                    setStageTransitioning(true);
-                    try {
-                      await updateCase(selectedCase.id, {
-                        platformReviewNotes: "",
-                        platformReviewResubmitted: true,
-                      });
-                      toast({
-                        title: "تم إعادة التقديم بنجاح",
-                        description: "بانتظار رد المنصة",
-                      });
-                    } catch (err) {
-                      toast({ title: "تعذّر تسجيل إعادة التقديم", description: extractApiError(err), variant: "destructive" });
-                    } finally {
-                      setStageTransitioning(false);
-                    }
-                  }}
-                  onInternalReviewSendBack={async (reviewerNotes) => {
-                    if (!user) return;
-                    const targetStage =
-                      selectedCase.currentStage === "مراجعة_داخلية_للتظلم"
-                        ? "تحرير_صيغة_التظلم"
-                        : "تحرير_صحيفة_الدعوى";
-                    setStageTransitioning(true);
-                    try {
-                      await updateCase(selectedCase.id, {
-                        currentStage: targetStage,
-                        reviewNotes: reviewerNotes,
-                        stageChangeNotes: reviewerNotes,
-                      } as Partial<LawCase> & { stageChangeNotes?: string });
-                      toast({ title: "تم إرجاع القضية بملاحظات المراجع" });
-                    } catch (err) {
-                      toast({ title: "تعذّر إرجاع القضية", description: extractApiError(err), variant: "destructive" });
-                    } finally {
-                      setStageTransitioning(false);
-                    }
-                  }}
-                  onReturnToCommittee={async (returnNotes) => {
-                    if (!user) return;
-                    setStageTransitioning(true);
-                    try {
-                      await apiRequest("POST", `/api/cases/${selectedCase.id}/return-to-committee`, {
-                        notes: returnNotes,
-                      });
-                      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-                      toast({ title: "تم إعادة القضية للجنة المراجعة" });
-                    } catch (err) {
-                      toast({ title: "تعذّر إعادة القضية للجنة", description: extractApiError(err), variant: "destructive" });
-                    } finally {
-                      setStageTransitioning(false);
-                    }
-                  }}
-                  // Committee-review (إحالة_للجنة_المراجعة) decisions surfaced on
-                  // the progress bar — identical to the إجراءات-tab handlers
-                  // (handleApprove / handleReject): same context mutations, same
-                  // toasts, same dialog-close. The bar only renders these when
-                  // canReviewCases(userRole) holds, matching canReview inside.
-                  onReviewCommitteeApprove={() => {
-                    handleApprove(selectedCase);
-                  }}
-                  onReviewCommitteeAddNotes={(committeeNotes) => {
-                    rejectCase(selectedCase.id, committeeNotes || "تم إضافة ملاحظات من لجنة المراجعة", "rejected");
-                    toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
-                    setSelectedCaseId(null);
-                  }}
-                  onSkipDataCompletion={
-                    // Skip-completion is allowed for the same 4 roles
-                    // the server permits: branch_manager, admin_support,
-                    // dept_head (own dept), and any assigned lawyer
-                    // (primary / responsible / in assignedLawyers).
-                    user && (
-                      user.role === "branch_manager" ||
-                      user.role === "admin_support" ||
-                      (user.role === "department_head" && selectedCase.departmentId === user.departmentId) ||
-                      selectedCase.primaryLawyerId === user.id ||
-                      selectedCase.responsibleLawyerId === user.id ||
-                      (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
-                    ) ? async (notes) => {
-                      if (!user) return;
-                      setStageTransitioning(true);
-                      try {
-                        const success = await skipDataCompletion(selectedCase.id, user.id, user.name, notes);
-                        if (success) {
-                          toast({ title: "تم تجاوز استكمال المرفقات والبيانات", description: "انتقلت القضية مباشرةً لمرحلة الدراسة" });
-                        } else {
-                          toast({ title: "تعذّر التجاوز", variant: "destructive" });
-                        }
-                      } catch (err) {
-                        toast({ title: "تعذّر التجاوز", description: extractApiError(err), variant: "destructive" });
-                      } finally {
-                        setStageTransitioning(false);
-                      }
-                    } : undefined
-                  }
+                <CaseStagePanel
+                  caseItem={selectedCase}
+                  onHearingPrompt={setHearingPrompt}
+                  onClosed={() => setSelectedCaseId(null)}
                 />
               </div>
 
