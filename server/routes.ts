@@ -129,6 +129,7 @@ import { sendToUser, broadcastToAdmins } from "./websocket";
 import { invalidateUserCache } from "./index";
 import {
   type ActingContext,
+  actingIdentitiesFor,
   hasEffectiveRole,
   effectiveDeptHeadDepts,
   effectiveIdsFor,
@@ -205,31 +206,47 @@ function sanitizeUser(user: any) {
 // non-GET request from a viewer before the handler runs, so
 // granting "admin-like" pass-throughs here can never enable a
 // mutation — the write path is unreachable.
-function canModifyCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head" && caseData.departmentId === user.departmentId) return true;
-  if (caseData.primaryLawyerId === user.id || caseData.responsibleLawyerId === user.id) return true;
-  if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) return true;
-  if (caseData.internalReviewerId && caseData.internalReviewerId === user.id) return true;
-  return false;
+// 4c-1 (cases) — the per-identity ORIGINAL logic, evaluated for the acting user
+// and (with an active delegation) each delegator they stand in for. With no ctx
+// the identity set is exactly [self], so each gate is byte-identical to before.
+// Scope honored: actingIdentitiesFor filters specific_cases by the case's id.
+type CaseActorIdentity = { id: string; role: string; departmentId: string | null };
+function caseActorIdentities(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): CaseActorIdentity[] {
+  if (!ctx) return [user];
+  return actingIdentitiesFor(ctx, caseData?.id ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }));
 }
 
-function canViewCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
+function canModifyCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head") return caseData.departmentId === user.departmentId;
-  if (user.role === "employee") {
-    return caseData.primaryLawyerId === user.id ||
-      caseData.responsibleLawyerId === user.id ||
-      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) ||
-      caseData.internalReviewerId === user.id;
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head" && caseData.departmentId === u.departmentId) return true;
+  if (caseData.primaryLawyerId === u.id || caseData.responsibleLawyerId === u.id) return true;
+  if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) return true;
+  if (caseData.internalReviewerId && caseData.internalReviewerId === u.id) return true;
+  return false;
+}
+function canModifyCase(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) => canModifyCaseIdentity(u, caseData));
+}
+
+function canViewCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head") return caseData.departmentId === u.departmentId;
+  if (u.role === "employee") {
+    return caseData.primaryLawyerId === u.id ||
+      caseData.responsibleLawyerId === u.id ||
+      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) ||
+      caseData.internalReviewerId === u.id;
   }
   return false;
 }
+function canViewCase(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) => canViewCaseIdentity(u, caseData));
+}
 
-function canEditCaseData(user: { id: string; role: string; departmentId: string | null }): boolean {
-  return ["branch_manager", "admin_support"].includes(user.role);
+function canEditCaseData(user: CaseActorIdentity, caseData?: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) => ["branch_manager", "admin_support"].includes(u.role));
 }
 
 function canModifyConsultation(user: { id: string; role: string; departmentId: string | null }, consultation: any): boolean {
@@ -1418,7 +1435,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
       const user = req.user!;
-      if (!canViewCase(user, caseItem)) {
+      if (!canViewCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه القضية" });
       }
       res.json(caseItem);
@@ -1652,7 +1669,7 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
-      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
@@ -1713,7 +1730,7 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
-      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
@@ -1772,7 +1789,7 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
-      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
@@ -1977,7 +1994,7 @@ export async function registerRoutes(
       }
       const hasDataFields = Object.keys(req.body).some((k) => effectiveDataFields.includes(k));
 
-      if (hasDataFields && !canEditCaseData(user)) {
+      if (hasDataFields && !canEditCaseData(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "تعديل بيانات القضية متاح فقط لمدير الفرع والدعم الإداري" });
       }
 
@@ -1990,14 +2007,18 @@ export async function registerRoutes(
       // through plus a department_head branch that misread the target dept
       // as the actor's gate, which silently 403'd assigned lawyers.
       if ("departmentId" in req.body && req.body.departmentId !== existing.departmentId) {
-        const isBranchOrAdmin = user.role === "branch_manager" || user.role === "admin_support";
-        const isOwnDeptHead =
-          user.role === "department_head" && existing.departmentId === user.departmentId;
-        const isAssignedLawyer =
-          existing.primaryLawyerId === user.id ||
-          existing.responsibleLawyerId === user.id ||
-          (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(user.id));
-        if (!isBranchOrAdmin && !isOwnDeptHead && !isAssignedLawyer) {
+        // 4c-1: evaluate the original transfer rule per acting identity (self +
+        // delegators). No ctx → [self] → byte-identical.
+        const transferIdentities = req.actingContext
+          ? actingIdentitiesFor(req.actingContext, existing.id ?? null)
+          : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
+        const transferAllowed = transferIdentities.some((i) =>
+          i.role === "branch_manager" || i.role === "admin_support" ||
+          (i.role === "department_head" && existing.departmentId === i.departmentId) ||
+          existing.primaryLawyerId === i.userId ||
+          existing.responsibleLawyerId === i.userId ||
+          (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(i.userId)));
+        if (!transferAllowed) {
           return res.status(403).json({ error: "لا تملك صلاحية تغيير قسم هذه القضية" });
         }
       }
@@ -2005,14 +2026,22 @@ export async function registerRoutes(
       // Check if this is an assignment operation (primaryLawyerId / assignedLawyers)
       const isAssignmentOp = !hasDataFields && (req.body.primaryLawyerId || req.body.assignedLawyers !== undefined);
 
-      if (isAssignmentOp && user.role === "department_head") {
-        // Determine effective target department after this operation
+      // 4c-1: a department_head assignment is dept-scoped — own role OR an
+      // inherited department_head (via delegation). The target dept must be one
+      // of the actor's effective department_head departments. No ctx →
+      // {own dept if dept_head} → byte-identical to the original own-dept check.
+      const actsAsDeptHead =
+        user.role === "department_head" ||
+        (!!req.actingContext && actingIdentitiesFor(req.actingContext, existing.id ?? null).some((i) => i.role === "department_head"));
+      if (isAssignmentOp && actsAsDeptHead) {
         const targetDeptId = ("departmentId" in req.body ? req.body.departmentId : existing.departmentId);
-        // Block if target dept is missing or does not match the department head's own department
-        if (!targetDeptId || targetDeptId !== user.departmentId) {
+        const allowedDeptHeadDepts = req.actingContext
+          ? effectiveDeptHeadDepts(req.actingContext, existing.id ?? null)
+          : new Set<string>(user.role === "department_head" && user.departmentId ? [user.departmentId] : []);
+        if (!targetDeptId || !allowedDeptHeadDepts.has(targetDeptId)) {
           return res.status(403).json({ error: "يمكنك فقط إسناد قضايا قسمك" });
         }
-      } else if (!hasDataFields && !canModifyCase(user, existing)) {
+      } else if (!hasDataFields && !canModifyCase(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
 
@@ -2041,10 +2070,10 @@ export async function registerRoutes(
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
-        // 4c-0: INERT — pass undefined so a delegate gains NO case transition
-        // act-as yet (even an admin-class delegate who passes canModifyCase on
-        // their own merit). 4c-1 (cases) flips this to req.actingContext.
-        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, undefined);
+        // 4c-1: cases are act-as enabled — canModifyCase above and this
+        // transition check both consult the acting context. (Four-eyes: the
+        // INTERNAL_REVIEW lock inside stays human-only.)
+        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, req.actingContext);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -6596,7 +6625,7 @@ export async function registerRoutes(
           // (was requireAuth-only: any user could drive another dept's case
           // forward). Hearings are always added from a case the user has open,
           // so legitimate creation passes.
-          if (!canModifyCase(req.user!, relatedCase)) {
+          if (!canModifyCase(req.user!, relatedCase, req.actingContext)) {
             return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
           }
           if (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived) {
@@ -6807,7 +6836,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
       const relatedCase = await storage.getCaseById(existing.caseId);
-      if (relatedCase && !canModifyCase(user, relatedCase)) {
+      if (relatedCase && !canModifyCase(user, relatedCase, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الجلسة" });
       }
 
@@ -7595,7 +7624,7 @@ export async function registerRoutes(
       let canModifyParent = false;
       if (existingTask.caseId) {
         const parentCase = await storage.getCaseById(existingTask.caseId);
-        canModifyParent = !!parentCase && canModifyCase(user, parentCase);
+        canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
       } else if (existingTask.consultationId) {
         const parentConsultation = await storage.getConsultationById(existingTask.consultationId);
         canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation);
@@ -8717,7 +8746,7 @@ export async function registerRoutes(
       // Previously this was gated to assigned-lawyer only, which made
       // the "إضافة" button silently 403 for branch_managers / admin_support
       // / dept_heads opening a case detail dialog.
-      if (!canViewCase(user, caseItem)) {
+      if (!canViewCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة تعليق على هذه القضية" });
       }
       // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
@@ -8762,7 +8791,7 @@ export async function registerRoutes(
       // can drop an internal note. The previous rule (assigned-lawyer
       // OR modify) silently 403'd dept_heads viewing a case outside
       // their dept and any read-only viewer who tried to leave a note.
-      if (!canViewCase(user, caseItem)) {
+      if (!canViewCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة ملاحظة على هذه القضية" });
       }
       // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
@@ -8868,7 +8897,7 @@ export async function registerRoutes(
       const user = req.user!;
       if (validated.caseId) {
         const targetCase = await storage.getCaseById(validated.caseId);
-        if (targetCase && !canModifyCase(user, targetCase)) {
+        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
         }
       }
@@ -8906,7 +8935,7 @@ export async function registerRoutes(
       const user = req.user!;
       if (existingDeadline.caseId) {
         const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase)) {
+        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
         }
       }
@@ -8928,7 +8957,7 @@ export async function registerRoutes(
       const user = req.user!;
       if (existingDeadline.caseId) {
         const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase)) {
+        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
         }
       }
