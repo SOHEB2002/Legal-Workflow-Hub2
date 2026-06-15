@@ -127,6 +127,13 @@ import path from "path";
 import fs from "fs";
 import { sendToUser, broadcastToAdmins } from "./websocket";
 import { invalidateUserCache } from "./index";
+import {
+  type ActingContext,
+  hasEffectiveRole,
+  effectiveDeptHeadDepts,
+  effectiveIdsFor,
+  effectiveRolesFor,
+} from "./acting-context";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
 
 // Contract attachments live in Replit Object Storage now — the
@@ -585,11 +592,42 @@ function validateStageTransition(
   userRole: string,
   entityType: "case" | "consultation" | "memo" | "contract",
   user?: { id: string; departmentId?: string | null },
-  entityData?: any
+  entityData?: any,
+  ctx?: ActingContext,
 ): { allowed: boolean; reason?: string } {
   if (currentStage === targetStage) {
     return { allowed: false, reason: "العنصر في نفس المرحلة المطلوبة" };
   }
+
+  // 4c-0 delegation-aware GRANT checks. When ctx carries active delegations
+  // these expand to the delegator(s) the actor stands in for (role + dept +
+  // identity); with no delegation (no ctx, or empty delegators) they resolve to
+  // EXACTLY the actor's own role/id/dept, so every decision below is
+  // byte-identical to before. The INTERNAL_REVIEW locks (four-eyes) deliberately
+  // do NOT use these — they keep comparing the HUMAN actor (see below).
+  // specific_cases scope keys on the entity's case id (the case itself, or a
+  // memo's parent case); consultations/contracts have no case id → all_cases only.
+  const scopeCaseId: string | null =
+    entityType === "case" ? (entityData?.id ?? null)
+    : entityType === "memo" ? (entityData?.caseId ?? null)
+    : null;
+  const grantRoles = (...roles: string[]): boolean =>
+    ctx ? hasEffectiveRole(ctx, scopeCaseId, ...roles) : roles.includes(userRole);
+  const grantDeptHeadDept = (deptId: string | null | undefined): boolean =>
+    !!deptId && (ctx
+      ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(deptId)
+      : (userRole === "department_head" && !!user?.departmentId && user.departmentId === deptId));
+  const grantAssignedLawyer = (): boolean => {
+    if (!entityData) return false;
+    if (!ctx) return !!user && isAssignedLawyer(user, entityData);
+    return Array.from(effectiveIdsFor(ctx, scopeCaseId)).some((id) => isAssignedLawyer({ id }, entityData));
+  };
+  const grantInternalReviewer = (): boolean => {
+    if (!(entityType === "case" || entityType === "memo" || entityType === "contract")) return false;
+    if (!entityData?.internalReviewerId) return false;
+    if (!ctx) return !!user && entityData.internalReviewerId === user.id;
+    return effectiveIdsFor(ctx, scopeCaseId).has(entityData.internalReviewerId);
+  };
 
   // Early closure: branch_manager / admin_support / department_head (own
   // dept) / assigned lawyer can move a case from any stage to مقفلة.
@@ -597,18 +635,13 @@ function validateStageTransition(
   // is required for all four roles (validated separately in the PATCH
   // handler).
   if (entityType === "case" && targetStage === "مقفلة") {
-    if (userRole === "branch_manager" || userRole === "admin_support") {
+    if (grantRoles("branch_manager", "admin_support")) {
       return { allowed: true };
     }
-    if (
-      userRole === "department_head" &&
-      entityData &&
-      !!user?.departmentId &&
-      entityData.departmentId === user.departmentId
-    ) {
+    if (entityData && grantDeptHeadDept(entityData.departmentId)) {
       return { allowed: true };
     }
-    if (user && entityData && isAssignedLawyer(user, entityData)) {
+    if (grantAssignedLawyer()) {
       return { allowed: true };
     }
     // Fall through to ALLOWED_CASE_TRANSITIONS for stage-specific rules
@@ -616,22 +649,22 @@ function validateStageTransition(
     // early-close shortcut).
   }
 
-  // Designated-reviewer synthetic role. Recognized for cases / memos /
-  // contracts (consultations have no internal_reviewer column; their
-  // INTERNAL_REVIEW stage exit is gated through a dedicated endpoint).
-  // Picked up by both the locked-stage check below and the effectiveRoles
-  // expansion that feeds the per-transition allowed-roles match.
-  const isInternalReviewer =
+  // Designated-reviewer synthetic role — HUMAN ONLY. This feeds the
+  // INTERNAL_REVIEW LOCKS (four-eyes), which must compare the real human actor
+  // and stay unchanged by delegation in 4c-0. (The effectiveRoles GRANT below
+  // uses grantInternalReviewer(), the delegation-aware variant.)
+  const isInternalReviewerHuman =
     (entityType === "case" || entityType === "memo" || entityType === "contract")
     && !!user && !!entityData && entityData.internalReviewerId === user.id;
 
   // Internal review stages are locked: only the designated internal reviewer
-  // or the branch manager can transition out of them.
+  // or the branch manager can transition out of them. HUMAN-ONLY (four-eyes) —
+  // intentionally NOT delegation-expanded.
   if (
     entityType === "case" &&
     (currentStage === "مراجعة_داخلية" || currentStage === "مراجعة_داخلية_للتظلم")
   ) {
-    if (!isInternalReviewer && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
         reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
@@ -645,7 +678,7 @@ function validateStageTransition(
   // endpoint already enforces this; this is belt-and-braces for the
   // generic stage-transition routes.
   if (entityType === "memo" && currentStage === "مراجعة_داخلية") {
-    if (!isInternalReviewer && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
         reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
@@ -659,7 +692,7 @@ function validateStageTransition(
   // non-reviewer employee can't approve their own draft by calling the
   // generic endpoint directly.
   if (entityType === "contract" && currentStage === ContractStage.INTERNAL_REVIEW) {
-    if (!isInternalReviewer && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
         reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
@@ -667,11 +700,15 @@ function validateStageTransition(
     }
   }
 
-  const effectiveRoles = [userRole];
-  if (user && entityData && isAssignedLawyer(user, entityData)) {
+  // GRANT side (delegation-aware): the actor's effective roles for this entity,
+  // plus the assigned_lawyer / internal_reviewer synthetic roles if any
+  // effective identity holds them. With no delegation this is exactly
+  // [userRole] (+ the actor's own synthetic roles) — byte-identical.
+  const effectiveRoles = ctx ? Array.from(effectiveRolesFor(ctx, scopeCaseId)) : [userRole];
+  if (grantAssignedLawyer()) {
     effectiveRoles.push("assigned_lawyer");
   }
-  if (isInternalReviewer) {
+  if (grantInternalReviewer()) {
     effectiveRoles.push("internal_reviewer");
   }
 
@@ -698,16 +735,13 @@ function validateStageTransition(
       // global. The FE already only surfaces other-dept cases to
       // branch_manager (canViewCase scopes dept_head to own dept), so this
       // enforces server-side what the UI already constrains.
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
 
       if (isBranchManager || isOwnDeptHead) {
         return { allowed: true }; // can go back to ANY previous stage
       }
-      if (isInternalReviewer && targetIdx === currentIdx - 1) {
+      if (grantInternalReviewer() && targetIdx === currentIdx - 1) {
         return { allowed: true }; // reviewer can send back one stage (to drafting)
       }
       if (isLawyer && targetIdx === currentIdx - 1) {
@@ -742,11 +776,8 @@ function validateStageTransition(
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
       // Phase 5 B/M4 — dept_head scoped to own dept (mirrors contract rollback);
       // branch_manager global. consultation entityData carries departmentId.
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
       if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
@@ -767,11 +798,8 @@ function validateStageTransition(
       // Phase 5 B/M4 — dept_head scoped to the parent case's dept (threaded
       // onto entityData.departmentId by the memo handlers, since memos carry
       // no departmentId); branch_manager global. Mirrors contract rollback.
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
       if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
@@ -793,11 +821,8 @@ function validateStageTransition(
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
       if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
@@ -850,7 +875,7 @@ function validateStageTransition(
   // (which already exempt branch_manager by design) still govern exits FROM
   // review. branch_manager being allowed on internal-review *outcome* edges is
   // pre-existing and intentional in every table.
-  if (userRole === "branch_manager") {
+  if (grantRoles("branch_manager")) {
     return { allowed: true };
   }
 
@@ -2016,7 +2041,7 @@ export async function registerRoutes(
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
-        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase);
+        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, req.actingContext);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -2820,7 +2845,7 @@ export async function registerRoutes(
 
       // Validate stage transition if changing status
       if (req.body.status && req.body.status !== existing.status) {
-        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing);
+        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing, req.actingContext);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -3041,6 +3066,7 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -3137,6 +3163,7 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -4776,6 +4803,7 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       // Slot-validation gate per ContractSlotsByType. Required slots
@@ -4931,6 +4959,7 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       const fromLabel = ContractStageLabels[contract.currentStage] || contract.currentStage;
@@ -6065,6 +6094,7 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -6168,6 +6198,7 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 

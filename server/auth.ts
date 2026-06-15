@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
+import { globalActingRoles } from "./acting-context";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { randomBytes, createHmac } from "crypto";
@@ -121,7 +122,17 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const user = (req as any).user;
-    if (!user || !roles.includes(user.role)) {
+    if (!user) {
+      res.status(403).json({ error: "لا تملك صلاحية" });
+      return;
+    }
+    // 4c-0: consult the delegation-effective roles (entity-agnostic →
+    // globalActingRoles uses all_cases delegators only). With NO active
+    // delegation this is exactly {own role}, so the check is byte-identical to
+    // roles.includes(user.role). Four-eyes/identity guards are unaffected.
+    const ctx = req.actingContext;
+    const effectiveRoles = ctx ? globalActingRoles(ctx) : new Set<string>([user.role]);
+    if (!roles.some((r) => effectiveRoles.has(r))) {
       res.status(403).json({ error: "لا تملك صلاحية" });
       return;
     }
