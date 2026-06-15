@@ -4969,6 +4969,10 @@ export interface MyTaskItem {
   // entities outside the two-class domain (contracts, delegations) or a
   // field task with no entity link (see taskSpecialtyClass).
   specialtyClass: TaskSpecialtyValue | null;
+  // When this task is surfaced to a DELEGATE because they act on behalf of a
+  // delegator (active approved delegation), this is the delegator's user id so
+  // the FE can render "بالنيابة عن (name)". null = the user's own task.
+  onBehalfOfUserId: string | null;
 }
 
 // Classify a task into its specialty domain (ترافع litigation / استشارات

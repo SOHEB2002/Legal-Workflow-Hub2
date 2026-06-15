@@ -29,6 +29,7 @@ import {
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
+import type { ActingContext } from "./acting-context";
 import { eq, and, or, gt, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
@@ -192,7 +193,7 @@ export interface IStorage {
   // exists for a section yet, that section returns 0 (avoids
   // overwhelming new users with the all-time backlog).
   getSidebarCounts(user: { id: string; role: string; departmentId: string | null }): Promise<SidebarCounts>;
-  getMyTasks(user: { id: string; role: string; departmentId: string | null }): Promise<MyTaskItem[]>;
+  getMyTasks(user: { id: string; role: string; departmentId: string | null }, ctx?: ActingContext): Promise<MyTaskItem[]>;
   markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void>;
 
   // Convert consultation to case (rebuild §3.2.3) — single DB transaction.
@@ -2798,7 +2799,15 @@ export class DatabaseStorage implements IStorage {
   // they own (identity/role); a department_head ALSO sees their department's
   // tasks (dept-scoped, tagged ownerScope:"team"). No delegation expansion yet
   // (increment 4). Read-only.
-  async getMyTasks(user: { id: string; role: string; departmentId: string | null }): Promise<MyTaskItem[]> {
+  // Per-identity task computation — the full per-user feed for ONE identity
+  // (a real user, OR a delegator the delegate is standing in for). Role/dept are
+  // taken from the passed identity, so running this for a delegator naturally
+  // yields that delegator's role-derived items (dept_head → team/unassigned;
+  // admin_support → collection/closing/data-completion). getMyTasks orchestrates
+  // self + delegators on top of this.
+  private async computeTasksForIdentity(
+    user: { id: string; role: string; departmentId: string | null },
+  ): Promise<Omit<MyTaskItem, "specialtyClass" | "onBehalfOfUserId">[]> {
     const uid = user.id;
     const isDeptHead = user.role === "department_head";
     const isAdminSupport = user.role === "admin_support";
@@ -2810,7 +2819,7 @@ export class DatabaseStorage implements IStorage {
     const today = new Date().toISOString().split("T")[0];
     // Built without specialtyClass; it's stamped uniformly on return via
     // taskSpecialtyClass so every item (esp. admin_support's) carries its class.
-    const tasks: Omit<MyTaskItem, "specialtyClass">[] = [];
+    const tasks: Omit<MyTaskItem, "specialtyClass" | "onBehalfOfUserId">[] = [];
     const scopeOf = (ownerId: string): "self" | "team" =>
       deptHeadScoped && ownerId !== uid ? "team" : "self";
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
@@ -3086,9 +3095,52 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // Stamp the specialty class (ترافع/استشارات) on every item so admin_support
-    // tasks group cleanly and nothing is left unclassified.
-    return tasks.map((t) => ({ ...t, specialtyClass: taskSpecialtyClass(t.entityType, t.caseId) }));
+    return tasks;
+  }
+
+  // Unified-tasks I4b — the per-user feed, now delegation-aware (read-only).
+  // Computes the feed for the user themselves, then for each delegator they
+  // currently act for (active approved window, resolved in req.actingContext),
+  // tagging the delegator-derived items with onBehalfOfUserId. Scope is honored:
+  // an all_cases delegator contributes all their items; a specific_cases
+  // delegator only items whose caseId is in its specificCaseIds. Dedupe by the
+  // stable task id (self / earlier wins → its onBehalfOfUserId stays). With no
+  // delegations (or no ctx) the result is the user's own feed unchanged, each
+  // item just carrying onBehalfOfUserId=null. NO write/permission gate touched.
+  async getMyTasks(
+    user: { id: string; role: string; departmentId: string | null },
+    ctx?: ActingContext,
+  ): Promise<MyTaskItem[]> {
+    type Built = Omit<MyTaskItem, "specialtyClass">;
+    const byId = new Map<string, Built>();
+
+    // The user's own tasks first (so they win any dedupe; onBehalfOfUserId=null).
+    for (const t of await this.computeTasksForIdentity(user)) {
+      byId.set(t.id, { ...t, onBehalfOfUserId: null });
+    }
+
+    // Then each delegator the user currently stands in for.
+    for (const d of ctx?.delegators ?? []) {
+      const dTasks = await this.computeTasksForIdentity({
+        id: d.userId,
+        role: d.role,
+        departmentId: d.departmentId,
+      });
+      for (const t of dTasks) {
+        // specific_cases: only surface the delegator's tasks tied to a listed case.
+        if (d.scope === "specific_cases" && !(t.caseId && d.specificCaseIds.includes(t.caseId))) {
+          continue;
+        }
+        if (byId.has(t.id)) continue; // own / earlier delegator wins
+        byId.set(t.id, { ...t, onBehalfOfUserId: d.userId });
+      }
+    }
+
+    // Stamp the specialty class (ترافع/استشارات) on every item.
+    return Array.from(byId.values()).map((t) => ({
+      ...t,
+      specialtyClass: taskSpecialtyClass(t.entityType, t.caseId),
+    }));
   }
 
   async markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void> {

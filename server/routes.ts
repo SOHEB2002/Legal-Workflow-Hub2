@@ -8488,11 +8488,14 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-      const myTasks = await storage.getMyTasks({
-        id: reqUser.id,
-        role: reqUser.role,
-        departmentId: reqUser.departmentId ?? null,
-      });
+      const myTasks = await storage.getMyTasks(
+        {
+          id: reqUser.id,
+          role: reqUser.role,
+          departmentId: reqUser.departmentId ?? null,
+        },
+        req.actingContext,
+      );
       res.json(myTasks);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
