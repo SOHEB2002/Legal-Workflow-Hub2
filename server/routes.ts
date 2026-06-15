@@ -544,21 +544,28 @@ function getContractTransitionsForType(_type: string): StageTransitionRule[] {
   return ALLOWED_CONTRACT_TRANSITIONS;
 }
 
-function canModifyContract(
-  user: { id: string; role: string; departmentId: string | null },
-  contract: any,
-): boolean {
-  // consultations_review_head IS admin-class here because they're the
-  // committee chair for contracts. cases_review_head is intentionally
-  // EXCLUDED — they chair the cases committee, which has nothing to
-  // do with the contracts module. They can still see a contract if
-  // they're personally on it (assigned / creator / internal reviewer).
+// 4c-4 (contracts) — per-identity original logic (mirror of cases/consultations).
+// consultations_review_head IS admin-class here (contracts committee chair);
+// cases_review_head is intentionally EXCLUDED (they can still match via
+// assigned/creator/internal-reviewer identity). No caseId on contracts → only
+// self + all_cases delegators apply. No ctx → [self] → byte-identical.
+function canModifyContractIdentity(u: CaseActorIdentity, contract: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head" && contract.departmentId === user.departmentId) return true;
-  if (contract.assignedTo === user.id || contract.createdBy === user.id) return true;
-  if (contract.internalReviewerId === user.id) return true;
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head" && contract.departmentId === u.departmentId) return true;
+  if (contract.assignedTo === u.id || contract.createdBy === u.id) return true;
+  if (contract.internalReviewerId === u.id) return true;
   return false;
+}
+function canModifyContract(
+  user: CaseActorIdentity,
+  contract: any,
+  ctx?: ActingContext,
+): boolean {
+  const identities = ctx
+    ? actingIdentitiesFor(ctx, null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  return identities.some((u) => canModifyContractIdentity(u, contract));
 }
 
 // Memos canonical 6+1 stage workflow (Phase-9). Mirrors consultations
@@ -4485,7 +4492,7 @@ export async function registerRoutes(
       const user = req.user!;
       const existing = await storage.getContractById(String(req.params.id));
       if (!existing) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(user, existing)) {
+      if (!canModifyContract(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا العقد" });
       }
 
@@ -4851,10 +4858,9 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
-        // 4c-0: INERT — pass undefined so a delegate gains NO contract
-        // transition act-as yet. 4c-4 (contracts) flips this to
-        // req.actingContext alongside expanding canModifyContract.
-        undefined,
+        // 4c-4: contracts act-as enabled. Four-eyes stays human in the
+        // INTERNAL_REVIEW lock + the dedicated /internal-review reviewer guard.
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       // Slot-validation gate per ContractSlotsByType. Required slots
@@ -5010,10 +5016,9 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
-        // 4c-0: INERT — pass undefined so a delegate gains NO contract
-        // transition act-as yet. 4c-4 (contracts) flips this to
-        // req.actingContext alongside expanding canModifyContract.
-        undefined,
+        // 4c-4: contracts act-as enabled. Four-eyes stays human in the
+        // INTERNAL_REVIEW lock + the dedicated /internal-review reviewer guard.
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       const fromLabel = ContractStageLabels[contract.currentStage] || contract.currentStage;
@@ -5443,7 +5448,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(reqUser, contract)) {
+      if (!canModifyContract(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية عرض هذا العقد" });
       }
       const activities = await storage.getContractActivities(contract.id);
@@ -5563,7 +5568,7 @@ export async function registerRoutes(
         if (!contract) {
           return res.status(404).json({ error: "العقد غير موجود" });
         }
-        if (!canModifyContract(reqUser, contract)) {
+        if (!canModifyContract(reqUser, contract, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية رفع مرفقات لهذا العقد" });
         }
         if (!file) {
@@ -5721,7 +5726,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(reqUser, contract)) {
+      if (!canModifyContract(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية عرض هذا العقد" });
       }
       const all = await storage.getContractAttachments(contract.id);
@@ -5749,7 +5754,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(reqUser, contract)) {
+      if (!canModifyContract(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
       }
       const att = await storage.getContractAttachmentById(String(req.params.attachmentId));
