@@ -249,12 +249,21 @@ function canEditCaseData(user: CaseActorIdentity, caseData?: any, ctx?: ActingCo
   return caseActorIdentities(user, caseData, ctx).some((u) => ["branch_manager", "admin_support"].includes(u.role));
 }
 
-function canModifyConsultation(user: { id: string; role: string; departmentId: string | null }, consultation: any): boolean {
+// 4c-3 (consultations) — per-identity original logic (mirror of cases). No
+// caseId on consultations, so only self + all_cases delegators apply
+// (specific_cases is case-only). No ctx → [self] → byte-identical.
+function canModifyConsultationIdentity(u: CaseActorIdentity, consultation: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head" && consultation.departmentId === user.departmentId) return true;
-  if (consultation.assignedTo === user.id || consultation.createdBy === user.id) return true;
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head" && consultation.departmentId === u.departmentId) return true;
+  if (consultation.assignedTo === u.id || consultation.createdBy === u.id) return true;
   return false;
+}
+function canModifyConsultation(user: CaseActorIdentity, consultation: any, ctx?: ActingContext): boolean {
+  const identities = ctx
+    ? actingIdentitiesFor(ctx, null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  return identities.some((u) => canModifyConsultationIdentity(u, consultation));
 }
 
 function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
@@ -2825,7 +2834,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
       const user = req.user!;
-      if (!canModifyConsultation(user, consultation)) {
+      if (!canModifyConsultation(user, consultation, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
       res.json(consultation);
@@ -2864,7 +2873,7 @@ export async function registerRoutes(
       if (!existing) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
-      if (!canModifyConsultation(user, existing)) {
+      if (!canModifyConsultation(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الاستشارة" });
       }
 
@@ -2877,9 +2886,10 @@ export async function registerRoutes(
 
       // Validate stage transition if changing status
       if (req.body.status && req.body.status !== existing.status) {
-        // 4c-0: INERT — pass undefined (zero act-as). 4c-3 (consultations)
-        // flips this to req.actingContext alongside expanding canModifyConsultation.
-        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing, undefined);
+        // 4c-3: consultations act-as enabled — canModifyConsultation above and
+        // this transition check both consult the acting context. Four-eyes: the
+        // /internal-review author-exclusion + designated-reviewer checks stay human.
+        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing, req.actingContext);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -3100,10 +3110,9 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
-        // 4c-0: INERT — pass undefined so a delegate gains NO consultation
-        // transition act-as yet. 4c-3 (consultations) flips this to
-        // req.actingContext alongside expanding canModifyConsultation.
-        undefined,
+        // 4c-3: consultations act-as enabled. Four-eyes stays human in the
+        // dedicated /internal-review + committee endpoints (not here).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -3200,10 +3209,9 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
-        // 4c-0: INERT — pass undefined so a delegate gains NO consultation
-        // transition act-as yet. 4c-3 (consultations) flips this to
-        // req.actingContext alongside expanding canModifyConsultation.
-        undefined,
+        // 4c-3: consultations act-as enabled. Four-eyes stays human in the
+        // dedicated /internal-review + committee endpoints (not here).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -3859,7 +3867,7 @@ export async function registerRoutes(
 
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
-      if (!canModifyConsultation(reqUser, consultation)) {
+      if (!canModifyConsultation(reqUser, consultation, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
 
@@ -3883,7 +3891,7 @@ export async function registerRoutes(
 
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
-      if (!canModifyConsultation(reqUser, consultation)) {
+      if (!canModifyConsultation(reqUser, consultation, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
 
@@ -7627,7 +7635,7 @@ export async function registerRoutes(
         canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
       } else if (existingTask.consultationId) {
         const parentConsultation = await storage.getConsultationById(existingTask.consultationId);
-        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation);
+        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
       }
       if (existingTask.assignedTo !== user.id && !canModifyParent) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
