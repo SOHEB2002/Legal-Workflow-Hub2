@@ -9118,6 +9118,31 @@ export async function registerRoutes(
     }
   });
 
+  // 4d — read-only: the active delegations where the CURRENT user is the
+  // delegate. This reuses req.actingContext — the SAME canonical set the
+  // server resolves for act-as (active + approved + in-window + the delegator
+  // still active) — and enriches each with the delegator's display name so the
+  // FE can show an "acting on behalf of" banner. Empty list = the user holds no
+  // inherited authority (the banner renders nothing). Display/info only — it
+  // grants nothing; the authority itself is resolved per-request server-side.
+  app.get("/api/delegations/acting-as", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const ctx = req.actingContext;
+      if (!ctx || ctx.delegators.length === 0) {
+        return res.json({ delegators: [] });
+      }
+      const delegators = await Promise.all(
+        ctx.delegators.map(async (d) => {
+          const u = await storage.getUser(d.userId);
+          return { userId: d.userId, name: u?.name ?? d.userId };
+        }),
+      );
+      res.json({ delegators });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التفويضات النشطة" });
+    }
+  });
+
   app.post("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;

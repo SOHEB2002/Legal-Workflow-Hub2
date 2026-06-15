@@ -21,6 +21,7 @@ import { ContactsProvider } from "@/lib/contacts-context";
 import { StandardsProvider } from "@/lib/standards-context";
 import { NotificationsProvider } from "@/lib/notifications-context";
 import { GlobalSearch } from "@/components/global-search";
+import { ActingForBanner } from "@/components/acting-for-banner";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { FavoritesProvider } from "@/lib/favorites-context";
@@ -150,6 +151,7 @@ function AuthenticatedLayout() {
             <FavoritesDropdown />
             <ThemeToggle />
           </header>
+          <ActingForBanner />
           <main className="flex-1 overflow-auto">
             <Router />
           </main>
