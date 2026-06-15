@@ -35,12 +35,17 @@ const httpServer = createServer(app);
 // REQUIRES a post-deploy preview smoke-test (open the site, confirm pages
 // render + no CSP errors in the browser console). If anything is blocked,
 // this commit can be reverted in isolation.
+// In development, Vite injects an inline preamble/HMR script into the served
+// HTML, which a strict script-src 'self' would block (white screen + CSP
+// errors). Allow 'unsafe-inline' for scripts in dev only; production builds
+// have no inline scripts, so script-src stays strict there.
+const isDev = process.env.NODE_ENV !== "production";
 app.use(
   helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: isDev ? ["'self'", "'unsafe-inline'"] : ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
         imgSrc: ["'self'", "data:", "blob:", "https:"],
