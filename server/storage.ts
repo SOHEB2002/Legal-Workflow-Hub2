@@ -527,6 +527,7 @@ function mapDbCase(dbCase: any): LawCase {
     closureReason: dbCase.closureReason || null,
     closureReasonOther: dbCase.closureReasonOther || null,
     isArchived: dbCase.isArchived ?? false,
+    dataCompletionLastAckAt: toISOStringOrNull(dbCase.dataCompletionLastAckAt),
     archivedAt: toISOStringOrNull(dbCase.archivedAt),
     archivedBy: dbCase.archivedBy || null,
     archiveReason: dbCase.archiveReason || null,
@@ -748,6 +749,7 @@ function mapDbHearing(dbHearing: any): Hearing {
     contactCompleted: dbHearing.contactCompleted ?? false,
     reportCompleted: dbHearing.reportCompleted ?? false,
     sessionReportExported: dbHearing.sessionReportExported ?? false,
+    agencyVerificationAckAt: toISOStringOrNull(dbHearing.agencyVerificationAckAt),
     adminTasksCreated: dbHearing.adminTasksCreated ?? false,
     opponentMemos: dbHearing.opponentMemos || "",
     hearingMinutes: dbHearing.hearingMinutes || "",
@@ -1093,10 +1095,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getCaseById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, closedAt, archivedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, closedAt, archivedAt, dataCompletionLastAckAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
+    }
+    // data_completion_last_ack_at is a date-mode column — same idiom as
+    // archivedAt below: convert the ISO string callers pass into a Date.
+    if (dataCompletionLastAckAt !== undefined) {
+      updateData.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
     }
     // archived_at is a date-mode column; mirror the closedAt idiom so the
     // ISO string callers pass (e.g. the auto-archive scheduler) becomes a
@@ -1648,12 +1655,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getHearingById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, ...updateFields } = data;
-    await db.update(hearings).set({
-      ...updateFields,
-      updatedAt: new Date(),
-    }).where(eq(hearings.id, id));
-    
+    const { createdAt, updatedAt, agencyVerificationAckAt, ...updateFields } = data;
+    const updateData: any = { ...updateFields, updatedAt: new Date() };
+    // agency_verification_ack_at is a date-mode column — convert the ISO
+    // string callers pass into a Date (mirrors updateCase's idiom).
+    if (agencyVerificationAckAt !== undefined) {
+      updateData.agencyVerificationAckAt = agencyVerificationAckAt ? new Date(agencyVerificationAckAt) : null;
+    }
+    await db.update(hearings).set(updateData).where(eq(hearings.id, id));
+
     return this.getHearingById(id);
   }
 
@@ -2902,6 +2912,7 @@ export class DatabaseStorage implements IStorage {
         id: hearings.id, caseId: hearings.caseId, date: hearings.hearingDate, status: hearings.status,
         result: hearings.result, reportCompleted: hearings.reportCompleted,
         attendingLawyerId: hearings.attendingLawyerId, caseNumber: lawCases.caseNumber,
+        agencyVerificationAckAt: hearings.agencyVerificationAckAt,
       }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id)).where(where);
       for (const r of rows) {
         const ownerId = r.attendingLawyerId || "";
@@ -2920,8 +2931,9 @@ export class DatabaseStorage implements IStorage {
               title: `حضور جلسة — قضية ${r.caseNumber} بتاريخ ${r.date}`, entityType: "hearing", entityId: r.id,
               caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
             // Agency verification — surfaces once we reach the weekend-aware
-            // "2 days before" lead (Fri/Sat skipped; Sunday hearing → Thursday).
-            if (agencyVerificationLeadDate(r.date) <= today) {
+            // "2 days before" lead (Fri/Sat skipped; Sunday hearing → Thursday),
+            // and only until acknowledged ("تم") for this hearing.
+            if (agencyVerificationLeadDate(r.date) <= today && !r.agencyVerificationAckAt) {
               tasks.push({ id: `agency_verification:${r.id}`, kind: MyTaskKind.AGENCY_VERIFICATION,
                 title: `التحقق من الوكالة قبل الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
                 caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "verify" });
@@ -3104,11 +3116,16 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 14. Data-completion (admin_support) — cases at the data-completion stage ----
-    // Simple "surface if at stage" version; the 2-day recurring client-contact
-    // reminder is a later increment (see report).
+    // Surfaces while a case sits at استكمال_البيانات, suppressed for 2 days after
+    // each "تم" acknowledge (data_completion_last_ack_at), then re-surfaces if
+    // the case is STILL at that stage (the client may still owe data). The
+    // 2-day window is computed in SQL against NOW().
     if (isAdminSupport) {
       const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-        .from(lawCases).where(eq(lawCases.currentStage, "استكمال_البيانات"));
+        .from(lawCases).where(and(
+          eq(lawCases.currentStage, "استكمال_البيانات"),
+          sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+        ));
       for (const r of rows) {
         tasks.push({ id: `data_completion:${r.id}`, kind: MyTaskKind.DATA_COMPLETION,
           title: `استكمال البيانات والتواصل مع العميل — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,

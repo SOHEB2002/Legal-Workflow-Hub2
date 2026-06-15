@@ -105,6 +105,8 @@ type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "r
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { mode: "confirm", title: "تأكيد تصدير تقرير الجلسة" };
+    case MyTaskKind.DATA_COMPLETION: return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
+    case MyTaskKind.AGENCY_VERIFICATION: return { mode: "confirm", title: "تأكيد التحقق من الوكالة" };
     case MyTaskKind.DELEGATION_APPROVAL: return { mode: "confirm", title: "اعتماد التفويض" };
     case MyTaskKind.CONTACT_FOLLOWUP: return { mode: "confirm", title: "إنهاء متابعة العميل" };
     case MyTaskKind.LEGAL_DEADLINE: return { mode: "confirm", title: "إنجاز الموعد القانوني" };
@@ -143,6 +145,8 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
   const e = task.entityId;
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { method: "POST", url: `/api/hearings/${e}/mark-report-exported` };
+    case MyTaskKind.DATA_COMPLETION: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
+    case MyTaskKind.AGENCY_VERIFICATION: return { method: "POST", url: `/api/hearings/${e}/ack-agency-verification` };
     case MyTaskKind.DELEGATION_APPROVAL: return { method: "POST", url: `/api/delegations/${e}/approve` };
     case MyTaskKind.CONTACT_FOLLOWUP: return { method: "PATCH", url: `/api/contact-logs/${e}`, body: { followUpCompleted: true } };
     case MyTaskKind.LEGAL_DEADLINE: return { method: "PATCH", url: `/api/legal-deadlines/${e}`, body: { status: "مكتمل" } };

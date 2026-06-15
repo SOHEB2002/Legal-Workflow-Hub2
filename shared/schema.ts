@@ -109,6 +109,11 @@ export const lawCases = pgTable("law_cases", {
   closureReason: varchar("closure_reason", { length: 255 }),
   closureReasonOther: varchar("closure_reason_other", { length: 500 }),
   isArchived: boolean("is_archived").default(false),
+  // Unified-tasks: "تم" acknowledge timestamp for the admin_support
+  // data-completion reminder (case at استكمال_البيانات). The reminder
+  // re-surfaces 2 days after the last ack while still at that stage.
+  // Purely additive (ADD COLUMN).
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   archivedAt: timestamp("archived_at"),
   archivedBy: varchar("archived_by", { length: 255 }),
   archiveReason: varchar("archive_reason", { length: 50 }),
@@ -503,6 +508,10 @@ export const hearings = pgTable("hearings", {
   // Done-state for the admin_support "export session report PDF" task — set
   // true once the report has been exported. Purely additive (ADD COLUMN).
   sessionReportExported: boolean("session_report_exported").default(false),
+  // Done-state for the agency-verification reminder (verify the agency before
+  // an upcoming hearing) — set when acknowledged; suppresses that hearing's
+  // reminder. Purely additive (ADD COLUMN).
+  agencyVerificationAckAt: timestamp("agency_verification_ack_at"),
   adminTasksCreated: boolean("admin_tasks_created").default(false),
   opponentMemos: text("opponent_memos").default(""),
   hearingMinutes: text("hearing_minutes").default(""),
@@ -2223,6 +2232,7 @@ export interface LawCase {
   moeenNumber: string | null;
   clientRole: string | null;
   isArchived: boolean;
+  dataCompletionLastAckAt: string | null;
   archivedAt: string | null;
   archivedBy: string | null;
   archiveReason: string | null;
@@ -2864,6 +2874,7 @@ export interface Hearing {
   contactCompleted: boolean;
   reportCompleted: boolean;
   sessionReportExported: boolean;
+  agencyVerificationAckAt: string | null;
   adminTasksCreated: boolean;
   opponentMemos: string;
   hearingMinutes: string;

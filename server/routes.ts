@@ -4182,6 +4182,27 @@ export async function registerRoutes(
   // Body: { notes }. Required notes — sends case from الأخذ_بالملاحظات
   // back to إحالة_للجنة_المراجعة. Allowed: assigned_lawyer +
   // admin_support + department_head (own dept) + branch_manager.
+  // "تم" acknowledge for the data-completion reminder — stamps
+  // data_completion_last_ack_at=now so the unified-tasks feed suppresses the
+  // case's data_completion task for 2 days, then re-surfaces it if the case is
+  // still at استكمال_البيانات. Gated by canModifyCase (delegation-aware) —
+  // covers admin_support / branch_manager / dept_head(own dept) / the assignee.
+  app.post("/api/cases/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!canModifyCase(user, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const updated = await storage.updateCase(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
   app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -7720,6 +7741,29 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error marking session report exported:", error);
       res.status(500).json({ error: "حدث خطأ في تحديث حالة تصدير التقرير" });
+    }
+  });
+
+  // "تم" acknowledge for the agency-verification reminder — stamps
+  // agency_verification_ack_at=now so the unified-tasks feed stops surfacing
+  // that hearing's agency_verification task. Same actors as the other hearing
+  // actions (attending lawyer / admin_support / branch_manager via
+  // canActOnHearing).
+  app.post("/api/hearings/:id/ack-agency-verification", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!canActOnHearing(req.user!, hearing)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
+      const updated = await storage.updateHearing(hearingId, { agencyVerificationAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging agency verification:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التحقق من الوكالة" });
     }
   });
 
