@@ -44,8 +44,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import type { User as UserType, UserRoleType, UserStatusValue } from "@shared/schema";
-import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels } from "@shared/schema";
+import type { User as UserType, UserRoleType, UserStatusValue, TaskSpecialtyValue } from "@shared/schema";
+import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels, TaskSpecialty, TaskSpecialtyLabels } from "@shared/schema";
 import { VacationDialog } from "@/components/users/vacation-dialog";
 import { CustomPermissionsDialog } from "@/components/users/custom-permissions-dialog";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
@@ -145,6 +145,7 @@ export default function UsersPage() {
     isActive: true,
     canBeAssignedCases: false,
     canBeAssignedConsultations: false,
+    taskSpecialties: [] as TaskSpecialtyValue[],
   });
 
   const resetForm = () => {
@@ -202,6 +203,7 @@ export default function UsersPage() {
       isActive: formData.isActive,
       canBeAssignedCases: formData.canBeAssignedCases,
       canBeAssignedConsultations: formData.canBeAssignedConsultations,
+      taskSpecialties: null,
       mustChangePassword: true,
     });
 
@@ -230,6 +232,7 @@ export default function UsersPage() {
       isActive: userToEdit.isActive,
       canBeAssignedCases: userToEdit.canBeAssignedCases,
       canBeAssignedConsultations: userToEdit.canBeAssignedConsultations,
+      taskSpecialties: userToEdit.taskSpecialties || [],
     });
     setShowEditDialog(true);
   };
@@ -266,6 +269,9 @@ export default function UsersPage() {
       isActive: editFormData.isActive,
       canBeAssignedCases: editFormData.canBeAssignedCases,
       canBeAssignedConsultations: editFormData.canBeAssignedConsultations,
+      // Only admin_support uses task-routing specialties; send [] for others
+      // so changing a user away from admin_support clears stale specialties.
+      taskSpecialties: editFormData.role === "admin_support" ? editFormData.taskSpecialties : [],
     });
 
     if (result.success) {
@@ -991,6 +997,38 @@ export default function UsersPage() {
                   onCheckedChange={(checked) => setEditFormData({ ...editFormData, canBeAssignedConsultations: checked })}
                 />
               </div>
+              {editFormData.role === "admin_support" && (
+                <div className="space-y-2 pt-1">
+                  <Label>تخصص المهام</Label>
+                  <p className="text-xs text-muted-foreground">
+                    تُوجَّه المهام التلقائية (مثل التحصيل) إلى موظف الدعم الإداري المختص. يمكن اختيار أكثر من تخصص.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.values(TaskSpecialty).map((spec) => {
+                      const selected = editFormData.taskSpecialties.includes(spec);
+                      return (
+                        <Button
+                          key={spec}
+                          type="button"
+                          variant={selected ? "default" : "outline"}
+                          size="sm"
+                          data-testid={`button-specialty-${spec}`}
+                          onClick={() =>
+                            setEditFormData({
+                              ...editFormData,
+                              taskSpecialties: selected
+                                ? editFormData.taskSpecialties.filter((s) => s !== spec)
+                                : [...editFormData.taskSpecialties, spec],
+                            })
+                          }
+                        >
+                          {TaskSpecialtyLabels[spec]}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>
