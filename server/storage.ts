@@ -2821,12 +2821,20 @@ export class DatabaseStorage implements IStorage {
     const isConsultationsReviewHead = user.role === "consultations_review_head";
     const userDept = user.departmentId && user.departmentId.length > 0 ? user.departmentId : null;
     const deptHeadScoped = isDeptHead && !!userDept;
+    // branch_manager = firm-wide supervisory view: the SAME team mechanism as
+    // dept_head but UNSCOPED by department. teamScoped drives the shared "see
+    // others' tasks (tagged ownerScope:team)" branches below; firmWideScoped
+    // drops the departmentId filter so every department is included. Parity:
+    // for a normal user both are false (self-only, byte-identical to before);
+    // for a dept_head only deptHeadScoped is true (dept filter still applied).
+    const firmWideScoped = user.role === "branch_manager";
+    const teamScoped = deptHeadScoped || firmWideScoped;
     const today = new Date().toISOString().split("T")[0];
     // Built without specialtyClass; it's stamped uniformly on return via
     // taskSpecialtyClass so every item (esp. admin_support's) carries its class.
     const tasks: Omit<MyTaskItem, "specialtyClass" | "onBehalfOfUserId">[] = [];
     const scopeOf = (ownerId: string): "self" | "team" =>
-      deptHeadScoped && ownerId !== uid ? "team" : "self";
+      teamScoped && ownerId !== uid ? "team" : "self";
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
     const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
 
@@ -2835,7 +2843,10 @@ export class DatabaseStorage implements IStorage {
     // refinement point). Excludes review/committee/platform/admin-owned stages.
     const LAWYER_WORK_STAGES = ["دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
     {
-      const where = deptHeadScoped
+      const where = firmWideScoped
+        ? and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
+            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+        : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
             sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
         : and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
@@ -2856,13 +2867,19 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 2. case_unassigned — unassigned case in dept (dept_head assigns) ----
-    if (deptHeadScoped) {
+    if (teamScoped) {
+      const unassignedWhere = firmWideScoped
+        ? and(
+            sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
+            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+          )
+        : and(
+            eq(lawCases.departmentId, userDept!),
+            sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
+            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+          );
       const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-        .from(lawCases).where(and(
-          eq(lawCases.departmentId, userDept!),
-          sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
-          sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
-        ));
+        .from(lawCases).where(unassignedWhere);
       for (const r of rows) {
         tasks.push({
           id: `case_unassigned:${r.id}`, kind: MyTaskKind.CASE_UNASSIGNED,
@@ -2876,7 +2893,9 @@ export class DatabaseStorage implements IStorage {
     // ---- 3-5 + agency. Hearings (attend / unrecorded-overdue / report) ----
     {
       const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND ${hearings.reportCompleted} = false))`;
-      const where = deptHeadScoped
+      const where = firmWideScoped
+        ? hActionable
+        : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), hActionable)
         : and(eq(hearings.attendingLawyerId, uid), hActionable);
       const rows = await db.select({
@@ -2915,7 +2934,9 @@ export class DatabaseStorage implements IStorage {
     // ---- 6. memo_pending — assigned memo not yet filed ----
     {
       const mActionable = sql`COALESCE(${memos.currentStage}, '') <> 'مرفوعة' AND ${memos.status} <> 'ملغاة'`;
-      const where = deptHeadScoped
+      const where = firmWideScoped
+        ? and(mActionable, sql`${memos.assignedTo} <> ''`)
+        : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), mActionable, sql`${memos.assignedTo} <> ''`)
         : and(eq(memos.assignedTo, uid), mActionable);
       const rows = await db.select({
@@ -2992,11 +3013,15 @@ export class DatabaseStorage implements IStorage {
       const ftActionable = sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`;
       const cols = { id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title,
         assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate };
-      const rows = deptHeadScoped
+      const rows = firmWideScoped
+        ? await db.select(cols).from(fieldTasks).where(ftActionable)
+        : deptHeadScoped
         ? await db.select(cols).from(fieldTasks).innerJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
             .where(and(eq(lawCases.departmentId, userDept!), ftActionable))
         : await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, uid), ftActionable));
-      const unassigned = isManager
+      // The firm-wide query already includes the unassigned "" tasks; only the
+      // non-firm-wide managers (admin_support) need the separate pool query.
+      const unassigned = isManager && !firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, ""), ftActionable))
         : [];
       for (const r of [...rows, ...unassigned]) {
@@ -3014,7 +3039,9 @@ export class DatabaseStorage implements IStorage {
 
     // ---- 9. Legal deadlines (approaching/overdue) — owned via parent case ----
     {
-      const where = deptHeadScoped
+      const where = firmWideScoped
+        ? eq(legalDeadlines.status, "نشط")
+        : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), eq(legalDeadlines.status, "نشط"))
         : and(eq(legalDeadlines.status, "نشط"),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
@@ -3048,11 +3075,15 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 12. Delegation approvals (dept_head of the delegator) ----
-    if (deptHeadScoped) {
+    if (teamScoped) {
+      const pendingWhere = firmWideScoped
+        ? and(sql`${delegationsTable.approvedBy} IS NULL`,
+            eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today))
+        : and(eq(users.departmentId, userDept!), sql`${delegationsTable.approvedBy} IS NULL`,
+            eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today));
       const rows = await db.select({ id: delegationsTable.id, fromUserId: delegationsTable.fromUserId, endDate: delegationsTable.endDate })
         .from(delegationsTable).innerJoin(users, eq(delegationsTable.fromUserId, users.id))
-        .where(and(eq(users.departmentId, userDept!), sql`${delegationsTable.approvedBy} IS NULL`,
-          eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today)));
+        .where(pendingWhere);
       for (const r of rows) {
         tasks.push({ id: `delegation_approval:${r.id}`, kind: MyTaskKind.DELEGATION_APPROVAL,
           title: "طلب تفويض بانتظار اعتمادك", entityType: "delegation", entityId: r.id, caseId: null,
