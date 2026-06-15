@@ -73,7 +73,7 @@ export function CaseProgressBar({
   onPlatformReviewAddNotes,
   onPlatformReviewResubmit,
   hasPlatformNotes = false,
-  userRole,
+  userRole: userRoleRaw,
   disabled = false,
   caseClassification,
   departmentName,
@@ -89,6 +89,14 @@ export function CaseProgressBar({
   isCaseAssignee = false,
   hasReturnedFromReview = false,
 }: CaseProgressBarProps) {
+  // Normalize the role ONCE at the source so EVERY permission gate below
+  // (canActOnInternalReview, canReviewCases for committee review, the
+  // next-stage enable check, platform/settlement, rollback) sees a clean
+  // value. Defends against any stray whitespace/CRLF on the role string so a
+  // global role like branch_manager can never fall through a `===`/`includes`
+  // check and get wrongly dimmed. Server role is the authority and is clean;
+  // this is belt-and-braces applied in one place rather than per call site.
+  const userRole = (typeof userRoleRaw === "string" ? userRoleRaw.trim() : userRoleRaw) as UserRoleType;
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
   const [selectedReviewerId, setSelectedReviewerId] = useState("");
@@ -266,22 +274,28 @@ export function CaseProgressBar({
 
   // Permission-aware enable state for the generic "المرحلة التالية" button —
   // the one button that previously always rendered and only failed AFTER a
-  // click (server 403 → error toast). This is a deliberately CONSERVATIVE,
-  // fail-OPEN mirror of the server's actor model (validateStageTransition):
-  // a user is an actor on a forward case transition only as branch_manager /
-  // department_head / admin_support, or via the assigned_lawyer / internal_
-  // reviewer synthetic roles. The real roles employee / hr / technical_support
-  // / viewer appear in NO forward case-transition rule, so when none of these
-  // hold the move can never succeed and disabling is always correct. When in
-  // doubt we leave it ENABLED (no regression vs today). The exact per-stage
-  // role set is NOT replicated here — see report (the client transitions table
-  // is stale); this gate only removes the guaranteed-to-fail clicks.
-  const nextStageActionAllowed =
-    userRole === "branch_manager" ||
-    userRole === "department_head" ||
-    userRole === "admin_support" ||
-    isCaseAssignee ||
-    isReviewerActor;
+  // click (server 403 → error toast).
+  //
+  // This is a DENYLIST, not an allowlist: we only disable the roles that can
+  // PROVABLY never advance any case, and enable everyone else. The previous
+  // allowlist (branch_manager/department_head/admin_support/…) had a real
+  // hazard — any management role NOT listed (or a role-string mismatch) would
+  // be wrongly DIMMED even though the server allows it. A global role like
+  // branch_manager must NEVER see a disabled stage button. So instead we
+  // disable only when the user is a read-only / non-actor role AND is not an
+  // assignee/designated reviewer of THIS case. On the server's actor model
+  // (validateStageTransition) the real roles employee / hr / technical_support
+  // / viewer appear in NO forward case-transition rule — they can only act via
+  // the assigned_lawyer / internal_reviewer synthetic roles — so disabling
+  // them when neither holds is always correct and never blocks a real actor.
+  // Every management role (branch_manager, department_head, admin_support,
+  // cases_review_head, consultations_review_head) is enabled by construction.
+  const isNonActorRole =
+    userRole === "employee" ||
+    userRole === "hr" ||
+    userRole === "technical_support" ||
+    userRole === "viewer";
+  const nextStageActionAllowed = !isNonActorRole || isCaseAssignee || isReviewerActor;
 
   const handleMoveNext = () => {
     // For the internal-review transition the dropdown is pre-filled from the
