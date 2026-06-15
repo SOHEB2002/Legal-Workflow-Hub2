@@ -809,20 +809,29 @@ function validateStageTransition(
     return { allowed: false, reason: `لا يمكن الانتقال من "${currentStage}" إلى "${targetStage}"` };
   }
 
-  // branch_manager is global on every DEFINED case transition. This mirrors
-  // the rollback blocks above (each returns allowed for branch_manager) and
-  // the system-wide intent that the branch manager can drive any case through
-  // its workflow. ~14 forward case rules (e.g. تحرير_صحيفة_الدعوى →
-  // مراجعة_داخلية) omit branch_manager from allowedRoles, which 400'd a
-  // non-assignee manager here ("ليس لديك صلاحية لتنفيذ هذا الانتقال"). A rule
-  // must still EXIST (checked above), so the manager can only traverse legal
-  // edges — not jump arbitrarily. The four-eyes-sensitive case transitions
-  // (internal-review approve, committee approve) already list branch_manager
-  // intentionally, so this opens no review hole, and the INTERNAL_REVIEW lock
-  // above (which also exempts branch_manager) still governs exits FROM review.
-  // Scoped to cases: consultation/contract/memo four-eyes is enforced in their
-  // dedicated endpoints, so they keep their existing table rules untouched.
-  if (entityType === "case" && userRole === "branch_manager") {
+  // branch_manager is global on every DEFINED forward transition, for ALL
+  // entity types. This mirrors the rollback blocks above (each short-circuits
+  // `isBranchManager → allowed` per entity) and the system-wide intent that
+  // the branch manager can drive any case/consultation/contract/memo through
+  // its workflow. A rule must still EXIST (checked above), so the manager can
+  // only traverse legal edges — not jump arbitrarily.
+  //
+  // Behavioral no-op today for consultation/contract/memo (every rule in their
+  // tables already lists branch_manager); it was load-bearing only for cases,
+  // whose older table omitted branch_manager on ~14 lawyer-work edges (e.g.
+  // تحرير_صحيفة_الدعوى → مراجعة_داخلية) and 400'd a non-assignee manager. Kept
+  // universal so a future rule that forgets branch_manager can't silently
+  // re-block it on any resource.
+  //
+  // Four-eyes is NOT affected: the self-review guards live in dedicated
+  // endpoints (consultation /internal-review's identity check
+  // `isAssignedLawyer` blocks even a branch_manager assignee; contract/memo
+  // require the designated `internal_reviewer` identity) — a different code
+  // path from this forward matcher — and the INTERNAL_REVIEW locks above
+  // (which already exempt branch_manager by design) still govern exits FROM
+  // review. branch_manager being allowed on internal-review *outcome* edges is
+  // pre-existing and intentional in every table.
+  if (userRole === "branch_manager") {
     return { allowed: true };
   }
 
