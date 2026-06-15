@@ -40,7 +40,7 @@ const ConsultationsPage = lazy(() => import("@/pages/consultations"));
 const ContractsPage = lazy(() => import("@/pages/contracts"));
 const HearingsPage = lazy(() => import("@/pages/hearings"));
 const UsersPage = lazy(() => import("@/pages/users"));
-const FieldTasksPage = lazy(() => import("@/pages/field-tasks"));
+const MyTasksPage = lazy(() => import("@/pages/my-tasks"));
 const DashboardSettingsPage = lazy(() => import("@/pages/dashboard-settings"));
 const KPIsPage = lazy(() => import("@/pages/kpis"));
 const HelpPage = lazy(() => import("@/pages/help"));
@@ -78,7 +78,7 @@ function Router() {
         <Route path="/consultations" component={ConsultationsPage} />
         <Route path="/contracts" component={ContractsPage} />
         <Route path="/hearings" component={HearingsPage} />
-        <Route path="/field-tasks" component={FieldTasksPage} />
+        <Route path="/field-tasks" component={MyTasksPage} />
         <Route path="/users" component={UsersPage} />
         <Route path="/dashboard-settings" component={DashboardSettingsPage} />
         <Route path="/kpis" component={KPIsPage} />
