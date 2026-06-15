@@ -809,6 +809,23 @@ function validateStageTransition(
     return { allowed: false, reason: `لا يمكن الانتقال من "${currentStage}" إلى "${targetStage}"` };
   }
 
+  // branch_manager is global on every DEFINED case transition. This mirrors
+  // the rollback blocks above (each returns allowed for branch_manager) and
+  // the system-wide intent that the branch manager can drive any case through
+  // its workflow. ~14 forward case rules (e.g. تحرير_صحيفة_الدعوى →
+  // مراجعة_داخلية) omit branch_manager from allowedRoles, which 400'd a
+  // non-assignee manager here ("ليس لديك صلاحية لتنفيذ هذا الانتقال"). A rule
+  // must still EXIST (checked above), so the manager can only traverse legal
+  // edges — not jump arbitrarily. The four-eyes-sensitive case transitions
+  // (internal-review approve, committee approve) already list branch_manager
+  // intentionally, so this opens no review hole, and the INTERNAL_REVIEW lock
+  // above (which also exempts branch_manager) still governs exits FROM review.
+  // Scoped to cases: consultation/contract/memo four-eyes is enforced in their
+  // dedicated endpoints, so they keep their existing table rules untouched.
+  if (entityType === "case" && userRole === "branch_manager") {
+    return { allowed: true };
+  }
+
   if (!effectiveRoles.some(role => rule.allowedRoles.includes(role))) {
     return { allowed: false, reason: "ليس لديك صلاحية لتنفيذ هذا الانتقال" };
   }
