@@ -90,6 +90,7 @@ import {
   advanceMemoStageSchema,
   contactLogBodySchema,
   updateFieldTaskSchema,
+  canAssignFieldTasks,
   updateLegalDeadlineSchema,
   updateTicketStatusSchema,
   assignTicketSchema,
@@ -994,6 +995,57 @@ function validateStageTransition(
 async function getActiveMemoCount(caseId: string): Promise<number> {
   const memos = await storage.getMemosByCase(caseId);
   return memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+}
+
+// D4 — auto-created field tasks must notify so urgent work (collection,
+// response-prep, client contact) is never invisible. The MANUAL add path is
+// already notified client-side (notifyFieldTaskAssigned in field-tasks-context);
+// the server auto-creation paths were silent. This mirrors that notification
+// (type "field_task_assigned", relatedType "field_task"): the assignee is
+// notified directly, or — when the task lands in the unassigned "" pool (e.g.
+// no matching specialist) — the managers (branch_manager / admin_support) are
+// notified so someone picks it up. Best-effort; a notification failure never
+// breaks the creating workflow.
+async function notifyFieldTaskCreated(
+  task: { id: string; title: string; assignedTo: string; priority?: string },
+  actor: { id: string; name?: string | null },
+): Promise<void> {
+  try {
+    const senderName = actor.name || actor.id;
+    if (task.assignedTo) {
+      await storage.createNotification({
+        type: "field_task_assigned",
+        priority: task.priority === "عاجل" || task.priority === "عالي" ? "high" : "medium",
+        title: "مهمة ميدانية جديدة",
+        message: `تم تكليفك بمهمة ميدانية جديدة: ${task.title}`,
+        senderId: actor.id,
+        senderName,
+        recipientId: task.assignedTo,
+        relatedType: "field_task",
+        relatedId: task.id,
+      });
+    } else {
+      const allUsers = await storage.getAllUsers();
+      const managers = allUsers.filter(
+        (u) => u.isActive && (u.role === "branch_manager" || u.role === "admin_support"),
+      );
+      for (const m of managers) {
+        await storage.createNotification({
+          type: "field_task_assigned",
+          priority: "high",
+          title: "مهمة ميدانية غير مُسندة",
+          message: `مهمة ميدانية جديدة بحاجة إلى إسناد: ${task.title}`,
+          senderId: actor.id,
+          senderName,
+          recipientId: m.id,
+          relatedType: "field_task",
+          relatedId: task.id,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[notifyFieldTaskCreated] failed:", e);
+  }
 }
 
 export function calculateSmartPriority(
@@ -2586,7 +2638,7 @@ export async function registerRoutes(
           // Collection (تحصيل) is litigation-class work → route to the
           // litigation admin_support specialist; "" (unassigned) if none.
           const assignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
-          await storage.createFieldTask(
+          const collectionTask = await storage.createFieldTask(
             {
               title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
               description: `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
@@ -2600,6 +2652,7 @@ export async function registerRoutes(
             },
             user.id,
           );
+          await notifyFieldTaskCreated(collectionTask, user); // D4
         } catch (e) {
           console.error("Failed to auto-create collection task on conciliation settlement:", e);
         }
@@ -7250,6 +7303,7 @@ export async function registerRoutes(
               priority: "عالي",
               dueDate: data.nextHearingDate,
             }, reqUser.id);
+            await notifyFieldTaskCreated(task, reqUser); // D4
             createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
 
             const deadlineDate = new Date(data.nextHearingDate);
@@ -7312,6 +7366,7 @@ export async function registerRoutes(
                 priority: "عاجل",
                 dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
               }, reqUser.id);
+              await notifyFieldTaskCreated(collectionTask, reqUser); // D4
               createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
 
               // Transition to collection
@@ -7421,6 +7476,7 @@ export async function registerRoutes(
             priority: "عاجل",
             dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
           }, reqUser.id);
+          await notifyFieldTaskCreated(contactTask, reqUser); // D4
           createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
         }
 
@@ -7480,6 +7536,7 @@ export async function registerRoutes(
             priority: "عاجل",
             dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
           }, reqUser.id);
+          await notifyFieldTaskCreated(collectionTask, reqUser); // D4
           createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
 
           caseUpdate.currentStage = "تحصيل";
@@ -7696,10 +7753,40 @@ export async function registerRoutes(
 
   // ==================== Field Tasks ====================
 
-  app.get("/api/field-tasks", requireAuth, async (req, res) => {
+  app.get("/api/field-tasks", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const tasks = await storage.getAllFieldTasks();
-      res.json(tasks);
+      // D5 (data-leak fix) — scope server-side so a browser never receives
+      // field tasks (client names, case numbers) it isn't entitled to. Before
+      // this, every task shipped to every browser and was filtered only
+      // client-side. Scope mirrors the per-user task predicates:
+      //   • branch_manager / admin_support (canAssignFieldTasks) → all tasks
+      //     (the management view; includes the unassigned "" pool);
+      //   • department_head → tasks on cases in their department (field tasks
+      //     carry no departmentId, so this resolves via the parent case) + own
+      //     + created;
+      //   • everyone else → only tasks assigned TO them or created BY them.
+      // The field-tasks page re-applies its own (canManage || own || createdBy)
+      // filter, so the page itself stays unchanged for every role.
+      const user = req.user!;
+      const all = await storage.getAllFieldTasks();
+      let scoped = all;
+      if (canAssignFieldTasks(user.role)) {
+        scoped = all;
+      } else if (user.role === "department_head" && user.departmentId) {
+        const cases = await storage.getAllCases();
+        const deptCaseIds = new Set(
+          cases.filter((c) => c.departmentId === user.departmentId).map((c) => c.id),
+        );
+        scoped = all.filter(
+          (t) =>
+            t.assignedTo === user.id ||
+            t.assignedBy === user.id ||
+            (!!t.caseId && deptCaseIds.has(t.caseId)),
+        );
+      } else {
+        scoped = all.filter((t) => t.assignedTo === user.id || t.assignedBy === user.id);
+      }
+      res.json(scoped);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب المهام الميدانية" });
     }
@@ -7782,6 +7869,30 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
       }
+
+      // D2 (action-hub write-back foundation) — completing a field task leaves
+      // evidence on the linked case's activity log, so e.g. finishing a
+      // collection letter is visible on the case. Fires only on the transition
+      // INTO "مكتمل" (FieldTaskStatus.COMPLETED) and only for case-linked tasks.
+      // completedAt itself is stamped server-side in storage.updateFieldTask
+      // (D7). Best-effort: a logging failure must not fail the completion.
+      // Task-type-specific write-backs (mark a hearing report exported, advance
+      // a stage, collection→execution, the consultation-linked activity log)
+      // are deferred to the action-hub UI increment — see report.
+      if (existingTask.status !== "مكتمل" && updated.status === "مكتمل" && updated.caseId) {
+        try {
+          await storage.logCaseActivity({
+            caseId: updated.caseId,
+            userId: user.id,
+            userName: user.name || user.id,
+            actionType: "field_task_completed",
+            title: `اكتملت مهمة ميدانية: ${updated.title}`,
+          });
+        } catch (e) {
+          console.error("[field-tasks PATCH] case activity write-back failed:", e);
+        }
+      }
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث المهمة" });

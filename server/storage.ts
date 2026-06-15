@@ -1711,10 +1711,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getFieldTaskById(id);
     if (!existing) return undefined;
     
+    // D7: completedAt is authoritative SERVER-SIDE — never trust a client value.
+    // `completedAt` is destructured out here (rest-sibling omit, so the spoofed
+    // value never reaches the row) and (re)stamped only on the transition INTO
+    // "مكتمل" (FieldTaskStatus.COMPLETED). An already-completed task keeps its
+    // original stamp; other edits leave completedAt untouched.
     const { createdAt, updatedAt, completedAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
-    if (completedAt) {
-      updateData.completedAt = new Date(completedAt);
+    if (updateFields.status === "مكتمل" && existing.status !== "مكتمل") {
+      updateData.completedAt = new Date();
     }
     await db.update(fieldTasks).set(updateData).where(eq(fieldTasks.id, id));
     
