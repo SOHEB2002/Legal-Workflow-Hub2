@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { authMiddleware, csrfProtection } from "./auth";
+import { attachActingContext } from "./acting-context";
 import { startScheduler } from "./scheduler";
 import { storage } from "./storage";
 import { pool } from "./db";
@@ -89,6 +90,10 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 app.use(authMiddleware);
+// Unified-tasks I4a — resolve the delegation acting context once per request
+// (after auth populates req.user). 4a only ATTACHES it; nothing consumes it yet,
+// so behavior is unchanged. Fail-safe (never blocks the request).
+app.use(attachActingContext);
 app.use(csrfProtection);
 
 // ==================== Viewer read-only guard ====================

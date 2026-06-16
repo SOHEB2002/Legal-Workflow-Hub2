@@ -17,6 +17,10 @@ export const users = pgTable("users", {
   isActive: boolean("is_active").default(true),
   canBeAssignedCases: boolean("can_be_assigned_cases").default(false),
   canBeAssignedConsultations: boolean("can_be_assigned_consultations").default(false),
+  // Task-routing specialty (ترافع / استشارات; see TaskSpecialty). Nullable
+  // jsonb array — a user may hold several. Auto-created admin_support tasks
+  // route to the matching active specialist. Purely additive (ADD COLUMN).
+  taskSpecialties: jsonb("task_specialties").$type<TaskSpecialtyValue[]>(),
   mustChangePassword: boolean("must_change_password").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -105,6 +109,11 @@ export const lawCases = pgTable("law_cases", {
   closureReason: varchar("closure_reason", { length: 255 }),
   closureReasonOther: varchar("closure_reason_other", { length: 500 }),
   isArchived: boolean("is_archived").default(false),
+  // Unified-tasks: "تم" acknowledge timestamp for the admin_support
+  // data-completion reminder (case at استكمال_البيانات). The reminder
+  // re-surfaces 2 days after the last ack while still at that stage.
+  // Purely additive (ADD COLUMN).
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   archivedAt: timestamp("archived_at"),
   archivedBy: varchar("archived_by", { length: 255 }),
   archiveReason: varchar("archive_reason", { length: 50 }),
@@ -141,6 +150,13 @@ export const lawCases = pgTable("law_cases", {
   // Phase-7 P7-2 — the cases list (getAllCases + role branches) orders by
   // updatedAt; createdAt above stays for getSidebarCounts' createdAt range.
   updatedAtIdx:        index("law_cases_updated_at_idx").on(t.updatedAt),
+  // Unified-tasks I3 — GIN index on the assignedLawyers jsonb for the
+  // `assigned_lawyers @> [uid]` containment in getMyTasks (case_work /
+  // legal_deadline member branches). Kept COMMENTED (like the Batch-M FKs) so
+  // drizzle-push never manages it; applied out-of-band on BOTH dev + prod via
+  // script/apply-tasks-gin-index.sql (CREATE INDEX CONCURRENTLY IF NOT EXISTS).
+  // assignedLawyersGin: index("law_cases_assigned_lawyers_gin_idx")
+  //   .using("gin", t.assignedLawyers),
   // Batch M FKs — applied via script/apply-fk-constraints.sql (NOT VALID +
   // VALIDATE); kept commented so Republish/drizzle-push never emits the
   // validating ADD CONSTRAINT that timed out the deploy:
@@ -489,6 +505,13 @@ export const hearings = pgTable("hearings", {
   nextSteps: text("next_steps").default(""),
   contactCompleted: boolean("contact_completed").default(false),
   reportCompleted: boolean("report_completed").default(false),
+  // Done-state for the admin_support "export session report PDF" task — set
+  // true once the report has been exported. Purely additive (ADD COLUMN).
+  sessionReportExported: boolean("session_report_exported").default(false),
+  // Done-state for the agency-verification reminder (verify the agency before
+  // an upcoming hearing) — set when acknowledged; suppresses that hearing's
+  // reminder. Purely additive (ADD COLUMN).
+  agencyVerificationAckAt: timestamp("agency_verification_ack_at"),
   adminTasksCreated: boolean("admin_tasks_created").default(false),
   opponentMemos: text("opponent_memos").default(""),
   hearingMinutes: text("hearing_minutes").default(""),
@@ -504,6 +527,9 @@ export const hearings = pgTable("hearings", {
   caseIdx: index("hearings_case_idx").on(t.caseId),
   // Phase-7 P7-2 — getAllHearings/getHearingsByCase order by (hearingDate, hearingTime).
   hearingDateIdx: index("hearings_hearing_date_idx").on(t.hearingDate, t.hearingTime),
+  // Unified-tasks I3 — per-user feed filters hearings by attendingLawyerId
+  // (getMyTasks member branch). Additive.
+  attendingLawyerIdx: index("hearings_attending_lawyer_idx").on(t.attendingLawyerId),
   // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
   // caseFk: foreignKey({ name: "hearings_case_id_fkey",
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
@@ -530,6 +556,9 @@ export const fieldTasks = pgTable("field_tasks", {
 }, (t) => ({
   // Phase-4 S1 — hot-path index (mirrors the contracts index idiom).
   caseIdx: index("field_tasks_case_idx").on(t.caseId),
+  // Unified-tasks I3 — per-user feed filters field tasks by assignee
+  // (getMyTasks: assignedTo = uid, and the unassigned "" pool). Additive.
+  assignedToIdx: index("field_tasks_assigned_to_idx").on(t.assignedTo),
   // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
   // caseFk: foreignKey({ name: "field_tasks_case_id_fkey",
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
@@ -683,6 +712,10 @@ export const memos = pgTable("memos", {
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
   // Phase-7 P7-2 — getAllMemos orders by deadline.
   deadlineIdx: index("memos_deadline_idx").on(t.deadline),
+  // Unified-tasks I3 — per-user feed filters memos by assignee (memo_pending)
+  // and by designated reviewer (review_pending). Both additive.
+  assignedToIdx: index("memos_assigned_to_idx").on(t.assignedTo),
+  internalReviewerIdx: index("memos_internal_reviewer_idx").on(t.internalReviewerId),
 }));
 
 export const caseActivityLog = pgTable("case_activity_log", {
@@ -855,6 +888,9 @@ export const delegationsTable = pgTable("delegations_table", {
   approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
+  // Unified-tasks I4a — delegation enforcement resolver filters by the delegate
+  // (toUserId) on every authed request (getActingContext). Additive btree index.
+  toUserIdx: index("delegations_table_to_user_idx").on(t.toUserId),
   // Batch M FKs — applied via script/apply-fk-constraints.sql (commented; see law_cases note).
   // Both mirror deleteUser, which deletes a user's delegations on delete:
   // fromUserFk: foreignKey({ name: "delegations_table_from_user_id_fkey",
@@ -1948,6 +1984,25 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
   "أخرى": "أخرى",
 };
 
+// ==================== تخصص المهام (Task-routing specialty) ====================
+// Primary work-class buckets used to route auto-created admin_support tasks to
+// the right specialist (the 4 admin_support staff have different specialties).
+// Stored as a jsonb string array on the user (users.taskSpecialties) so a user
+// can hold MULTIPLE classes (e.g. both ترافع and استشارات). Sub-classes can be
+// added under a primary class later by extending this enum — no schema change,
+// since the column is just a string array.
+export const TaskSpecialty = {
+  LITIGATION: "ترافع",
+  CONSULTATIONS: "استشارات",
+} as const;
+
+export type TaskSpecialtyValue = typeof TaskSpecialty[keyof typeof TaskSpecialty];
+
+export const TaskSpecialtyLabels: Record<TaskSpecialtyValue, string> = {
+  "ترافع": "ترافع",
+  "استشارات": "استشارات",
+};
+
 // ==================== أنواع المحاكم ====================
 export const CourtType = {
   GENERAL: "المحكمة العامة",
@@ -2093,6 +2148,7 @@ export interface User {
   isActive: boolean;
   canBeAssignedCases: boolean;
   canBeAssignedConsultations: boolean;
+  taskSpecialties: TaskSpecialtyValue[] | null;
   mustChangePassword: boolean;
   createdAt: string;
   updatedAt: string;
@@ -2176,6 +2232,7 @@ export interface LawCase {
   moeenNumber: string | null;
   clientRole: string | null;
   isArchived: boolean;
+  dataCompletionLastAckAt: string | null;
   archivedAt: string | null;
   archivedBy: string | null;
   archiveReason: string | null;
@@ -2816,6 +2873,8 @@ export interface Hearing {
   nextSteps: string;
   contactCompleted: boolean;
   reportCompleted: boolean;
+  sessionReportExported: boolean;
+  agencyVerificationAckAt: string | null;
   adminTasksCreated: boolean;
   opponentMemos: string;
   hearingMinutes: string;
@@ -3053,6 +3112,7 @@ export const updateUserSchema = z.object({
   mustChangePassword: z.boolean().optional(),
   canBeAssignedCases: z.boolean().optional(),
   canBeAssignedConsultations: z.boolean().optional(),
+  taskSpecialties: z.array(z.enum(["ترافع", "استشارات"])).nullable().optional(),
 }).strict();
 
 export type UpdateUser = z.infer<typeof updateUserSchema>;
@@ -4864,3 +4924,88 @@ export const SIDEBAR_SECTIONS: SidebarSectionValue[] = [
 ];
 
 export type SidebarCounts = Record<SidebarSectionValue, number>;
+
+// ==================== Unified Tasks (My Tasks feed) ====================
+// A single typed item in the per-user "my tasks" aggregation (GET /api/my-tasks).
+// Each item points at a source entity so the FE can deep-link, and carries the
+// responsible owner + scope so a dept_head's view can split "my" vs "team".
+export const MyTaskKind = {
+  CASE_WORK: "case_work",                 // assigned lawyer must act at a lawyer-work stage
+  CASE_UNASSIGNED: "case_unassigned",     // unassigned case in dept (dept_head assigns)
+  HEARING_ATTEND: "hearing_attend",       // upcoming hearing to attend
+  HEARING_UNRECORDED: "hearing_unrecorded", // hearing date passed, result not recorded
+  HEARING_REPORT: "hearing_report",       // result recorded, report not completed
+  MEMO_PENDING: "memo_pending",           // assigned memo not yet filed
+  REVIEW_PENDING: "review_pending",       // internal/committee review awaiting this reviewer
+  COLLECTION: "collection",               // collection (تحصيل) field task, incl. unassigned ""
+  LEGAL_DEADLINE: "legal_deadline",       // approaching/overdue legal deadline
+  FIELD_TASK: "field_task",               // assigned field task
+  CONTACT_FOLLOWUP: "contact_followup",   // contact follow-up due
+  DELEGATION_APPROVAL: "delegation_approval", // pending delegation approval (dept_head)
+  CONSULTATION_CLOSING: "consultation_closing", // consultation ready to close (admin_support)
+  DATA_COMPLETION: "data_completion",     // case at data-completion stage (admin_support)
+  AGENCY_VERIFICATION: "agency_verification", // verify agency before a near hearing
+  SESSION_REPORT_EXPORT: "session_report_export", // export session-report PDF (admin_support)
+} as const;
+
+export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
+
+export type MyTaskEntityType =
+  | "case" | "consultation" | "contract" | "memo"
+  | "hearing" | "field_task" | "legal_deadline" | "contact_log" | "delegation";
+
+export type MyTaskActionHint =
+  | "review" | "attend" | "draft" | "assign" | "export" | "approve"
+  | "record" | "complete" | "follow_up" | "verify" | "close";
+
+// "self" = the current user is the owner; "team" = a department member's task
+// surfaced to their department_head (supervisory view).
+export type MyTaskOwnerScope = "self" | "team";
+
+export interface MyTaskItem {
+  id: string;                  // stable, unique within the feed (kind:entityId)
+  kind: MyTaskKindValue;       // the task type
+  title: string;               // Arabic, human-readable
+  entityType: MyTaskEntityType;// source entity type (for deep-linking)
+  entityId: string;            // source entity id
+  caseId: string | null;       // parent case id when relevant (cross-entity context)
+  ownerId: string;             // responsible user id ("" when unassigned)
+  ownerScope: MyTaskOwnerScope;
+  dueDate: string | null;      // relevant/due date if any
+  isOverdue: boolean;          // server-computed where a backend signal exists
+  actionHint: MyTaskActionHint;// what the user does
+  // Specialty class (ترافع / استشارات) of the task. The organizing principle
+  // for admin_support: EVERY admin_support task falls under one class so it
+  // routes to the right specialist and nothing is unclassified. null only for
+  // entities outside the two-class domain (contracts, delegations) or a
+  // field task with no entity link (see taskSpecialtyClass).
+  specialtyClass: TaskSpecialtyValue | null;
+  // When this task is surfaced to a DELEGATE because they act on behalf of a
+  // delegator (active approved delegation), this is the delegator's user id so
+  // the FE can render "بالنيابة عن (name)". null = the user's own task.
+  onBehalfOfUserId: string | null;
+}
+
+// Classify a task into its specialty domain (ترافع litigation / استشارات
+// consultations). Rule: anything tied to a case / hearing / memo / legal
+// deadline (litigation workflow) → ترافع; anything tied to a consultation →
+// استشارات. field_task / contact_log are classified by their case link
+// (case-linked → ترافع; consultation-linked or entity-less → null until a
+// consultationId is carried). Contracts/delegations are outside the two-class
+// admin_support domain → null. Shared by the auto-task router and the feed.
+export function taskSpecialtyClass(entityType: MyTaskEntityType, caseId: string | null): TaskSpecialtyValue | null {
+  switch (entityType) {
+    case "consultation":
+      return TaskSpecialty.CONSULTATIONS;
+    case "case":
+    case "hearing":
+    case "memo":
+    case "legal_deadline":
+      return TaskSpecialty.LITIGATION;
+    case "field_task":
+    case "contact_log":
+      return caseId ? TaskSpecialty.LITIGATION : null;
+    default: // contract, delegation
+      return null;
+  }
+}

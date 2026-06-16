@@ -21,6 +21,7 @@ import { ContactsProvider } from "@/lib/contacts-context";
 import { StandardsProvider } from "@/lib/standards-context";
 import { NotificationsProvider } from "@/lib/notifications-context";
 import { GlobalSearch } from "@/components/global-search";
+import { ActingForBanner } from "@/components/acting-for-banner";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { FavoritesProvider } from "@/lib/favorites-context";
@@ -39,7 +40,7 @@ const ConsultationsPage = lazy(() => import("@/pages/consultations"));
 const ContractsPage = lazy(() => import("@/pages/contracts"));
 const HearingsPage = lazy(() => import("@/pages/hearings"));
 const UsersPage = lazy(() => import("@/pages/users"));
-const FieldTasksPage = lazy(() => import("@/pages/field-tasks"));
+const MyTasksPage = lazy(() => import("@/pages/my-tasks"));
 const DashboardSettingsPage = lazy(() => import("@/pages/dashboard-settings"));
 const KPIsPage = lazy(() => import("@/pages/kpis"));
 const HelpPage = lazy(() => import("@/pages/help"));
@@ -77,7 +78,7 @@ function Router() {
         <Route path="/consultations" component={ConsultationsPage} />
         <Route path="/contracts" component={ContractsPage} />
         <Route path="/hearings" component={HearingsPage} />
-        <Route path="/field-tasks" component={FieldTasksPage} />
+        <Route path="/field-tasks" component={MyTasksPage} />
         <Route path="/users" component={UsersPage} />
         <Route path="/dashboard-settings" component={DashboardSettingsPage} />
         <Route path="/kpis" component={KPIsPage} />
@@ -150,6 +151,7 @@ function AuthenticatedLayout() {
             <FavoritesDropdown />
             <ThemeToggle />
           </header>
+          <ActingForBanner />
           <main className="flex-1 overflow-auto">
             <Router />
           </main>

@@ -72,7 +72,7 @@ const menuItems: MenuItem[] = [
     countSection: "memos",
   },
   {
-    title: "المهام الميدانية",
+    title: "مهامي",
     url: "/field-tasks",
     icon: ClipboardList,
   },

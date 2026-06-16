@@ -8,7 +8,7 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
-  type SidebarCounts, type SidebarSectionValue, 
+  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, taskSpecialtyClass,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -29,6 +29,7 @@ import {
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
+import type { ActingContext } from "./acting-context";
 import { eq, and, or, gt, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
@@ -192,6 +193,7 @@ export interface IStorage {
   // exists for a section yet, that section returns 0 (avoids
   // overwhelming new users with the all-time backlog).
   getSidebarCounts(user: { id: string; role: string; departmentId: string | null }): Promise<SidebarCounts>;
+  getMyTasks(user: { id: string; role: string; departmentId: string | null }, ctx?: ActingContext): Promise<MyTaskItem[]>;
   markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void>;
 
   // Convert consultation to case (rebuild §3.2.3) — single DB transaction.
@@ -455,6 +457,7 @@ function mapDbUser(dbUser: any): User {
     isActive: dbUser.isActive ?? true,
     canBeAssignedCases: dbUser.canBeAssignedCases ?? false,
     canBeAssignedConsultations: dbUser.canBeAssignedConsultations ?? false,
+    taskSpecialties: dbUser.taskSpecialties ?? null,
     mustChangePassword: dbUser.mustChangePassword ?? true,
     createdAt: toISOString(dbUser.createdAt),
     updatedAt: toISOString(dbUser.updatedAt),
@@ -524,6 +527,7 @@ function mapDbCase(dbCase: any): LawCase {
     closureReason: dbCase.closureReason || null,
     closureReasonOther: dbCase.closureReasonOther || null,
     isArchived: dbCase.isArchived ?? false,
+    dataCompletionLastAckAt: toISOStringOrNull(dbCase.dataCompletionLastAckAt),
     archivedAt: toISOStringOrNull(dbCase.archivedAt),
     archivedBy: dbCase.archivedBy || null,
     archiveReason: dbCase.archiveReason || null,
@@ -744,6 +748,8 @@ function mapDbHearing(dbHearing: any): Hearing {
     nextSteps: dbHearing.nextSteps || "",
     contactCompleted: dbHearing.contactCompleted ?? false,
     reportCompleted: dbHearing.reportCompleted ?? false,
+    sessionReportExported: dbHearing.sessionReportExported ?? false,
+    agencyVerificationAckAt: toISOStringOrNull(dbHearing.agencyVerificationAckAt),
     adminTasksCreated: dbHearing.adminTasksCreated ?? false,
     opponentMemos: dbHearing.opponentMemos || "",
     hearingMinutes: dbHearing.hearingMinutes || "",
@@ -755,6 +761,22 @@ function mapDbHearing(dbHearing: any): Hearing {
     createdAt: toISOString(dbHearing.createdAt),
     updatedAt: toISOString(dbHearing.updatedAt),
   };
+}
+
+// Weekend-aware lead date for the agency-verification reminder. The lead is
+// "2 days before the hearing", but the Saudi weekend (Friday + Saturday) is
+// skipped: if hearingDate − 2 calendar days lands on Friday/Saturday, step
+// back to the working day before the weekend (Thursday). So a Sunday hearing
+// surfaces from Thursday, not Friday/Saturday. All math is in UTC so it never
+// drifts a day by local timezone. Working days = Sun–Thu; weekend = Fri(5)/Sat(6)
+// by getUTCDay(). Returns the surface-start date as "YYYY-MM-DD".
+function agencyVerificationLeadDate(hearingDate: string): string {
+  const d = new Date(`${hearingDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 2);
+  while (d.getUTCDay() === 5 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+  return d.toISOString().split("T")[0];
 }
 
 // Map DB field task to interface FieldTask
@@ -928,6 +950,7 @@ export class DatabaseStorage implements IStorage {
       isActive: data.isActive ?? true,
       canBeAssignedCases: data.canBeAssignedCases ?? false,
       canBeAssignedConsultations: data.canBeAssignedConsultations ?? false,
+      taskSpecialties: data.taskSpecialties ?? null,
       mustChangePassword: data.mustChangePassword ?? true,
       createdAt: now,
       updatedAt: now,
@@ -1072,10 +1095,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getCaseById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, closedAt, archivedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, closedAt, archivedAt, dataCompletionLastAckAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (closedAt !== undefined) {
       updateData.closedAt = closedAt ? new Date(closedAt) : null;
+    }
+    // data_completion_last_ack_at is a date-mode column — same idiom as
+    // archivedAt below: convert the ISO string callers pass into a Date.
+    if (dataCompletionLastAckAt !== undefined) {
+      updateData.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
     }
     // archived_at is a date-mode column; mirror the closedAt idiom so the
     // ISO string callers pass (e.g. the auto-archive scheduler) becomes a
@@ -1606,6 +1634,7 @@ export class DatabaseStorage implements IStorage {
       nextSteps: "",
       contactCompleted: false,
       reportCompleted: false,
+      sessionReportExported: false,
       adminTasksCreated: false,
       opponentMemos: "",
       hearingMinutes: "",
@@ -1626,12 +1655,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getHearingById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, ...updateFields } = data;
-    await db.update(hearings).set({
-      ...updateFields,
-      updatedAt: new Date(),
-    }).where(eq(hearings.id, id));
-    
+    const { createdAt, updatedAt, agencyVerificationAckAt, ...updateFields } = data;
+    const updateData: any = { ...updateFields, updatedAt: new Date() };
+    // agency_verification_ack_at is a date-mode column — convert the ISO
+    // string callers pass into a Date (mirrors updateCase's idiom).
+    if (agencyVerificationAckAt !== undefined) {
+      updateData.agencyVerificationAckAt = agencyVerificationAckAt ? new Date(agencyVerificationAckAt) : null;
+    }
+    await db.update(hearings).set(updateData).where(eq(hearings.id, id));
+
     return this.getHearingById(id);
   }
 
@@ -1689,10 +1721,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getFieldTaskById(id);
     if (!existing) return undefined;
     
+    // D7: completedAt is authoritative SERVER-SIDE — never trust a client value.
+    // `completedAt` is destructured out here (rest-sibling omit, so the spoofed
+    // value never reaches the row) and (re)stamped only on the transition INTO
+    // "مكتمل" (FieldTaskStatus.COMPLETED). An already-completed task keeps its
+    // original stamp; other edits leave completedAt untouched.
     const { createdAt, updatedAt, completedAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
-    if (completedAt) {
-      updateData.completedAt = new Date(completedAt);
+    if (updateFields.status === "مكتمل" && existing.status !== "مكتمل") {
+      updateData.completedAt = new Date();
     }
     await db.update(fieldTasks).set(updateData).where(eq(fieldTasks.id, id));
     
@@ -2768,6 +2805,395 @@ export class DatabaseStorage implements IStorage {
     }
 
     return counts;
+  }
+
+  // ==================== Unified Tasks (My Tasks feed) ====================
+  // Per-user aggregation of everything that requires this user's action.
+  // Mirrors getSidebarCounts' proven per-user SQL: ONE user-filtered select()
+  // per resource (NOT load-all-then-filter). Visibility: a user sees the tasks
+  // they own (identity/role); a department_head ALSO sees their department's
+  // tasks (dept-scoped, tagged ownerScope:"team"). No delegation expansion yet
+  // (increment 4). Read-only.
+  // Per-identity task computation — the full per-user feed for ONE identity
+  // (a real user, OR a delegator the delegate is standing in for). Role/dept are
+  // taken from the passed identity, so running this for a delegator naturally
+  // yields that delegator's role-derived items (dept_head → team/unassigned;
+  // admin_support → collection/closing/data-completion). getMyTasks orchestrates
+  // self + delegators on top of this.
+  private async computeTasksForIdentity(
+    user: { id: string; role: string; departmentId: string | null },
+  ): Promise<Omit<MyTaskItem, "specialtyClass" | "onBehalfOfUserId">[]> {
+    const uid = user.id;
+    const isDeptHead = user.role === "department_head";
+    const isAdminSupport = user.role === "admin_support";
+    const isManager = user.role === "branch_manager" || user.role === "admin_support";
+    const isCasesReviewHead = user.role === "cases_review_head";
+    const isConsultationsReviewHead = user.role === "consultations_review_head";
+    const userDept = user.departmentId && user.departmentId.length > 0 ? user.departmentId : null;
+    const deptHeadScoped = isDeptHead && !!userDept;
+    // branch_manager = firm-wide supervisory view: the SAME team mechanism as
+    // dept_head but UNSCOPED by department. teamScoped drives the shared "see
+    // others' tasks (tagged ownerScope:team)" branches below; firmWideScoped
+    // drops the departmentId filter so every department is included. Parity:
+    // for a normal user both are false (self-only, byte-identical to before);
+    // for a dept_head only deptHeadScoped is true (dept filter still applied).
+    const firmWideScoped = user.role === "branch_manager";
+    const teamScoped = deptHeadScoped || firmWideScoped;
+    const today = new Date().toISOString().split("T")[0];
+    // Built without specialtyClass; it's stamped uniformly on return via
+    // taskSpecialtyClass so every item (esp. admin_support's) carries its class.
+    const tasks: Omit<MyTaskItem, "specialtyClass" | "onBehalfOfUserId">[] = [];
+    const scopeOf = (ownerId: string): "self" | "team" =>
+      teamScoped && ownerId !== uid ? "team" : "self";
+    // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
+    const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
+
+    // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
+    // Conservative "lawyer must act" stage set (see report: exact set is a
+    // refinement point). Excludes review/committee/platform/admin-owned stages.
+    const LAWYER_WORK_STAGES = ["دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
+    {
+      const where = firmWideScoped
+        ? and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
+            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
+            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+        : and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
+            or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const rows = await db.select({
+        id: lawCases.id, caseNumber: lawCases.caseNumber, stage: lawCases.currentStage,
+        primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+      }).from(lawCases).where(where);
+      for (const r of rows) {
+        const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
+        tasks.push({
+          id: `case_work:${r.id}`, kind: MyTaskKind.CASE_WORK,
+          title: `العمل على القضية ${r.caseNumber} — ${r.stage}`,
+          entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "draft",
+        });
+      }
+    }
+
+    // ---- 2. case_unassigned — unassigned case in dept (dept_head assigns) ----
+    if (teamScoped) {
+      const unassignedWhere = firmWideScoped
+        ? and(
+            sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
+            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+          )
+        : and(
+            eq(lawCases.departmentId, userDept!),
+            sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
+            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+          );
+      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+        .from(lawCases).where(unassignedWhere);
+      for (const r of rows) {
+        tasks.push({
+          id: `case_unassigned:${r.id}`, kind: MyTaskKind.CASE_UNASSIGNED,
+          title: `قضية غير مُسندة بحاجة لإسناد — ${r.caseNumber}`,
+          entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "assign",
+        });
+      }
+    }
+
+    // ---- 3-5 + agency. Hearings (attend / unrecorded-overdue / report) ----
+    {
+      const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND ${hearings.reportCompleted} = false))`;
+      const where = firmWideScoped
+        ? hActionable
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), hActionable)
+        : and(eq(hearings.attendingLawyerId, uid), hActionable);
+      const rows = await db.select({
+        id: hearings.id, caseId: hearings.caseId, date: hearings.hearingDate, status: hearings.status,
+        result: hearings.result, reportCompleted: hearings.reportCompleted,
+        attendingLawyerId: hearings.attendingLawyerId, caseNumber: lawCases.caseNumber,
+        agencyVerificationAckAt: hearings.agencyVerificationAckAt,
+      }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id)).where(where);
+      for (const r of rows) {
+        const ownerId = r.attendingLawyerId || "";
+        const ownerScope = scopeOf(ownerId);
+        if (r.result && r.reportCompleted === false) {
+          tasks.push({ id: `hearing_report:${r.id}`, kind: MyTaskKind.HEARING_REPORT,
+            title: `كتابة تقرير الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
+            caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "record" });
+        } else if (r.status === "قادمة") {
+          if (r.date < today) {
+            tasks.push({ id: `hearing_unrecorded:${r.id}`, kind: MyTaskKind.HEARING_UNRECORDED,
+              title: `جلسة انقضت دون تسجيل نتيجتها — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
+              caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: true, actionHint: "record" });
+          } else {
+            tasks.push({ id: `hearing_attend:${r.id}`, kind: MyTaskKind.HEARING_ATTEND,
+              title: `حضور جلسة — قضية ${r.caseNumber} بتاريخ ${r.date}`, entityType: "hearing", entityId: r.id,
+              caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
+            // Agency verification — surfaces once we reach the weekend-aware
+            // "2 days before" lead (Fri/Sat skipped; Sunday hearing → Thursday),
+            // and only until acknowledged ("تم") for this hearing.
+            if (agencyVerificationLeadDate(r.date) <= today && !r.agencyVerificationAckAt) {
+              tasks.push({ id: `agency_verification:${r.id}`, kind: MyTaskKind.AGENCY_VERIFICATION,
+                title: `التحقق من الوكالة قبل الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
+                caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "verify" });
+            }
+          }
+        }
+      }
+    }
+
+    // ---- 6. memo_pending — assigned memo not yet filed ----
+    {
+      const mActionable = sql`COALESCE(${memos.currentStage}, '') <> 'مرفوعة' AND ${memos.status} <> 'ملغاة'`;
+      const where = firmWideScoped
+        ? and(mActionable, sql`${memos.assignedTo} <> ''`)
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), mActionable, sql`${memos.assignedTo} <> ''`)
+        : and(eq(memos.assignedTo, uid), mActionable);
+      const rows = await db.select({
+        id: memos.id, caseId: memos.caseId, title: memos.title, deadline: memos.deadline, assignedTo: memos.assignedTo,
+      }).from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id)).where(where);
+      for (const r of rows) {
+        tasks.push({ id: `memo_pending:${r.id}`, kind: MyTaskKind.MEMO_PENDING,
+          title: `مذكرة بحاجة لإنجاز — ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
+          ownerId: r.assignedTo, ownerScope: scopeOf(r.assignedTo),
+          dueDate: r.deadline, isOverdue: !!r.deadline && r.deadline < today, actionHint: "draft" });
+      }
+    }
+
+    // ---- 7. review_pending — internal-review (identity) + committee (role) ----
+    // Internal review: the designated internalReviewerId on cases/contracts/memos.
+    {
+      const caseRows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+        .from(lawCases).where(and(eq(lawCases.internalReviewerId, uid),
+          inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"])));
+      for (const r of caseRows) tasks.push({ id: `review_pending:case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+        title: `مراجعة داخلية بانتظارك — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+
+      const contractRows = await db.select({ id: contracts.id, title: contracts.title })
+        .from(contracts).where(and(eq(contracts.internalReviewerId, uid), eq(contracts.currentStage, "مراجعة_داخلية")));
+      for (const r of contractRows) tasks.push({ id: `review_pending:contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+        title: `مراجعة داخلية بانتظارك — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
+        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+
+      const memoRows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
+        .from(memos).where(and(eq(memos.internalReviewerId, uid), eq(memos.currentStage, "مراجعة_داخلية")));
+      for (const r of memoRows) tasks.push({ id: `review_pending:memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+        title: `مراجعة داخلية بانتظارك — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
+        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+
+      // Consultations now carry a designated reviewer at internal review too
+      // (mirrors cases) — surface to that reviewer.
+      const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType })
+        .from(consultations).where(and(eq(consultations.internalReviewerId, uid),
+          eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية")));
+      for (const r of consultReviewRows) tasks.push({ id: `review_pending:consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+        title: `مراجعة داخلية بانتظارك — استشارة (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+
+      // Committee: cases_review_head chairs cases + memos; consultations_review_head chairs consultations + contracts.
+      if (isCasesReviewHead) {
+        const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+          .from(lawCases).where(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"));
+        for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+          title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        const mc = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
+          .from(memos).where(eq(memos.currentStage, "لجنة_مراجعة"));
+        for (const r of mc) tasks.push({ id: `review_pending:committee_memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+          title: `قرار لجنة المراجعة — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
+          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+      }
+      if (isConsultationsReviewHead) {
+        const conc = await db.select({ id: consultations.id, type: consultations.consultationType })
+          .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة")));
+        for (const r of conc) tasks.push({ id: `review_pending:committee_consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+          title: `قرار لجنة المراجعة — استشارة (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        const ctc = await db.select({ id: contracts.id, title: contracts.title })
+          .from(contracts).where(eq(contracts.currentStage, "لجنة_مراجعة"));
+        for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+          title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
+          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+      }
+    }
+
+    // ---- 8 + 10. Field tasks (collection vs generic) + the unassigned "" pool for managers ----
+    {
+      const ftActionable = sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`;
+      const cols = { id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title,
+        assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate };
+      const rows = firmWideScoped
+        ? await db.select(cols).from(fieldTasks).where(ftActionable)
+        : deptHeadScoped
+        ? await db.select(cols).from(fieldTasks).innerJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+            .where(and(eq(lawCases.departmentId, userDept!), ftActionable))
+        : await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, uid), ftActionable));
+      // The firm-wide query already includes the unassigned "" tasks; only the
+      // non-firm-wide managers (admin_support) need the separate pool query.
+      const unassigned = isManager && !firmWideScoped
+        ? await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, ""), ftActionable))
+        : [];
+      for (const r of [...rows, ...unassigned]) {
+        const isCollection = r.title.startsWith("إعداد خطاب تحصيل");
+        const ownerId = r.assignedTo || "";
+        tasks.push({
+          id: `${isCollection ? "collection" : "field_task"}:${r.id}`,
+          kind: isCollection ? MyTaskKind.COLLECTION : MyTaskKind.FIELD_TASK,
+          title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+          ownerId, ownerScope: scopeOf(ownerId),
+          dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today, actionHint: "complete",
+        });
+      }
+    }
+
+    // ---- 9. Legal deadlines (approaching/overdue) — owned via parent case ----
+    {
+      const where = firmWideScoped
+        ? eq(legalDeadlines.status, "نشط")
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), eq(legalDeadlines.status, "نشط"))
+        : and(eq(legalDeadlines.status, "نشط"),
+            or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const rows = await db.select({
+        id: legalDeadlines.id, caseId: legalDeadlines.caseId, title: legalDeadlines.title,
+        deadlineDate: legalDeadlines.deadlineDate, caseNumber: lawCases.caseNumber,
+        primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+      }).from(legalDeadlines).innerJoin(lawCases, eq(legalDeadlines.caseId, lawCases.id)).where(where);
+      for (const r of rows) {
+        const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
+        tasks.push({ id: `legal_deadline:${r.id}`, kind: MyTaskKind.LEGAL_DEADLINE,
+          title: `موعد قانوني — ${r.title} (قضية ${r.caseNumber})`, entityType: "legal_deadline", entityId: r.id,
+          caseId: r.caseId, ownerId, ownerScope: scopeOf(ownerId),
+          dueDate: r.deadlineDate, isOverdue: r.deadlineDate < today, actionHint: "complete" });
+      }
+    }
+
+    // ---- 11. Contact follow-ups (owner = createdBy) ----
+    {
+      const rows = await db.select({ id: contactLogs.id, caseId: contactLogs.caseId, nextFollowUpDate: contactLogs.nextFollowUpDate })
+        .from(contactLogs).where(and(
+          eq(contactLogs.createdBy, uid),
+          sql`COALESCE(${contactLogs.followUpRequired}, false) = true AND COALESCE(${contactLogs.followUpCompleted}, false) = false`,
+        ));
+      for (const r of rows) {
+        const due = r.nextFollowUpDate || null;
+        tasks.push({ id: `contact_followup:${r.id}`, kind: MyTaskKind.CONTACT_FOLLOWUP,
+          title: "متابعة تواصل مع عميل", entityType: "contact_log", entityId: r.id, caseId: r.caseId ?? null,
+          ownerId: uid, ownerScope: "self", dueDate: due, isOverdue: !!due && due < today, actionHint: "follow_up" });
+      }
+    }
+
+    // ---- 12. Delegation approvals (dept_head of the delegator) ----
+    if (teamScoped) {
+      const pendingWhere = firmWideScoped
+        ? and(sql`${delegationsTable.approvedBy} IS NULL`,
+            eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today))
+        : and(eq(users.departmentId, userDept!), sql`${delegationsTable.approvedBy} IS NULL`,
+            eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today));
+      const rows = await db.select({ id: delegationsTable.id, fromUserId: delegationsTable.fromUserId, endDate: delegationsTable.endDate })
+        .from(delegationsTable).innerJoin(users, eq(delegationsTable.fromUserId, users.id))
+        .where(pendingWhere);
+      for (const r of rows) {
+        tasks.push({ id: `delegation_approval:${r.id}`, kind: MyTaskKind.DELEGATION_APPROVAL,
+          title: "طلب تفويض بانتظار اعتمادك", entityType: "delegation", entityId: r.id, caseId: null,
+          ownerId: uid, ownerScope: "self", dueDate: r.endDate, isOverdue: false, actionHint: "approve" });
+      }
+    }
+
+    // ---- 13. Consultation closing (admin_support) — firm-wide (admin_support is not dept-scoped) ----
+    if (isAdminSupport) {
+      const rows = await db.select({ id: consultations.id, type: consultations.consultationType })
+        .from(consultations).where(and(eq(consultations.status, "active"),
+          inArray(consultations.currentStage, ["جاهزة_للإرسال", "منجزة"])));
+      for (const r of rows) {
+        tasks.push({ id: `consultation_closing:${r.id}`, kind: MyTaskKind.CONSULTATION_CLOSING,
+          title: `استشارة جاهزة للإغلاق (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "close" });
+      }
+    }
+
+    // ---- 14. Data-completion (admin_support) — cases at the data-completion stage ----
+    // Surfaces while a case sits at استكمال_البيانات, suppressed for 2 days after
+    // each "تم" acknowledge (data_completion_last_ack_at), then re-surfaces if
+    // the case is STILL at that stage (the client may still owe data). The
+    // 2-day window is computed in SQL against NOW().
+    if (isAdminSupport) {
+      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+        .from(lawCases).where(and(
+          eq(lawCases.currentStage, "استكمال_البيانات"),
+          sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+        ));
+      for (const r of rows) {
+        tasks.push({ id: `data_completion:${r.id}`, kind: MyTaskKind.DATA_COMPLETION,
+          title: `استكمال البيانات والتواصل مع العميل — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "complete" });
+      }
+    }
+
+    // ---- 15. Session-report PDF export (admin_support) — after the lawyer ----
+    // wrote the hearing report (reportCompleted) and it hasn't been exported yet.
+    // Litigation class (hearing). Clears when sessionReportExported flips true.
+    if (isAdminSupport) {
+      const rows = await db.select({ id: hearings.id, caseId: hearings.caseId, caseNumber: lawCases.caseNumber })
+        .from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
+        .where(and(eq(hearings.reportCompleted, true),
+          sql`COALESCE(${hearings.sessionReportExported}, false) = false`));
+      for (const r of rows) {
+        tasks.push({ id: `session_report_export:${r.id}`, kind: MyTaskKind.SESSION_REPORT_EXPORT,
+          title: `تصدير تقرير الجلسة (PDF) — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
+          caseId: r.caseId, ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "export" });
+      }
+    }
+
+    return tasks;
+  }
+
+  // Unified-tasks I4b — the per-user feed, now delegation-aware (read-only).
+  // Computes the feed for the user themselves, then for each delegator they
+  // currently act for (active approved window, resolved in req.actingContext),
+  // tagging the delegator-derived items with onBehalfOfUserId. Scope is honored:
+  // an all_cases delegator contributes all their items; a specific_cases
+  // delegator only items whose caseId is in its specificCaseIds. Dedupe by the
+  // stable task id (self / earlier wins → its onBehalfOfUserId stays). With no
+  // delegations (or no ctx) the result is the user's own feed unchanged, each
+  // item just carrying onBehalfOfUserId=null. NO write/permission gate touched.
+  async getMyTasks(
+    user: { id: string; role: string; departmentId: string | null },
+    ctx?: ActingContext,
+  ): Promise<MyTaskItem[]> {
+    type Built = Omit<MyTaskItem, "specialtyClass">;
+    const byId = new Map<string, Built>();
+
+    // The user's own tasks first (so they win any dedupe; onBehalfOfUserId=null).
+    for (const t of await this.computeTasksForIdentity(user)) {
+      byId.set(t.id, { ...t, onBehalfOfUserId: null });
+    }
+
+    // Then each delegator the user currently stands in for.
+    for (const d of ctx?.delegators ?? []) {
+      const dTasks = await this.computeTasksForIdentity({
+        id: d.userId,
+        role: d.role,
+        departmentId: d.departmentId,
+      });
+      for (const t of dTasks) {
+        // specific_cases: only surface the delegator's tasks tied to a listed case.
+        if (d.scope === "specific_cases" && !(t.caseId && d.specificCaseIds.includes(t.caseId))) {
+          continue;
+        }
+        if (byId.has(t.id)) continue; // own / earlier delegator wins
+        byId.set(t.id, { ...t, onBehalfOfUserId: d.userId });
+      }
+    }
+
+    // Stamp the specialty class (ترافع/استشارات) on every item.
+    return Array.from(byId.values()).map((t) => ({
+      ...t,
+      specialtyClass: taskSpecialtyClass(t.entityType, t.caseId),
+    }));
   }
 
   async markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void> {

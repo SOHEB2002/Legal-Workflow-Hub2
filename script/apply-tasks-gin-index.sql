@@ -1,0 +1,31 @@
+-- Unified-tasks Increment 3 — GIN index for the assignedLawyers jsonb.
+--
+-- Background: the per-user "my tasks" feed (storage.getMyTasks) filters cases
+-- the user is on with a jsonb containment predicate:
+--     assigned_lawyers @> '["<userId>"]'::jsonb
+-- (case_work and legal_deadline member branches). Without a GIN index that is
+-- a sequential scan. A btree index can't serve jsonb `@>`, so this needs a GIN.
+--
+-- Why a script (not a schema.ts Drizzle decl): GIN is the first non-btree index
+-- in the schema and is applied the same careful, out-of-band way as the Batch-M
+-- FK constraints — the Drizzle decl is kept COMMENTED in shared/schema.ts so
+-- drizzle-kit push / Replit Republish never manages it (no dev/prod drift, no
+-- surprise DROP). This file is the source of truth for the GIN.
+--
+-- ADDITIVE ONLY: a single CREATE INDEX. No table rewrite, no DROP, no column or
+-- constraint change. CONCURRENTLY avoids any write-blocking lock; IF NOT EXISTS
+-- makes re-runs safe. jsonb_path_ops is the smallest/fastest opclass for the
+-- containment (@>) operator this query uses.
+--
+-- FK/dev-prod sync rule (PERMANENT, see CLAUDE.md): run on BOTH dev + prod, and
+-- re-run on dev after any dev reset (db:push won't recreate it — it's commented
+-- in schema). Safe because IF NOT EXISTS makes it idempotent.
+--
+-- Run from the Replit Shell against each database:
+--   psql "$DATABASE_URL" -f script/apply-tasks-gin-index.sql
+--
+-- NOTE: CREATE INDEX CONCURRENTLY cannot run inside a transaction block, so this
+-- statement is intentionally NOT wrapped in BEGIN/COMMIT.
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS law_cases_assigned_lawyers_gin_idx
+  ON law_cases USING gin (assigned_lawyers jsonb_path_ops);

@@ -11,6 +11,8 @@ import {
   extendConsultationDeliverySchema,
   insertHearingSchema,
   insertFieldTaskSchema,
+  TaskSpecialty,
+  type TaskSpecialtyValue,
   insertAttachmentSchema,
   insertMemoSchema,
   hearingResultSchema,
@@ -88,6 +90,7 @@ import {
   advanceMemoStageSchema,
   contactLogBodySchema,
   updateFieldTaskSchema,
+  canAssignFieldTasks,
   updateLegalDeadlineSchema,
   updateTicketStatusSchema,
   assignTicketSchema,
@@ -118,13 +121,21 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { requireAuth, requireRole, generateToken, verifyTokenForRefresh, validatePassword, hashPassword, comparePassword, generateCsrfToken } from "./auth";
+import { requireAuth, requireRole, requireRealRole, generateToken, verifyTokenForRefresh, validatePassword, hashPassword, comparePassword, generateCsrfToken } from "./auth";
 import rateLimit from "express-rate-limit";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { sendToUser, broadcastToAdmins } from "./websocket";
 import { invalidateUserCache } from "./index";
+import {
+  type ActingContext,
+  actingIdentitiesFor,
+  hasEffectiveRole,
+  effectiveDeptHeadDepts,
+  effectiveIdsFor,
+  effectiveRolesFor,
+} from "./acting-context";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
 
 // Contract attachments live in Replit Object Storage now — the
@@ -196,38 +207,121 @@ function sanitizeUser(user: any) {
 // non-GET request from a viewer before the handler runs, so
 // granting "admin-like" pass-throughs here can never enable a
 // mutation — the write path is unreachable.
-function canModifyCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head" && caseData.departmentId === user.departmentId) return true;
-  if (caseData.primaryLawyerId === user.id || caseData.responsibleLawyerId === user.id) return true;
-  if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) return true;
-  if (caseData.internalReviewerId && caseData.internalReviewerId === user.id) return true;
-  return false;
+// 4c-1 (cases) — the per-identity ORIGINAL logic, evaluated for the acting user
+// and (with an active delegation) each delegator they stand in for. With no ctx
+// the identity set is exactly [self], so each gate is byte-identical to before.
+// Scope honored: actingIdentitiesFor filters specific_cases by the case's id.
+type CaseActorIdentity = { id: string; role: string; departmentId: string | null };
+function caseActorIdentities(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): CaseActorIdentity[] {
+  if (!ctx) return [user];
+  return actingIdentitiesFor(ctx, caseData?.id ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }));
 }
 
-function canViewCase(user: { id: string; role: string; departmentId: string | null }, caseData: any): boolean {
+function canModifyCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head") return caseData.departmentId === user.departmentId;
-  if (user.role === "employee") {
-    return caseData.primaryLawyerId === user.id ||
-      caseData.responsibleLawyerId === user.id ||
-      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(user.id)) ||
-      caseData.internalReviewerId === user.id;
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head" && caseData.departmentId === u.departmentId) return true;
+  if (caseData.primaryLawyerId === u.id || caseData.responsibleLawyerId === u.id) return true;
+  if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) return true;
+  if (caseData.internalReviewerId && caseData.internalReviewerId === u.id) return true;
+  return false;
+}
+function canModifyCase(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) => canModifyCaseIdentity(u, caseData));
+}
+
+function canViewCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head") return caseData.departmentId === u.departmentId;
+  if (u.role === "employee") {
+    return caseData.primaryLawyerId === u.id ||
+      caseData.responsibleLawyerId === u.id ||
+      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) ||
+      caseData.internalReviewerId === u.id;
   }
   return false;
 }
-
-function canEditCaseData(user: { id: string; role: string; departmentId: string | null }): boolean {
-  return ["branch_manager", "admin_support"].includes(user.role);
+function canViewCase(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) => canViewCaseIdentity(u, caseData));
 }
 
-function canModifyConsultation(user: { id: string; role: string; departmentId: string | null }, consultation: any): boolean {
+function canEditCaseData(user: CaseActorIdentity, caseData?: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) => ["branch_manager", "admin_support"].includes(u.role));
+}
+
+// 4c-3 (consultations) — per-identity original logic (mirror of cases). No
+// caseId on consultations, so only self + all_cases delegators apply
+// (specific_cases is case-only). No ctx → [self] → byte-identical.
+function canModifyConsultationIdentity(u: CaseActorIdentity, consultation: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head" && consultation.departmentId === user.departmentId) return true;
-  if (consultation.assignedTo === user.id || consultation.createdBy === user.id) return true;
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head" && consultation.departmentId === u.departmentId) return true;
+  if (consultation.assignedTo === u.id || consultation.createdBy === u.id) return true;
+  return false;
+}
+function canModifyConsultation(user: CaseActorIdentity, consultation: any, ctx?: ActingContext): boolean {
+  const identities = ctx
+    ? actingIdentitiesFor(ctx, null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  return identities.some((u) => canModifyConsultationIdentity(u, consultation));
+}
+
+// 4c-5 (memos) — per-identity act-as for the memo workflow state endpoints
+// (pause / unpause / await-completion / resume-from-completion /
+// return-to-committee / cancel), which all share the same inline access gate:
+//   branch_manager || admin_support [|| cases_review_head] ||
+//   (department_head whose dept === the PARENT case's dept) || the memo assignee.
+// Memos carry no departmentId, so department_head is scoped against the PARENT
+// case's department; specific_cases delegations reach a memo via its parent
+// caseId (actingIdentitiesFor(ctx, memo.caseId)) — unlike consultations/
+// contracts, which have no case id and so are reached only by all_cases. The
+// admin-role list is passed per call site (cancel additionally allows
+// cases_review_head). With no ctx the identity set is exactly [self] and the
+// parent case is fetched only when a department_head identity is present — so
+// this is byte-identical to the original inline gate for non-delegated users.
+// Four-eyes is NOT routed through here: the INTERNAL_REVIEW lock (in
+// validateStageTransition) and the dedicated /internal-review reviewer guard
+// stay HUMAN. The dedicated committee/take-notes role gates are left un-expanded
+// (deferred with the requireRole role-gate pass).
+async function canActOnMemo(
+  user: CaseActorIdentity,
+  memo: any,
+  ctx: ActingContext | undefined,
+  adminRoles: string[],
+): Promise<boolean> {
+  const identities = ctx
+    ? actingIdentitiesFor(ctx, memo.caseId ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  // Admin roles + the memo assignee don't depend on the parent case.
+  if (identities.some((u) => adminRoles.includes(u.role) || (!!memo.assignedTo && memo.assignedTo === u.id))) {
+    return true;
+  }
+  // department_head is scoped to the parent case's department. Fetch the parent
+  // case only when there is a department_head identity to evaluate (matches the
+  // original gate, which fetched it only for a department_head actor).
+  const deptHeads = identities.filter((u) => u.role === "department_head");
+  if (deptHeads.length === 0) return false;
+  const parentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+  if (!parentCase) return false;
+  return deptHeads.some((u) => parentCase.departmentId === u.departmentId);
+}
+
+// 4c-5 (memos) — per-identity predicate for the memo /activities READ gate
+// (richer than the modify gate: admin incl. cases_review_head, the memo
+// assignee, the parent case's lawyers, and the parent case's dept_head). The
+// parent case is always loaded by that endpoint, so it's passed in. Mirrors the
+// consultation/contract /activities gates, which already read req.actingContext
+// via canModify*. No ctx → [self] → byte-identical.
+function canViewMemoActivitiesIdentity(u: CaseActorIdentity, memo: any, parentCase: any): boolean {
+  if (["branch_manager", "admin_support", "cases_review_head"].includes(u.role)) return true;
+  if (memo.assignedTo === u.id) return true;
+  if (!!parentCase && (
+    parentCase.primaryLawyerId === u.id ||
+    parentCase.responsibleLawyerId === u.id ||
+    (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(u.id))
+  )) return true;
+  if (u.role === "department_head" && !!parentCase && parentCase.departmentId === u.departmentId) return true;
   return false;
 }
 
@@ -509,21 +603,28 @@ function getContractTransitionsForType(_type: string): StageTransitionRule[] {
   return ALLOWED_CONTRACT_TRANSITIONS;
 }
 
-function canModifyContract(
-  user: { id: string; role: string; departmentId: string | null },
-  contract: any,
-): boolean {
-  // consultations_review_head IS admin-class here because they're the
-  // committee chair for contracts. cases_review_head is intentionally
-  // EXCLUDED — they chair the cases committee, which has nothing to
-  // do with the contracts module. They can still see a contract if
-  // they're personally on it (assigned / creator / internal reviewer).
+// 4c-4 (contracts) — per-identity original logic (mirror of cases/consultations).
+// consultations_review_head IS admin-class here (contracts committee chair);
+// cases_review_head is intentionally EXCLUDED (they can still match via
+// assigned/creator/internal-reviewer identity). No caseId on contracts → only
+// self + all_cases delegators apply. No ctx → [self] → byte-identical.
+function canModifyContractIdentity(u: CaseActorIdentity, contract: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(user.role)) return true;
-  if (user.role === "department_head" && contract.departmentId === user.departmentId) return true;
-  if (contract.assignedTo === user.id || contract.createdBy === user.id) return true;
-  if (contract.internalReviewerId === user.id) return true;
+  if (adminRoles.includes(u.role)) return true;
+  if (u.role === "department_head" && contract.departmentId === u.departmentId) return true;
+  if (contract.assignedTo === u.id || contract.createdBy === u.id) return true;
+  if (contract.internalReviewerId === u.id) return true;
   return false;
+}
+function canModifyContract(
+  user: CaseActorIdentity,
+  contract: any,
+  ctx?: ActingContext,
+): boolean {
+  const identities = ctx
+    ? actingIdentitiesFor(ctx, null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  return identities.some((u) => canModifyContractIdentity(u, contract));
 }
 
 // Memos canonical 6+1 stage workflow (Phase-9). Mirrors consultations
@@ -560,17 +661,65 @@ function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   return false;
 }
 
+// Route an auto-created admin_support task to the active admin_support whose
+// taskSpecialties includes the task's class. Returns the unassigned sentinel
+// "" (the system's canonical "غير مسند" value, e.g. auto-memos write
+// primaryLawyerId || responsibleLawyerId || "") when no matching active
+// specialist exists, so the task lands unassigned for a manager/admin_support
+// to distribute manually — instead of the old arbitrary "first admin_support".
+function selectSpecialistAssignee(allUsers: any[], specialty: TaskSpecialtyValue): string {
+  const match = allUsers.find(
+    (u: any) =>
+      u.role === "admin_support" &&
+      u.isActive &&
+      Array.isArray(u.taskSpecialties) &&
+      u.taskSpecialties.includes(specialty),
+  );
+  return match?.id || "";
+}
+
 function validateStageTransition(
   currentStage: string,
   targetStage: string,
   userRole: string,
   entityType: "case" | "consultation" | "memo" | "contract",
   user?: { id: string; departmentId?: string | null },
-  entityData?: any
+  entityData?: any,
+  ctx?: ActingContext,
 ): { allowed: boolean; reason?: string } {
   if (currentStage === targetStage) {
     return { allowed: false, reason: "العنصر في نفس المرحلة المطلوبة" };
   }
+
+  // 4c-0 delegation-aware GRANT checks. When ctx carries active delegations
+  // these expand to the delegator(s) the actor stands in for (role + dept +
+  // identity); with no delegation (no ctx, or empty delegators) they resolve to
+  // EXACTLY the actor's own role/id/dept, so every decision below is
+  // byte-identical to before. The INTERNAL_REVIEW locks (four-eyes) deliberately
+  // do NOT use these — they keep comparing the HUMAN actor (see below).
+  // specific_cases scope keys on the entity's case id (the case itself, or a
+  // memo's parent case); consultations/contracts have no case id → all_cases only.
+  const scopeCaseId: string | null =
+    entityType === "case" ? (entityData?.id ?? null)
+    : entityType === "memo" ? (entityData?.caseId ?? null)
+    : null;
+  const grantRoles = (...roles: string[]): boolean =>
+    ctx ? hasEffectiveRole(ctx, scopeCaseId, ...roles) : roles.includes(userRole);
+  const grantDeptHeadDept = (deptId: string | null | undefined): boolean =>
+    !!deptId && (ctx
+      ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(deptId)
+      : (userRole === "department_head" && !!user?.departmentId && user.departmentId === deptId));
+  const grantAssignedLawyer = (): boolean => {
+    if (!entityData) return false;
+    if (!ctx) return !!user && isAssignedLawyer(user, entityData);
+    return Array.from(effectiveIdsFor(ctx, scopeCaseId)).some((id) => isAssignedLawyer({ id }, entityData));
+  };
+  const grantInternalReviewer = (): boolean => {
+    if (!(entityType === "case" || entityType === "memo" || entityType === "contract")) return false;
+    if (!entityData?.internalReviewerId) return false;
+    if (!ctx) return !!user && entityData.internalReviewerId === user.id;
+    return effectiveIdsFor(ctx, scopeCaseId).has(entityData.internalReviewerId);
+  };
 
   // Early closure: branch_manager / admin_support / department_head (own
   // dept) / assigned lawyer can move a case from any stage to مقفلة.
@@ -578,18 +727,13 @@ function validateStageTransition(
   // is required for all four roles (validated separately in the PATCH
   // handler).
   if (entityType === "case" && targetStage === "مقفلة") {
-    if (userRole === "branch_manager" || userRole === "admin_support") {
+    if (grantRoles("branch_manager", "admin_support")) {
       return { allowed: true };
     }
-    if (
-      userRole === "department_head" &&
-      entityData &&
-      !!user?.departmentId &&
-      entityData.departmentId === user.departmentId
-    ) {
+    if (entityData && grantDeptHeadDept(entityData.departmentId)) {
       return { allowed: true };
     }
-    if (user && entityData && isAssignedLawyer(user, entityData)) {
+    if (grantAssignedLawyer()) {
       return { allowed: true };
     }
     // Fall through to ALLOWED_CASE_TRANSITIONS for stage-specific rules
@@ -597,22 +741,22 @@ function validateStageTransition(
     // early-close shortcut).
   }
 
-  // Designated-reviewer synthetic role. Recognized for cases / memos /
-  // contracts (consultations have no internal_reviewer column; their
-  // INTERNAL_REVIEW stage exit is gated through a dedicated endpoint).
-  // Picked up by both the locked-stage check below and the effectiveRoles
-  // expansion that feeds the per-transition allowed-roles match.
-  const isInternalReviewer =
+  // Designated-reviewer synthetic role — HUMAN ONLY. This feeds the
+  // INTERNAL_REVIEW LOCKS (four-eyes), which must compare the real human actor
+  // and stay unchanged by delegation in 4c-0. (The effectiveRoles GRANT below
+  // uses grantInternalReviewer(), the delegation-aware variant.)
+  const isInternalReviewerHuman =
     (entityType === "case" || entityType === "memo" || entityType === "contract")
     && !!user && !!entityData && entityData.internalReviewerId === user.id;
 
   // Internal review stages are locked: only the designated internal reviewer
-  // or the branch manager can transition out of them.
+  // or the branch manager can transition out of them. HUMAN-ONLY (four-eyes) —
+  // intentionally NOT delegation-expanded.
   if (
     entityType === "case" &&
     (currentStage === "مراجعة_داخلية" || currentStage === "مراجعة_داخلية_للتظلم")
   ) {
-    if (!isInternalReviewer && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
         reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
@@ -626,7 +770,7 @@ function validateStageTransition(
   // endpoint already enforces this; this is belt-and-braces for the
   // generic stage-transition routes.
   if (entityType === "memo" && currentStage === "مراجعة_داخلية") {
-    if (!isInternalReviewer && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
         reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
@@ -640,7 +784,7 @@ function validateStageTransition(
   // non-reviewer employee can't approve their own draft by calling the
   // generic endpoint directly.
   if (entityType === "contract" && currentStage === ContractStage.INTERNAL_REVIEW) {
-    if (!isInternalReviewer && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
         reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
@@ -648,11 +792,15 @@ function validateStageTransition(
     }
   }
 
-  const effectiveRoles = [userRole];
-  if (user && entityData && isAssignedLawyer(user, entityData)) {
+  // GRANT side (delegation-aware): the actor's effective roles for this entity,
+  // plus the assigned_lawyer / internal_reviewer synthetic roles if any
+  // effective identity holds them. With no delegation this is exactly
+  // [userRole] (+ the actor's own synthetic roles) — byte-identical.
+  const effectiveRoles = ctx ? Array.from(effectiveRolesFor(ctx, scopeCaseId)) : [userRole];
+  if (grantAssignedLawyer()) {
     effectiveRoles.push("assigned_lawyer");
   }
-  if (isInternalReviewer) {
+  if (grantInternalReviewer()) {
     effectiveRoles.push("internal_reviewer");
   }
 
@@ -679,16 +827,13 @@ function validateStageTransition(
       // global. The FE already only surfaces other-dept cases to
       // branch_manager (canViewCase scopes dept_head to own dept), so this
       // enforces server-side what the UI already constrains.
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
 
       if (isBranchManager || isOwnDeptHead) {
         return { allowed: true }; // can go back to ANY previous stage
       }
-      if (isInternalReviewer && targetIdx === currentIdx - 1) {
+      if (grantInternalReviewer() && targetIdx === currentIdx - 1) {
         return { allowed: true }; // reviewer can send back one stage (to drafting)
       }
       if (isLawyer && targetIdx === currentIdx - 1) {
@@ -723,11 +868,8 @@ function validateStageTransition(
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
       // Phase 5 B/M4 — dept_head scoped to own dept (mirrors contract rollback);
       // branch_manager global. consultation entityData carries departmentId.
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
       if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
@@ -748,11 +890,8 @@ function validateStageTransition(
       // Phase 5 B/M4 — dept_head scoped to the parent case's dept (threaded
       // onto entityData.departmentId by the memo handlers, since memos carry
       // no departmentId); branch_manager global. Mirrors contract rollback.
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
       if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
@@ -774,11 +913,8 @@ function validateStageTransition(
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
-      const isBranchManager = userRole === "branch_manager";
-      const isOwnDeptHead =
-        userRole === "department_head"
-        && !!user?.departmentId
-        && entityData.departmentId === user.departmentId;
+      const isBranchManager = grantRoles("branch_manager");
+      const isOwnDeptHead = grantDeptHeadDept(entityData.departmentId);
       if (isBranchManager || isOwnDeptHead) return { allowed: true };
       if (isLawyer && targetIdx === currentIdx - 1) return { allowed: true };
       if (isLawyer && targetIdx < currentIdx - 1) {
@@ -831,7 +967,7 @@ function validateStageTransition(
   // (which already exempt branch_manager by design) still govern exits FROM
   // review. branch_manager being allowed on internal-review *outcome* edges is
   // pre-existing and intentional in every table.
-  if (userRole === "branch_manager") {
+  if (grantRoles("branch_manager")) {
     return { allowed: true };
   }
 
@@ -859,6 +995,57 @@ function validateStageTransition(
 async function getActiveMemoCount(caseId: string): Promise<number> {
   const memos = await storage.getMemosByCase(caseId);
   return memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+}
+
+// D4 — auto-created field tasks must notify so urgent work (collection,
+// response-prep, client contact) is never invisible. The MANUAL add path is
+// already notified client-side (notifyFieldTaskAssigned in field-tasks-context);
+// the server auto-creation paths were silent. This mirrors that notification
+// (type "field_task_assigned", relatedType "field_task"): the assignee is
+// notified directly, or — when the task lands in the unassigned "" pool (e.g.
+// no matching specialist) — the managers (branch_manager / admin_support) are
+// notified so someone picks it up. Best-effort; a notification failure never
+// breaks the creating workflow.
+async function notifyFieldTaskCreated(
+  task: { id: string; title: string; assignedTo: string; priority?: string },
+  actor: { id: string; name?: string | null },
+): Promise<void> {
+  try {
+    const senderName = actor.name || actor.id;
+    if (task.assignedTo) {
+      await storage.createNotification({
+        type: "field_task_assigned",
+        priority: task.priority === "عاجل" || task.priority === "عالي" ? "high" : "medium",
+        title: "مهمة ميدانية جديدة",
+        message: `تم تكليفك بمهمة ميدانية جديدة: ${task.title}`,
+        senderId: actor.id,
+        senderName,
+        recipientId: task.assignedTo,
+        relatedType: "field_task",
+        relatedId: task.id,
+      });
+    } else {
+      const allUsers = await storage.getAllUsers();
+      const managers = allUsers.filter(
+        (u) => u.isActive && (u.role === "branch_manager" || u.role === "admin_support"),
+      );
+      for (const m of managers) {
+        await storage.createNotification({
+          type: "field_task_assigned",
+          priority: "high",
+          title: "مهمة ميدانية غير مُسندة",
+          message: `مهمة ميدانية جديدة بحاجة إلى إسناد: ${task.title}`,
+          senderId: actor.id,
+          senderName,
+          recipientId: m.id,
+          relatedType: "field_task",
+          relatedId: task.id,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[notifyFieldTaskCreated] failed:", e);
+  }
 }
 
 export function calculateSmartPriority(
@@ -1037,7 +1224,13 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/users/:id/reset-password", requireAuth, requireRole("branch_manager"), async (req, res) => {
+  // 4c-6 (takeover-class) — resetting another account's password is an
+  // account-takeover vector (reset the delegator's or any admin's password →
+  // full login as them), which outlasts the delegation window. requireRealRole
+  // → real own role only. JUDGMENT CALL (flagged in report): not one of the two
+  // literal exclusions, but same escalation rationale; relax to requireRole if
+  // password reset should inherit.
+  app.post("/api/users/:id/reset-password", requireAuth, requireRealRole("branch_manager"), async (req, res) => {
     try {
       const userId = String(req.params.id);
       const { newPassword } = resetUserPasswordSchema.parse(req.body);
@@ -1083,7 +1276,13 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/users", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
+  // 4c-6 EXCLUSION 2 (provisioning) — creating a user account assigns a role
+  // to a new account and is an escalation backdoor (a delegate could mint a
+  // branch_manager that outlasts the window). requireRealRole → real own role
+  // only. JUDGMENT CALL (flagged in report): not one of the two literal
+  // exclusions, but squarely within their "no escalation that outlasts the
+  // window" rationale; relax to requireRole if account creation should inherit.
+  app.post("/api/users", requireAuth, requireRealRole("branch_manager", "admin_support"), async (req, res) => {
     try {
       const validatedData = insertUserSchema.parse(req.body);
       const pwValidation = validatePassword(validatedData.password);
@@ -1101,9 +1300,32 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
+  // PATCH stays delegation-inheritable for profile MANAGEMENT (name/email/
+  // phone/username/canBeAssigned*/taskSpecialties/mustChangePassword), but three
+  // sub-operations are EXCLUDED from inherited authority and require the actor's
+  // OWN real manager role: role change (EXCLUSION 2), deactivation isActive=false
+  // (EXCLUSION 1 — "delete/deactivate"), and password set (takeover-class).
+  app.patch("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
     try {
       const validatedData = updateUserSchema.parse(req.body);
+
+      // 4c-6 — distinguish OWN-role authority from delegation-derived authority.
+      // The route admits an actor whose EFFECTIVE roles include branch_manager/
+      // admin_support; the actor reached here by their own role iff their REAL
+      // (JWT) role is one of those. If not, they passed only via an inherited
+      // role → block the escalation/destruction-class sub-operations. A real
+      // branch_manager/admin_support is unaffected (parity).
+      const ownRoleManagesUsers = ["branch_manager", "admin_support"].includes(req.user!.role);
+      if (!ownRoleManagesUsers) {
+        const isRoleChange = validatedData.role !== undefined;
+        const isDeactivation = validatedData.isActive === false;
+        const isPasswordSet = validatedData.password !== undefined;
+        if (isRoleChange || isDeactivation || isPasswordSet) {
+          return res.status(403).json({
+            error: "لا يمكن تغيير الدور أو تعطيل الحساب أو إعادة تعيين كلمة المرور عبر التفويض",
+          });
+        }
+      }
       if (validatedData.username) {
         const allUsers = await storage.getAllUsers();
         const duplicate = allUsers.find(u => u.username === validatedData.username && String(u.id) !== String(req.params.id));
@@ -1203,7 +1425,12 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/users/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
+  // 4c-6 EXCLUSION 1 — user-account DELETE is NOT delegation-inheritable.
+  // requireRealRole → only a real branch_manager/admin_support (own role)
+  // can delete a user; a delegate with an inherited admin role is blocked
+  // (account destruction would outlast the delegation window and could orphan
+  // the delegation itself). The self-delete guard below stays (real id).
+  app.delete("/api/users/:id", requireAuth, requireRealRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
     try {
       const userId = String(req.params.id);
       const currentUser = req.user!;
@@ -1374,7 +1601,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "القضية غير موجودة" });
       }
       const user = req.user!;
-      if (!canViewCase(user, caseItem)) {
+      if (!canViewCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه القضية" });
       }
       res.json(caseItem);
@@ -1608,7 +1835,7 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
-      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
@@ -1669,7 +1896,7 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
-      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
@@ -1728,7 +1955,7 @@ export async function registerRoutes(
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
-      if (!canModifyCase(user, caseItem)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
@@ -1933,7 +2160,7 @@ export async function registerRoutes(
       }
       const hasDataFields = Object.keys(req.body).some((k) => effectiveDataFields.includes(k));
 
-      if (hasDataFields && !canEditCaseData(user)) {
+      if (hasDataFields && !canEditCaseData(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "تعديل بيانات القضية متاح فقط لمدير الفرع والدعم الإداري" });
       }
 
@@ -1946,14 +2173,18 @@ export async function registerRoutes(
       // through plus a department_head branch that misread the target dept
       // as the actor's gate, which silently 403'd assigned lawyers.
       if ("departmentId" in req.body && req.body.departmentId !== existing.departmentId) {
-        const isBranchOrAdmin = user.role === "branch_manager" || user.role === "admin_support";
-        const isOwnDeptHead =
-          user.role === "department_head" && existing.departmentId === user.departmentId;
-        const isAssignedLawyer =
-          existing.primaryLawyerId === user.id ||
-          existing.responsibleLawyerId === user.id ||
-          (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(user.id));
-        if (!isBranchOrAdmin && !isOwnDeptHead && !isAssignedLawyer) {
+        // 4c-1: evaluate the original transfer rule per acting identity (self +
+        // delegators). No ctx → [self] → byte-identical.
+        const transferIdentities = req.actingContext
+          ? actingIdentitiesFor(req.actingContext, existing.id ?? null)
+          : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
+        const transferAllowed = transferIdentities.some((i) =>
+          i.role === "branch_manager" || i.role === "admin_support" ||
+          (i.role === "department_head" && existing.departmentId === i.departmentId) ||
+          existing.primaryLawyerId === i.userId ||
+          existing.responsibleLawyerId === i.userId ||
+          (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(i.userId)));
+        if (!transferAllowed) {
           return res.status(403).json({ error: "لا تملك صلاحية تغيير قسم هذه القضية" });
         }
       }
@@ -1961,14 +2192,22 @@ export async function registerRoutes(
       // Check if this is an assignment operation (primaryLawyerId / assignedLawyers)
       const isAssignmentOp = !hasDataFields && (req.body.primaryLawyerId || req.body.assignedLawyers !== undefined);
 
-      if (isAssignmentOp && user.role === "department_head") {
-        // Determine effective target department after this operation
+      // 4c-1: a department_head assignment is dept-scoped — own role OR an
+      // inherited department_head (via delegation). The target dept must be one
+      // of the actor's effective department_head departments. No ctx →
+      // {own dept if dept_head} → byte-identical to the original own-dept check.
+      const actsAsDeptHead =
+        user.role === "department_head" ||
+        (!!req.actingContext && actingIdentitiesFor(req.actingContext, existing.id ?? null).some((i) => i.role === "department_head"));
+      if (isAssignmentOp && actsAsDeptHead) {
         const targetDeptId = ("departmentId" in req.body ? req.body.departmentId : existing.departmentId);
-        // Block if target dept is missing or does not match the department head's own department
-        if (!targetDeptId || targetDeptId !== user.departmentId) {
+        const allowedDeptHeadDepts = req.actingContext
+          ? effectiveDeptHeadDepts(req.actingContext, existing.id ?? null)
+          : new Set<string>(user.role === "department_head" && user.departmentId ? [user.departmentId] : []);
+        if (!targetDeptId || !allowedDeptHeadDepts.has(targetDeptId)) {
           return res.status(403).json({ error: "يمكنك فقط إسناد قضايا قسمك" });
         }
-      } else if (!hasDataFields && !canModifyCase(user, existing)) {
+      } else if (!hasDataFields && !canModifyCase(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
 
@@ -1997,7 +2236,10 @@ export async function registerRoutes(
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
-        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase);
+        // 4c-1: cases are act-as enabled — canModifyCase above and this
+        // transition check both consult the acting context. (Four-eyes: the
+        // INTERNAL_REVIEW lock inside stays human-only.)
+        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, req.actingContext);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -2393,11 +2635,10 @@ export async function registerRoutes(
       if (shouldCreateCollectionTask) {
         try {
           const allUsers = await storage.getAllUsers();
-          const adminSupport = allUsers.find(
-            (u: any) => u.role === "admin_support" && u.isActive,
-          );
-          const assignee = adminSupport?.id || user.id;
-          await storage.createFieldTask(
+          // Collection (تحصيل) is litigation-class work → route to the
+          // litigation admin_support specialist; "" (unassigned) if none.
+          const assignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
+          const collectionTask = await storage.createFieldTask(
             {
               title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
               description: `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
@@ -2411,6 +2652,7 @@ export async function registerRoutes(
             },
             user.id,
           );
+          await notifyFieldTaskCreated(collectionTask, user); // D4
         } catch (e) {
           console.error("Failed to auto-create collection task on conciliation settlement:", e);
         }
@@ -2750,7 +2992,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
       const user = req.user!;
-      if (!canModifyConsultation(user, consultation)) {
+      if (!canModifyConsultation(user, consultation, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
       res.json(consultation);
@@ -2789,7 +3031,7 @@ export async function registerRoutes(
       if (!existing) {
         return res.status(404).json({ error: "الاستشارة غير موجودة" });
       }
-      if (!canModifyConsultation(user, existing)) {
+      if (!canModifyConsultation(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الاستشارة" });
       }
 
@@ -2802,7 +3044,10 @@ export async function registerRoutes(
 
       // Validate stage transition if changing status
       if (req.body.status && req.body.status !== existing.status) {
-        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing);
+        // 4c-3: consultations act-as enabled — canModifyConsultation above and
+        // this transition check both consult the acting context. Four-eyes: the
+        // /internal-review author-exclusion + designated-reviewer checks stay human.
+        const stageCheck = validateStageTransition(existing.status, req.body.status, user.role, "consultation", user, existing, req.actingContext);
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
@@ -3023,6 +3268,9 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
+        // 4c-3: consultations act-as enabled. Four-eyes stays human in the
+        // dedicated /internal-review + committee endpoints (not here).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -3039,6 +3287,38 @@ export async function registerRoutes(
         stageUpdate.status = "closed";
         stageUpdate.closedAt = new Date();
       }
+
+      // Entering internal review requires a designated reviewer — mirrors the
+      // case flow (PATCH /api/cases/:id, "موعد للمرحلة"): use the one already on
+      // the consultation if set, else the one chosen now (req.body), and
+      // persist it so the internal-review action is gated to that reviewer
+      // below. Four-eyes: the reviewer can't be the assigned (answering) lawyer.
+      if (targetStage === ConsultationStage.INTERNAL_REVIEW) {
+        const overrideReviewer =
+          (typeof req.body?.internalReviewerId === "string" && req.body.internalReviewerId)
+            ? req.body.internalReviewerId
+            : undefined;
+        const reviewerId = overrideReviewer || consultation.internalReviewerId || undefined;
+        if (!reviewerId) {
+          return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
+        }
+        const reviewer = await storage.getUser(reviewerId);
+        if (!reviewer || !reviewer.isActive) {
+          return res.status(400).json({ error: "المراجع الداخلي المختار غير صالح" });
+        }
+        if (reviewer.role === "admin_support") {
+          return res.status(400).json({ error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" });
+        }
+        if (reviewer.departmentId !== consultation.departmentId) {
+          return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم الاستشارة" });
+        }
+        if (reviewerId === consultation.assignedTo) {
+          return res.status(400).json({ error: "لا يمكن أن يكون المراجع الداخلي هو المحامي المسند إليه للاستشارة" });
+        }
+        // Persist (bootstrap or re-designate) so the internal-review gate works.
+        stageUpdate.internalReviewerId = reviewerId;
+      }
+
       const updated = await storage.updateConsultationAndLog(
         consultation.id,
         stageUpdate,
@@ -3087,6 +3367,9 @@ export async function registerRoutes(
         "consultation",
         reqUser,
         consultation,
+        // 4c-3: consultations act-as enabled. Four-eyes stays human in the
+        // dedicated /internal-review + committee endpoints (not here).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -3146,18 +3429,21 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة المراجعة الداخلية" });
       }
 
-      // Phase 5 B/M1 (four-eyes) — the assigned (answering) lawyer cannot clear
-      // their OWN consultation's internal review, even though their role
-      // (employee) is in baseAllowed. A different reviewer — another employee,
-      // dept_head, review head, or branch_manager — must do it.
-      // internalReviewerId can't gate this: on consultations it's a
-      // committee-referral field, still null at the internal-review stage.
+      // Four-eyes (Phase 5 B/M1) — the assigned (answering) lawyer can never
+      // clear their own consultation's internal review. Kept as belt-and-braces
+      // (the reviewer designation below already excludes the assignee).
       if (isAssignedLawyer(reqUser, consultation)) {
         return res.status(403).json({ error: "لا يمكن للمحامي المسند إليه اعتماد المراجعة الداخلية لاستشارته؛ يجب أن يقوم بها مراجع آخر" });
       }
-      const baseAllowed = ["employee", "department_head", "cases_review_head", "consultations_review_head", "branch_manager"];
-      if (!baseAllowed.includes(reqUser.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لتقديم المراجعة الداخلية" });
+      // Mirror cases (validateStageTransition INTERNAL_REVIEW lock): only the
+      // DESIGNATED internal reviewer or branch_manager may act. internalReviewerId
+      // is now required when entering this stage (see /advance-stage), so a
+      // normally-routed consultation always has one; a legacy row with no
+      // reviewer stays actionable by branch_manager (who can also re-route it).
+      const isDesignatedReviewer =
+        !!consultation.internalReviewerId && consultation.internalReviewerId === reqUser.id;
+      if (!isDesignatedReviewer && reqUser.role !== "branch_manager") {
+        return res.status(403).json({ error: "فقط المراجع الداخلي المعيَّن أو مدير الفرع يمكنه اعتماد المراجعة الداخلية لهذه الاستشارة" });
       }
 
       const nextStage = decision === InternalReviewDecision.PASSED
@@ -3198,7 +3484,13 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
-      if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
+      // 4c-7: committee decisions INHERIT. A delegate inheriting the committee
+      // chair role (consultations_review_head) or branch_manager may decide.
+      // Scope is null — consultations carry no caseId, so only all_cases
+      // delegations apply. No delegation → exactly the own-role check (parity).
+      const ctx = req.actingContext;
+      const ownRoleDecides = ["consultations_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "branch_manager"))) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
 
@@ -3221,6 +3513,15 @@ export async function registerRoutes(
 
       if (consultation.currentStage !== ConsultationStage.COMMITTEE) {
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
+      // standing in for the review head may NOT decide a committee on a
+      // consultation they (REAL id) authored / are the assigned lawyer of.
+      // Gated on !ownRoleDecides so a real review head is byte-identical
+      // (this endpoint has no own-role author-exclusion today). Real human id.
+      if (!ownRoleDecides && isAssignedLawyer(reqUser, consultation)) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد قرار اللجنة على عمل أنت محرّره" });
       }
 
       const nextStage = decision === CommitteeDecision.APPROVED
@@ -3281,8 +3582,18 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      // 4c-7: take-notes-outcome INHERITS. The assigned lawyer applies the
+      // committee's notes and records the outcome — their OWN follow-up work,
+      // NOT a review — so a delegate inheriting the assigned-lawyer identity OR a
+      // dept_head/branch_manager role may record it. No author/self exclusion
+      // (not a review). Scope null. No delegation → own identity+role (parity).
+      const ctx = req.actingContext;
+      const isLawyer = ctx
+        ? Array.from(effectiveIdsFor(ctx, null)).some((id) => isAssignedLawyer({ id }, consultation))
+        : isAssignedLawyer(reqUser, consultation);
+      const isHead = ctx
+        ? hasEffectiveRole(ctx, null, "department_head", "branch_manager")
+        : ["department_head", "branch_manager"].includes(reqUser.role);
       if (!isLawyer && !isHead) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
       }
@@ -3739,7 +4050,7 @@ export async function registerRoutes(
 
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
-      if (!canModifyConsultation(reqUser, consultation)) {
+      if (!canModifyConsultation(reqUser, consultation, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
 
@@ -3763,7 +4074,7 @@ export async function registerRoutes(
 
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
-      if (!canModifyConsultation(reqUser, consultation)) {
+      if (!canModifyConsultation(reqUser, consultation, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
       }
 
@@ -3871,6 +4182,27 @@ export async function registerRoutes(
   // Body: { notes }. Required notes — sends case from الأخذ_بالملاحظات
   // back to إحالة_للجنة_المراجعة. Allowed: assigned_lawyer +
   // admin_support + department_head (own dept) + branch_manager.
+  // "تم" acknowledge for the data-completion reminder — stamps
+  // data_completion_last_ack_at=now so the unified-tasks feed suppresses the
+  // case's data_completion task for 2 days, then re-surfaces it if the case is
+  // still at استكمال_البيانات. Gated by canModifyCase (delegation-aware) —
+  // covers admin_support / branch_manager / dept_head(own dept) / the assignee.
+  app.post("/api/cases/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!canModifyCase(user, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const updated = await storage.updateCase(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
   app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -4034,15 +4366,9 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      // Department-scope check needs the parent case for dept_head.
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as. No delegation → exactly the actor's own
+      // branch_manager/admin_support/own-dept-head/assignee check.
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه المذكرة" });
 
       if (memo.pausedAt) {
@@ -4085,14 +4411,8 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه المذكرة" });
 
       if (!memo.pausedAt) {
@@ -4130,17 +4450,16 @@ export async function registerRoutes(
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
       // Visibility — anyone who can act on the memo can read its log.
+      // 4c-5: per-identity act-as, mirroring the consultation/contract
+      // /activities gates (which read req.actingContext via canModify*).
+      // specific_cases delegations reach the memo via its parent caseId.
+      // No delegation → exactly the actor's own assignee/case-lawyer/
+      // own-dept-head/admin check.
       const parentCase = await storage.getCaseById(memo.caseId);
-      const isAssigned = memo.assignedTo === reqUser.id;
-      const isCaseLawyer = !!parentCase && (
-        parentCase.primaryLawyerId === reqUser.id ||
-        parentCase.responsibleLawyerId === reqUser.id ||
-        (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(reqUser.id))
-      );
-      const isDeptHead = reqUser.role === "department_head"
-        && !!parentCase && parentCase.departmentId === reqUser.departmentId;
-      const isAdmin = ["branch_manager", "admin_support", "cases_review_head"].includes(reqUser.role);
-      if (!(isAssigned || isCaseLawyer || isDeptHead || isAdmin)) {
+      const viewerIdentities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, memo.caseId ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+        : [reqUser];
+      if (!viewerIdentities.some((u) => canViewMemoActivitiesIdentity(u, memo, parentCase))) {
         return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه المذكرة" });
       }
 
@@ -4357,7 +4676,7 @@ export async function registerRoutes(
       const user = req.user!;
       const existing = await storage.getContractById(String(req.params.id));
       if (!existing) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(user, existing)) {
+      if (!canModifyContract(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذا العقد" });
       }
 
@@ -4723,6 +5042,9 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
+        // 4c-4: contracts act-as enabled. Four-eyes stays human in the
+        // INTERNAL_REVIEW lock + the dedicated /internal-review reviewer guard.
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       // Slot-validation gate per ContractSlotsByType. Required slots
@@ -4878,6 +5200,9 @@ export async function registerRoutes(
         "contract",
         reqUser,
         contract,
+        // 4c-4: contracts act-as enabled. Four-eyes stays human in the
+        // INTERNAL_REVIEW lock + the dedicated /internal-review reviewer guard.
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
       const fromLabel = ContractStageLabels[contract.currentStage] || contract.currentStage;
@@ -4957,7 +5282,11 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       // Committee chair = consultations_review_head per spec.
-      if (!["consultations_review_head", "branch_manager"].includes(reqUser.role)) {
+      // 4c-7: committee decisions INHERIT (scope null — contracts carry no
+      // caseId → all_cases delegations only). No delegation → own-role (parity).
+      const ctx = req.actingContext;
+      const ownRoleDecides = ["consultations_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "branch_manager"))) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
@@ -4981,6 +5310,13 @@ export async function registerRoutes(
       }
       if (contract.currentStage !== ContractStage.COMMITTEE) {
         return res.status(400).json({ error: "العقد ليس في مرحلة لجنة المراجعة" });
+      }
+      // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
+      // standing in for the review head may NOT decide a committee on a contract
+      // they (REAL id) authored / are the assigned lawyer of. Real review head
+      // unaffected (parity). Real human id.
+      if (!ownRoleDecides && isAssignedLawyer(reqUser, contract)) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد قرار اللجنة على عمل أنت محرّره" });
       }
       const nextStage = decision === CommitteeDecision.APPROVED
         ? ContractStage.READY
@@ -5024,8 +5360,16 @@ export async function registerRoutes(
       if (contract.currentStage !== ContractStage.TAKING_NOTES) {
         return res.status(400).json({ error: "العقد ليس في مرحلة الأخذ بالملاحظات" });
       }
-      const isLawyer = isAssignedLawyer(reqUser, contract);
-      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      // 4c-7: take-notes-outcome INHERITS (lawyer's own follow-up work applying
+      // committee notes, NOT a review → no author/self exclusion). Scope null.
+      // No delegation → own identity+role only (parity).
+      const ctx = req.actingContext;
+      const isLawyer = ctx
+        ? Array.from(effectiveIdsFor(ctx, null)).some((id) => isAssignedLawyer({ id }, contract))
+        : isAssignedLawyer(reqUser, contract);
+      const isHead = ctx
+        ? hasEffectiveRole(ctx, null, "department_head", "branch_manager")
+        : ["department_head", "branch_manager"].includes(reqUser.role);
       if (!isLawyer && !isHead) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
       }
@@ -5307,7 +5651,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(reqUser, contract)) {
+      if (!canModifyContract(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية عرض هذا العقد" });
       }
       const activities = await storage.getContractActivities(contract.id);
@@ -5427,7 +5771,7 @@ export async function registerRoutes(
         if (!contract) {
           return res.status(404).json({ error: "العقد غير موجود" });
         }
-        if (!canModifyContract(reqUser, contract)) {
+        if (!canModifyContract(reqUser, contract, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية رفع مرفقات لهذا العقد" });
         }
         if (!file) {
@@ -5585,7 +5929,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(reqUser, contract)) {
+      if (!canModifyContract(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية عرض هذا العقد" });
       }
       const all = await storage.getContractAttachments(contract.id);
@@ -5613,7 +5957,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!canModifyContract(reqUser, contract)) {
+      if (!canModifyContract(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
       }
       const att = await storage.getContractAttachmentById(String(req.params.attachmentId));
@@ -5884,14 +6228,8 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
 
       if (memo.pausedAt) {
@@ -5936,14 +6274,8 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      const parentCase = reqUser.role === "department_head"
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && parentCase && parentCase.departmentId === reqUser.departmentId) ||
-        memo.assignedTo === reqUser.id;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
 
       if (!memo.awaitingCompletion) {
@@ -6012,6 +6344,11 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
+        // 4c-5: memos act-as enabled. entityData carries memo.caseId, so
+        // scopeCaseId = the memo's PARENT case id — specific_cases delegations
+        // reach a memo via its parent case. Four-eyes stays human (INTERNAL_REVIEW
+        // lock + the dedicated /internal-review reviewer guard).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -6115,6 +6452,11 @@ export async function registerRoutes(
         "memo",
         reqUser,
         { ...memo, departmentId: memoParentCase?.departmentId ?? null },
+        // 4c-5: memos act-as enabled. entityData carries memo.caseId, so
+        // scopeCaseId = the memo's PARENT case id — specific_cases delegations
+        // reach a memo via its parent case. Four-eyes stays human (INTERNAL_REVIEW
+        // lock + the dedicated /internal-review reviewer guard).
+        req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
 
@@ -6226,7 +6568,14 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
-      if (!["cases_review_head", "branch_manager"].includes(reqUser.role)) {
+      // 4c-7: committee decisions INHERIT. Memos scope by their PARENT caseId
+      // (specific_cases delegations reach a memo via its parent case), so the
+      // authoritative grant runs after the memo is loaded. This fast-deny keeps
+      // the pre-fetch 403 byte-identical for non-delegated users; a user with an
+      // active delegation defers to the scoped check below.
+      const ctx = req.actingContext;
+      const ownRoleDecides = ["cases_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && (!ctx || ctx.delegators.length === 0)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
 
@@ -6248,6 +6597,20 @@ export async function registerRoutes(
       }
       if (memo.currentStage !== MemoStage.COMMITTEE) {
         return res.status(400).json({ error: "المذكرة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      // 4c-7: scoped committee grant — a delegate inheriting cases_review_head/
+      // branch_manager for this memo's PARENT case may decide. Non-delegated
+      // users already resolved at the fast-deny above (this is a no-op for them).
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, memo.caseId, "cases_review_head", "branch_manager"))) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+      // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
+      // standing in for the review head may NOT decide a committee on a memo
+      // they (REAL id) authored / are the assigned lawyer of. Real review head
+      // unaffected (parity). Real human id.
+      if (!ownRoleDecides && isAssignedLawyer(reqUser, memo)) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد قرار اللجنة على مذكرة أنت محرّرها" });
       }
 
       const nextStage = decision === CommitteeDecision.APPROVED
@@ -6307,8 +6670,16 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
-      const isLawyer = !!memo.assignedTo && memo.assignedTo === reqUser.id;
-      const isHead = ["department_head", "branch_manager"].includes(reqUser.role);
+      // 4c-7: take-notes-outcome INHERITS (lawyer's own follow-up work applying
+      // committee notes, NOT a review → no author/self exclusion). Scope = the
+      // memo's PARENT caseId. No delegation → own identity+role only (parity).
+      const ctx = req.actingContext;
+      const isLawyer = ctx
+        ? Array.from(effectiveIdsFor(ctx, memo.caseId)).some((id) => isAssignedLawyer({ id }, memo))
+        : (!!memo.assignedTo && memo.assignedTo === reqUser.id);
+      const isHead = ctx
+        ? hasEffectiveRole(ctx, memo.caseId, "department_head", "branch_manager")
+        : ["department_head", "branch_manager"].includes(reqUser.role);
       if (!isLawyer && !isHead) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل النتيجة" });
       }
@@ -6364,19 +6735,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "المذكرة ليست في مرحلة الأخذ بالملاحظات" });
       }
 
-      const parentCase = reqUser.role === "department_head" && memo.caseId
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!parentCase
-        && parentCase.departmentId === reqUser.departmentId;
-      const isAssigned = !!memo.assignedTo && memo.assignedTo === reqUser.id;
-      const allowed =
-        reqUser.role === "branch_manager"
-        || reqUser.role === "admin_support"
-        || isOwnDeptHead
-        || isAssigned;
+      // 4c-5: per-identity act-as (see /pause).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
       if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإعادة المذكرة للجنة" });
       }
@@ -6425,20 +6785,9 @@ export async function registerRoutes(
         return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
       }
 
-      const parentCase = reqUser.role === "department_head" && memo.caseId
-        ? await storage.getCaseById(memo.caseId)
-        : null;
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!parentCase
-        && parentCase.departmentId === reqUser.departmentId;
-      const isAssigned = !!memo.assignedTo && memo.assignedTo === reqUser.id;
-      const allowed =
-        reqUser.role === "branch_manager"
-        || reqUser.role === "cases_review_head"
-        || reqUser.role === "admin_support"
-        || isOwnDeptHead
-        || isAssigned;
+      // 4c-5: per-identity act-as (see /pause). cancel additionally allows
+      // cases_review_head (the memo committee chair).
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support", "cases_review_head"]);
       if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء المذكرة" });
       }
@@ -6489,7 +6838,7 @@ export async function registerRoutes(
           // (was requireAuth-only: any user could drive another dept's case
           // forward). Hearings are always added from a case the user has open,
           // so legitimate creation passes.
-          if (!canModifyCase(req.user!, relatedCase)) {
+          if (!canModifyCase(req.user!, relatedCase, req.actingContext)) {
             return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
           }
           if (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived) {
@@ -6700,7 +7049,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
       const relatedCase = await storage.getCaseById(existing.caseId);
-      if (relatedCase && !canModifyCase(user, relatedCase)) {
+      if (relatedCase && !canModifyCase(user, relatedCase, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه الجلسة" });
       }
 
@@ -6975,6 +7324,7 @@ export async function registerRoutes(
               priority: "عالي",
               dueDate: data.nextHearingDate,
             }, reqUser.id);
+            await notifyFieldTaskCreated(task, reqUser); // D4
             createdTasks.push({ type: "prepare_response", id: task.id, description: "مهمة إعداد الرد" });
 
             const deadlineDate = new Date(data.nextHearingDate);
@@ -7025,18 +7375,19 @@ export async function registerRoutes(
               caseUpdate.currentStage = "محكوم_حكم_نهائي";
               await storage.updateCase(effectiveCaseId, caseUpdate);
 
-              // Auto-create collection task
+              // Auto-create collection task → litigation specialist ("" if none)
               const allUsers = await storage.getAllUsers();
-              const adminSupport = allUsers.find((u: any) => u.role === "admin_support" && u.isActive);
+              const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
               const collectionTask = await storage.createFieldTask({
                 title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
                 description: `صدر حكم نهائي ${judgmentType} - يرجى إعداد خطاب تحصيل`,
                 taskType: "متابعة_محكمة",
                 caseId: effectiveCaseId,
-                assignedTo: adminSupport?.id || reqUser.id,
+                assignedTo: collectionAssignee,
                 priority: "عاجل",
                 dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
               }, reqUser.id);
+              await notifyFieldTaskCreated(collectionTask, reqUser); // D4
               createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
 
               // Transition to collection
@@ -7146,6 +7497,7 @@ export async function registerRoutes(
             priority: "عاجل",
             dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
           }, reqUser.id);
+          await notifyFieldTaskCreated(contactTask, reqUser); // D4
           createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
         }
 
@@ -7193,18 +7545,19 @@ export async function registerRoutes(
 
         // ==================== CONCILIATION: SETTLEMENT REACHED (تم_الصلح) ====================
         else if (data.result === HearingResult.SETTLEMENT_REACHED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "تم_الصلح")) {
-          // Auto-create collection task
+          // Auto-create collection task → litigation specialist ("" if none)
           const allUsers = await storage.getAllUsers();
-          const adminSupport = allUsers.find((u: any) => u.role === "admin_support" && u.isActive);
+          const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
           const collectionTask = await storage.createFieldTask({
             title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
             description: `تم الصلح - يرجى إعداد خطاب تحصيل`,
             taskType: "متابعة_محكمة",
             caseId: effectiveCaseId,
-            assignedTo: adminSupport?.id || reqUser.id,
+            assignedTo: collectionAssignee,
             priority: "عاجل",
             dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
           }, reqUser.id);
+          await notifyFieldTaskCreated(collectionTask, reqUser); // D4
           createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
 
           caseUpdate.currentStage = "تحصيل";
@@ -7366,6 +7719,54 @@ export async function registerRoutes(
     }
   });
 
+  // Mark the session report as exported — clears the admin_support
+  // SESSION_REPORT_EXPORT task. This is the done-state toggle only; actual PDF
+  // generation is a separate concern (see report). Allowed for the same actors
+  // as the other hearing actions (attending lawyer / admin_support / branch_manager).
+  app.post("/api/hearings/:id/mark-report-exported", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!canActOnHearing(req.user!, hearing)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
+      if (!hearing.reportCompleted) {
+        return res.status(400).json({ error: "يجب إكمال تقرير الجلسة أولاً" });
+      }
+      const updated = await storage.updateHearing(hearingId, { sessionReportExported: true });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error marking session report exported:", error);
+      res.status(500).json({ error: "حدث خطأ في تحديث حالة تصدير التقرير" });
+    }
+  });
+
+  // "تم" acknowledge for the agency-verification reminder — stamps
+  // agency_verification_ack_at=now so the unified-tasks feed stops surfacing
+  // that hearing's agency_verification task. Same actors as the other hearing
+  // actions (attending lawyer / admin_support / branch_manager via
+  // canActOnHearing).
+  app.post("/api/hearings/:id/ack-agency-verification", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!canActOnHearing(req.user!, hearing)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
+      const updated = await storage.updateHearing(hearingId, { agencyVerificationAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging agency verification:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التحقق من الوكالة" });
+    }
+  });
+
   app.post("/api/hearings/:id/close", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);
@@ -7396,20 +7797,94 @@ export async function registerRoutes(
 
   // ==================== Field Tasks ====================
 
-  app.get("/api/field-tasks", requireAuth, async (req, res) => {
+  app.get("/api/field-tasks", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const tasks = await storage.getAllFieldTasks();
-      res.json(tasks);
+      // D5 (data-leak fix) — scope server-side so a browser never receives
+      // field tasks (client names, case numbers) it isn't entitled to. Before
+      // this, every task shipped to every browser and was filtered only
+      // client-side. Scope mirrors the per-user task predicates:
+      //   • branch_manager / admin_support (canAssignFieldTasks) → all tasks
+      //     (the management view; includes the unassigned "" pool);
+      //   • department_head → tasks on cases in their department (field tasks
+      //     carry no departmentId, so this resolves via the parent case) + own
+      //     + created;
+      //   • everyone else → only tasks assigned TO them or created BY them.
+      // The field-tasks page re-applies its own (canManage || own || createdBy)
+      // filter, so the page itself stays unchanged for every role.
+      const user = req.user!;
+      const all = await storage.getAllFieldTasks();
+      let scoped = all;
+      if (canAssignFieldTasks(user.role)) {
+        scoped = all;
+      } else if (user.role === "department_head" && user.departmentId) {
+        const cases = await storage.getAllCases();
+        const deptCaseIds = new Set(
+          cases.filter((c) => c.departmentId === user.departmentId).map((c) => c.id),
+        );
+        scoped = all.filter(
+          (t) =>
+            t.assignedTo === user.id ||
+            t.assignedBy === user.id ||
+            (!!t.caseId && deptCaseIds.has(t.caseId)),
+        );
+      } else {
+        scoped = all.filter((t) => t.assignedTo === user.id || t.assignedBy === user.id);
+      }
+      res.json(scoped);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب المهام الميدانية" });
     }
   });
 
-  app.get("/api/field-tasks/:id", requireAuth, async (req, res) => {
+  // ITEM 1 — case-scoped field tasks: ALL field tasks on a case, gated by CASE
+  // ACCESS (canViewCase, delegation-aware via req.actingContext — 4c-1). Whoever
+  // can VIEW the case sees the case's complete task picture (the assigned lawyer
+  // sees every task on their case, dept_head sees their dept's cases, managers
+  // see all). This does NOT reopen D5: access is per-caseId, so a user still
+  // can't reach tasks on cases they can't see. The general /api/field-tasks list
+  // stays per-user scoped. (Path has 2 segments after field-tasks, so it never
+  // collides with /api/field-tasks/:id.)
+  app.get("/api/field-tasks/case/:caseId", requireAuth, async (req: AuthRequest, res) => {
     try {
+      const user = req.user!;
+      const caseId = String(req.params.caseId);
+      const parentCase = await storage.getCaseById(caseId);
+      if (!parentCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!canViewCase(user, parentCase, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض مهام هذه القضية" });
+      }
+      const tasks = await storage.getFieldTasksByCase(caseId);
+      res.json(tasks);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب مهام القضية" });
+    }
+  });
+
+  app.get("/api/field-tasks/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
       const task = await storage.getFieldTaskById(String(req.params.id));
       if (!task) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
+      }
+      // ITEM 2 — access check (was requireAuth-only, any user could fetch any
+      // task by UUID). Allowed: the assignee, the creator, a manager
+      // (canAssignFieldTasks), or anyone who can access the task's parent
+      // case/consultation (delegation-aware). Mirrors the PATCH gate.
+      let allowed =
+        task.assignedTo === user.id ||
+        task.assignedBy === user.id ||
+        canAssignFieldTasks(user.role);
+      if (!allowed && task.caseId) {
+        const parentCase = await storage.getCaseById(task.caseId);
+        allowed = !!parentCase && canViewCase(user, parentCase, req.actingContext);
+      }
+      if (!allowed && task.consultationId) {
+        const parentConsultation = await storage.getConsultationById(task.consultationId);
+        allowed = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
+      }
+      if (!allowed) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه المهمة" });
       }
       res.json(task);
     } catch (error) {
@@ -7463,10 +7938,10 @@ export async function registerRoutes(
       let canModifyParent = false;
       if (existingTask.caseId) {
         const parentCase = await storage.getCaseById(existingTask.caseId);
-        canModifyParent = !!parentCase && canModifyCase(user, parentCase);
+        canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
       } else if (existingTask.consultationId) {
         const parentConsultation = await storage.getConsultationById(existingTask.consultationId);
-        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation);
+        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
       }
       if (existingTask.assignedTo !== user.id && !canModifyParent) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
@@ -7482,6 +7957,30 @@ export async function registerRoutes(
       if (!updated) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
       }
+
+      // D2 (action-hub write-back foundation) — completing a field task leaves
+      // evidence on the linked case's activity log, so e.g. finishing a
+      // collection letter is visible on the case. Fires only on the transition
+      // INTO "مكتمل" (FieldTaskStatus.COMPLETED) and only for case-linked tasks.
+      // completedAt itself is stamped server-side in storage.updateFieldTask
+      // (D7). Best-effort: a logging failure must not fail the completion.
+      // Task-type-specific write-backs (mark a hearing report exported, advance
+      // a stage, collection→execution, the consultation-linked activity log)
+      // are deferred to the action-hub UI increment — see report.
+      if (existingTask.status !== "مكتمل" && updated.status === "مكتمل" && updated.caseId) {
+        try {
+          await storage.logCaseActivity({
+            caseId: updated.caseId,
+            userId: user.id,
+            userName: user.name || user.id,
+            actionType: "field_task_completed",
+            title: `اكتملت مهمة ميدانية: ${updated.title}`,
+          });
+        } catch (e) {
+          console.error("[field-tasks PATCH] case activity write-back failed:", e);
+        }
+      }
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث المهمة" });
@@ -8402,6 +8901,28 @@ export async function registerRoutes(
     }
   });
 
+  // Unified Tasks feed — everything requiring THIS user's action across the
+  // system (cases/hearings/memos/reviews/collection/deadlines/field-tasks/
+  // delegations/consultations). Per-user SQL aggregation (see storage.getMyTasks);
+  // a department_head also sees their department's tasks tagged ownerScope:"team".
+  app.get("/api/my-tasks", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const myTasks = await storage.getMyTasks(
+        {
+          id: reqUser.id,
+          role: reqUser.role,
+          departmentId: reqUser.departmentId ?? null,
+        },
+        req.actingContext,
+      );
+      res.json(myTasks);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post("/api/sidebar-counts/mark-viewed", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -8563,7 +9084,7 @@ export async function registerRoutes(
       // Previously this was gated to assigned-lawyer only, which made
       // the "إضافة" button silently 403 for branch_managers / admin_support
       // / dept_heads opening a case detail dialog.
-      if (!canViewCase(user, caseItem)) {
+      if (!canViewCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة تعليق على هذه القضية" });
       }
       // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
@@ -8608,7 +9129,7 @@ export async function registerRoutes(
       // can drop an internal note. The previous rule (assigned-lawyer
       // OR modify) silently 403'd dept_heads viewing a case outside
       // their dept and any read-only viewer who tried to leave a note.
-      if (!canViewCase(user, caseItem)) {
+      if (!canViewCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة ملاحظة على هذه القضية" });
       }
       // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
@@ -8714,7 +9235,7 @@ export async function registerRoutes(
       const user = req.user!;
       if (validated.caseId) {
         const targetCase = await storage.getCaseById(validated.caseId);
-        if (targetCase && !canModifyCase(user, targetCase)) {
+        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
         }
       }
@@ -8752,7 +9273,7 @@ export async function registerRoutes(
       const user = req.user!;
       if (existingDeadline.caseId) {
         const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase)) {
+        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
         }
       }
@@ -8774,7 +9295,7 @@ export async function registerRoutes(
       const user = req.user!;
       if (existingDeadline.caseId) {
         const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase)) {
+        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
           return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
         }
       }
@@ -8793,6 +9314,31 @@ export async function registerRoutes(
       res.json(delegations);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب التفويضات" });
+    }
+  });
+
+  // 4d — read-only: the active delegations where the CURRENT user is the
+  // delegate. This reuses req.actingContext — the SAME canonical set the
+  // server resolves for act-as (active + approved + in-window + the delegator
+  // still active) — and enriches each with the delegator's display name so the
+  // FE can show an "acting on behalf of" banner. Empty list = the user holds no
+  // inherited authority (the banner renders nothing). Display/info only — it
+  // grants nothing; the authority itself is resolved per-request server-side.
+  app.get("/api/delegations/acting-as", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const ctx = req.actingContext;
+      if (!ctx || ctx.delegators.length === 0) {
+        return res.json({ delegators: [] });
+      }
+      const delegators = await Promise.all(
+        ctx.delegators.map(async (d) => {
+          const u = await storage.getUser(d.userId);
+          return { userId: d.userId, name: u?.name ?? d.userId };
+        }),
+      );
+      res.json({ delegators });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التفويضات النشطة" });
     }
   });
 
@@ -8872,6 +9418,16 @@ export async function registerRoutes(
       // Check the delegation exists first and validate users are active
       const existingDelegation = await storage.getDelegation(String(req.params.id));
       if (!existingDelegation) return res.status(404).json({ message: "تفويض غير موجود" });
+
+      // 4c-6 guardrail (privilege self-cycle, real id) — nobody may approve a
+      // delegation they are personally a party to. Compares the REAL human id,
+      // so an inherited approve role (now that requireRole is delegation-aware)
+      // cannot be used to self-approve one's own incoming/outgoing delegation
+      // (which would let a delegate activate/perpetuate their own act-as). Also
+      // closes the long-standing self-approval hole for real approvers.
+      if (existingDelegation.fromUserId === user.id || existingDelegation.toUserId === user.id) {
+        return res.status(403).json({ error: "لا يمكنك اعتماد تفويض أنت طرف فيه" });
+      }
 
       // Validate both fromUser and toUser are active before approving
       const { valid } = await validateAssignedUsersActive([existingDelegation.fromUserId, existingDelegation.toUserId]);

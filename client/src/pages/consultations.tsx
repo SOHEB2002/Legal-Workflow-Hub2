@@ -753,6 +753,9 @@ export default function ConsultationsPage() {
 
   const [showAdvanceDialog, setShowAdvanceDialog] = useState(false);
   const [advanceConsultation, setAdvanceConsultation] = useState<Consultation | null>(null);
+  // Reviewer chosen when advancing INTO internal review (defaults to the one
+  // already designated on the consultation). Mirrors the case progress bar.
+  const [advanceReviewerId, setAdvanceReviewerId] = useState("");
 
   const [showReturnDialog, setShowReturnDialog] = useState(false);
   const [returnConsultation, setReturnConsultation] = useState<Consultation | null>(null);
@@ -1432,6 +1435,7 @@ export default function ConsultationsPage() {
 
   const openAdvanceDialog = (c: Consultation) => {
     setAdvanceConsultation(c);
+    setAdvanceReviewerId(c.internalReviewerId || "");
     setShowAdvanceDialog(true);
   };
 
@@ -1442,10 +1446,17 @@ export default function ConsultationsPage() {
       toast({ title: "لا يمكن نقل الاستشارة", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
       return;
     }
+    // Entering internal review must carry a designated reviewer (mirrors cases).
+    const enteringInternalReview = target === ConsultationStage.INTERNAL_REVIEW;
+    if (enteringInternalReview && !advanceReviewerId) {
+      toast({ title: "اختر المراجع الداخلي", description: "يجب تعيين مراجع داخلي قبل الانتقال للمراجعة", variant: "destructive" });
+      return;
+    }
     setActionInProgress(true);
     try {
       await apiRequest("POST", `/api/consultations/${advanceConsultation.id}/advance-stage`, {
         targetStage: target,
+        ...(enteringInternalReview ? { internalReviewerId: advanceReviewerId } : {}),
       });
       await refreshConsultations();
       toast({ title: "تم نقل الاستشارة للمرحلة التالية" });
@@ -3051,11 +3062,49 @@ export default function ConsultationsPage() {
               ) : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {advanceConsultation && user
+            && getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId) === ConsultationStage.INTERNAL_REVIEW && (
+            <div className="space-y-1" dir="rtl">
+              <Label className="text-sm font-semibold">
+                المراجع الداخلي <span className="text-red-500">*</span>
+              </Label>
+              <Select
+                value={advanceReviewerId || "none"}
+                onValueChange={(v) => setAdvanceReviewerId(v === "none" ? "" : v)}
+              >
+                <SelectTrigger data-testid="select-advance-reviewer">
+                  <SelectValue placeholder="اختر مراجعاً" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— اختر مراجعاً —</SelectItem>
+                  {users
+                    .filter(u =>
+                      u.isActive
+                      && u.role !== "branch_manager" && u.role !== "admin_support"
+                      && u.role !== "hr" && u.role !== "technical_support"
+                      && u.departmentId === advanceConsultation.departmentId
+                      && u.id !== advanceConsultation.assignedTo
+                    )
+                    .map(u => (
+                      <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                يُعرض المراجع المعيَّن إن وُجد، أو اختر مراجعاً الآن (لا يكون المحامي المسند إليه).
+              </p>
+            </div>
+          )}
           <AlertDialogFooter className="gap-2">
             <AlertDialogCancel data-testid="button-cancel-advance">إلغاء</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleAdvanceStage}
-              disabled={actionInProgress}
+              disabled={
+                actionInProgress
+                || (!!advanceConsultation && !!user
+                  && getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId) === ConsultationStage.INTERNAL_REVIEW
+                  && !advanceReviewerId)
+              }
               data-testid="button-confirm-advance"
             >
               تأكيد

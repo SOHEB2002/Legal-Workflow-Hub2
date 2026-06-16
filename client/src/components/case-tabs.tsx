@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useCaseFieldTasks } from "@/hooks/use-case-field-tasks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -294,12 +295,15 @@ interface CaseDeadlinesTabProps {
   caseId: string;
   hearings?: any[];
   memos?: any[];
-  fieldTasks?: any[];
   responseDeadline?: string | null;
 }
 
-export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], fieldTasks = [], responseDeadline }: CaseDeadlinesTabProps) {
+export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], responseDeadline }: CaseDeadlinesTabProps) {
   const { toast } = useToast();
+  // ITEM 1 — the case's COMPLETE field-task list (case-access gated), not the
+  // per-user scoped general list, so the case-detail timeline shows every task
+  // on the case to anyone who can view it.
+  const { data: fieldTasks = [] } = useCaseFieldTasks(caseId);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({
     deadlineType: "objection" as string,
@@ -374,9 +378,12 @@ export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], fieldTasks
     }
   }
 
-  // Field task due dates
+  // Field task due dates. (Excludes completed "مكتمل" / cancelled "ملغي" — the
+  // correct FieldTaskStatus values; the prior literals "مكتملة"/"ملغاة" were
+  // memo-status values that never matched, so done/cancelled tasks used to leak
+  // onto the timeline. Surfaced now that the list is typed FieldTask[].)
   for (const t of fieldTasks) {
-    if (t.dueDate && t.status !== "مكتملة" && t.status !== "ملغاة") {
+    if (t.dueDate && t.status !== "مكتمل" && t.status !== "ملغي") {
       timelineItems.push({
         date: t.dueDate,
         label: t.title || "مهمة ميدانية",
