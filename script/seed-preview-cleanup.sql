@@ -1,18 +1,17 @@
 -- ============================================================================
 -- seed-preview-cleanup.sql — removes EXACTLY the rows seed-preview-tasks.sql
--- created (every id LIKE 'SEED\_%'), returning dev to a clean state.
+-- created (every id LIKE 'T\_%'). Manager (id='1') and departments untouched.
 --
--- DEV ONLY. Run from the Replit Shell against the DEV database:
+-- DEV ONLY. Run from the Replit Shell:
 --     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f script/seed-preview-cleanup.sql
 --
--- Same hard guard as the seed (aborts unless current_database() = 'heliumdb').
--- One transaction. Deletes in FK-safe order (children before parents). Touches
--- ONLY 'SEED_'-prefixed rows — no real data is affected.
+-- Use this to re-seed without a full wipe: cleanup -> seed. (A full reset is
+-- seed-preview-wipe.sql -> seed.) Same hard guard; one transaction; FK-safe
+-- order (children before parents); touches ONLY 'T_'-prefixed rows.
 -- ============================================================================
 
 BEGIN;
 
--- ---- HARD DEV-ONLY GUARD -----------------------------------------------------
 DO $$
 BEGIN
   IF current_database() <> 'heliumdb' THEN
@@ -22,20 +21,19 @@ BEGIN
   END IF;
 END $$;
 
--- Children / referencing rows first, then parents.
-DELETE FROM delegations_table WHERE id LIKE 'SEED\_%';
-DELETE FROM contact_logs      WHERE id LIKE 'SEED\_%';
-DELETE FROM legal_deadlines   WHERE id LIKE 'SEED\_%';
-DELETE FROM field_tasks       WHERE id LIKE 'SEED\_%';
-DELETE FROM memos             WHERE id LIKE 'SEED\_%';
-DELETE FROM hearings          WHERE id LIKE 'SEED\_%';
-DELETE FROM consultations     WHERE id LIKE 'SEED\_%';
-DELETE FROM contracts         WHERE id LIKE 'SEED\_%';
-DELETE FROM law_cases         WHERE id LIKE 'SEED\_%';
-DELETE FROM users             WHERE id LIKE 'SEED\_%';
-DELETE FROM clients           WHERE id LIKE 'SEED\_%';
+DELETE FROM delegations_table WHERE id LIKE 'T\_%';
+DELETE FROM contact_logs      WHERE id LIKE 'T\_%';
+DELETE FROM legal_deadlines   WHERE id LIKE 'T\_%';
+DELETE FROM field_tasks       WHERE id LIKE 'T\_%';
+DELETE FROM memos             WHERE id LIKE 'T\_%';
+DELETE FROM hearings          WHERE id LIKE 'T\_%';
+DELETE FROM consultations     WHERE id LIKE 'T\_%';
+DELETE FROM contracts         WHERE id LIKE 'T\_%';
+DELETE FROM law_cases         WHERE id LIKE 'T\_%';
+DELETE FROM users             WHERE id LIKE 'T\_%';
+DELETE FROM clients           WHERE id LIKE 'T\_%';
 
 COMMIT;
 
--- Verify zero SEED rows remain, e.g.:
---   SELECT count(*) FROM users WHERE id LIKE 'SEED\_%';   -- expect 0
+-- Verify zero T_ rows remain, e.g.:
+--   SELECT count(*) FROM users WHERE id LIKE 'T\_%';   -- expect 0
