@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
-  UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Pin, Users, Plus,
+  UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -72,7 +72,9 @@ const ACTION_LABEL: Record<MyTaskActionHint, string> = {
   follow_up: "متابعة", verify: "تحقق", close: "إغلاق",
 };
 
-// Pinned to the top: hearings (+ their actions) and case-assignment tasks.
+// Pinned to the top under the "المستعجلة" (urgent) heading: hearings (+ their
+// actions: report/agency) and unassigned case-assignment tasks. The internal
+// "pinned" naming is the pin-to-top mechanism; the user-facing label is urgent.
 const PINNED_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED, MyTaskKind.HEARING_REPORT,
   MyTaskKind.AGENCY_VERIFICATION, MyTaskKind.CASE_UNASSIGNED,
@@ -436,7 +438,7 @@ export default function MyTasksPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <SummaryCard label="مهامي" value={own.length} />
         <SummaryCard label="متأخرة" value={overdueCount} tone="danger" />
-        <SummaryCard label="مثبتة" value={pinned.length} />
+        <SummaryCard label="المستعجلة" value={pinned.length} />
         {(isDeptHead || isBranchManager) && <SummaryCard label="مهام الفريق" value={team.length} />}
       </div>
 
@@ -447,7 +449,7 @@ export default function MyTasksPage() {
           {pinned.length > 0 && (
             <section className="space-y-2" data-testid="section-pinned">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <Pin className="h-4 w-4" /> مثبتة — جلسات وإسناد قضايا
+                <Flame className="h-4 w-4" /> المستعجلة — جلسات وإسناد قضايا
               </h2>
               <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
             </section>
