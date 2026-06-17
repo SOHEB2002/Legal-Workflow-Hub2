@@ -113,7 +113,12 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
     case MyTaskKind.CONTACT_FOLLOWUP: return { mode: "confirm", title: "إنهاء متابعة العميل" };
     case MyTaskKind.LEGAL_DEADLINE: return { mode: "confirm", title: "إنجاز الموعد القانوني" };
     case MyTaskKind.FIELD_TASK:
-    case MyTaskKind.COLLECTION: return { mode: "complete", title: "إكمال المهمة" };
+    case MyTaskKind.COLLECTION:
+      // Unassigned pool item (server sends actionHint:"assign") → assign it;
+      // an assigned task → complete it.
+      return task.ownerId
+        ? { mode: "complete", title: "إكمال المهمة" }
+        : { mode: "assign", title: "إسناد المهمة لموظف" };
     case MyTaskKind.CONSULTATION_CLOSING: return { mode: "reason", title: "إغلاق الاستشارة" };
     case MyTaskKind.HEARING_REPORT: return { mode: "report", title: "تقرير الجلسة" };
     case MyTaskKind.CASE_UNASSIGNED: return { mode: "assign", title: "إسناد القضية لمحامٍ" };
@@ -154,10 +159,13 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
     case MyTaskKind.LEGAL_DEADLINE: return { method: "PATCH", url: `/api/legal-deadlines/${e}`, body: { status: "مكتمل" } };
     case MyTaskKind.FIELD_TASK:
     case MyTaskKind.COLLECTION:
-      return { method: "PATCH", url: `/api/field-tasks/${e}`, body: {
-        status: FieldTaskStatus.COMPLETED, completionNotes: form.notes,
-        proofDescription: form.proofDescription, proofFileLink: form.proofFileLink,
-      } };
+      // Unassigned pool → assign (set assignedTo); otherwise complete the task.
+      return task.ownerId
+        ? { method: "PATCH", url: `/api/field-tasks/${e}`, body: {
+            status: FieldTaskStatus.COMPLETED, completionNotes: form.notes,
+            proofDescription: form.proofDescription, proofFileLink: form.proofFileLink,
+          } }
+        : { method: "PATCH", url: `/api/field-tasks/${e}`, body: { assignedTo: form.assigneeId } };
     case MyTaskKind.CONSULTATION_CLOSING: return { method: "POST", url: `/api/consultations/${e}/early-close`, body: { reason: form.reason } };
     case MyTaskKind.HEARING_REPORT:
       return { method: "POST", url: `/api/hearings/${e}/report`, body: {
@@ -391,7 +399,10 @@ export default function MyTasksPage() {
 
   const pinned = own.filter((t) => PINNED_KINDS.has(t.kind)).sort(byTime);
   const rest = own.filter((t) => !PINNED_KINDS.has(t.kind)).sort(byTime);
-  const overdueCount = own.filter((t) => t.isOverdue).length;
+  // Count EVERY overdue row the user actually sees (own + team), so the card
+  // matches the red rows. The old `own`-only count read 0 for a manager whose
+  // overdue rows are all team-scoped (ownerScope:"team").
+  const overdueCount = visible.filter((t) => t.isOverdue).length;
 
   const teamByMember = new Map<string, MyTaskItem[]>();
   for (const t of team) {

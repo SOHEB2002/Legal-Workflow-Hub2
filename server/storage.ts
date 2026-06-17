@@ -3044,7 +3044,11 @@ export class DatabaseStorage implements IStorage {
           kind: isCollection ? MyTaskKind.COLLECTION : MyTaskKind.FIELD_TASK,
           title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
           ownerId, ownerScope: scopeOf(ownerId),
-          dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today, actionHint: "complete",
+          // Unassigned pool ("" assignee, surfaced to managers): the action is to
+          // ASSIGN it (إسناد), not complete it — an unassigned task can't be
+          // "completed". An assigned task keeps the complete (إكمال) action.
+          dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
+          actionHint: ownerId ? "complete" : "assign",
         });
       }
     }
