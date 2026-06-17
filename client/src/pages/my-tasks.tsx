@@ -138,13 +138,15 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
 interface ActionForm {
   notes: string; proofDescription: string; proofFileLink: string;
   reason: string; decision: string;
-  assigneeId: string;
+  // case_unassigned can route to a specific lawyer OR a whole department
+  // (item 7); field-task assign uses assigneeId only.
+  assigneeId: string; assignTarget: "lawyer" | "department"; assignDeptId: string;
   hearingReport: string; recommendations: string; nextSteps: string; contactCompleted: string;
 }
 const EMPTY_FORM: ActionForm = {
   notes: "", proofDescription: "", proofFileLink: "",
   reason: "", decision: InternalReviewDecision.PASSED,
-  assigneeId: "",
+  assigneeId: "", assignTarget: "lawyer", assignDeptId: "",
   hearingReport: "", recommendations: "", nextSteps: "", contactCompleted: "no",
 };
 
@@ -173,7 +175,13 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
         hearingReport: form.hearingReport, recommendations: form.recommendations,
         nextSteps: form.nextSteps, contactCompleted: form.contactCompleted === "yes",
       } };
-    case MyTaskKind.CASE_UNASSIGNED: return { method: "PATCH", url: `/api/cases/${e}`, body: { primaryLawyerId: form.assigneeId } };
+    case MyTaskKind.CASE_UNASSIGNED:
+      // Reuse PATCH /api/cases/:id: routing to a department sets departmentId
+      // (a case assigned to a dept-but-no-lawyer — the dept_head then picks a
+      // lawyer); routing to a lawyer sets primaryLawyerId (item 7).
+      return form.assignTarget === "department"
+        ? { method: "PATCH", url: `/api/cases/${e}`, body: { departmentId: form.assignDeptId } }
+        : { method: "PATCH", url: `/api/cases/${e}`, body: { primaryLawyerId: form.assigneeId } };
     case MyTaskKind.REVIEW_PENDING: {
       const isCommittee = task.id.includes(":committee_");
       const base = task.entityType === "memo" ? "memos" : task.entityType === "contract" ? "contracts" : "consultations";
@@ -375,7 +383,11 @@ export default function MyTasksPage() {
     const mode = actionModeFor(actionTask)?.mode;
     if (mode === "reason" && !form.reason.trim()) { toast({ title: "السبب مطلوب", variant: "destructive" }); return; }
     if (mode === "report" && !form.hearingReport.trim()) { toast({ title: "نص التقرير مطلوب", variant: "destructive" }); return; }
-    if (mode === "assign" && !form.assigneeId) { toast({ title: "اختر المحامي المسند", variant: "destructive" }); return; }
+    if (mode === "assign") {
+      const toDept = actionTask.kind === MyTaskKind.CASE_UNASSIGNED && form.assignTarget === "department";
+      if (toDept && !form.assignDeptId) { toast({ title: "اختر القسم المسند إليه", variant: "destructive" }); return; }
+      if (!toDept && !form.assigneeId) { toast({ title: "اختر المسند إليه", variant: "destructive" }); return; }
+    }
     if (mode === "decision" && form.decision === InternalReviewDecision.NEEDS_NOTES && !form.notes.trim()) {
       toast({ title: "الملاحظات مطلوبة عند الإرجاع", variant: "destructive" }); return;
     }
@@ -666,15 +678,39 @@ export default function MyTasksPage() {
               )}
 
               {currentMode === "assign" && (
-                <div className="space-y-1"><Label>المحامي المسند</Label>
-                  <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
-                    <SelectTrigger data-testid="select-assignee"><SelectValue placeholder="اختر محامياً" /></SelectTrigger>
-                    <SelectContent>
-                      {users.filter((u) => u.isActive).map((u) => (
-                        <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select></div>
+                <div className="space-y-3">
+                  {/* case_unassigned can route to a specific lawyer OR a whole
+                      department (item 7); field-task assign is lawyer-only. */}
+                  {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED && (
+                    <div className="space-y-1"><Label>إسناد إلى</Label>
+                      <Select value={form.assignTarget} onValueChange={(v) => setForm({ ...form, assignTarget: v as "lawyer" | "department" })}>
+                        <SelectTrigger data-testid="select-assign-target"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="lawyer">محامٍ محدد</SelectItem>
+                          <SelectItem value="department">قسم</SelectItem>
+                        </SelectContent>
+                      </Select></div>
+                  )}
+                  {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED && form.assignTarget === "department" ? (
+                    <div className="space-y-1"><Label>القسم المسند إليه</Label>
+                      <Select value={form.assignDeptId} onValueChange={(v) => setForm({ ...form, assignDeptId: v })}>
+                        <SelectTrigger data-testid="select-assign-dept"><SelectValue placeholder="اختر قسماً" /></SelectTrigger>
+                        <SelectContent>
+                          {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
+                        </SelectContent>
+                      </Select></div>
+                  ) : (
+                    <div className="space-y-1"><Label>{actionTask?.kind === MyTaskKind.CASE_UNASSIGNED ? "المحامي المسند" : "المسند إليه"}</Label>
+                      <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
+                        <SelectTrigger data-testid="select-assignee"><SelectValue placeholder="اختر موظفاً" /></SelectTrigger>
+                        <SelectContent>
+                          {users.filter((u) => u.isActive).map((u) => (
+                            <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select></div>
+                  )}
+                </div>
               )}
 
               {currentMode === "report" && (
