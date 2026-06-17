@@ -13,6 +13,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
+  ChevronDown, ChevronLeft,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -233,9 +234,34 @@ function SummaryCard({ label, value, tone }: { label: string; value: number; ton
   );
 }
 
+// Clickable collapse/expand header (chevron + title + optional count badge),
+// used for every department / member / pool group in the supervisory views.
+// RTL: open → chevron points down; collapsed → points right (ChevronLeft).
+function GroupHeader({ open, onToggle, title, count, titleClass, testId }: {
+  open: boolean; onToggle: () => void; title: string; count?: number;
+  titleClass?: string; testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full items-center gap-2 text-right"
+      data-testid={testId}
+    >
+      {open
+        ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        : <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />}
+      <span className={`flex-1 min-w-0 ${titleClass ?? ""}`}><BidiText>{title}</BidiText></span>
+      {typeof count === "number" && (
+        <Badge variant="secondary" className="text-[10px]">{count}</Badge>
+      )}
+    </button>
+  );
+}
+
 export default function MyTasksPage() {
   const { user, users } = useAuth();
-  const { getDepartmentName } = useDepartments();
+  const { departments } = useDepartments();
   const { cases } = useCases();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -259,6 +285,16 @@ export default function MyTasksPage() {
     caseId: "", assigneeId: "",
   });
   const [creating, setCreating] = useState(false);
+  // Collapsed group keys (dept:<id> / member:<id> / pool:<id>). Empty = all
+  // expanded by default; a key present means that group is collapsed.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const isOpen = (key: string) => !collapsed.has(key);
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
 
   const { data: tasks = [], isLoading } = useQuery<MyTaskItem[]>({
     queryKey: ["/api/my-tasks"],
@@ -268,10 +304,6 @@ export default function MyTasksPage() {
 
   const userName = (id: string): string =>
     users.find((u) => u.id === id)?.name || (id ? id : "غير مُسند");
-  const ownerDeptName = (id: string): string => {
-    const u = users.find((x) => x.id === id);
-    return u?.departmentId ? getDepartmentName(u.departmentId) : "بدون قسم";
-  };
 
   const isAdminSupport = user?.role === "admin_support";
   const isDeptHead = user?.role === "department_head";
@@ -410,15 +442,49 @@ export default function MyTasksPage() {
     arr.push(t);
     teamByMember.set(t.ownerId, arr);
   }
-  const teamByDept = new Map<string, Map<string, MyTaskItem[]>>();
-  for (const t of team) {
-    const dept = ownerDeptName(t.ownerId);
-    const members = teamByDept.get(dept) ?? new Map<string, MyTaskItem[]>();
-    const arr = members.get(t.ownerId) ?? [];
-    arr.push(t);
-    members.set(t.ownerId, arr);
-    teamByDept.set(dept, members);
-  }
+
+  // ----- Supervisory rosters (dept_head "team" + branch_manager firm view) -----
+  // Driven by the USER ROSTER, not just task-owners, so every member shows even
+  // with zero tasks ("لا يوجد") and never silently disappears (item 5). Members
+  // sorted by Arabic name; their tasks urgent-first via pinAndSort.
+  const activeUsers = users.filter((u) => u.isActive);
+  const isLawyerRole = (r: string) => r === "employee" || r === "department_head";
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, "ar");
+  const memberTasks = (id: string) => pinAndSort(teamByMember.get(id) ?? []);
+  const memberTaskCount = (id: string) => teamByMember.get(id)?.length ?? 0;
+
+  // admin_support has no department, so it gets a dedicated section (item 8).
+  const adminSupportMembers = activeUsers.filter((u) => u.role === "admin_support").sort(byName);
+  // Each department → its lawyer members (employee + department_head) (item 5).
+  const deptRoster = departments
+    .map((d) => ({ dept: d, members: activeUsers.filter((u) => isLawyerRole(u.role) && u.departmentId === d.id).sort(byName) }))
+    .filter((g) => g.members.length > 0);
+  // Owners that appear in team tasks but aren't covered by the rosters above
+  // (data drift / a non-lawyer non-admin_support owner) — surfaced under a
+  // fallback group so a task is NEVER hidden. "" (unassigned) is the pool below.
+  const rosterIds = new Set<string>([
+    ...adminSupportMembers.map((u) => u.id),
+    ...deptRoster.flatMap((g) => g.members.map((u) => u.id)),
+  ]);
+  const leftoverOwnerIds = Array.from(teamByMember.keys()).filter((id) => id !== "" && !rosterIds.has(id));
+  const unassignedPool = pinAndSort(teamByMember.get("") ?? []);
+
+  // One member row: collapsible header (name + task count), then the member's
+  // tasks or "لا يوجد" when they have none.
+  const renderMemberRow = (id: string, name: string) => {
+    const key = `member:${id}`;
+    const open = isOpen(key);
+    const items = memberTasks(id);
+    return (
+      <div key={id} className="space-y-2 ps-2">
+        <GroupHeader open={open} onToggle={() => toggle(key)} title={name} count={items.length}
+          titleClass="text-xs font-semibold text-muted-foreground" testId={`team-member-${id}`} />
+        {open && (items.length === 0
+          ? <p className="ps-6 text-xs text-muted-foreground">لا يوجد</p>
+          : <div className="space-y-2">{items.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>)}
+      </div>
+    );
+  };
 
   const currentMode = actionTask ? actionModeFor(actionTask)?.mode : undefined;
 
@@ -475,36 +541,86 @@ export default function MyTasksPage() {
             )}
           </section>
 
-          {isDeptHead && team.length > 0 && (
+          {/* dept_head — every member of THEIR department (item 5), each
+              member's list collapsible (item 6). */}
+          {isDeptHead && (
             <section className="space-y-3" data-testid="section-team">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" /> مهام الفريق
               </h2>
-              {Array.from(teamByMember.entries()).map(([ownerId, items]) => (
-                <div key={ownerId} className="space-y-2">
-                  <h3 className="text-xs font-semibold"><BidiText>{userName(ownerId)}</BidiText></h3>
-                  <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
+              {activeUsers
+                .filter((u) => isLawyerRole(u.role) && !!user?.departmentId && u.departmentId === user.departmentId)
+                .sort(byName)
+                .map((u) => renderMemberRow(u.id, u.name))}
+              {leftoverOwnerIds.map((id) => renderMemberRow(id, userName(id)))}
+              {unassignedPool.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold text-muted-foreground">مهام غير مُسندة</h3>
+                  <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
                 </div>
-              ))}
+              )}
             </section>
           )}
 
-          {isBranchManager && team.length > 0 && (
+          {/* branch_manager — firm-wide: department→member tree (collapsible at
+              both levels, item 6), a dedicated admin_support section (item 8,
+              also where turki/item 3 lands), every member shown even at zero
+              tasks (item 5), and the unassigned pool to assign from (item 2). */}
+          {isBranchManager && (
             <section className="space-y-4" data-testid="section-firm">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" /> مهام الفرع (حسب القسم)
               </h2>
-              {Array.from(teamByDept.entries()).map(([dept, members]) => (
-                <div key={dept} className="space-y-2 rounded-md border p-3">
-                  <h3 className="text-sm font-bold">{dept}</h3>
-                  {Array.from(members.entries()).map(([ownerId, items]) => (
-                    <div key={ownerId} className="space-y-2 ps-2">
-                      <h4 className="text-xs font-semibold text-muted-foreground"><BidiText>{userName(ownerId)}</BidiText></h4>
-                      <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
-                    </div>
-                  ))}
-                </div>
-              ))}
+              {deptRoster.map(({ dept, members }) => {
+                const key = `dept:${dept.id}`;
+                const open = isOpen(key);
+                const count = members.reduce((n, u) => n + memberTaskCount(u.id), 0);
+                return (
+                  <div key={dept.id} className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title={dept.name} count={count}
+                      titleClass="text-sm font-bold" testId={`team-dept-${dept.id}`} />
+                    {open && members.map((u) => renderMemberRow(u.id, u.name))}
+                  </div>
+                );
+              })}
+
+              {adminSupportMembers.length > 0 && (() => {
+                const key = "dept:admin_support";
+                const open = isOpen(key);
+                const count = adminSupportMembers.reduce((n, u) => n + memberTaskCount(u.id), 0);
+                return (
+                  <div className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title="قسم الدعم الإداري" count={count}
+                      titleClass="text-sm font-bold" testId="team-dept-admin-support" />
+                    {open && adminSupportMembers.map((u) => renderMemberRow(u.id, u.name))}
+                  </div>
+                );
+              })()}
+
+              {leftoverOwnerIds.length > 0 && (() => {
+                const key = "dept:other";
+                const open = isOpen(key);
+                const count = leftoverOwnerIds.reduce((n, id) => n + memberTaskCount(id), 0);
+                return (
+                  <div className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title="أعضاء آخرون" count={count}
+                      titleClass="text-sm font-bold" testId="team-dept-other" />
+                    {open && leftoverOwnerIds.map((id) => renderMemberRow(id, userName(id)))}
+                  </div>
+                );
+              })()}
+
+              {unassignedPool.length > 0 && (() => {
+                const key = "pool:unassigned";
+                const open = isOpen(key);
+                return (
+                  <div className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title="مهام غير مُسندة" count={unassignedPool.length}
+                      titleClass="text-sm font-bold" testId="team-pool-unassigned" />
+                    {open && <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>}
+                  </div>
+                );
+              })()}
             </section>
           )}
         </>
