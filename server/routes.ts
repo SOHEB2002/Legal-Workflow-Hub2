@@ -7943,7 +7943,22 @@ export async function registerRoutes(
         const parentConsultation = await storage.getConsultationById(existingTask.consultationId);
         canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
       }
-      if (existingTask.assignedTo !== user.id && !canModifyParent) {
+      // Flag 1 — a manager (branch_manager / admin_support) may ASSIGN an
+      // UNASSIGNED ("" assignee) task even when it has no parent case/
+      // consultation (the parentless unassigned pool surfaced in مهامي, e.g.
+      // ft_7). Narrow: only when the task is currently unassigned AND this PATCH
+      // sets a non-empty assignee. Delegation-aware via actingIdentitiesFor
+      // (mirrors the cases-transfer manager check), so an all_cases delegate
+      // standing in for a manager qualifies too.
+      const managerIdentities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, existingTask.caseId ?? null)
+        : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
+      const actsAsManager = managerIdentities.some((i) => i.role === "branch_manager" || i.role === "admin_support");
+      const isUnassignedAssign =
+        existingTask.assignedTo === "" &&
+        typeof req.body.assignedTo === "string" && req.body.assignedTo.length > 0 &&
+        actsAsManager;
+      if (existingTask.assignedTo !== user.id && !canModifyParent && !isUnassignedAssign) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       if (req.body.assignedTo) {

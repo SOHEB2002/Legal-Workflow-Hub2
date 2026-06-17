@@ -73,6 +73,16 @@ const ACTION_LABEL: Record<MyTaskActionHint, string> = {
   follow_up: "متابعة", verify: "تحقق", close: "إغلاق",
 };
 
+// Per-kind button-label override (takes precedence over ACTION_LABEL[actionHint]).
+// Used where a kind needs a more specific verb than its generic hint and that
+// hint is shared by other kinds — e.g. data_completion uses the "complete" hint
+// (shared with field_task/collection/legal_deadline) but is really a "تم
+// التواصل" acknowledgement, and session_report_export confirms the export.
+const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
+  [MyTaskKind.SESSION_REPORT_EXPORT]: "تأكيد التصدير",
+  [MyTaskKind.DATA_COMPLETION]: "تم التواصل",
+};
+
 // Pinned to the top under the "المستعجلة" (urgent) heading: hearings (+ their
 // actions: report/agency) and unassigned case-assignment tasks. The internal
 // "pinned" naming is the pin-to-top mechanism; the user-facing label is urgent.
@@ -225,7 +235,7 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
         onClick={() => actionable && onAction(task)}
         data-testid={`task-action-${task.id}`}
       >
-        {ACTION_LABEL[task.actionHint] ?? "إجراء"}
+        {KIND_ACTION_LABEL[task.kind] ?? ACTION_LABEL[task.actionHint] ?? "إجراء"}
       </Button>
     </div>
   );
