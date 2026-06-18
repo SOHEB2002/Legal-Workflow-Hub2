@@ -4961,6 +4961,7 @@ export const MyTaskKind = {
   COLLECTION: "collection",               // collection (تحصيل) field task, incl. unassigned ""
   LEGAL_DEADLINE: "legal_deadline",       // approaching/overdue legal deadline
   FIELD_TASK: "field_task",               // assigned field task
+  GENERAL_TASK: "general_task",           // manually-created general (عام) task, incl. unassigned ""
   CONTACT_FOLLOWUP: "contact_followup",   // contact follow-up due
   DELEGATION_APPROVAL: "delegation_approval", // pending delegation approval (dept_head)
   CONSULTATION_CLOSING: "consultation_closing", // consultation ready to close (admin_support)

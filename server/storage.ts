@@ -8,7 +8,7 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
-  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, taskSpecialtyClass,
+  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, taskSpecialtyClass,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -3030,7 +3030,7 @@ export class DatabaseStorage implements IStorage {
     {
       const ftActionable = sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`;
       const cols = { id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title,
-        assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate };
+        assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate, taskType: fieldTasks.taskType };
       const rows = firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(ftActionable)
         : deptHeadScoped
@@ -3044,10 +3044,14 @@ export class DatabaseStorage implements IStorage {
         : [];
       for (const r of [...rows, ...unassigned]) {
         const isCollection = r.title.startsWith("إعداد خطاب تحصيل");
+        // Manually-created general tasks (taskType "عام") get their own kind so
+        // the feed labels/routes them distinctly from auto/field tasks. Auto
+        // field + collection tasks are never type "عام", so they are unaffected.
+        const isGeneral = !isCollection && r.taskType === FieldTaskType.GENERAL;
         const ownerId = r.assignedTo || "";
         tasks.push({
-          id: `${isCollection ? "collection" : "field_task"}:${r.id}`,
-          kind: isCollection ? MyTaskKind.COLLECTION : MyTaskKind.FIELD_TASK,
+          id: `${isCollection ? "collection" : isGeneral ? "general_task" : "field_task"}:${r.id}`,
+          kind: isCollection ? MyTaskKind.COLLECTION : isGeneral ? MyTaskKind.GENERAL_TASK : MyTaskKind.FIELD_TASK,
           title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
           ownerId, ownerScope: scopeOf(ownerId),
           // Unassigned pool ("" assignee, surfaced to managers): the action is to

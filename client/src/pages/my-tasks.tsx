@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,11 +13,14 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft,
+  ChevronDown, ChevronLeft, ListChecks, Search, X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useCases } from "@/lib/cases-context";
+import { useConsultations } from "@/lib/consultations-context";
+import { useContracts } from "@/lib/contracts-context";
+import { useClients } from "@/lib/clients-context";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
@@ -28,7 +31,7 @@ import { MemoAdvancePanel } from "@/components/memo-advance-panel";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
-  MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, InternalReviewDecision,
+  MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
 } from "@shared/schema";
 
@@ -58,6 +61,7 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   collection: { icon: FileSignature, label: "خطاب تحصيل" },
   legal_deadline: { icon: CalendarClock, label: "موعد قانوني" },
   field_task: { icon: ClipboardList, label: "مهمة ميدانية" },
+  general_task: { icon: ListChecks, label: "مهمة عامة" },
   contact_followup: { icon: Phone, label: "متابعة عميل" },
   delegation_approval: { icon: Stamp, label: "اعتماد تفويض" },
   consultation_closing: { icon: CheckSquare, label: "إغلاق استشارة" },
@@ -72,6 +76,120 @@ const ACTION_LABEL: Record<MyTaskActionHint, string> = {
   export: "تصدير", approve: "اعتماد", record: "تسجيل", complete: "إكمال",
   follow_up: "متابعة", verify: "تحقق", close: "إغلاق",
 };
+
+// ----- General-task optional entity link -----
+// A manually-created general (عام) task may optionally be linked to ONE of a
+// case / consultation / contract / client (or none = free-standing). The picker
+// reuses the existing entity context lists (no new fetchers) and writes the id
+// into the matching field (caseId / consultationId / contractId / clientId).
+type LinkType = "none" | "case" | "consultation" | "contract" | "client";
+const LINK_TYPE_LABELS: Record<LinkType, string> = {
+  none: "بدون ربط", case: "قضية", consultation: "استشارة", contract: "عقد", client: "عميل",
+};
+
+function EntityLinkPicker({
+  linkType, linkId, onChange,
+}: {
+  linkType: LinkType;
+  linkId: string;
+  onChange: (linkType: LinkType, linkId: string) => void;
+}) {
+  const { cases } = useCases();
+  const { consultations } = useConsultations();
+  const { contracts } = useContracts();
+  const { clients, getClientName } = useClients();
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  // Candidate {id,label,sublabel} list for the active link type, drawn from the
+  // already-loaded context lists (search by number/name + the secondary field).
+  const options: { id: string; label: string; sublabel: string }[] =
+    linkType === "case"
+      ? cases.map((c) => ({ id: c.id, label: c.caseNumber, sublabel: getClientName(c.clientId) }))
+      : linkType === "consultation"
+      ? consultations.map((c) => ({ id: c.id, label: c.consultationNumber, sublabel: getClientName(c.clientId) }))
+      : linkType === "contract"
+      ? contracts.map((c) => ({ id: c.id, label: c.contractNumber, sublabel: c.title }))
+      : linkType === "client"
+      ? clients.map((c) => ({ id: c.id, label: getClientName(c.id), sublabel: c.phone || "" }))
+      : [];
+
+  const q = search.trim().toLowerCase();
+  const filtered = (q
+    ? options.filter((o) => o.label.toLowerCase().includes(q) || o.sublabel.toLowerCase().includes(q))
+    : options
+  ).slice(0, 50);
+  const selectedLabel = linkId ? options.find((o) => o.id === linkId)?.label ?? "" : "";
+
+  return (
+    <div className="space-y-2">
+      <Label>ربط بكيان (اختياري)</Label>
+      <div className="grid grid-cols-2 gap-3">
+        <Select
+          value={linkType}
+          onValueChange={(v) => { onChange(v as LinkType, ""); setSearch(""); }}
+        >
+          <SelectTrigger data-testid="select-link-type"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {(Object.keys(LINK_TYPE_LABELS) as LinkType[]).map((t) => (
+              <SelectItem key={t} value={t}>{LINK_TYPE_LABELS[t]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {linkType !== "none" && (
+          <div ref={wrapperRef} className="relative">
+            <div className="relative">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              <Input
+                data-testid="input-link-search"
+                value={open || !selectedLabel ? search : selectedLabel}
+                onChange={(e) => { setSearch(e.target.value); setOpen(true); if (linkId) onChange(linkType, ""); }}
+                onFocus={() => setOpen(true)}
+                placeholder={`ابحث عن ${LINK_TYPE_LABELS[linkType]}…`}
+                className="pr-9 pl-8"
+              />
+              {linkId && (
+                <button
+                  type="button"
+                  onClick={() => { onChange(linkType, ""); setSearch(""); }}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  data-testid="button-clear-link"
+                ><X className="w-4 h-4" /></button>
+              )}
+            </div>
+            {open && (
+              <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-md max-h-[200px] overflow-y-auto">
+                {filtered.length > 0 ? filtered.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    data-testid={`option-link-${o.id}`}
+                    className="w-full text-right px-3 py-2 text-sm hover-elevate cursor-pointer flex items-center justify-between gap-2"
+                    onClick={() => { onChange(linkType, o.id); setSearch(""); setOpen(false); }}
+                  >
+                    <span>{o.label}</span>
+                    {o.sublabel && <span className="text-muted-foreground text-xs">{o.sublabel}</span>}
+                  </button>
+                )) : (
+                  <div className="px-3 py-2 text-sm text-muted-foreground text-center">لا توجد نتائج</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // Per-kind button-label override (takes precedence over ACTION_LABEL[actionHint]).
 // Used where a kind needs a more specific verb than its generic hint and that
@@ -125,6 +243,9 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
     case MyTaskKind.LEGAL_DEADLINE: return { mode: "confirm", title: "إنجاز الموعد القانوني" };
     case MyTaskKind.FIELD_TASK:
     case MyTaskKind.COLLECTION:
+    // General (عام) tasks share the basic complete/assign action for now; the
+    // complete-with-result → return-to-requester lifecycle lands in sub-step 3.
+    case MyTaskKind.GENERAL_TASK:
       // Unassigned pool item (server sends actionHint:"assign") → assign it;
       // an assigned task → complete it.
       return task.ownerId
@@ -172,6 +293,7 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
     case MyTaskKind.LEGAL_DEADLINE: return { method: "PATCH", url: `/api/legal-deadlines/${e}`, body: { status: "مكتمل" } };
     case MyTaskKind.FIELD_TASK:
     case MyTaskKind.COLLECTION:
+    case MyTaskKind.GENERAL_TASK:
       // Unassigned pool → assign (set assignedTo); otherwise complete the task.
       return task.ownerId
         ? { method: "PATCH", url: `/api/field-tasks/${e}`, body: {
@@ -280,7 +402,6 @@ function GroupHeader({ open, onToggle, title, count, titleClass, testId }: {
 export default function MyTasksPage() {
   const { user, users } = useAuth();
   const { departments } = useDepartments();
-  const { cases } = useCases();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [specialtyFilter, setSpecialtyFilter] = useState<"all" | TaskSpecialtyValue>("all");
@@ -300,7 +421,7 @@ export default function MyTasksPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({
     title: "", description: "", dueDate: "", priority: "متوسط",
-    caseId: "", assigneeId: "",
+    linkType: "none" as LinkType, linkId: "", assigneeId: "",
   });
   const [creating, setCreating] = useState(false);
   // Collapsed group keys (dept:<id> / member:<id> / pool:<id>). Empty = all
@@ -421,21 +542,28 @@ export default function MyTasksPage() {
     }
     setCreating(true);
     try {
-      // Reuse the existing field-task create endpoint + its assignment logic.
-      // Default assignee = self; managers/dept_head may pick someone else.
+      // Manually-created tasks are GENERAL (عام) tasks. Reuse the existing
+      // field-task create endpoint + its assignment logic (default assignee =
+      // self; managers/dept_head may pick someone else). The optional entity
+      // link writes into exactly ONE of caseId/consultationId/contractId/
+      // clientId per the chosen link type; the rest stay null.
+      const { linkType, linkId } = createForm;
       await apiRequest("POST", "/api/field-tasks", {
         title: createForm.title,
         description: createForm.description,
-        taskType: "أخرى",
+        taskType: FieldTaskType.GENERAL,
         priority: createForm.priority,
         dueDate: createForm.dueDate,
-        caseId: createForm.caseId || null,
+        caseId: linkType === "case" ? linkId || null : null,
+        consultationId: linkType === "consultation" ? linkId || null : null,
+        contractId: linkType === "contract" ? linkId || null : null,
+        clientId: linkType === "client" ? linkId || null : null,
         assignedTo: (canAssignToOthers && createForm.assigneeId) ? createForm.assigneeId : user?.id,
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/my-tasks"] });
       toast({ title: "تمت إضافة المهمة" });
       setShowCreate(false);
-      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", caseId: "", assigneeId: "" });
+      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", linkType: "none", linkId: "", assigneeId: "" });
     } catch (err) {
       toast({ title: "تعذّرت إضافة المهمة", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -803,14 +931,11 @@ export default function MyTasksPage() {
                   </SelectContent>
                 </Select></div>
             </div>
-            <div className="space-y-1"><Label>ربط بقضية (اختياري)</Label>
-              <Select value={createForm.caseId || "none"} onValueChange={(v) => setCreateForm({ ...createForm, caseId: v === "none" ? "" : v })}>
-                <SelectTrigger data-testid="select-create-case"><SelectValue placeholder="بدون قضية" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">بدون قضية</SelectItem>
-                  {cases.slice(0, 200).map((c) => (<SelectItem key={c.id} value={c.id}>{c.caseNumber}</SelectItem>))}
-                </SelectContent>
-              </Select></div>
+            <EntityLinkPicker
+              linkType={createForm.linkType}
+              linkId={createForm.linkId}
+              onChange={(linkType, linkId) => setCreateForm({ ...createForm, linkType, linkId })}
+            />
             {canAssignToOthers && (
               <div className="space-y-1"><Label>إسناد إلى (افتراضياً أنت)</Label>
                 <Select value={createForm.assigneeId || "self"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "self" ? "" : v })}>
