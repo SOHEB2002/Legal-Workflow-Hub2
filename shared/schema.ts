@@ -542,6 +542,15 @@ export const fieldTasks = pgTable("field_tasks", {
   taskType: varchar("task_type", { length: 50 }).notNull(),
   caseId: varchar("case_id", { length: 255 }),
   consultationId: varchar("consultation_id", { length: 255 }),
+  // Optional entity links for general (عام) tasks (additive, nullable) — a
+  // general task may be linked to a contract or a client as well as / instead
+  // of a case/consultation. Auto/field tasks leave these null.
+  contractId: varchar("contract_id", { length: 255 }),
+  clientId: varchar("client_id", { length: 255 }),
+  // Review note attached when a general (عام) task is sent for / returned from
+  // review (AWAITING_REVIEW lifecycle, wired in later sub-steps). Additive,
+  // defaults to "" — auto/field tasks never set it.
+  reviewNote: text("review_note").default(""),
   assignedTo: varchar("assigned_to", { length: 255 }).notNull(),
   assignedBy: varchar("assigned_by", { length: 255 }).notNull(),
   status: varchar("status", { length: 50 }).notNull(),
@@ -1954,6 +1963,7 @@ export const FieldTaskStatus = {
   IN_PROGRESS: "قيد_التنفيذ",
   COMPLETED: "مكتمل",
   CANCELLED: "ملغي",
+  AWAITING_REVIEW: "بانتظار_الاطلاع",
 } as const;
 
 export type FieldTaskStatusValue = typeof FieldTaskStatus[keyof typeof FieldTaskStatus];
@@ -1963,6 +1973,7 @@ export const FieldTaskStatusLabels: Record<FieldTaskStatusValue, string> = {
   "قيد_التنفيذ": "قيد التنفيذ",
   "مكتمل": "مكتمل",
   "ملغي": "ملغي",
+  "بانتظار_الاطلاع": "بانتظار الاطلاع",
 };
 
 // ==================== أنواع المهام الميدانية ====================
@@ -1972,6 +1983,7 @@ export const FieldTaskType = {
   CLIENT_VISIT: "زيارة_عميل",
   COURT_FOLLOW_UP: "متابعة_محكمة",
   OTHER: "أخرى",
+  GENERAL: "عام",
 } as const;
 
 export type FieldTaskTypeValue = typeof FieldTaskType[keyof typeof FieldTaskType];
@@ -1982,6 +1994,7 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
   "زيارة_عميل": "زيارة عميل",
   "متابعة_محكمة": "متابعة محكمة",
   "أخرى": "أخرى",
+  "عام": "مهمة عامة",
 };
 
 // ==================== تخصص المهام (Task-routing specialty) ====================
@@ -2927,6 +2940,9 @@ export interface FieldTask {
   taskType: FieldTaskTypeValue;
   caseId: string | null;
   consultationId: string | null;
+  contractId: string | null;
+  clientId: string | null;
+  reviewNote: string;
   assignedTo: string;
   assignedBy: string;
   status: FieldTaskStatusValue;
@@ -3280,9 +3296,11 @@ export type HearingReportInput = z.infer<typeof hearingReportSchema>;
 export const insertFieldTaskSchema = z.object({
   title: z.string().min(1, "عنوان المهمة مطلوب"),
   description: z.string().optional().default(""),
-  taskType: z.enum(["مراجعة_ميدانية", "تسليم_مستندات", "زيارة_عميل", "متابعة_محكمة", "أخرى"]),
+  taskType: z.enum(["مراجعة_ميدانية", "تسليم_مستندات", "زيارة_عميل", "متابعة_محكمة", "أخرى", "عام"]),
   caseId: z.string().nullable().optional(),
   consultationId: z.string().nullable().optional(),
+  contractId: z.string().nullable().optional(),
+  clientId: z.string().nullable().optional(),
   assignedTo: z.string().min(1, "الموظف المكلف مطلوب"),
   priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).default("متوسط"),
   dueDate: z.string().min(1, "تاريخ الاستحقاق مطلوب"),
@@ -4125,6 +4143,8 @@ export const updateFieldTaskSchema = z.object({
   taskType: z.string().optional(),
   caseId: z.string().nullable().optional(),
   consultationId: z.string().nullable().optional(),
+  contractId: z.string().nullable().optional(),
+  clientId: z.string().nullable().optional(),
   assignedTo: z.string().optional(),
   assignedBy: z.string().optional(),
   status: z.string().optional(),
@@ -4135,6 +4155,7 @@ export const updateFieldTaskSchema = z.object({
   completionNotes: z.string().optional(),
   proofDescription: z.string().optional(),
   proofFileLink: z.string().optional(),
+  reviewNote: z.string().optional(),
 }).passthrough();
 
 // Mirrors the legal_deadlines columns (status is the only field the FE
