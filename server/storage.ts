@@ -1730,6 +1730,17 @@ export class DatabaseStorage implements IStorage {
     };
     
     await db.insert(fieldTasks).values(newTask);
+    // TEMP DIAGNOSTIC (general-task original_requester_id bug — remove once the
+    // stale-process question is settled). Fires only for عام tasks; prints what
+    // was handed to the INSERT so the live server console is decisive:
+    //   • line appears with originalRequesterId=<id> → THIS code is running and
+    //     wrote the value; if the DB row is still null, it's a drizzle mapping
+    //     problem (it isn't — the column is declared on the pgTable).
+    //   • line does NOT appear on a fresh عام create → the process is stale (old
+    //     code) or you're hitting a different deployment.
+    if (newTask.taskType === FieldTaskType.GENERAL) {
+      console.log(`[createFieldTask][DIAG] عام task ${id} originalRequesterId=${JSON.stringify(newTask.originalRequesterId)} assignedBy=${JSON.stringify(assignedBy)}`);
+    }
     return mapDbFieldTask(newTask);
   }
 
