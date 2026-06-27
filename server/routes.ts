@@ -7989,10 +7989,17 @@ export async function registerRoutes(
         existingTask.status !== FieldTaskStatus.COMPLETED;
       if (isGeneralComplete) {
         const worker = user.id;
+        // Robust to a missing return address: fall back to assignedBy (the
+        // creator), exactly like the /review endpoint's legacy fallback, so the
+        // self-assign skip compares worker === (originalRequesterId ?? assignedBy)
+        // — never a raw null (a null requester must NEVER make a non-self task
+        // close without review). Also HEAL the row by persisting the resolved
+        // requester so a legacy/edge null can't recur on this task.
         const requester = existingTask.originalRequesterId || existingTask.assignedBy;
+        const heal = existingTask.originalRequesterId ? {} : { originalRequesterId: requester };
         updatePayload = worker === requester
-          ? { ...req.body, workerId: worker } // self-assigned → close normally
-          : { ...req.body, status: FieldTaskStatus.AWAITING_REVIEW, assignedTo: requester, workerId: worker };
+          ? { ...req.body, ...heal, workerId: worker } // self-assigned → close normally
+          : { ...req.body, ...heal, status: FieldTaskStatus.AWAITING_REVIEW, assignedTo: requester, workerId: worker };
       }
 
       const updated = await storage.updateFieldTask(String(req.params.id), updatePayload);
