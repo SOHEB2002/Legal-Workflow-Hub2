@@ -4088,6 +4088,14 @@ export const workflowNotesSchema = z.object({
   notes: z.string().optional(),
 }).passthrough();
 
+// Sub-step 4 — general (عام) task requester-review body. decision is
+// "تم_الاطلاع" (close) or "ملاحظة" (send back); reviewNote required only for the
+// send-back (enforced in the handler, not here — tolerant gate per 2D').
+export const generalTaskReviewSchema = z.object({
+  decision: z.string().optional(),
+  reviewNote: z.string().optional(),
+}).passthrough();
+
 // ---- 2D' V2a — cases/consultations non-workflow Tier-2 bodies ----
 
 export const updateCaseTaradiSchema = z.object({

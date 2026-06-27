@@ -11,6 +11,10 @@ import {
   extendConsultationDeliverySchema,
   insertHearingSchema,
   insertFieldTaskSchema,
+  generalTaskReviewSchema,
+  FieldTaskStatus,
+  FieldTaskType,
+  type FieldTask,
   TaskSpecialty,
   type TaskSpecialtyValue,
   insertAttachmentSchema,
@@ -7968,7 +7972,30 @@ export async function registerRoutes(
         }
       }
 
-      const updated = await storage.updateFieldTask(String(req.params.id), req.body);
+      // Sub-step 4 — general (عام) complete-with-result. A finished general task
+      // does NOT close directly: it returns to its ORIGINAL requester for review
+      // (بانتظار_الاطلاع), flipping assignedTo → originalRequesterId and stamping
+      // workerId = the worker. EXCEPTION: a self-assigned task (the worker IS the
+      // requester) has nothing to review → it closes normally (مكتمل). Guarded on
+      // taskType === عام, so non-general field/auto/collection tasks keep their
+      // exact current complete→مكتمل behavior. (The dept-routed path-2 branch —
+      // member→dept_head approval — lands in sub-step 7; routedDepartmentId is
+      // null on every general task until then, so only this person-direct branch
+      // is reachable now.)
+      let updatePayload: Partial<FieldTask> = req.body;
+      const isGeneralComplete =
+        existingTask.taskType === FieldTaskType.GENERAL &&
+        req.body.status === FieldTaskStatus.COMPLETED &&
+        existingTask.status !== FieldTaskStatus.COMPLETED;
+      if (isGeneralComplete) {
+        const worker = user.id;
+        const requester = existingTask.originalRequesterId || existingTask.assignedBy;
+        updatePayload = worker === requester
+          ? { ...req.body, workerId: worker } // self-assigned → close normally
+          : { ...req.body, status: FieldTaskStatus.AWAITING_REVIEW, assignedTo: requester, workerId: worker };
+      }
+
+      const updated = await storage.updateFieldTask(String(req.params.id), updatePayload);
       if (!updated) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
       }
@@ -7999,6 +8026,67 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث المهمة" });
+    }
+  });
+
+  // Sub-step 4 — PATH-1 requester review of a returned general (عام) task.
+  // A worker's completed result lands in بانتظار_الاطلاع assigned to the ORIGINAL
+  // requester (see the PATCH general-complete branch above). Only that requester
+  // — or a delegate acting on their behalf — may act. Two decisions:
+  //   • تم_الاطلاع (close) → مكتمل (terminal; completedAt stamped in storage).
+  //   • ملاحظة (send back) → قيد_الانتظار back to the worker (workerId), reviewNote
+  //     = the note (required). Mirrors the consultation/memo review endpoints.
+  app.post("/api/field-tasks/:id/review", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const bodyCheck = generalTaskReviewSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const decision = String(req.body?.decision || "");
+      const reviewNote = String(req.body?.reviewNote || "");
+
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (task.taskType !== FieldTaskType.GENERAL) {
+        return res.status(400).json({ error: "هذا الإجراء خاص بالمهام العامة فقط" });
+      }
+      if (task.status !== FieldTaskStatus.AWAITING_REVIEW) {
+        return res.status(400).json({ error: "المهمة ليست بانتظار الاطلاع" });
+      }
+      // Only the ORIGINAL requester (or a delegate standing in for them) may
+      // review. originalRequesterId is the write-once return address; a legacy
+      // general task created before it existed falls back to assignedBy.
+      const requester = task.originalRequesterId || task.assignedBy;
+      const actingIds = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, task.caseId ?? null).map((i) => i.userId)
+        : [user.id];
+      if (!actingIds.includes(requester)) {
+        return res.status(403).json({ error: "لا تملك صلاحية مراجعة هذه المهمة" });
+      }
+
+      if (decision === "تم_الاطلاع") {
+        // Close — completedAt is stamped in storage.updateFieldTask on the
+        // transition into مكتمل.
+        const updated = await storage.updateFieldTask(task.id, { status: FieldTaskStatus.COMPLETED });
+        return res.json(updated);
+      }
+      if (decision === "ملاحظة") {
+        if (!reviewNote.trim()) {
+          return res.status(400).json({ error: "الملاحظة مطلوبة عند الإعادة" });
+        }
+        // Send back to the worker who produced the result (workerId), not to the
+        // requester; the note rides along in reviewNote.
+        const updated = await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.PENDING,
+          assignedTo: task.workerId || task.assignedTo,
+          reviewNote,
+        });
+        return res.json(updated);
+      }
+      return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في مراجعة المهمة" });
     }
   });
 

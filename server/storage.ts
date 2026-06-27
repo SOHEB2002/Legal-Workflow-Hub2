@@ -3084,7 +3084,13 @@ export class DatabaseStorage implements IStorage {
           // Unassigned pool ("" assignee, surfaced to managers): the action is to
           // ASSIGN it (إسناد), not complete it — an unassigned task can't be
           // "completed". An assigned task keeps the complete (إكمال) action.
-          dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
+          // The بانتظار_* general states are waiting on a human (review/distribute/
+          // approve), not late → never overdue regardless of dueDate.
+          dueDate: r.dueDate || null,
+          isOverdue: r.status !== FieldTaskStatus.AWAITING_REVIEW
+            && r.status !== FieldTaskStatus.AWAITING_DISTRIBUTION
+            && r.status !== FieldTaskStatus.AWAITING_APPROVAL
+            && !!r.dueDate && r.dueDate < today,
           actionHint: isGeneral ? generalHint : (ownerId ? "complete" : "assign"),
         });
       }

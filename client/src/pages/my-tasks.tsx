@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
+import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useCases } from "@/lib/cases-context";
 import { useConsultations } from "@/lib/consultations-context";
 import { useContracts } from "@/lib/contracts-context";
@@ -235,7 +236,7 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 // are enforced server-side — we never duplicate that here). actionModeFor
 // returns the modal shape, or null for kinds PART 2 doesn't wire yet (those keep
 // a disabled placeholder; see the report's FLAGS).
-type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report";
+type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
   switch (task.kind) {
@@ -251,10 +252,14 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
     // complete-with-result → return-to-requester lifecycle lands in sub-step 3.
     case MyTaskKind.GENERAL_TASK:
       // Unassigned pool item (server sends actionHint:"assign") → assign it;
-      // an assigned task → complete it.
+      // an assigned task → complete it (write the result note on completion).
       return task.ownerId
         ? { mode: "complete", title: "إكمال المهمة" }
         : { mode: "assign", title: "إسناد المهمة لموظف" };
+    case MyTaskKind.GENERAL_TASK_REVIEW:
+      // The original requester reviews the returned result: تم الاطلاع (close) or
+      // ملاحظة (send back to the worker). The modal also shows the worker's result.
+      return { mode: "review", title: "مراجعة نتيجة المهمة" };
     case MyTaskKind.CONSULTATION_CLOSING: return { mode: "reason", title: "إغلاق الاستشارة" };
     case MyTaskKind.HEARING_REPORT: return { mode: "report", title: "تقرير الجلسة" };
     case MyTaskKind.CASE_UNASSIGNED: return { mode: "assign", title: "إسناد القضية لمحامٍ" };
@@ -305,6 +310,14 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
             proofDescription: form.proofDescription, proofFileLink: form.proofFileLink,
           } }
         : { method: "PATCH", url: `/api/field-tasks/${e}`, body: { assignedTo: form.assigneeId } };
+    case MyTaskKind.GENERAL_TASK_REVIEW:
+      // تم الاطلاع (close) is the default; ملاحظة (send back) requires a note.
+      // form.decision carries "ملاحظة" only when the user picks it (leftover
+      // decision values from other modes coerce to close).
+      return { method: "POST", url: `/api/field-tasks/${e}/review`, body: {
+        decision: form.decision === "ملاحظة" ? "ملاحظة" : "تم_الاطلاع",
+        reviewNote: form.notes,
+      } };
     case MyTaskKind.CONSULTATION_CLOSING: return { method: "POST", url: `/api/consultations/${e}/early-close`, body: { reason: form.reason } };
     case MyTaskKind.HEARING_REPORT:
       return { method: "POST", url: `/api/hearings/${e}/report`, body: {
@@ -406,6 +419,10 @@ function GroupHeader({ open, onToggle, title, count, titleClass, testId }: {
 export default function MyTasksPage() {
   const { user, users } = useAuth();
   const { departments } = useDepartments();
+  // For the GENERAL_TASK_REVIEW modal — the worker's result (completionNotes) +
+  // workerId live on the full field task, not the feed item; the field-tasks
+  // context already has it loaded app-wide (the requester is assignedTo/assignedBy).
+  const { getTaskById } = useFieldTasks();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [specialtyFilter, setSpecialtyFilter] = useState<"all" | TaskSpecialtyValue>("all");
@@ -526,6 +543,9 @@ export default function MyTasksPage() {
     if (mode === "decision" && form.decision === InternalReviewDecision.NEEDS_NOTES && !form.notes.trim()) {
       toast({ title: "الملاحظات مطلوبة عند الإرجاع", variant: "destructive" }); return;
     }
+    if (mode === "review" && form.decision === "ملاحظة" && !form.notes.trim()) {
+      toast({ title: "الملاحظة مطلوبة عند الإعادة", variant: "destructive" }); return;
+    }
     setSubmitting(true);
     try {
       const { method, url, body } = buildActionRequest(actionTask, form);
@@ -641,6 +661,9 @@ export default function MyTasksPage() {
   };
 
   const currentMode = actionTask ? actionModeFor(actionTask)?.mode : undefined;
+  // The full field task behind a GENERAL_TASK_REVIEW item (carries the worker's
+  // result + workerId, which the feed item does not).
+  const reviewTask = actionTask && currentMode === "review" ? getTaskById(actionTask.entityId) : undefined;
 
   return (
     <div dir="rtl" className="p-4 md:p-6 space-y-6" data-testid="page-my-tasks">
@@ -868,6 +891,33 @@ export default function MyTasksPage() {
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent><SelectItem value="yes">نعم</SelectItem><SelectItem value="no">لا</SelectItem></SelectContent>
                     </Select></div>
+                </>
+              )}
+
+              {currentMode === "review" && (
+                <>
+                  <div className="space-y-1"><Label>نتيجة المنفّذ</Label>
+                    <div className="rounded-md border p-2 text-sm bg-muted/30 whitespace-pre-wrap" data-testid="text-worker-result">
+                      <BidiText>{reviewTask?.completionNotes?.trim() || "—"}</BidiText></div>
+                    {reviewTask?.workerId && (
+                      <p className="text-xs text-muted-foreground">النتيجة من: {users.find((u) => u.id === reviewTask.workerId)?.name || reviewTask.workerId}</p>
+                    )}
+                    {reviewTask?.proofFileLink?.trim() && (
+                      <p className="text-xs text-muted-foreground">رابط الإثبات: <BidiText>{reviewTask.proofFileLink}</BidiText></p>
+                    )}
+                  </div>
+                  <div className="space-y-1"><Label>القرار</Label>
+                    <Select value={form.decision === "ملاحظة" ? "ملاحظة" : "تم_الاطلاع"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                      <SelectTrigger data-testid="select-review-decision"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="تم_الاطلاع">تم الاطلاع (إغلاق)</SelectItem>
+                        <SelectItem value="ملاحظة">ملاحظة (إعادة للمنفّذ)</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                  {form.decision === "ملاحظة" && (
+                    <div className="space-y-1"><Label>الملاحظة (مطلوبة)</Label>
+                      <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-review-note" /></div>
+                  )}
                 </>
               )}
 
