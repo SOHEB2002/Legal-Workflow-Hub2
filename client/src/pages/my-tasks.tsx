@@ -29,6 +29,7 @@ import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { CaseStagePanel } from "@/components/case-stage-panel";
 import { MemoAdvancePanel } from "@/components/memo-advance-panel";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
@@ -921,7 +922,7 @@ export default function MyTasksPage() {
               <Textarea value={createForm.description} onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1"><Label>تاريخ الاستحقاق</Label>
-                <Input type="date" value={createForm.dueDate} onChange={(e) => setCreateForm({ ...createForm, dueDate: e.target.value })} data-testid="input-create-due" /></div>
+                <HijriDatePicker value={createForm.dueDate} onChange={(v) => setCreateForm({ ...createForm, dueDate: v })} data-testid="input-create-due" /></div>
               <div className="space-y-1"><Label>الأولوية</Label>
                 <Select value={createForm.priority} onValueChange={(v) => setCreateForm({ ...createForm, priority: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
