@@ -582,6 +582,32 @@ export const fieldTasks = pgTable("field_tasks", {
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
+// Sub-step 4.6 — general (عام) task activity thread (سجل الأخذ والعطا). One row
+// per lifecycle event so the full back-and-forth survives: completionNotes /
+// reviewNote OVERWRITE each cycle, this table ACCUMULATES. Keyed to the
+// field_task; only general tasks ever write events. event_type is a free varchar
+// (extensible) — path-2 توزيع/اعتماد add later with NO schema change. actor_name
+// is denormalized (like case_activity_log.user_name) so the FE needs no lookup.
+export const generalTaskEvents = pgTable("general_task_events", {
+  id:          varchar("id", { length: 255 }).primaryKey(),
+  fieldTaskId: varchar("field_task_id", { length: 255 }).notNull(),
+  actorId:     varchar("actor_id", { length: 255 }),
+  actorName:   varchar("actor_name", { length: 255 }),
+  eventType:   varchar("event_type", { length: 50 }).notNull(),
+  body:        text("body"),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  taskIdx:    index("general_task_events_task_idx").on(t.fieldTaskId),
+  createdIdx: index("general_task_events_created_at_idx").on(t.createdAt),
+  // FK mirrors memo_activity_log (cascade) — uncommented here, created with the
+  // table on dev via the Replit-Shell SQL (db:push is unavailable locally).
+  taskFk: foreignKey({
+    name: "general_task_events_field_task_id_fkey",
+    columns: [t.fieldTaskId],
+    foreignColumns: [fieldTasks.id],
+  }).onDelete("cascade"),
+}));
+
 export const contactLogs = pgTable("contact_logs", {
   id: varchar("id", { length: 255 }).primaryKey(),
   clientId: varchar("client_id", { length: 255 }).notNull(),
@@ -2011,6 +2037,24 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
   "عام": "مهمة عامة",
 };
 
+// ==================== أحداث المهام العامة (general-task activity thread) ====================
+// Extensible event types for the general (عام) task الأخذ والعطا thread. Path-2
+// (sub-step 7/8) adds DISTRIBUTED "توزيع" / APPROVED "اعتماد" here with no schema
+// change (event_type is a free varchar on the row).
+export const GeneralTaskEventType = {
+  RESULT_SUBMITTED:   "إنجاز",      // worker submitted a result
+  RETURNED_WITH_NOTE: "ملاحظة",     // requester sent it back with a note
+  REVIEWED_CLOSED:    "تم_الاطلاع", // requester closed it (no text)
+} as const;
+
+export type GeneralTaskEventTypeValue = typeof GeneralTaskEventType[keyof typeof GeneralTaskEventType];
+
+export const GeneralTaskEventTypeLabels: Record<GeneralTaskEventTypeValue, string> = {
+  "إنجاز": "إنجاز",
+  "ملاحظة": "ملاحظة",
+  "تم_الاطلاع": "تم الاطلاع",
+};
+
 // ==================== تخصص المهام (Task-routing specialty) ====================
 // Primary work-class buckets used to route auto-created admin_support tasks to
 // the right specialist (the 4 admin_support staff have different specialties).
@@ -2971,6 +3015,19 @@ export interface FieldTask {
   proofFileLink: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// One general-task thread event (read shape). eventType is a plain string for
+// read-extensibility (mirrors MemoActivity.activityType) — future event types
+// never break this. actorName is denormalized for display.
+export interface GeneralTaskEvent {
+  id: string;
+  fieldTaskId: string;
+  actorId: string | null;
+  actorName: string | null;
+  eventType: string;
+  body: string | null;
+  createdAt: string;
 }
 
 // ==================== المرفقات ====================

@@ -1,6 +1,6 @@
 import {
   type User, type LawCase, type Client, type Consultation, type Hearing,
-  type FieldTask, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
+  type FieldTask, type GeneralTaskEvent, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
   type SupportTicket,
   type CaseActivity, type InsertCaseActivity,
   type CaseNote, type InsertCaseNote,
@@ -25,7 +25,7 @@ import {
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationDeliveryExtensions, consultationActivityLog,
   contracts, contractAttachments, contractActivityLog,
-  memoActivityLog,
+  memoActivityLog, generalTaskEvents,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
@@ -104,6 +104,9 @@ export interface IStorage {
   createFieldTask(data: Partial<FieldTask>, assignedBy: string): Promise<FieldTask>;
   updateFieldTask(id: string, data: Partial<FieldTask>): Promise<FieldTask | undefined>;
   deleteFieldTask(id: string): Promise<boolean>;
+  // General (عام) task activity thread (sub-step 4.6)
+  createGeneralTaskEvent(data: { fieldTaskId: string; actorId: string; actorName: string; eventType: string; body: string | null }): Promise<void>;
+  getGeneralTaskEvents(fieldTaskId: string): Promise<GeneralTaskEvent[]>;
 
   // Contact Logs
   getAllContactLogs(): Promise<ContactLog[]>;
@@ -1730,18 +1733,37 @@ export class DatabaseStorage implements IStorage {
     };
     
     await db.insert(fieldTasks).values(newTask);
-    // TEMP DIAGNOSTIC (general-task original_requester_id bug — remove once the
-    // stale-process question is settled). Fires only for عام tasks; prints what
-    // was handed to the INSERT so the live server console is decisive:
-    //   • line appears with originalRequesterId=<id> → THIS code is running and
-    //     wrote the value; if the DB row is still null, it's a drizzle mapping
-    //     problem (it isn't — the column is declared on the pgTable).
-    //   • line does NOT appear on a fresh عام create → the process is stale (old
-    //     code) or you're hitting a different deployment.
-    if (newTask.taskType === FieldTaskType.GENERAL) {
-      console.log(`[createFieldTask][DIAG] عام task ${id} originalRequesterId=${JSON.stringify(newTask.originalRequesterId)} assignedBy=${JSON.stringify(assignedBy)}`);
-    }
     return mapDbFieldTask(newTask);
+  }
+
+  async createGeneralTaskEvent(data: { fieldTaskId: string; actorId: string; actorName: string; eventType: string; body: string | null }): Promise<void> {
+    await db.insert(generalTaskEvents).values({
+      id: randomUUID(),
+      fieldTaskId: data.fieldTaskId,
+      actorId: data.actorId,
+      actorName: data.actorName,
+      eventType: data.eventType,
+      body: data.body,
+      createdAt: new Date(),
+    });
+  }
+
+  async getGeneralTaskEvents(fieldTaskId: string): Promise<GeneralTaskEvent[]> {
+    // Ascending (oldest→newest) — read as a conversation. 200-row cap mirrors
+    // getMemoActivities/getCaseActivities.
+    const rows = await db.select().from(generalTaskEvents)
+      .where(eq(generalTaskEvents.fieldTaskId, fieldTaskId))
+      .orderBy(asc(generalTaskEvents.createdAt))
+      .limit(200);
+    return rows.map((row) => ({
+      id: row.id,
+      fieldTaskId: row.fieldTaskId,
+      actorId: row.actorId ?? null,
+      actorName: row.actorName ?? null,
+      eventType: row.eventType,
+      body: row.body ?? null,
+      createdAt: toISOString(row.createdAt),
+    }));
   }
 
   async updateFieldTask(id: string, data: Partial<FieldTask>): Promise<FieldTask | undefined> {

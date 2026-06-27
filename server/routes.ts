@@ -14,6 +14,7 @@ import {
   generalTaskReviewSchema,
   FieldTaskStatus,
   FieldTaskType,
+  GeneralTaskEventType,
   type FieldTask,
   TaskSpecialty,
   type TaskSpecialtyValue,
@@ -8007,6 +8008,20 @@ export async function registerRoutes(
         return res.status(404).json({ error: "المهمة غير موجودة" });
       }
 
+      // Sub-step 4.6 — thread event: the worker submitted a result (إنجاز). Fires
+      // for BOTH the return-to-review path and the self-assign→مكتمل path (any
+      // general complete-with-result). Best-effort: never fail the completion.
+      if (isGeneralComplete) {
+        try {
+          await storage.createGeneralTaskEvent({
+            fieldTaskId: updated.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.RESULT_SUBMITTED, body: updated.completionNotes || "",
+          });
+        } catch (e) {
+          console.error("[field-tasks PATCH] general-task event write failed:", e);
+        }
+      }
+
       // D2 (action-hub write-back foundation) — completing a field task leaves
       // evidence on the linked case's activity log, so e.g. finishing a
       // collection letter is visible on the case. Fires only on the transition
@@ -8093,6 +8108,15 @@ export async function registerRoutes(
             console.error("[field-tasks review] case activity write-back failed:", e);
           }
         }
+        // Sub-step 4.6 — thread event: requester closed (تم الاطلاع), no text.
+        try {
+          await storage.createGeneralTaskEvent({
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.REVIEWED_CLOSED, body: null,
+          });
+        } catch (e) {
+          console.error("[field-tasks review] general-task event write failed:", e);
+        }
         return res.json(updated);
       }
       if (decision === "ملاحظة") {
@@ -8106,6 +8130,15 @@ export async function registerRoutes(
           assignedTo: task.workerId || task.assignedTo,
           reviewNote,
         });
+        // Sub-step 4.6 — thread event: requester sent it back with a note (ملاحظة).
+        try {
+          await storage.createGeneralTaskEvent({
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.RETURNED_WITH_NOTE, body: reviewNote,
+          });
+        } catch (e) {
+          console.error("[field-tasks review] general-task event write failed:", e);
+        }
         return res.json(updated);
       }
       return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
