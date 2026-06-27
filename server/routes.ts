@@ -8069,6 +8069,23 @@ export async function registerRoutes(
         // Close — completedAt is stamped in storage.updateFieldTask on the
         // transition into مكتمل.
         const updated = await storage.updateFieldTask(task.id, { status: FieldTaskStatus.COMPLETED });
+        // Mirror the PATCH→مكتمل case-activity write-back: a case-linked general
+        // task leaves "اكتملت مهمة ميدانية" evidence on its case when the requester
+        // closes it. Best-effort (caseId-guarded) — a logging failure must not
+        // fail the close. caseId-less general tasks just close silently.
+        if (updated?.caseId) {
+          try {
+            await storage.logCaseActivity({
+              caseId: updated.caseId,
+              userId: user.id,
+              userName: user.name || user.id,
+              actionType: "field_task_completed",
+              title: `اكتملت مهمة ميدانية: ${updated.title}`,
+            });
+          } catch (e) {
+            console.error("[field-tasks review] case activity write-back failed:", e);
+          }
+        }
         return res.json(updated);
       }
       if (decision === "ملاحظة") {
