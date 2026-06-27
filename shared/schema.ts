@@ -551,6 +551,15 @@ export const fieldTasks = pgTable("field_tasks", {
   // review (AWAITING_REVIEW lifecycle, wired in later sub-steps). Additive,
   // defaults to "" — auto/field tasks never set it.
   reviewNote: text("review_note").default(""),
+  // General (عام) task two-path lifecycle (additive, all nullable — auto/field
+  // tasks leave them null). originalRequesterId is the WRITE-ONCE return address
+  // (set at creation, never updated) so the result always returns to the creator
+  // regardless of reassignment churn; routedDepartmentId marks a dept-routed
+  // (path-2) task and which dept (null = person-direct path-1); workerId records
+  // who produced the CURRENT result (for send-back re-routing + "النتيجة من" display).
+  originalRequesterId: varchar("original_requester_id", { length: 255 }),
+  routedDepartmentId: varchar("routed_department_id", { length: 255 }),
+  workerId: varchar("worker_id", { length: 255 }),
   assignedTo: varchar("assigned_to", { length: 255 }).notNull(),
   assignedBy: varchar("assigned_by", { length: 255 }).notNull(),
   status: varchar("status", { length: 50 }).notNull(),
@@ -1964,6 +1973,9 @@ export const FieldTaskStatus = {
   COMPLETED: "مكتمل",
   CANCELLED: "ملغي",
   AWAITING_REVIEW: "بانتظار_الاطلاع",
+  // General (عام) task path-2 (dept-routed) lifecycle states (additive):
+  AWAITING_DISTRIBUTION: "بانتظار_التوزيع", // sitting with the dept_head to hand to a member
+  AWAITING_APPROVAL: "بانتظار_الاعتماد",     // member's result awaiting the dept_head's approval
 } as const;
 
 export type FieldTaskStatusValue = typeof FieldTaskStatus[keyof typeof FieldTaskStatus];
@@ -1974,6 +1986,8 @@ export const FieldTaskStatusLabels: Record<FieldTaskStatusValue, string> = {
   "مكتمل": "مكتمل",
   "ملغي": "ملغي",
   "بانتظار_الاطلاع": "بانتظار الاطلاع",
+  "بانتظار_التوزيع": "بانتظار التوزيع",
+  "بانتظار_الاعتماد": "بانتظار الاعتماد",
 };
 
 // ==================== أنواع المهام الميدانية ====================
@@ -2943,6 +2957,9 @@ export interface FieldTask {
   contractId: string | null;
   clientId: string | null;
   reviewNote: string;
+  originalRequesterId: string | null;
+  routedDepartmentId: string | null;
+  workerId: string | null;
   assignedTo: string;
   assignedBy: string;
   status: FieldTaskStatusValue;
@@ -4961,7 +4978,10 @@ export const MyTaskKind = {
   COLLECTION: "collection",               // collection (تحصيل) field task, incl. unassigned ""
   LEGAL_DEADLINE: "legal_deadline",       // approaching/overdue legal deadline
   FIELD_TASK: "field_task",               // assigned field task
-  GENERAL_TASK: "general_task",           // manually-created general (عام) task, incl. unassigned ""
+  GENERAL_TASK: "general_task",           // manually-created general (عام) task — the assignee's do-the-work step, incl. unassigned ""
+  GENERAL_TASK_REVIEW: "general_task_review",         // general task result awaiting the ORIGINAL requester's review (تم الاطلاع / send-back)
+  GENERAL_TASK_DISTRIBUTE: "general_task_distribute", // dept-routed general task awaiting the dept_head distributing it to a member
+  GENERAL_TASK_APPROVE: "general_task_approve",       // dept member's result awaiting the dept_head's approval before it returns to the requester
   CONTACT_FOLLOWUP: "contact_followup",   // contact follow-up due
   DELEGATION_APPROVAL: "delegation_approval", // pending delegation approval (dept_head)
   CONSULTATION_CLOSING: "consultation_closing", // consultation ready to close (admin_support)

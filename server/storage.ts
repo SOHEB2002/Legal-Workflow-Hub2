@@ -8,7 +8,7 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
-  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, taskSpecialtyClass,
+  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, FieldTaskStatus, taskSpecialtyClass,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -791,6 +791,9 @@ function mapDbFieldTask(dbTask: any): FieldTask {
     contractId: dbTask.contractId ?? null,
     clientId: dbTask.clientId ?? null,
     reviewNote: dbTask.reviewNote || "",
+    originalRequesterId: dbTask.originalRequesterId ?? null,
+    routedDepartmentId: dbTask.routedDepartmentId ?? null,
+    workerId: dbTask.workerId ?? null,
     assignedTo: dbTask.assignedTo,
     assignedBy: dbTask.assignedBy,
     status: dbTask.status,
@@ -1706,6 +1709,13 @@ export class DatabaseStorage implements IStorage {
       contractId: data.contractId || null,
       clientId: data.clientId || null,
       reviewNote: "",
+      // originalRequesterId = the creator (= assignedBy at creation) for general
+      // (عام) tasks only; the write-once return address. Other (auto/field) task
+      // types leave it null. routedDepartmentId/workerId are set later by the
+      // dept-route / complete transitions, never at plain creation.
+      originalRequesterId: data.taskType === FieldTaskType.GENERAL ? assignedBy : (data.originalRequesterId ?? null),
+      routedDepartmentId: data.routedDepartmentId ?? null,
+      workerId: data.workerId ?? null,
       assignedTo: data.assignedTo || "",
       assignedBy,
       status: "قيد_الانتظار",
@@ -3030,7 +3040,8 @@ export class DatabaseStorage implements IStorage {
     {
       const ftActionable = sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`;
       const cols = { id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title,
-        assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate, taskType: fieldTasks.taskType };
+        assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate, taskType: fieldTasks.taskType,
+        status: fieldTasks.status };
       const rows = firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(ftActionable)
         : deptHeadScoped
@@ -3049,16 +3060,32 @@ export class DatabaseStorage implements IStorage {
         // field + collection tasks are never type "عام", so they are unaffected.
         const isGeneral = !isCollection && r.taskType === FieldTaskType.GENERAL;
         const ownerId = r.assignedTo || "";
+        // General (عام) task kind + action depend on the lifecycle status so the
+        // right actor sees the right step: distribute / approve (dept_head),
+        // review (original requester), or do-the-work (assignee). Each transition
+        // flips assignedTo to whoever must act next, so ownerId stays the viewer.
+        // Collection/field tasks are unaffected (these consts are read only when
+        // isGeneral). Conditional exprs (not reassignment) keep the union types.
+        const generalKind =
+          r.status === FieldTaskStatus.AWAITING_DISTRIBUTION ? MyTaskKind.GENERAL_TASK_DISTRIBUTE
+          : r.status === FieldTaskStatus.AWAITING_APPROVAL ? MyTaskKind.GENERAL_TASK_APPROVE
+          : r.status === FieldTaskStatus.AWAITING_REVIEW ? MyTaskKind.GENERAL_TASK_REVIEW
+          : MyTaskKind.GENERAL_TASK;
+        const generalHint =
+          r.status === FieldTaskStatus.AWAITING_DISTRIBUTION ? "assign"
+          : r.status === FieldTaskStatus.AWAITING_APPROVAL ? "approve"
+          : r.status === FieldTaskStatus.AWAITING_REVIEW ? "review"
+          : (ownerId ? "complete" : "assign");
         tasks.push({
           id: `${isCollection ? "collection" : isGeneral ? "general_task" : "field_task"}:${r.id}`,
-          kind: isCollection ? MyTaskKind.COLLECTION : isGeneral ? MyTaskKind.GENERAL_TASK : MyTaskKind.FIELD_TASK,
+          kind: isCollection ? MyTaskKind.COLLECTION : isGeneral ? generalKind : MyTaskKind.FIELD_TASK,
           title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
           ownerId, ownerScope: scopeOf(ownerId),
           // Unassigned pool ("" assignee, surfaced to managers): the action is to
           // ASSIGN it (إسناد), not complete it — an unassigned task can't be
           // "completed". An assigned task keeps the complete (إكمال) action.
           dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
-          actionHint: ownerId ? "complete" : "assign",
+          actionHint: isGeneral ? generalHint : (ownerId ? "complete" : "assign"),
         });
       }
     }
