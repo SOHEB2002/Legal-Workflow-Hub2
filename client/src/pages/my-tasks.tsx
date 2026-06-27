@@ -34,7 +34,9 @@ import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
+  GeneralTaskEventType, GeneralTaskEventTypeLabels,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
+  type GeneralTaskEventTypeValue,
 } from "@shared/schema";
 
 // hearing_attend / hearing_unrecorded open the SHARED hearing-result dialog
@@ -340,6 +342,49 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
   }
 }
 
+// Colour-coded badge per event type (extensible — path-2 توزيع/اعتماد slot in
+// here later with no other change).
+const EVENT_BADGE_CLASS: Record<string, string> = {
+  [GeneralTaskEventType.RESULT_SUBMITTED]:   "border-green-400 text-green-700 dark:text-green-400",
+  [GeneralTaskEventType.RETURNED_WITH_NOTE]: "border-amber-400 text-amber-700 dark:text-amber-400",
+  [GeneralTaskEventType.REVIEWED_CLOSED]:    "border-muted-foreground/40 text-muted-foreground",
+};
+
+interface ThreadEvent { id: string; actorName: string | null; eventType: string; body: string | null; createdAt: string; }
+
+// The general (عام) task الأخذ والعطا thread — a chronological (oldest→newest)
+// conversation of lifecycle events. Fetched per task (key ['field-task-events',
+// id]); shown in the worker complete + requester review modals. Renders nothing
+// for a task that has no events yet (a fresh task).
+function GeneralTaskThread({ taskId }: { taskId: string }) {
+  const { data: events, isLoading } = useQuery<ThreadEvent[]>({
+    queryKey: ["field-task-events", taskId],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/field-tasks/${taskId}/events`);
+      return res.json();
+    },
+  });
+  if (isLoading) return <p className="text-xs text-muted-foreground">جارٍ تحميل النشاط…</p>;
+  if (!events || events.length === 0) return null;
+  return (
+    <div className="space-y-2 max-h-44 overflow-y-auto rounded-md border p-2 bg-muted/20" data-testid="general-task-thread">
+      <p className="text-xs font-semibold text-muted-foreground">سجل الأخذ والعطا</p>
+      {events.map((e) => (
+        <div key={e.id} className="text-sm border-t pt-1 first:border-t-0 first:pt-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">{e.actorName || "—"}</span>
+            <Badge variant="outline" className={`text-[10px] ${EVENT_BADGE_CLASS[e.eventType] ?? ""}`}>
+              {GeneralTaskEventTypeLabels[e.eventType as GeneralTaskEventTypeValue] ?? e.eventType}
+            </Badge>
+            <DualDateDisplay date={e.createdAt} showTime compact className="text-xs text-muted-foreground" />
+          </div>
+          {e.body?.trim() && <p className="mt-0.5 text-muted-foreground"><BidiText>{e.body}</BidiText></p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
@@ -537,6 +582,10 @@ export default function MyTasksPage() {
     await queryClient.invalidateQueries({
       predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/"),
     });
+    // The general-task thread query key (['field-task-events', id]) isn't under
+    // "/api/", so invalidate it explicitly — keeps the thread current after a
+    // worker-complete / requester send-back / close.
+    await queryClient.invalidateQueries({ queryKey: ["field-task-events"] });
   }
 
   async function submitAction() {
@@ -829,6 +878,7 @@ export default function MyTasksPage() {
 
               {currentMode === "complete" && (
                 <>
+                  {actionTask.kind === MyTaskKind.GENERAL_TASK && <GeneralTaskThread taskId={actionTask.entityId} />}
                   {returnedNote && (
                     <div className="rounded-md border border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-2 text-sm" data-testid="text-returned-note">
                       <span className="font-semibold">ملاحظة المُراجِع: </span><BidiText>{returnedNote}</BidiText>
@@ -917,6 +967,7 @@ export default function MyTasksPage() {
 
               {currentMode === "review" && (
                 <>
+                  <GeneralTaskThread taskId={actionTask.entityId} />
                   <div className="space-y-1"><Label>نتيجة المنفّذ</Label>
                     <div className="rounded-md border p-2 text-sm bg-muted/30 whitespace-pre-wrap" data-testid="text-worker-result">
                       <BidiText>{reviewTask?.completionNotes?.trim() || "—"}</BidiText></div>
