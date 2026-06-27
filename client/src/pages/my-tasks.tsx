@@ -343,6 +343,12 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
 function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
+  const { getTaskById } = useFieldTasks();
+  // A general (عام) task back in the worker's list WITH a reviewNote was returned
+  // for edits (ملاحظة) — flag it so the worker sees it's a returned task, not a
+  // fresh one. Short-circuited for every non-general kind (no lookup cost).
+  const wasReturned = task.kind === MyTaskKind.GENERAL_TASK
+    && !!getTaskById(task.entityId)?.reviewNote?.trim();
   const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind)
     || isCaseStageKind(task) || task.kind === MyTaskKind.MEMO_PENDING;
   return (
@@ -359,6 +365,9 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
             <Badge variant="secondary" className="text-[10px]">{TaskSpecialtyLabels[task.specialtyClass]}</Badge>
           )}
           <OnBehalfBadge userId={task.onBehalfOfUserId} />
+          {wasReturned && (
+            <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700 dark:text-amber-400" data-testid="badge-returned">أُعيدت للتعديل</Badge>
+          )}
         </div>
         <div className="mt-1 flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
           <span>{meta?.label ?? task.kind}</span>
@@ -664,6 +673,13 @@ export default function MyTasksPage() {
   // The full field task behind a GENERAL_TASK_REVIEW item (carries the worker's
   // result + workerId, which the feed item does not).
   const reviewTask = actionTask && currentMode === "review" ? getTaskById(actionTask.entityId) : undefined;
+  // When a GENERAL_TASK (do-the-work) was sent back by the requester via ملاحظة,
+  // its reviewNote carries what to fix. Surface it in the worker's complete modal
+  // so they can correct before re-completing. Only general (عام) tasks set
+  // reviewNote — collection/field/auto never do.
+  const returnedNote = actionTask && currentMode === "complete" && actionTask.kind === MyTaskKind.GENERAL_TASK
+    ? (getTaskById(actionTask.entityId)?.reviewNote || "").trim()
+    : "";
 
   return (
     <div dir="rtl" className="p-4 md:p-6 space-y-6" data-testid="page-my-tasks">
@@ -813,6 +829,11 @@ export default function MyTasksPage() {
 
               {currentMode === "complete" && (
                 <>
+                  {returnedNote && (
+                    <div className="rounded-md border border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-2 text-sm" data-testid="text-returned-note">
+                      <span className="font-semibold">ملاحظة المُراجِع: </span><BidiText>{returnedNote}</BidiText>
+                    </div>
+                  )}
                   <div className="space-y-1"><Label>ملاحظات الإنجاز</Label>
                     <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-notes" /></div>
                   <div className="space-y-1"><Label>وصف الإثبات (اختياري)</Label>
