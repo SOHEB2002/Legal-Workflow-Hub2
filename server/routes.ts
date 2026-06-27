@@ -8147,6 +8147,57 @@ export async function registerRoutes(
     }
   });
 
+  // Sub-step 4.6b — general (عام) task activity thread (read). Ordered ascending
+  // (oldest→newest) by storage.getGeneralTaskEvents. Anyone INVOLVED may read:
+  // the assignee, the original requester, the worker who produced the current
+  // result, the creator (assignedBy), a manager (canAssignFieldTasks), or anyone
+  // who can modify the linked case/consultation. Delegation-aware via
+  // actingIdentitiesFor (a delegate standing in for an involved user qualifies),
+  // mirroring the GET /api/memos/:id/activities viewer gate.
+  // EXTENSION POINT (path-2): also allow the routed dept_head
+  // (task.routedDepartmentId) once dept routing exists (sub-step 6+).
+  app.get("/api/field-tasks/:id/events", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, task.caseId ?? null)
+        : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
+      const ids = new Set(identities.map((i) => i.userId));
+      const involved =
+        ids.has(task.assignedTo) ||
+        (!!task.originalRequesterId && ids.has(task.originalRequesterId)) ||
+        (!!task.workerId && ids.has(task.workerId)) ||
+        ids.has(task.assignedBy);
+      // Mirror the PATCH manager check (direct role compare — ActingIdentity.role
+      // is a plain string): branch_manager / admin_support are canAssignFieldTasks.
+      const isManager = identities.some((i) => i.role === "branch_manager" || i.role === "admin_support");
+
+      let canModifyParent = false;
+      if (task.caseId) {
+        const parentCase = await storage.getCaseById(task.caseId);
+        canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+      } else if (task.consultationId) {
+        const parentConsultation = await storage.getConsultationById(task.consultationId);
+        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
+      }
+
+      if (!involved && !isManager && !canModifyParent) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض سجل هذه المهمة" });
+      }
+
+      const events = await storage.getGeneralTaskEvents(task.id);
+      // Denormalized actorName → the FE needs no user lookup.
+      res.json(events.map((e) => ({
+        id: e.id, actorName: e.actorName, eventType: e.eventType, body: e.body, createdAt: e.createdAt,
+      })));
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب سجل المهمة" });
+    }
+  });
+
   app.delete("/api/field-tasks/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
     try {
       await storage.deleteFieldTask(String(req.params.id));
