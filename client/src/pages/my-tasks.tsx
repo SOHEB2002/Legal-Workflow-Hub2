@@ -500,10 +500,12 @@ export default function MyTasksPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({
     title: "", description: "", dueDate: "", priority: "متوسط",
-    linkType: "none" as LinkType, linkId: "", assigneeId: "",
-    // PATH-2: branch_manager + admin_support may target a whole DEPARTMENT
-    // instead of a person. Everyone else stays person-only ("person").
-    assignTarget: "person" as "person" | "department", deptId: "",
+    linkType: "none" as LinkType, linkId: "",
+    // Two-dropdown assignment (final design): two INDEPENDENT fields, no mode
+    // toggle. deptId = the القسم dropdown, assigneeId = the الشخص dropdown.
+    // A chosen person → path-1 person-direct; a dept alone → path-2 dept-routed.
+    // Open to every role.
+    deptId: "", assigneeId: "",
   });
   const [creating, setCreating] = useState(false);
   // Collapsed group keys (dept:<id> / member:<id> / pool:<id>). Empty = all
@@ -529,15 +531,15 @@ export default function MyTasksPage() {
   const isAdminSupport = user?.role === "admin_support";
   const isDeptHead = user?.role === "department_head";
   const isBranchManager = user?.role === "branch_manager";
-  // Person-direct (path-1) assignment to SOMEONE ELSE is still manager/dept_head
-  // only; a regular employee in person mode self-assigns (unchanged). Routing to
-  // a DEPARTMENT (path-2) is open to every role — see the create modal toggle.
-  const canAssignToOthers = isBranchManager || isAdminSupport || isDeptHead;
-
-  // Assignee options for create: dept_head → own dept members; managers → anyone.
-  const assignableUsers = users.filter((u) => {
+  // Person dropdown (الشخص) options for the create modal — open to EVERY role.
+  // Filtered by the chosen department: a selected القسم narrows the list to that
+  // department's active members; with NO department chosen the FULL active-user
+  // list is offered (any department, incl. admin_support members + future
+  // committee members — admin_support is not a department row so it is only
+  // reachable through this no-department path).
+  const personOptions = users.filter((u) => {
     if (!u.isActive) return false;
-    if (isDeptHead && !isBranchManager) return u.departmentId === user?.departmentId;
+    if (createForm.deptId) return u.departmentId === createForm.deptId;
     return true;
   });
 
@@ -632,12 +634,21 @@ export default function MyTasksPage() {
     if (!createForm.title.trim() || !createForm.dueDate) {
       toast({ title: "العنوان وتاريخ الاستحقاق مطلوبان", variant: "destructive" }); return;
     }
-    // PATH-2: dept-routing requires a chosen department. The dept head is
-    // resolved server-side (head → assign; >1 → block; head-less → routed +
-    // unassigned, waits). Any role may dept-route; we only send the dept.
-    const isDeptAssign = createForm.assignTarget === "department";
-    if (isDeptAssign && !createForm.deptId) {
-      toast({ title: "اختر القسم المسند إليه", variant: "destructive" }); return;
+    // Two-dropdown assignment (final design). The body is decided purely by
+    // WHICH field(s) are filled:
+    //   • person filled  → PATH-1 person-direct (assignedTo = that person). The
+    //     department, if also chosen, only filtered the person list — it is NOT
+    //     sent. Covers: dept+person, no-dept+person, and self-assign (pick self
+    //     → straight to مكتمل, the existing path-1 edge).
+    //   • dept only      → PATH-2 dept-routed (routedDepartmentId = dept). The
+    //     server resolves the head → assign; >1 → block; head-less → routed +
+    //     unassigned, waits for a head. (admin_support is not a dept row, so it
+    //     never reaches this path — its members are picked as persons instead.)
+    //   • neither        → validation error.
+    const dept = createForm.deptId;
+    const person = createForm.assigneeId;
+    if (!dept && !person) {
+      toast({ title: "اختر قسماً أو شخصاً", variant: "destructive" }); return;
     }
     setCreating(true);
     try {
@@ -658,17 +669,16 @@ export default function MyTasksPage() {
         contractId: linkType === "contract" ? linkId || null : null,
         clientId: linkType === "client" ? linkId || null : null,
       };
-      // Dept-route: send routedDepartmentId (no assignedTo — the server sets it
-      // to the resolved dept head + status بانتظار_التوزيع). Person-direct: the
-      // exact body as before (byte-identical).
-      const body = isDeptAssign
-        ? { ...baseBody, routedDepartmentId: createForm.deptId }
-        : { ...baseBody, assignedTo: (canAssignToOthers && createForm.assigneeId) ? createForm.assigneeId : user?.id };
+      // Person wins → person-direct body (byte-identical to the working path-1).
+      // Dept only → dept-route body (server resolves the head + sets status).
+      const body = person
+        ? { ...baseBody, assignedTo: person }
+        : { ...baseBody, routedDepartmentId: dept };
       await apiRequest("POST", "/api/field-tasks", body);
       await queryClient.invalidateQueries({ queryKey: ["/api/my-tasks"] });
       toast({ title: "تمت إضافة المهمة" });
       setShowCreate(false);
-      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", linkType: "none", linkId: "", assigneeId: "", assignTarget: "person", deptId: "" });
+      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", linkType: "none", linkId: "", deptId: "", assigneeId: "" });
     } catch (err) {
       toast({ title: "تعذّرت إضافة المهمة", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -1085,37 +1095,30 @@ export default function MyTasksPage() {
               linkId={createForm.linkId}
               onChange={(linkType, linkId) => setCreateForm({ ...createForm, linkType, linkId })}
             />
-            {/* PATH-2 (final): EVERY role chooses person vs whole department. */}
-            <div className="space-y-3">
-              <div className="space-y-1"><Label>نوع الإسناد</Label>
-                <Select value={createForm.assignTarget} onValueChange={(v) => setCreateForm({ ...createForm, assignTarget: v as "person" | "department", assigneeId: "", deptId: "" })}>
-                  <SelectTrigger data-testid="select-create-target"><SelectValue /></SelectTrigger>
+            {/* Two-dropdown assignment (final design) — open to EVERY role. No
+                mode toggle: fill the القسم dropdown, the الشخص dropdown, or both.
+                A chosen person → assigned directly to them; the القسم only
+                filters the person list (selecting it clears any prior person).
+                Dept alone → routed to the dept head for distribution. */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1"><Label>القسم</Label>
+                <Select value={createForm.deptId || "none"} onValueChange={(v) => setCreateForm({ ...createForm, deptId: v === "none" ? "" : v, assigneeId: "" })}>
+                  <SelectTrigger data-testid="select-create-dept"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="person">شخص</SelectItem>
-                    <SelectItem value="department">قسم</SelectItem>
+                    <SelectItem value="none">بدون قسم</SelectItem>
+                    {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
                   </SelectContent>
                 </Select></div>
-              {createForm.assignTarget === "department" ? (
-                <div className="space-y-1"><Label>القسم المسند إليه</Label>
-                  <Select value={createForm.deptId} onValueChange={(v) => setCreateForm({ ...createForm, deptId: v })}>
-                    <SelectTrigger data-testid="select-create-dept"><SelectValue placeholder="اختر قسماً" /></SelectTrigger>
-                    <SelectContent>
-                      {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">ستُسند المهمة إلى رئيس القسم للتوزيع (وإن لم يوجد رئيس، تنتظر التوزيع حتى تعيينه).</p>
-                </div>
-              ) : canAssignToOthers ? (
-                <div className="space-y-1"><Label>إسناد إلى (افتراضياً أنت)</Label>
-                  <Select value={createForm.assigneeId || "self"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "self" ? "" : v })}>
-                    <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="self">أنا</SelectItem>
-                      {assignableUsers.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
-                    </SelectContent>
-                  </Select></div>
-              ) : null}
+              <div className="space-y-1"><Label>الشخص</Label>
+                <Select value={createForm.assigneeId || "none"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "none" ? "" : v })}>
+                  <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">بدون شخص</SelectItem>
+                    {personOptions.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
+                  </SelectContent>
+                </Select></div>
             </div>
+            <p className="text-xs text-muted-foreground">اختر شخصاً لإسناد المهمة إليه مباشرة، أو اختر قسماً فقط لإسنادها إلى رئيس القسم للتوزيع (وإن لم يوجد رئيس، تنتظر التوزيع حتى تعيينه). اختيار قسم يصفّي قائمة الأشخاص؛ بدون قسم تظهر كل الأسماء.</p>
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>إلغاء</Button>
