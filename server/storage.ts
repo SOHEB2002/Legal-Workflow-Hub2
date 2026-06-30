@@ -3100,13 +3100,20 @@ export class DatabaseStorage implements IStorage {
       const rows = firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(ftActionable)
         : deptHeadScoped
-        // LEFT join (was INNER) + an OR on the head's own assignment: the head
-        // must also see tasks assigned directly TO THEM that have no case in
-        // their department — notably PATH-2 dept-routed general tasks (بانتظار
-        // التوزيع) whose caseId is null or points elsewhere. The dept-case branch
-        // (team supervisory view) is unchanged; this only ADDS the head's own rows.
+        // LEFT join (was INNER) + an OR covering three head-visible sources:
+        //  (1) assignedTo=uid — the head's own tasks (incl. PATH-2 tasks routed
+        //      to them whose caseId is null/elsewhere);
+        //  (2) lawCases.departmentId=userDept — team supervisory view (unchanged);
+        //  (3) routedDepartmentId=userDept — tasks routed to THIS department,
+        //      including HEAD-LESS ones (assignedTo="") created before a head
+        //      existed: the moment this head is appointed they surface here for
+        //      distribution, with no migration or re-assignment needed.
         ? await db.select(cols).from(fieldTasks).leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
-            .where(and(ftActionable, or(eq(fieldTasks.assignedTo, uid), eq(lawCases.departmentId, userDept!))))
+            .where(and(ftActionable, or(
+              eq(fieldTasks.assignedTo, uid),
+              eq(lawCases.departmentId, userDept!),
+              eq(fieldTasks.routedDepartmentId, userDept!),
+            )))
         : await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, uid), ftActionable));
       // The firm-wide query already includes the unassigned "" tasks; only the
       // non-firm-wide managers (admin_support) need the separate pool query.
@@ -3152,6 +3159,36 @@ export class DatabaseStorage implements IStorage {
             && r.status !== FieldTaskStatus.AWAITING_APPROVAL
             && !!r.dueDate && r.dueDate < today,
           actionHint: isGeneral ? generalHint : (ownerId ? "complete" : "assign"),
+        });
+      }
+    }
+
+    // ---- 8b. Requester's view of a HEAD-LESS routed general task ----
+    // A general task routed to a department that has no head sits in
+    // بانتظار_التوزيع with assignedTo="" until a head is appointed. The owner
+    // ("" ) queries above surface it to the branch_manager (firm-wide) and to
+    // admin_support (the "" pool), and the dept-scoped query will surface it to
+    // a head once one exists — but the REQUESTER who created it must also keep
+    // sight of it. Emit it to them as an informational row (no action). Managers
+    // already see it via the firm-wide / "" -pool queries, so skip them here to
+    // avoid a duplicate row.
+    if (!isManager) {
+      const myRouted = await db.select({
+        id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title, dueDate: fieldTasks.dueDate,
+      }).from(fieldTasks).where(and(
+        eq(fieldTasks.originalRequesterId, uid),
+        eq(fieldTasks.assignedTo, ""),
+        eq(fieldTasks.taskType, FieldTaskType.GENERAL),
+        eq(fieldTasks.status, FieldTaskStatus.AWAITING_DISTRIBUTION),
+        sql`${fieldTasks.routedDepartmentId} IS NOT NULL`,
+      ));
+      for (const r of myRouted) {
+        tasks.push({
+          id: `general_awaiting_dist:${r.id}`,
+          kind: MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION,
+          title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+          ownerId: uid, ownerScope: "self",
+          dueDate: r.dueDate || null, isOverdue: false, actionHint: "review",
         });
       }
     }

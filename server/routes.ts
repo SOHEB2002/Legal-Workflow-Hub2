@@ -7899,37 +7899,40 @@ export async function registerRoutes(
 
   app.post("/api/field-tasks", requireAuth, async (req: AuthRequest, res) => {
     try {
-      // PATH-2 (sub-step 5) — dept-routed general (عام) task. A non-empty
-      // routedDepartmentId in the body marks "assign to a whole DEPARTMENT"
-      // instead of a person; person-direct creation never sends it, so that
-      // path (below) stays byte-identical. Only branch_manager + admin_support
-      // may dept-route.
+      // PATH-2 (sub-step 5, FINAL rules) — dept-routed general (عام) task. A
+      // non-empty routedDepartmentId marks "assign to a whole DEPARTMENT"
+      // instead of a person; person-direct creation never sends it, so that path
+      // (below) stays byte-identical. ANY role may dept-route (no role gate).
       const rawRoutedDept = typeof req.body?.routedDepartmentId === "string"
         ? req.body.routedDepartmentId.trim() : "";
       if (rawRoutedDept) {
-        const actorRole = req.user!.role;
-        if (actorRole !== "branch_manager" && actorRole !== "admin_support") {
-          return res.status(403).json({ error: "غير مصرح بإسناد المهمة إلى قسم" });
+        // Must be a real department. This also enforces "no dept-assign to
+        // admin_support" — admin_support is not a department row, so its id (or
+        // any bogus id) is rejected here.
+        const dept = await storage.getDepartmentById(rawRoutedDept);
+        if (!dept) {
+          return res.status(400).json({ error: "القسم غير موجود" });
         }
-        // Resolve the dept head (Q4 decision): 0 → block; exactly 1 → use it;
-        // >1 → block (a data anomaly; never silently guess which head). Source is
-        // the authoritative users query, NOT departments.headId.
+        // Resolve the dept head. Authoritative source = the users query, NOT
+        // departments.headId. Rules: exactly 1 → assign to that head; >1 → block
+        // (data anomaly; never guess); 0 (head-less) → DO NOT block — create the
+        // task routed + unassigned (assignedTo="") so it WAITS in بانتظار_التوزيع
+        // until a head is appointed (then the dept-scoped feed surfaces it).
         const heads = await storage.getDepartmentHeads(rawRoutedDept);
-        if (heads.length === 0) {
-          return res.status(400).json({ error: "القسم بلا رئيس قسم" });
-        }
         if (heads.length > 1) {
           return res.status(400).json({ error: "القسم له أكثر من رئيس قسم — يتعذّر تحديد المستلم" });
         }
-        const head = heads[0];
-        // Inject the resolved head so the shared insert schema (assignedTo is
-        // required) validates the rest of the body normally.
-        const deptTaskData = insertFieldTaskSchema.parse({ ...req.body, assignedTo: head.id });
+        const head = heads.length === 1 ? heads[0] : null;
+        // The shared insert schema requires a non-empty assignedTo; pass a
+        // placeholder (the creator) to validate the rest of the body, then set
+        // the REAL assignee below (head.id, or "" when head-less).
+        const deptTaskData = insertFieldTaskSchema.parse({ ...req.body, assignedTo: head ? head.id : req.user!.id });
         if (deptTaskData.taskType !== FieldTaskType.GENERAL) {
           return res.status(400).json({ error: "الإسناد إلى قسم متاح للمهام العامة فقط" });
         }
         const deptTask = await storage.createFieldTask({
           ...deptTaskData,
+          assignedTo: head ? head.id : "",
           routedDepartmentId: rawRoutedDept,
           status: FieldTaskStatus.AWAITING_DISTRIBUTION,
         }, req.user!.id);

@@ -13,7 +13,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Search, X,
+  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -68,6 +68,7 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   general_task: { icon: ListChecks, label: "مهمة عامة" },
   general_task_review: { icon: ClipboardCheck, label: "مراجعة نتيجة مهمة" },
   general_task_distribute: { icon: UserPlus, label: "توزيع مهمة" },
+  general_task_awaiting_distribution: { icon: Clock, label: "بانتظار توزيع القسم" },
   general_task_approve: { icon: Stamp, label: "اعتماد نتيجة مهمة" },
   contact_followup: { icon: Phone, label: "متابعة عميل" },
   delegation_approval: { icon: Stamp, label: "اعتماد تفويض" },
@@ -206,6 +207,9 @@ function EntityLinkPicker({
 const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
   [MyTaskKind.SESSION_REPORT_EXPORT]: "تأكيد التصدير",
   [MyTaskKind.DATA_COMPLETION]: "تم التواصل",
+  // Requester's informational view of a routed task awaiting distribution — no
+  // action for them; the (disabled) button just restates the state.
+  [MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION]: "بانتظار التوزيع",
 };
 
 // Pinned to the top under the "المستعجلة" (urgent) heading: hearings (+ their
@@ -525,10 +529,10 @@ export default function MyTasksPage() {
   const isAdminSupport = user?.role === "admin_support";
   const isDeptHead = user?.role === "department_head";
   const isBranchManager = user?.role === "branch_manager";
+  // Person-direct (path-1) assignment to SOMEONE ELSE is still manager/dept_head
+  // only; a regular employee in person mode self-assigns (unchanged). Routing to
+  // a DEPARTMENT (path-2) is open to every role — see the create modal toggle.
   const canAssignToOthers = isBranchManager || isAdminSupport || isDeptHead;
-  // PATH-2: only branch_manager + admin_support may route a task to a whole
-  // department (dept_head stays person-only — own-dept members).
-  const canAssignToDept = isBranchManager || isAdminSupport;
 
   // Assignee options for create: dept_head → own dept members; managers → anyone.
   const assignableUsers = users.filter((u) => {
@@ -629,8 +633,9 @@ export default function MyTasksPage() {
       toast({ title: "العنوان وتاريخ الاستحقاق مطلوبان", variant: "destructive" }); return;
     }
     // PATH-2: dept-routing requires a chosen department. The dept head is
-    // resolved server-side (incl. the 0/>1-heads block); we only send the dept.
-    const isDeptAssign = canAssignToDept && createForm.assignTarget === "department";
+    // resolved server-side (head → assign; >1 → block; head-less → routed +
+    // unassigned, waits). Any role may dept-route; we only send the dept.
+    const isDeptAssign = createForm.assignTarget === "department";
     if (isDeptAssign && !createForm.deptId) {
       toast({ title: "اختر القسم المسند إليه", variant: "destructive" }); return;
     }
@@ -1080,42 +1085,37 @@ export default function MyTasksPage() {
               linkId={createForm.linkId}
               onChange={(linkType, linkId) => setCreateForm({ ...createForm, linkType, linkId })}
             />
-            {canAssignToOthers && (
-              <div className="space-y-3">
-                {/* PATH-2: managers choose person vs whole department. dept_head
-                    never sees this toggle → stays person-only (unchanged). */}
-                {canAssignToDept && (
-                  <div className="space-y-1"><Label>نوع الإسناد</Label>
-                    <Select value={createForm.assignTarget} onValueChange={(v) => setCreateForm({ ...createForm, assignTarget: v as "person" | "department", assigneeId: "", deptId: "" })}>
-                      <SelectTrigger data-testid="select-create-target"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="person">شخص</SelectItem>
-                        <SelectItem value="department">قسم</SelectItem>
-                      </SelectContent>
-                    </Select></div>
-                )}
-                {canAssignToDept && createForm.assignTarget === "department" ? (
-                  <div className="space-y-1"><Label>القسم المسند إليه</Label>
-                    <Select value={createForm.deptId} onValueChange={(v) => setCreateForm({ ...createForm, deptId: v })}>
-                      <SelectTrigger data-testid="select-create-dept"><SelectValue placeholder="اختر قسماً" /></SelectTrigger>
-                      <SelectContent>
-                        {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">ستُسند المهمة إلى رئيس القسم للتوزيع.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-1"><Label>إسناد إلى (افتراضياً أنت)</Label>
-                    <Select value={createForm.assigneeId || "self"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "self" ? "" : v })}>
-                      <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="self">أنا</SelectItem>
-                        {assignableUsers.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
-                      </SelectContent>
-                    </Select></div>
-                )}
-              </div>
-            )}
+            {/* PATH-2 (final): EVERY role chooses person vs whole department. */}
+            <div className="space-y-3">
+              <div className="space-y-1"><Label>نوع الإسناد</Label>
+                <Select value={createForm.assignTarget} onValueChange={(v) => setCreateForm({ ...createForm, assignTarget: v as "person" | "department", assigneeId: "", deptId: "" })}>
+                  <SelectTrigger data-testid="select-create-target"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="person">شخص</SelectItem>
+                    <SelectItem value="department">قسم</SelectItem>
+                  </SelectContent>
+                </Select></div>
+              {createForm.assignTarget === "department" ? (
+                <div className="space-y-1"><Label>القسم المسند إليه</Label>
+                  <Select value={createForm.deptId} onValueChange={(v) => setCreateForm({ ...createForm, deptId: v })}>
+                    <SelectTrigger data-testid="select-create-dept"><SelectValue placeholder="اختر قسماً" /></SelectTrigger>
+                    <SelectContent>
+                      {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">ستُسند المهمة إلى رئيس القسم للتوزيع (وإن لم يوجد رئيس، تنتظر التوزيع حتى تعيينه).</p>
+                </div>
+              ) : canAssignToOthers ? (
+                <div className="space-y-1"><Label>إسناد إلى (افتراضياً أنت)</Label>
+                  <Select value={createForm.assigneeId || "self"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "self" ? "" : v })}>
+                    <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="self">أنا</SelectItem>
+                      {assignableUsers.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
+                    </SelectContent>
+                  </Select></div>
+              ) : null}
+            </div>
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>إلغاء</Button>

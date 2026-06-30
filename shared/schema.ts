@@ -5046,6 +5046,7 @@ export const MyTaskKind = {
   GENERAL_TASK: "general_task",           // manually-created general (عام) task — the assignee's do-the-work step, incl. unassigned ""
   GENERAL_TASK_REVIEW: "general_task_review",         // general task result awaiting the ORIGINAL requester's review (تم الاطلاع / send-back)
   GENERAL_TASK_DISTRIBUTE: "general_task_distribute", // dept-routed general task awaiting the dept_head distributing it to a member
+  GENERAL_TASK_AWAITING_DISTRIBUTION: "general_task_awaiting_distribution", // requester's informational view of a dept-routed task still awaiting distribution (esp. head-less dept, assignedTo="")
   GENERAL_TASK_APPROVE: "general_task_approve",       // dept member's result awaiting the dept_head's approval before it returns to the requester
   CONTACT_FOLLOWUP: "contact_followup",   // contact follow-up due
   DELEGATION_APPROVAL: "delegation_approval", // pending delegation approval (dept_head)
