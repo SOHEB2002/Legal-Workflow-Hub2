@@ -127,6 +127,10 @@ export interface IStorage {
 
   // Departments
   getAllDepartments(): Promise<DepartmentInfo[]>;
+  // Active users with role=department_head in the given department. Authoritative
+  // dept-head source for PATH-2 dept-routing (departments.headId is only
+  // partially seeded and can disagree). Returns 0/1/>1 for the caller to handle.
+  getDepartmentHeads(departmentId: string): Promise<User[]>;
   getDepartmentById(id: string): Promise<DepartmentInfo | undefined>;
   updateDepartment(id: string, data: Partial<DepartmentInfo>): Promise<DepartmentInfo | undefined>;
 
@@ -944,6 +948,21 @@ export class DatabaseStorage implements IStorage {
     return result.map(mapDbUser);
   }
 
+  async getDepartmentHeads(departmentId: string): Promise<User[]> {
+    // Authoritative source for PATH-2 dept-routing: users with the
+    // department_head role in this department who are active. departments.headId
+    // is only partially seeded (e.g. set for dept "1" but null for dept "2"
+    // whose real head exists only via this users query) → never trust it here.
+    const result = await db.select().from(users).where(
+      and(
+        eq(users.role, "department_head"),
+        eq(users.departmentId, departmentId),
+        eq(users.isActive, true),
+      ),
+    );
+    return result.map(mapDbUser);
+  }
+
   async createUser(data: Partial<User>): Promise<User> {
     const id = data.id || randomUUID();
     const now = new Date();
@@ -1721,7 +1740,10 @@ export class DatabaseStorage implements IStorage {
       workerId: data.workerId ?? null,
       assignedTo: data.assignedTo || "",
       assignedBy,
-      status: "قيد_الانتظار",
+      // Default = قيد_الانتظار (the person-direct path passes no status, so it is
+      // byte-identical). The PATH-2 dept-route passes بانتظار_التوزيع to land the
+      // task with the dept_head for distribution.
+      status: data.status ?? "قيد_الانتظار",
       priority: data.priority || "متوسط",
       dueDate: data.dueDate || "",
       completedAt: null,
@@ -3078,8 +3100,13 @@ export class DatabaseStorage implements IStorage {
       const rows = firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(ftActionable)
         : deptHeadScoped
-        ? await db.select(cols).from(fieldTasks).innerJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
-            .where(and(eq(lawCases.departmentId, userDept!), ftActionable))
+        // LEFT join (was INNER) + an OR on the head's own assignment: the head
+        // must also see tasks assigned directly TO THEM that have no case in
+        // their department — notably PATH-2 dept-routed general tasks (بانتظار
+        // التوزيع) whose caseId is null or points elsewhere. The dept-case branch
+        // (team supervisory view) is unchanged; this only ADDS the head's own rows.
+        ? await db.select(cols).from(fieldTasks).leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+            .where(and(ftActionable, or(eq(fieldTasks.assignedTo, uid), eq(lawCases.departmentId, userDept!))))
         : await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, uid), ftActionable));
       // The firm-wide query already includes the unassigned "" tasks; only the
       // non-firm-wide managers (admin_support) need the separate pool query.

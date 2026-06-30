@@ -7899,6 +7899,43 @@ export async function registerRoutes(
 
   app.post("/api/field-tasks", requireAuth, async (req: AuthRequest, res) => {
     try {
+      // PATH-2 (sub-step 5) — dept-routed general (عام) task. A non-empty
+      // routedDepartmentId in the body marks "assign to a whole DEPARTMENT"
+      // instead of a person; person-direct creation never sends it, so that
+      // path (below) stays byte-identical. Only branch_manager + admin_support
+      // may dept-route.
+      const rawRoutedDept = typeof req.body?.routedDepartmentId === "string"
+        ? req.body.routedDepartmentId.trim() : "";
+      if (rawRoutedDept) {
+        const actorRole = req.user!.role;
+        if (actorRole !== "branch_manager" && actorRole !== "admin_support") {
+          return res.status(403).json({ error: "غير مصرح بإسناد المهمة إلى قسم" });
+        }
+        // Resolve the dept head (Q4 decision): 0 → block; exactly 1 → use it;
+        // >1 → block (a data anomaly; never silently guess which head). Source is
+        // the authoritative users query, NOT departments.headId.
+        const heads = await storage.getDepartmentHeads(rawRoutedDept);
+        if (heads.length === 0) {
+          return res.status(400).json({ error: "القسم بلا رئيس قسم" });
+        }
+        if (heads.length > 1) {
+          return res.status(400).json({ error: "القسم له أكثر من رئيس قسم — يتعذّر تحديد المستلم" });
+        }
+        const head = heads[0];
+        // Inject the resolved head so the shared insert schema (assignedTo is
+        // required) validates the rest of the body normally.
+        const deptTaskData = insertFieldTaskSchema.parse({ ...req.body, assignedTo: head.id });
+        if (deptTaskData.taskType !== FieldTaskType.GENERAL) {
+          return res.status(400).json({ error: "الإسناد إلى قسم متاح للمهام العامة فقط" });
+        }
+        const deptTask = await storage.createFieldTask({
+          ...deptTaskData,
+          routedDepartmentId: rawRoutedDept,
+          status: FieldTaskStatus.AWAITING_DISTRIBUTION,
+        }, req.user!.id);
+        return res.status(201).json(deptTask);
+      }
+
       const validatedData = insertFieldTaskSchema.parse(req.body);
 
       // Validate assignedTo user is active

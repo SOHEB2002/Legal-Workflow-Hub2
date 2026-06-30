@@ -497,6 +497,9 @@ export default function MyTasksPage() {
   const [createForm, setCreateForm] = useState({
     title: "", description: "", dueDate: "", priority: "متوسط",
     linkType: "none" as LinkType, linkId: "", assigneeId: "",
+    // PATH-2: branch_manager + admin_support may target a whole DEPARTMENT
+    // instead of a person. Everyone else stays person-only ("person").
+    assignTarget: "person" as "person" | "department", deptId: "",
   });
   const [creating, setCreating] = useState(false);
   // Collapsed group keys (dept:<id> / member:<id> / pool:<id>). Empty = all
@@ -523,6 +526,9 @@ export default function MyTasksPage() {
   const isDeptHead = user?.role === "department_head";
   const isBranchManager = user?.role === "branch_manager";
   const canAssignToOthers = isBranchManager || isAdminSupport || isDeptHead;
+  // PATH-2: only branch_manager + admin_support may route a task to a whole
+  // department (dept_head stays person-only — own-dept members).
+  const canAssignToDept = isBranchManager || isAdminSupport;
 
   // Assignee options for create: dept_head → own dept members; managers → anyone.
   const assignableUsers = users.filter((u) => {
@@ -622,6 +628,12 @@ export default function MyTasksPage() {
     if (!createForm.title.trim() || !createForm.dueDate) {
       toast({ title: "العنوان وتاريخ الاستحقاق مطلوبان", variant: "destructive" }); return;
     }
+    // PATH-2: dept-routing requires a chosen department. The dept head is
+    // resolved server-side (incl. the 0/>1-heads block); we only send the dept.
+    const isDeptAssign = canAssignToDept && createForm.assignTarget === "department";
+    if (isDeptAssign && !createForm.deptId) {
+      toast({ title: "اختر القسم المسند إليه", variant: "destructive" }); return;
+    }
     setCreating(true);
     try {
       // Manually-created tasks are GENERAL (عام) tasks. Reuse the existing
@@ -630,7 +642,7 @@ export default function MyTasksPage() {
       // link writes into exactly ONE of caseId/consultationId/contractId/
       // clientId per the chosen link type; the rest stay null.
       const { linkType, linkId } = createForm;
-      await apiRequest("POST", "/api/field-tasks", {
+      const baseBody = {
         title: createForm.title,
         description: createForm.description,
         taskType: FieldTaskType.GENERAL,
@@ -640,12 +652,18 @@ export default function MyTasksPage() {
         consultationId: linkType === "consultation" ? linkId || null : null,
         contractId: linkType === "contract" ? linkId || null : null,
         clientId: linkType === "client" ? linkId || null : null,
-        assignedTo: (canAssignToOthers && createForm.assigneeId) ? createForm.assigneeId : user?.id,
-      });
+      };
+      // Dept-route: send routedDepartmentId (no assignedTo — the server sets it
+      // to the resolved dept head + status بانتظار_التوزيع). Person-direct: the
+      // exact body as before (byte-identical).
+      const body = isDeptAssign
+        ? { ...baseBody, routedDepartmentId: createForm.deptId }
+        : { ...baseBody, assignedTo: (canAssignToOthers && createForm.assigneeId) ? createForm.assigneeId : user?.id };
+      await apiRequest("POST", "/api/field-tasks", body);
       await queryClient.invalidateQueries({ queryKey: ["/api/my-tasks"] });
       toast({ title: "تمت إضافة المهمة" });
       setShowCreate(false);
-      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", linkType: "none", linkId: "", assigneeId: "" });
+      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", linkType: "none", linkId: "", assigneeId: "", assignTarget: "person", deptId: "" });
     } catch (err) {
       toast({ title: "تعذّرت إضافة المهمة", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -1063,14 +1081,40 @@ export default function MyTasksPage() {
               onChange={(linkType, linkId) => setCreateForm({ ...createForm, linkType, linkId })}
             />
             {canAssignToOthers && (
-              <div className="space-y-1"><Label>إسناد إلى (افتراضياً أنت)</Label>
-                <Select value={createForm.assigneeId || "self"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "self" ? "" : v })}>
-                  <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="self">أنا</SelectItem>
-                    {assignableUsers.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
-                  </SelectContent>
-                </Select></div>
+              <div className="space-y-3">
+                {/* PATH-2: managers choose person vs whole department. dept_head
+                    never sees this toggle → stays person-only (unchanged). */}
+                {canAssignToDept && (
+                  <div className="space-y-1"><Label>نوع الإسناد</Label>
+                    <Select value={createForm.assignTarget} onValueChange={(v) => setCreateForm({ ...createForm, assignTarget: v as "person" | "department", assigneeId: "", deptId: "" })}>
+                      <SelectTrigger data-testid="select-create-target"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="person">شخص</SelectItem>
+                        <SelectItem value="department">قسم</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                )}
+                {canAssignToDept && createForm.assignTarget === "department" ? (
+                  <div className="space-y-1"><Label>القسم المسند إليه</Label>
+                    <Select value={createForm.deptId} onValueChange={(v) => setCreateForm({ ...createForm, deptId: v })}>
+                      <SelectTrigger data-testid="select-create-dept"><SelectValue placeholder="اختر قسماً" /></SelectTrigger>
+                      <SelectContent>
+                        {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">ستُسند المهمة إلى رئيس القسم للتوزيع.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1"><Label>إسناد إلى (افتراضياً أنت)</Label>
+                    <Select value={createForm.assigneeId || "self"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "self" ? "" : v })}>
+                      <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="self">أنا</SelectItem>
+                        {assignableUsers.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
+                      </SelectContent>
+                    </Select></div>
+                )}
+              </div>
             )}
           </div>
           <DialogFooter className="gap-2">
