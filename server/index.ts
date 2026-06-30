@@ -273,6 +273,18 @@ app.use((req, res, next) => {
   setupWebSocket(httpServer);
   await registerRoutes(httpServer, app);
 
+  // Any /api/* request that reaches here matched NO route above. Without this it
+  // falls through to the SPA catch-all (vite.ts / static.ts), which serves
+  // index.html with HTTP 200 — so the client treats a missing/not-yet-registered
+  // endpoint as SUCCESS (a mutating POST silently no-ops while apiRequest, which
+  // only throws on non-2xx, fires its success toast). Returning a JSON 404 here
+  // makes apiRequest throw, surfacing the real failure instead of masking it.
+  // Placed after registerRoutes (so real routes win) and before the SPA
+  // catch-all; non-/api paths skip it and still reach the SPA.
+  app.use("/api", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "المسار غير موجود" });
+  });
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
 
