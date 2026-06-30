@@ -2012,7 +2012,7 @@ export const FieldTaskStatusLabels: Record<FieldTaskStatusValue, string> = {
   "مكتمل": "مكتمل",
   "ملغي": "ملغي",
   "بانتظار_الاطلاع": "بانتظار الاطلاع",
-  "بانتظار_التوزيع": "بانتظار التوزيع",
+  "بانتظار_التوزيع": "بانتظار الإسناد",
   "بانتظار_الاعتماد": "بانتظار الاعتماد",
 };
 
@@ -2051,7 +2051,8 @@ export const GeneralTaskEventType = {
 export type GeneralTaskEventTypeValue = typeof GeneralTaskEventType[keyof typeof GeneralTaskEventType];
 
 export const GeneralTaskEventTypeLabels: Record<GeneralTaskEventTypeValue, string> = {
-  "توزيع": "توزيع",
+  // Key (the stored event_type value) stays "توزيع"; the DISPLAYED label is "إسناد".
+  "توزيع": "إسناد",
   "إنجاز": "إنجاز",
   "ملاحظة": "ملاحظة",
   "تم_الاطلاع": "تم الاطلاع",

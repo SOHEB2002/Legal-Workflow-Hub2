@@ -8216,7 +8216,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "هذه المهمة ليست موجَّهة إلى قسم" });
       }
       if (task.status !== FieldTaskStatus.AWAITING_DISTRIBUTION) {
-        return res.status(400).json({ error: "المهمة ليست بانتظار التوزيع" });
+        return res.status(400).json({ error: "المهمة ليست بانتظار الإسناد" });
       }
 
       // Access gate — delegation-aware. A branch_manager (firm-wide), or a
@@ -8232,7 +8232,7 @@ export async function registerRoutes(
         ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
         : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
       if (!isManager && !isRoutedHead) {
-        return res.status(403).json({ error: "لا تملك صلاحية توزيع هذه المهمة" });
+        return res.status(403).json({ error: "لا تملك صلاحية إسناد هذه المهمة" });
       }
 
       // The chosen assignee must be an ACTIVE user who is either a member of the
@@ -8267,7 +8267,7 @@ export async function registerRoutes(
       }
       return res.json(updated);
     } catch (error) {
-      res.status(500).json({ error: "حدث خطأ في توزيع المهمة" });
+      res.status(500).json({ error: "حدث خطأ في إسناد المهمة" });
     }
   });
 

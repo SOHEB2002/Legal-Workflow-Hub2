@@ -67,8 +67,8 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   field_task: { icon: ClipboardList, label: "مهمة ميدانية" },
   general_task: { icon: ListChecks, label: "مهمة عامة" },
   general_task_review: { icon: ClipboardCheck, label: "مراجعة نتيجة مهمة" },
-  general_task_distribute: { icon: UserPlus, label: "توزيع مهمة" },
-  general_task_awaiting_distribution: { icon: Clock, label: "بانتظار توزيع القسم" },
+  general_task_distribute: { icon: UserPlus, label: "إسناد مهمة" },
+  general_task_awaiting_distribution: { icon: Clock, label: "بانتظار إسناد القسم" },
   general_task_approve: { icon: Stamp, label: "اعتماد نتيجة مهمة" },
   contact_followup: { icon: Phone, label: "متابعة عميل" },
   delegation_approval: { icon: Stamp, label: "اعتماد تفويض" },
@@ -209,10 +209,10 @@ const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
   [MyTaskKind.DATA_COMPLETION]: "تم التواصل",
   // Requester's informational view of a routed task awaiting distribution — no
   // action for them; the (disabled) button just restates the state.
-  [MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION]: "بانتظار التوزيع",
-  // Dept-routed task awaiting the head's distribution — the verb is "توزيع",
+  [MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION]: "بانتظار الإسناد",
+  // Dept-routed task awaiting the head's assignment — the verb is "إسناد",
   // more specific than the generic "assign" hint it shares.
-  [MyTaskKind.GENERAL_TASK_DISTRIBUTE]: "توزيع",
+  [MyTaskKind.GENERAL_TASK_DISTRIBUTE]: "إسناد",
 };
 
 // Pinned to the top under the "المستعجلة" (urgent) heading: hearings (+ their
@@ -273,7 +273,7 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
       // The dept_head (or a delegate / branch_manager) hands a dept-routed task
       // sitting in بانتظار_التوزيع to a member of the routed department (or
       // himself) — sub-step 6. The member then does the work as a normal task.
-      return { mode: "distribute", title: "توزيع المهمة" };
+      return { mode: "distribute", title: "إسناد المهمة" };
     case MyTaskKind.CONSULTATION_CLOSING: return { mode: "reason", title: "إغلاق الاستشارة" };
     case MyTaskKind.HEARING_REPORT: return { mode: "report", title: "تقرير الجلسة" };
     case MyTaskKind.CASE_UNASSIGNED: return { mode: "assign", title: "إسناد القضية لمحامٍ" };
@@ -779,16 +779,22 @@ export default function MyTasksPage() {
   const returnedNote = actionTask && currentMode === "complete" && actionTask.kind === MyTaskKind.GENERAL_TASK
     ? (getTaskById(actionTask.entityId)?.reviewNote || "").trim()
     : "";
-  // Distribute modal (sub-step 6): the routed department is carried on the feed
-  // item itself (NOT via the field-tasks context — a head-less task that just
-  // got a head stays assignedTo="" → outside that context's scope). Options =
-  // active members of the routed department PLUS the actor himself (the
+  // Distribute modal (sub-step 6) — the routed department to list members from.
+  // A department_head can ONLY distribute a task routed to their OWN department
+  // (the server gate enforces exactly this: effectiveDeptHeadDepts → the head's
+  // own dept), so for a head the routed dept IS user.departmentId — authoritative
+  // and robust even if the feed item's optional routedDepartmentId didn't
+  // propagate. A branch_manager (or a delegate acting for a head, whose own role
+  // isn't department_head) can distribute another department's task, so they read
+  // it from the feed item (with the full field task as a fallback).
+  const distributeDeptId = currentMode !== "distribute" ? "" :
+    (isDeptHead
+      ? (user?.departmentId || "")
+      : (actionTask?.routedDepartmentId || getTaskById(actionTask?.entityId ?? "")?.routedDepartmentId || ""));
+  // Options = active members of the routed department PLUS the actor himself (the
   // "distribute to myself" edge — a head whose own dept is the routed dept is
   // already in the first set; the id clause also lets a branch_manager pick
   // himself). dedup is natural (one row per user). The server re-validates this.
-  const distributeDeptId = actionTask && currentMode === "distribute"
-    ? (actionTask.routedDepartmentId || "")
-    : "";
   const distributeOptions = currentMode === "distribute"
     ? users.filter((u) => u.isActive && (u.departmentId === distributeDeptId || u.id === user?.id))
     : [];
@@ -1057,7 +1063,7 @@ export default function MyTasksPage() {
               )}
 
               {currentMode === "distribute" && (
-                <div className="space-y-1"><Label>توزيع إلى (عضو من القسم أو أنت)</Label>
+                <div className="space-y-1"><Label>إسناد إلى (عضو من القسم أو أنت)</Label>
                   <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
                     <SelectTrigger data-testid="select-distribute-assignee"><SelectValue placeholder="اختر المسند إليه" /></SelectTrigger>
                     <SelectContent>
@@ -1160,7 +1166,7 @@ export default function MyTasksPage() {
                   </SelectContent>
                 </Select></div>
             </div>
-            <p className="text-xs text-muted-foreground">اختر شخصاً لإسناد المهمة إليه مباشرة، أو اختر قسماً فقط لإسنادها إلى رئيس القسم للتوزيع (وإن لم يوجد رئيس، تنتظر التوزيع حتى تعيينه). اختيار قسم يصفّي قائمة الأشخاص؛ بدون قسم تظهر كل الأسماء.</p>
+            <p className="text-xs text-muted-foreground">اختر شخصاً لإسناد المهمة إليه مباشرة، أو اختر قسماً فقط لإحالتها إلى رئيس القسم ليُسندها لعضو (وإن لم يوجد رئيس، تنتظر الإسناد حتى تعيينه). اختيار قسم يصفّي قائمة الأشخاص؛ بدون قسم تظهر كل الأسماء.</p>
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>إلغاء</Button>
