@@ -3096,7 +3096,7 @@ export class DatabaseStorage implements IStorage {
       const ftActionable = sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`;
       const cols = { id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title,
         assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate, taskType: fieldTasks.taskType,
-        status: fieldTasks.status };
+        status: fieldTasks.status, routedDepartmentId: fieldTasks.routedDepartmentId };
       const rows = firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(ftActionable)
         : deptHeadScoped
@@ -3159,6 +3159,10 @@ export class DatabaseStorage implements IStorage {
             && r.status !== FieldTaskStatus.AWAITING_APPROVAL
             && !!r.dueDate && r.dueDate < today,
           actionHint: isGeneral ? generalHint : (ownerId ? "complete" : "assign"),
+          // Carried for the dept_head distribute modal (sub-step 6) — the routed
+          // department's members are listed from this, independent of the
+          // field-tasks context scope. Only meaningful for GENERAL_TASK_DISTRIBUTE.
+          routedDepartmentId: r.routedDepartmentId ?? null,
         });
       }
     }

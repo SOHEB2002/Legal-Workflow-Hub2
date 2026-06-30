@@ -210,6 +210,9 @@ const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
   // Requester's informational view of a routed task awaiting distribution — no
   // action for them; the (disabled) button just restates the state.
   [MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION]: "بانتظار التوزيع",
+  // Dept-routed task awaiting the head's distribution — the verb is "توزيع",
+  // more specific than the generic "assign" hint it shares.
+  [MyTaskKind.GENERAL_TASK_DISTRIBUTE]: "توزيع",
 };
 
 // Pinned to the top under the "المستعجلة" (urgent) heading: hearings (+ their
@@ -242,7 +245,7 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 // are enforced server-side — we never duplicate that here). actionModeFor
 // returns the modal shape, or null for kinds PART 2 doesn't wire yet (those keep
 // a disabled placeholder; see the report's FLAGS).
-type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review";
+type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
   switch (task.kind) {
@@ -266,6 +269,11 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
       // The original requester reviews the returned result: تم الاطلاع (close) or
       // ملاحظة (send back to the worker). The modal also shows the worker's result.
       return { mode: "review", title: "مراجعة نتيجة المهمة" };
+    case MyTaskKind.GENERAL_TASK_DISTRIBUTE:
+      // The dept_head (or a delegate / branch_manager) hands a dept-routed task
+      // sitting in بانتظار_التوزيع to a member of the routed department (or
+      // himself) — sub-step 6. The member then does the work as a normal task.
+      return { mode: "distribute", title: "توزيع المهمة" };
     case MyTaskKind.CONSULTATION_CLOSING: return { mode: "reason", title: "إغلاق الاستشارة" };
     case MyTaskKind.HEARING_REPORT: return { mode: "report", title: "تقرير الجلسة" };
     case MyTaskKind.CASE_UNASSIGNED: return { mode: "assign", title: "إسناد القضية لمحامٍ" };
@@ -324,6 +332,11 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
         decision: form.decision === "ملاحظة" ? "ملاحظة" : "تم_الاطلاع",
         reviewNote: form.notes,
       } };
+    case MyTaskKind.GENERAL_TASK_DISTRIBUTE:
+      // Dedicated endpoint — the server resolves the gate (routed-dept head /
+      // delegate / manager) + validates the assignee is a routed-dept member or
+      // the head himself, sets قيد_الانتظار, keeps routedDepartmentId.
+      return { method: "POST", url: `/api/field-tasks/${e}/distribute`, body: { assignedTo: form.assigneeId } };
     case MyTaskKind.CONSULTATION_CLOSING: return { method: "POST", url: `/api/consultations/${e}/early-close`, body: { reason: form.reason } };
     case MyTaskKind.HEARING_REPORT:
       return { method: "POST", url: `/api/hearings/${e}/report`, body: {
@@ -349,6 +362,7 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
 // Colour-coded badge per event type (extensible — path-2 توزيع/اعتماد slot in
 // here later with no other change).
 const EVENT_BADGE_CLASS: Record<string, string> = {
+  [GeneralTaskEventType.DISTRIBUTED]:        "border-blue-400 text-blue-700 dark:text-blue-400",
   [GeneralTaskEventType.RESULT_SUBMITTED]:   "border-green-400 text-green-700 dark:text-green-400",
   [GeneralTaskEventType.RETURNED_WITH_NOTE]: "border-amber-400 text-amber-700 dark:text-amber-400",
   [GeneralTaskEventType.REVIEWED_CLOSED]:    "border-muted-foreground/40 text-muted-foreground",
@@ -616,6 +630,9 @@ export default function MyTasksPage() {
     if (mode === "review" && form.decision === "ملاحظة" && !form.notes.trim()) {
       toast({ title: "الملاحظة مطلوبة عند الإعادة", variant: "destructive" }); return;
     }
+    if (mode === "distribute" && !form.assigneeId) {
+      toast({ title: "اختر المسند إليه", variant: "destructive" }); return;
+    }
     setSubmitting(true);
     try {
       const { method, url, body } = buildActionRequest(actionTask, form);
@@ -762,6 +779,19 @@ export default function MyTasksPage() {
   const returnedNote = actionTask && currentMode === "complete" && actionTask.kind === MyTaskKind.GENERAL_TASK
     ? (getTaskById(actionTask.entityId)?.reviewNote || "").trim()
     : "";
+  // Distribute modal (sub-step 6): the routed department is carried on the feed
+  // item itself (NOT via the field-tasks context — a head-less task that just
+  // got a head stays assignedTo="" → outside that context's scope). Options =
+  // active members of the routed department PLUS the actor himself (the
+  // "distribute to myself" edge — a head whose own dept is the routed dept is
+  // already in the first set; the id clause also lets a branch_manager pick
+  // himself). dedup is natural (one row per user). The server re-validates this.
+  const distributeDeptId = actionTask && currentMode === "distribute"
+    ? (actionTask.routedDepartmentId || "")
+    : "";
+  const distributeOptions = currentMode === "distribute"
+    ? users.filter((u) => u.isActive && (u.departmentId === distributeDeptId || u.id === user?.id))
+    : [];
 
   return (
     <div dir="rtl" className="p-4 md:p-6 space-y-6" data-testid="page-my-tasks">
@@ -1024,6 +1054,18 @@ export default function MyTasksPage() {
                       <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-review-note" /></div>
                   )}
                 </>
+              )}
+
+              {currentMode === "distribute" && (
+                <div className="space-y-1"><Label>توزيع إلى (عضو من القسم أو أنت)</Label>
+                  <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
+                    <SelectTrigger data-testid="select-distribute-assignee"><SelectValue placeholder="اختر المسند إليه" /></SelectTrigger>
+                    <SelectContent>
+                      {distributeOptions.map((u) => (
+                        <SelectItem key={u.id} value={u.id}>{u.id === user?.id ? `${u.name} (أنا)` : u.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select></div>
               )}
 
               {currentMode === "confirm" && (

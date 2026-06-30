@@ -2042,6 +2042,7 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
 // (sub-step 7/8) adds DISTRIBUTED "توزيع" / APPROVED "اعتماد" here with no schema
 // change (event_type is a free varchar on the row).
 export const GeneralTaskEventType = {
+  DISTRIBUTED:        "توزيع",      // dept_head handed a dept-routed task to a member (sub-step 6)
   RESULT_SUBMITTED:   "إنجاز",      // worker submitted a result
   RETURNED_WITH_NOTE: "ملاحظة",     // requester sent it back with a note
   REVIEWED_CLOSED:    "تم_الاطلاع", // requester closed it (no text)
@@ -2050,6 +2051,7 @@ export const GeneralTaskEventType = {
 export type GeneralTaskEventTypeValue = typeof GeneralTaskEventType[keyof typeof GeneralTaskEventType];
 
 export const GeneralTaskEventTypeLabels: Record<GeneralTaskEventTypeValue, string> = {
+  "توزيع": "توزيع",
   "إنجاز": "إنجاز",
   "ملاحظة": "ملاحظة",
   "تم_الاطلاع": "تم الاطلاع",
@@ -4153,6 +4155,13 @@ export const generalTaskReviewSchema = z.object({
   reviewNote: z.string().optional(),
 }).passthrough();
 
+// Sub-step 6 — dept_head distributes a بانتظار_التوزيع dept-routed general task
+// to a member (assignedTo = the chosen member or himself). Tolerant gate;
+// the handler enforces the real rules (active + routed-dept membership).
+export const generalTaskDistributeSchema = z.object({
+  assignedTo: z.string().optional(),
+}).passthrough();
+
 // ---- 2D' V2a — cases/consultations non-workflow Tier-2 bodies ----
 
 export const updateCaseTaradiSchema = z.object({
@@ -5092,6 +5101,12 @@ export interface MyTaskItem {
   // delegator (active approved delegation), this is the delegator's user id so
   // the FE can render "بالنيابة عن (name)". null = the user's own task.
   onBehalfOfUserId: string | null;
+  // For dept-routed general (عام) tasks only (GENERAL_TASK_DISTRIBUTE): the
+  // department the task was routed to, so the distribute modal can list that
+  // department's members WITHOUT depending on the field-tasks context (a
+  // head-less task that just got a head stays assignedTo="" → outside that
+  // context's scope). Undefined for every other feed kind.
+  routedDepartmentId?: string | null;
 }
 
 // Classify a task into its specialty domain (ترافع litigation / استشارات

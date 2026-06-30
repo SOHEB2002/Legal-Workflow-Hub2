@@ -12,6 +12,7 @@ import {
   insertHearingSchema,
   insertFieldTaskSchema,
   generalTaskReviewSchema,
+  generalTaskDistributeSchema,
   FieldTaskStatus,
   FieldTaskType,
   GeneralTaskEventType,
@@ -8184,6 +8185,89 @@ export async function registerRoutes(
       return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في مراجعة المهمة" });
+    }
+  });
+
+  // Sub-step 6 — dept_head DISTRIBUTES a dept-routed general (عام) task that is
+  // sitting in بانتظار_التوزيع to a member of the routed department (or himself).
+  // The task then moves to that member as a normal do-the-work GENERAL_TASK in
+  // قيد_الانتظار, with routedDepartmentId intact (so the result later routes back
+  // through the head for approval — sub-step 7). workerId stays null until the
+  // member completes. Access: a dept_head of the routed department, a delegate
+  // acting for such a head, or a branch_manager.
+  app.post("/api/field-tasks/:id/distribute", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const bodyCheck = generalTaskDistributeSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const assignTo = String(req.body?.assignedTo || "").trim();
+      if (!assignTo) {
+        return res.status(400).json({ error: "اختر المسند إليه" });
+      }
+
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (task.taskType !== FieldTaskType.GENERAL) {
+        return res.status(400).json({ error: "هذا الإجراء خاص بالمهام العامة فقط" });
+      }
+      if (!task.routedDepartmentId) {
+        return res.status(400).json({ error: "هذه المهمة ليست موجَّهة إلى قسم" });
+      }
+      if (task.status !== FieldTaskStatus.AWAITING_DISTRIBUTION) {
+        return res.status(400).json({ error: "المهمة ليست بانتظار التوزيع" });
+      }
+
+      // Access gate — delegation-aware. A branch_manager (firm-wide), or a
+      // dept_head of the ROUTED department (the delegator's own dept travels with
+      // the inherited dept_head role via effectiveDeptHeadDepts). With no acting
+      // context the helpers resolve to exactly the actor's own role/dept.
+      const ctx = req.actingContext;
+      const scopeCaseId = task.caseId ?? null;
+      const isManager = ctx
+        ? hasEffectiveRole(ctx, scopeCaseId, "branch_manager")
+        : user.role === "branch_manager";
+      const isRoutedHead = ctx
+        ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
+        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+      if (!isManager && !isRoutedHead) {
+        return res.status(403).json({ error: "لا تملك صلاحية توزيع هذه المهمة" });
+      }
+
+      // The chosen assignee must be an ACTIVE user who is either a member of the
+      // routed department OR the actor himself (the "distribute to myself" edge —
+      // a head whose own departmentId is the routed dept already qualifies via
+      // the first clause; the id clause also covers a manager picking himself).
+      const assignee = await storage.getUser(assignTo);
+      if (!assignee || !assignee.isActive) {
+        return res.status(400).json({ error: "الموظف المكلف غير نشط أو غير موجود" });
+      }
+      if (assignee.departmentId !== task.routedDepartmentId && assignee.id !== user.id) {
+        return res.status(400).json({ error: "يجب اختيار عضو من القسم الموجَّهة إليه المهمة" });
+      }
+
+      // Hand the task to the member: assignedTo = chosen member, status =
+      // قيد_الانتظار. routedDepartmentId + workerId(null) untouched (partial set).
+      const updated = await storage.updateFieldTask(task.id, {
+        assignedTo: assignTo,
+        status: FieldTaskStatus.PENDING,
+      });
+
+      // Thread event: DISTRIBUTED — actor = the distributing head; body notes the
+      // member it went to (best-effort; a logging failure must not fail the op).
+      try {
+        await storage.createGeneralTaskEvent({
+          fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+          eventType: GeneralTaskEventType.DISTRIBUTED,
+          body: `إلى: ${assignee.name || assignee.id}`,
+        });
+      } catch (e) {
+        console.error("[field-tasks distribute] general-task event write failed:", e);
+      }
+      return res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في توزيع المهمة" });
     }
   });
 
