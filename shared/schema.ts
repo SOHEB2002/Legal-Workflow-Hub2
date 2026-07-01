@@ -930,6 +930,9 @@ export const delegationsTable = pgTable("delegations_table", {
   specificCaseIds: jsonb("specific_case_ids"),
   approvedBy: varchar("approved_by", { length: 255 }),
   approvedAt: timestamp("approved_at"),
+  // Set when a delegation is REJECTED (status "مرفوض") via /api/delegations/:id/reject.
+  // Nullable/additive — pending/approved/cancelled/expired rows leave it null.
+  rejectionReason: text("rejection_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   // Unified-tasks I4a — delegation enforcement resolver filters by the delegate
@@ -3650,6 +3653,7 @@ export const NotificationType = {
   // إشعارات التفويض
   DELEGATION_REQUESTED: "delegation_requested",
   DELEGATION_APPROVED: "delegation_approved",
+  DELEGATION_REJECTED: "delegation_rejected",
   DELEGATION_EXPIRED: "delegation_expired",
 
   // متابعة التواصل
@@ -3716,6 +3720,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   legal_deadline_overdue: "موعد نظامي فائت",
   delegation_requested: "طلب تفويض",
   delegation_approved: "تم اعتماد التفويض",
+  delegation_rejected: "تم رفض التفويض",
   delegation_expired: "انتهاء التفويض",
   contact_followup_overdue: "متابعة تواصل متأخرة",
   hearing_update_overdue: "جلسة متأخرة التحديث",

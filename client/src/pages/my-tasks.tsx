@@ -34,9 +34,9 @@ import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
-  GeneralTaskEventType, GeneralTaskEventTypeLabels,
+  GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
-  type GeneralTaskEventTypeValue, type FieldTask,
+  type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
 } from "@shared/schema";
 
 // hearing_attend / hearing_unrecorded open the SHARED hearing-result dialog
@@ -245,14 +245,14 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 // are enforced server-side — we never duplicate that here). actionModeFor
 // returns the modal shape, or null for kinds PART 2 doesn't wire yet (those keep
 // a disabled placeholder; see the report's FLAGS).
-type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve";
+type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve" | "delegationDecision";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { mode: "confirm", title: "تأكيد تصدير تقرير الجلسة" };
     case MyTaskKind.DATA_COMPLETION: return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
     case MyTaskKind.AGENCY_VERIFICATION: return { mode: "confirm", title: "تأكيد التحقق من الوكالة" };
-    case MyTaskKind.DELEGATION_APPROVAL: return { mode: "confirm", title: "اعتماد التفويض" };
+    case MyTaskKind.DELEGATION_APPROVAL: return { mode: "delegationDecision", title: "قرار التفويض" };
     case MyTaskKind.CONTACT_FOLLOWUP: return { mode: "confirm", title: "إنهاء متابعة العميل" };
     case MyTaskKind.LEGAL_DEADLINE: return { mode: "confirm", title: "إنجاز الموعد القانوني" };
     case MyTaskKind.FIELD_TASK:
@@ -316,7 +316,11 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
     case MyTaskKind.SESSION_REPORT_EXPORT: return { method: "POST", url: `/api/hearings/${e}/mark-report-exported` };
     case MyTaskKind.DATA_COMPLETION: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
     case MyTaskKind.AGENCY_VERIFICATION: return { method: "POST", url: `/api/hearings/${e}/ack-agency-verification` };
-    case MyTaskKind.DELEGATION_APPROVAL: return { method: "POST", url: `/api/delegations/${e}/approve` };
+    case MyTaskKind.DELEGATION_APPROVAL:
+      // اعتماد (default) → /approve; رفض → /reject with the required reason.
+      return form.decision === "رفض"
+        ? { method: "POST", url: `/api/delegations/${e}/reject`, body: { reason: form.notes } }
+        : { method: "POST", url: `/api/delegations/${e}/approve` };
     case MyTaskKind.CONTACT_FOLLOWUP: return { method: "PATCH", url: `/api/contact-logs/${e}`, body: { followUpCompleted: true } };
     case MyTaskKind.LEGAL_DEADLINE: return { method: "PATCH", url: `/api/legal-deadlines/${e}`, body: { status: "مكتمل" } };
     case MyTaskKind.FIELD_TASK:
@@ -563,6 +567,10 @@ export default function MyTasksPage() {
   const [actionTask, setActionTask] = useState<MyTaskItem | null>(null);
   const [form, setForm] = useState<ActionForm>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  // The full delegation record behind a DELEGATION_APPROVAL task — fetched on
+  // open so the decision modal can show from/to/reason/dates/scope (the feed
+  // item carries only the enriched title).
+  const [delegationRecord, setDelegationRecord] = useState<DelegationRecord | null>(null);
   // Hearing-result dialog (the shared component) target
   const [resultHearing, setResultHearing] = useState<Hearing | null>(null);
   // Case stage panel (the shared component) target
@@ -668,6 +676,18 @@ export default function MyTasksPage() {
       }
       return;
     }
+    if (task.kind === MyTaskKind.DELEGATION_APPROVAL) {
+      // Fetch the full delegation so the decision modal can show its details
+      // (from/to/reason/dates/scope), then open the generic modal.
+      try {
+        const res = await apiRequest("GET", `/api/delegations/${task.entityId}`);
+        setDelegationRecord(await res.json());
+        openAction(task);
+      } catch (err) {
+        toast({ title: "تعذّر فتح التفويض", description: extractApiError(err), variant: "destructive" });
+      }
+      return;
+    }
     openAction(task);
   }
 
@@ -703,6 +723,9 @@ export default function MyTasksPage() {
     if (mode === "distribute" && !form.assigneeId) {
       toast({ title: "اختر المسند إليه", variant: "destructive" }); return;
     }
+    if (mode === "delegationDecision" && form.decision === "رفض" && !form.notes.trim()) {
+      toast({ title: "سبب الرفض مطلوب", variant: "destructive" }); return;
+    }
     setSubmitting(true);
     try {
       const { method, url, body } = buildActionRequest(actionTask, form);
@@ -710,6 +733,7 @@ export default function MyTasksPage() {
       await refreshAfterAction();
       toast({ title: "تم تنفيذ الإجراء" });
       setActionTask(null);
+      setDelegationRecord(null);
     } catch (err) {
       toast({ title: "تعذّر تنفيذ الإجراء", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -1071,7 +1095,7 @@ export default function MyTasksPage() {
       )}
 
       {/* ===== Action dialog ===== */}
-      <Dialog open={!!actionTask} onOpenChange={(o) => !o && setActionTask(null)}>
+      <Dialog open={!!actionTask} onOpenChange={(o) => { if (!o) { setActionTask(null); setDelegationRecord(null); } }}>
         <DialogContent dir="rtl" data-testid="dialog-action">
           <DialogHeader><DialogTitle>{actionTask ? actionModeFor(actionTask)?.title : ""}</DialogTitle></DialogHeader>
           {actionTask && (
@@ -1241,13 +1265,39 @@ export default function MyTasksPage() {
                   </Select></div>
               )}
 
+              {currentMode === "delegationDecision" && (
+                <>
+                  {/* Details block (item 2): who ← whom, reason, window, scope. */}
+                  <div className="rounded-md border p-3 text-sm space-y-1 bg-muted/30" data-testid="delegation-details">
+                    <p>المفوِّض: <span className="font-medium"><BidiText>{userName(delegationRecord?.fromUserId ?? "")}</BidiText></span></p>
+                    <p>المفوَّض إليه: <span className="font-medium"><BidiText>{userName(delegationRecord?.toUserId ?? "")}</BidiText></span></p>
+                    <p>السبب: {delegationRecord ? (DelegationReasonLabels[delegationRecord.reason] || delegationRecord.reason) : "—"}
+                      {delegationRecord?.reasonDetails?.trim() ? <> — <BidiText>{delegationRecord.reasonDetails}</BidiText></> : null}</p>
+                    <p>المدة: {delegationRecord ? <>من <DualDateDisplay date={delegationRecord.startDate} /> إلى <DualDateDisplay date={delegationRecord.endDate} /></> : "—"}</p>
+                    <p>النطاق: {delegationRecord?.scope === "specific_cases" ? "قضايا محددة" : "جميع القضايا"}</p>
+                  </div>
+                  <div className="space-y-1"><Label>القرار</Label>
+                    <Select value={form.decision === "رفض" ? "رفض" : "اعتماد"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                      <SelectTrigger data-testid="select-delegation-decision"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="اعتماد">اعتماد</SelectItem>
+                        <SelectItem value="رفض">رفض</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                  {form.decision === "رفض" && (
+                    <div className="space-y-1"><Label>سبب الرفض (مطلوب)</Label>
+                      <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-delegation-reject-reason" /></div>
+                  )}
+                </>
+              )}
+
               {currentMode === "confirm" && (
                 <p className="text-sm">هل تريد تأكيد هذا الإجراء؟</p>
               )}
             </div>
           )}
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setActionTask(null)}>إلغاء</Button>
+            <Button variant="outline" onClick={() => { setActionTask(null); setDelegationRecord(null); }}>إلغاء</Button>
             <Button onClick={submitAction} disabled={submitting} data-testid="button-confirm-action">
               {submitting ? "جارٍ التنفيذ…" : "تأكيد"}
             </Button>

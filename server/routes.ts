@@ -9785,9 +9785,20 @@ export async function registerRoutes(
 
   // ==================== Delegations ====================
 
+  // Item 4 — the /delegations page is now open to EVERY authenticated user (the
+  // sidebar link is no longer manager-only), so this list is role-scoped
+  // server-side: managers/approvers (branch_manager / department_head /
+  // admin_support) see all delegations; everyone else sees ONLY the ones they
+  // are a party to (delegator or delegate). Prevents leaking other people's
+  // delegations to a regular user who can now reach the page.
   app.get("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const delegations = await storage.getAllDelegations();
+      const user = req.user!;
+      const all = await storage.getAllDelegations();
+      const canSeeAll = ["branch_manager", "department_head", "admin_support"].includes(user.role);
+      const delegations = canSeeAll
+        ? all
+        : all.filter((d) => d.fromUserId === user.id || d.toUserId === user.id);
       res.json(delegations);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب التفويضات" });
@@ -9816,6 +9827,26 @@ export async function registerRoutes(
       res.json({ delegators });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب التفويضات النشطة" });
+    }
+  });
+
+  // Item 2 — single delegation (for the approval modal's details block). Gate
+  // mirrors the list scope: a party (delegator/delegate) or a manager/approver
+  // may read it. Registered AFTER /acting-as (a literal) so the :id capture
+  // never swallows that path.
+  app.get("/api/delegations/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const delegation = await storage.getDelegation(String(req.params.id));
+      if (!delegation) return res.status(404).json({ error: "تفويض غير موجود" });
+      const canSeeAll = ["branch_manager", "department_head", "admin_support"].includes(user.role);
+      const isParty = delegation.fromUserId === user.id || delegation.toUserId === user.id;
+      if (!canSeeAll && !isParty) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذا التفويض" });
+      }
+      res.json(delegation);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التفويض" });
     }
   });
 
@@ -9945,6 +9976,59 @@ export async function registerRoutes(
       res.json(delegation);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في اعتماد التفويض" });
+    }
+  });
+
+  // Item 2 — REJECT a pending delegation. Same gate + guardrails as /approve
+  // (branch_manager / department_head / admin_support, never a party). Requires
+  // a rejection reason. Sets status "مرفوض" + stores the reason, and notifies
+  // BOTH parties (delegator + delegate), mirroring the approval notifications.
+  app.post("/api/delegations/:id/reject", requireAuth, requireRole("branch_manager", "department_head", "admin_support"), async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (!reason) {
+        return res.status(400).json({ error: "سبب الرفض مطلوب" });
+      }
+      const existingDelegation = await storage.getDelegation(String(req.params.id));
+      if (!existingDelegation) return res.status(404).json({ message: "تفويض غير موجود" });
+      // Same self-cycle guardrail as /approve — nobody may reject a delegation
+      // they are personally a party to (real human id).
+      if (existingDelegation.fromUserId === user.id || existingDelegation.toUserId === user.id) {
+        return res.status(403).json({ error: "لا يمكنك رفض تفويض أنت طرف فيه" });
+      }
+      const delegation = await storage.updateDelegation(String(req.params.id), {
+        status: "مرفوض",
+        rejectionReason: reason,
+      });
+      if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
+      const toUser = await storage.getUser(delegation.toUserId);
+      const fromUser = await storage.getUser(delegation.fromUserId);
+      if (toUser && fromUser) {
+        await storage.createNotification({
+          type: "delegation_rejected",
+          title: "تم رفض التفويض",
+          message: `تم رفض تفويض قضايا ${fromUser.name} إليك. السبب: ${reason}`,
+          priority: "high",
+          status: "pending",
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: toUser.id,
+        });
+        await storage.createNotification({
+          type: "delegation_rejected",
+          title: "تم رفض التفويض",
+          message: `تم رفض طلب تفويض قضاياك إلى ${toUser.name}. السبب: ${reason}`,
+          priority: "high",
+          status: "pending",
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: fromUser.id,
+        });
+      }
+      res.json(delegation);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في رفض التفويض" });
     }
   });
 

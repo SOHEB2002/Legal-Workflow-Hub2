@@ -31,6 +31,7 @@ import {
 import { db } from "./db";
 import type { ActingContext } from "./acting-context";
 import { eq, and, or, gt, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
@@ -3277,12 +3278,21 @@ export class DatabaseStorage implements IStorage {
             eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today))
         : and(eq(users.departmentId, userDept!), sql`${delegationsTable.approvedBy} IS NULL`,
             eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today));
-      const rows = await db.select({ id: delegationsTable.id, fromUserId: delegationsTable.fromUserId, endDate: delegationsTable.endDate })
+      // Enriched card (item 1): show WHO delegates to WHOM. The delegator name
+      // comes from the existing users join (fromUserId); the delegate name needs
+      // a second aliased users join on toUserId. pendingWhere still scopes on the
+      // delegator's dept via the primary `users` join.
+      const toUsers = alias(users, "deleg_to_users");
+      const rows = await db.select({
+        id: delegationsTable.id, fromUserId: delegationsTable.fromUserId, endDate: delegationsTable.endDate,
+        fromName: users.name, toName: toUsers.name,
+      })
         .from(delegationsTable).innerJoin(users, eq(delegationsTable.fromUserId, users.id))
+        .innerJoin(toUsers, eq(delegationsTable.toUserId, toUsers.id))
         .where(pendingWhere);
       for (const r of rows) {
         tasks.push({ id: `delegation_approval:${r.id}`, kind: MyTaskKind.DELEGATION_APPROVAL,
-          title: "طلب تفويض بانتظار اعتمادك", entityType: "delegation", entityId: r.id, caseId: null,
+          title: `طلب تفويض: ${r.fromName || r.fromUserId} ← ${r.toName || ""}`, entityType: "delegation", entityId: r.id, caseId: null,
           ownerId: uid, ownerScope: "self", dueDate: r.endDate, isOverdue: false, actionHint: "approve" });
       }
     }

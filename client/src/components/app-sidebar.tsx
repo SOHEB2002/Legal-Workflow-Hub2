@@ -81,6 +81,14 @@ const menuItems: MenuItem[] = [
     url: "/notifications",
     icon: Bell,
   },
+  // Item 4 — open to EVERY authenticated user (was manager-only under الإدارة).
+  // The delegator is usually a regular employee, so they need the entry point;
+  // the /delegations list is role-scoped server-side.
+  {
+    title: "التفويضات",
+    url: "/delegations",
+    icon: ArrowLeftRight,
+  },
 ];
 
 const adminMenuItems = [
@@ -93,11 +101,6 @@ const adminMenuItems = [
     title: "سجل النشاط",
     url: "/activity-log",
     icon: FileText,
-  },
-  {
-    title: "التفويضات",
-    url: "/delegations",
-    icon: ArrowLeftRight,
   },
 ];
 
