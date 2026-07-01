@@ -99,6 +99,7 @@ export interface IStorage {
 
   // Field Tasks
   getAllFieldTasks(): Promise<FieldTask[]>;
+  getArchivedGeneralTasks(user: { id: string; role: string; departmentId: string | null }): Promise<FieldTask[]>;
   getFieldTasksByCase(caseId: string): Promise<FieldTask[]>;
   getFieldTaskById(id: string): Promise<FieldTask | undefined>;
   createFieldTask(data: Partial<FieldTask>, assignedBy: string): Promise<FieldTask>;
@@ -1712,6 +1713,37 @@ export class DatabaseStorage implements IStorage {
     return result.map(mapDbFieldTask);
   }
 
+  // Sub-step 9 — the مهامي "منجزة" archive: CLOSED (مكتمل + ملغي) GENERAL (عام)
+  // tasks only, scoped to what the viewer may see (mirrors the live-feed field-
+  // task visibility). Fetched lazily (only when the user expands the archive
+  // section), so it never rides on the 30s my-tasks poll.
+  //   • branch_manager → firm-wide (all closed general tasks);
+  //   • department_head → involved (assignee/worker/creator/requester) OR routed
+  //     to their department OR on a case in their department (the routed-dept +
+  //     parent-case clauses match the live feed's dept_head scope, so a task
+  //     that flowed through the head — but where he is not the final assignee —
+  //     still appears);
+  //   • everyone else (incl. admin_support) → involved only (their own closed
+  //     general tasks as requester, worker, creator, or final assignee).
+  async getArchivedGeneralTasks(user: { id: string; role: string; departmentId: string | null }): Promise<FieldTask[]> {
+    const all = await this.getAllFieldTasks();
+    const closed = all.filter((t) =>
+      t.taskType === FieldTaskType.GENERAL &&
+      (t.status === FieldTaskStatus.COMPLETED || t.status === FieldTaskStatus.CANCELLED),
+    );
+    if (user.role === "branch_manager") return closed;
+    const uid = user.id;
+    const involved = (t: FieldTask) =>
+      t.assignedTo === uid || t.workerId === uid || t.assignedBy === uid || t.originalRequesterId === uid;
+    if (user.role === "department_head" && user.departmentId) {
+      const dept = user.departmentId;
+      const cases = await this.getAllCases();
+      const deptCaseIds = new Set(cases.filter((c) => c.departmentId === dept).map((c) => c.id));
+      return closed.filter((t) => involved(t) || t.routedDepartmentId === dept || (!!t.caseId && deptCaseIds.has(t.caseId)));
+    }
+    return closed.filter(involved);
+  }
+
   async getFieldTaskById(id: string): Promise<FieldTask | undefined> {
     const result = await db.select().from(fieldTasks).where(eq(fieldTasks.id, id));
     return result[0] ? mapDbFieldTask(result[0]) : undefined;
@@ -3179,6 +3211,7 @@ export class DatabaseStorage implements IStorage {
     if (!isManager) {
       const myRouted = await db.select({
         id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title, dueDate: fieldTasks.dueDate,
+        routedDepartmentId: fieldTasks.routedDepartmentId,
       }).from(fieldTasks).where(and(
         eq(fieldTasks.originalRequesterId, uid),
         eq(fieldTasks.assignedTo, ""),
@@ -3193,6 +3226,9 @@ export class DatabaseStorage implements IStorage {
           title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
           ownerId: uid, ownerScope: "self",
           dueDate: r.dueDate || null, isOverdue: false, actionHint: "review",
+          // Carried so the informational row can show "القسم: <dept>" — which
+          // department the task is waiting on for distribution (sub-step 9).
+          routedDepartmentId: r.routedDepartmentId ?? null,
         });
       }
     }

@@ -13,7 +13,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock,
+  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -36,7 +36,7 @@ import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
   GeneralTaskEventType, GeneralTaskEventTypeLabels,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
-  type GeneralTaskEventTypeValue,
+  type GeneralTaskEventTypeValue, type FieldTask,
 } from "@shared/schema";
 
 // hearing_attend / hearing_unrecorded open the SHARED hearing-result dialog
@@ -420,6 +420,17 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
   const { getTaskById } = useFieldTasks();
+  const { departments } = useDepartments();
+  // Dept-routed (path-2) context: show which department the task is flowing
+  // through so the head and the requester have it at a glance. Only path-2
+  // general tasks carry routedDepartmentId; every other kind leaves it null.
+  const routedDeptName = task.routedDepartmentId
+    ? (departments.find((d) => d.id === task.routedDepartmentId)?.name || task.routedDepartmentId)
+    : "";
+  // The awaiting-distribution row is INFORMATIONAL for the requester (no action
+  // — it waits on the dept_head), so its disabled button must not promise a
+  // "coming soon" activation like the genuinely-unwired kinds do.
+  const isInfoOnly = task.kind === MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION;
   // A general (عام) task back in the worker's list WITH a reviewNote was returned
   // for edits (ملاحظة) — flag it so the worker sees it's a returned task, not a
   // fresh one. Short-circuited for every non-general kind (no lookup cost).
@@ -447,6 +458,7 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
         </div>
         <div className="mt-1 flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
           <span>{meta?.label ?? task.kind}</span>
+          {routedDeptName && (<><span>•</span><span data-testid={`task-routed-dept-${task.id}`}>القسم: <BidiText>{routedDeptName}</BidiText></span></>)}
           {task.dueDate && (<><span>•</span><DualDateDisplay date={task.dueDate} /></>)}
           {task.isOverdue && <Badge variant="destructive" className="text-[10px]">متأخرة</Badge>}
         </div>
@@ -455,7 +467,7 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
         size="sm"
         variant="outline"
         disabled={!actionable}
-        title={actionable ? undefined : "سيتم تفعيل هذا الإجراء قريباً"}
+        title={actionable ? undefined : isInfoOnly ? "بانتظار قيام رئيس القسم بإسناد المهمة" : "سيتم تفعيل هذا الإجراء قريباً"}
         onClick={() => actionable && onAction(task)}
         data-testid={`task-action-${task.id}`}
       >
@@ -498,6 +510,41 @@ function GroupHeader({ open, onToggle, title, count, titleClass, testId }: {
         <Badge variant="secondary" className="text-[10px]">{count}</Badge>
       )}
     </button>
+  );
+}
+
+// One archived (closed) general-task row in the "منجزة" section. Shows the
+// title + result + any last review note + when it closed; expanding it reveals
+// the full activity thread (read-only — the same GeneralTaskThread the modals
+// use). Self-contained expand state so many rows can open independently.
+function ArchiveRow({ task, workerName }: { task: FieldTask; workerName: string }) {
+  const [open, setOpen] = useState(false);
+  const cancelled = task.status === FieldTaskStatus.CANCELLED;
+  return (
+    <div className="rounded-md border bg-muted/20 p-3" data-testid={`archive-row-${task.id}`}>
+      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 text-right">
+        {open
+          ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          : <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />}
+        <span className="flex-1 min-w-0 text-sm font-medium"><BidiText>{task.title}</BidiText></span>
+        <Badge variant={cancelled ? "destructive" : "secondary"} className="text-[10px]">
+          {cancelled ? "ملغي" : "مكتمل"}
+        </Badge>
+      </button>
+      <div className="mt-1 ps-6 space-y-0.5 text-xs text-muted-foreground">
+        {task.completionNotes?.trim() && (
+          <p>النتيجة: <BidiText>{task.completionNotes}</BidiText></p>
+        )}
+        {task.workerId && <p>النتيجة من: <BidiText>{workerName}</BidiText></p>}
+        {task.reviewNote?.trim() && (
+          <p>آخر ملاحظة: <BidiText>{task.reviewNote}</BidiText></p>
+        )}
+        {task.completedAt && (
+          <p>أُغلقت: <DualDateDisplay date={task.completedAt} compact /></p>
+        )}
+      </div>
+      {open && <div className="mt-2 ps-6"><GeneralTaskThread taskId={task.id} /></div>}
+    </div>
   );
 }
 
@@ -550,6 +597,16 @@ export default function MyTasksPage() {
     queryKey: ["/api/my-tasks"],
     refetchInterval: 30000, // supervisory feed — poll every 30s
     enabled: !!user,
+  });
+
+  // "منجزة" archive — closed general tasks, fetched LAZILY only when the section
+  // is expanded (never rides the 30s poll). Server scopes it to feed visibility.
+  // Collapsed by default. Invalidated by refreshAfterAction's "/api/" sweep, so
+  // closing a task refreshes it while open.
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const { data: archivedTasks = [], isLoading: archiveLoading } = useQuery<FieldTask[]>({
+    queryKey: ["/api/field-tasks/archive"],
+    enabled: !!user && archiveOpen,
   });
 
   const userName = (id: string): string =>
@@ -764,6 +821,22 @@ export default function MyTasksPage() {
   const leftoverOwnerIds = Array.from(teamByMember.keys()).filter((id) => id !== "" && !rosterIds.has(id));
   const unassignedPool = pinAndSort(teamByMember.get("") ?? []);
 
+  // ----- "منجزة" archive derivation -----
+  // Newest-closed first (completedAt, falling back to updatedAt/createdAt so a
+  // cancelled task with no completedAt still sorts sanely). Supervisors additionally
+  // see it grouped by the WORKER who produced the result (workerId — reliably set
+  // on every completed general task; falls back to the creator for a task
+  // cancelled before anyone worked it).
+  const closedTs = (t: FieldTask) => t.completedAt || t.updatedAt || t.createdAt || "";
+  const archivedSorted = [...archivedTasks].sort((a, b) => closedTs(b).localeCompare(closedTs(a)));
+  const archiveByMember = new Map<string, FieldTask[]>();
+  for (const t of archivedSorted) {
+    const memberId = t.workerId || t.assignedBy || "";
+    const arr = archiveByMember.get(memberId) ?? [];
+    arr.push(t);
+    archiveByMember.set(memberId, arr);
+  }
+
   // One member row: collapsible header (name + task count), then the member's
   // tasks or "لا يوجد" when they have none.
   const renderMemberRow = (id: string, name: string) => {
@@ -949,6 +1022,51 @@ export default function MyTasksPage() {
               })()}
             </section>
           )}
+
+          {/* ===== "منجزة" archive — collapsed by default, at the bottom.
+              Closed general tasks move here out of the active feed. Lazy-loaded
+              on expand; grouped by worker for supervisors, flat for a user. ===== */}
+          <section className="space-y-2" data-testid="section-archive">
+            <button
+              type="button"
+              onClick={() => setArchiveOpen((o) => !o)}
+              className="flex w-full items-center gap-2 text-sm font-semibold text-muted-foreground"
+              data-testid="archive-header"
+            >
+              {archiveOpen
+                ? <ChevronDown className="h-4 w-4 shrink-0" />
+                : <ChevronLeft className="h-4 w-4 shrink-0" />}
+              <Archive className="h-4 w-4 shrink-0" />
+              <span className="flex-1 text-right">منجزة</span>
+              {archiveOpen && <Badge variant="secondary" className="text-[10px]">{archivedSorted.length}</Badge>}
+            </button>
+            {archiveOpen && (
+              archiveLoading ? (
+                <p className="ps-6 text-sm text-muted-foreground">جارٍ التحميل…</p>
+              ) : archivedSorted.length === 0 ? (
+                <p className="ps-6 text-sm text-muted-foreground">لا توجد مهام منجزة.</p>
+              ) : (isDeptHead || isBranchManager) ? (
+                <div className="space-y-3">
+                  {Array.from(archiveByMember.entries()).map(([memberId, items]) => {
+                    const key = `archive-member:${memberId}`;
+                    const open = isOpen(key);
+                    return (
+                      <div key={memberId || "unknown"} className="space-y-2 ps-2">
+                        <GroupHeader open={open} onToggle={() => toggle(key)}
+                          title={memberId ? userName(memberId) : "غير محدد"} count={items.length}
+                          titleClass="text-xs font-semibold text-muted-foreground" testId={`archive-member-${memberId}`} />
+                        {open && <div className="space-y-2">{items.map((t) => <ArchiveRow key={t.id} task={t} workerName={userName(t.workerId || "")} />)}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {archivedSorted.map((t) => <ArchiveRow key={t.id} task={t} workerName={userName(t.workerId || "")} />)}
+                </div>
+              )
+            )}
+          </section>
         </>
       )}
 
@@ -1058,6 +1176,9 @@ export default function MyTasksPage() {
                     {reviewTask?.workerId && (
                       <p className="text-xs text-muted-foreground">النتيجة من: {users.find((u) => u.id === reviewTask.workerId)?.name || reviewTask.workerId}</p>
                     )}
+                    {reviewTask?.routedDepartmentId && (
+                      <p className="text-xs text-muted-foreground">القسم: <BidiText>{departments.find((d) => d.id === reviewTask.routedDepartmentId)?.name || reviewTask.routedDepartmentId}</BidiText></p>
+                    )}
                     {reviewTask?.proofFileLink?.trim() && (
                       <p className="text-xs text-muted-foreground">رابط الإثبات: <BidiText>{reviewTask.proofFileLink}</BidiText></p>
                     )}
@@ -1085,6 +1206,9 @@ export default function MyTasksPage() {
                       <BidiText>{reviewTask?.completionNotes?.trim() || "—"}</BidiText></div>
                     {reviewTask?.workerId && (
                       <p className="text-xs text-muted-foreground">النتيجة من: {users.find((u) => u.id === reviewTask.workerId)?.name || reviewTask.workerId}</p>
+                    )}
+                    {reviewTask?.routedDepartmentId && (
+                      <p className="text-xs text-muted-foreground">القسم: <BidiText>{departments.find((d) => d.id === reviewTask.routedDepartmentId)?.name || reviewTask.routedDepartmentId}</BidiText></p>
                     )}
                     {reviewTask?.proofFileLink?.trim() && (
                       <p className="text-xs text-muted-foreground">رابط الإثبات: <BidiText>{reviewTask.proofFileLink}</BidiText></p>

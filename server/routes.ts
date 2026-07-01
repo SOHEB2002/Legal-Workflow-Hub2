@@ -7843,6 +7843,23 @@ export async function registerRoutes(
     }
   });
 
+  // Sub-step 9 — مهامي "منجزة" archive: closed (مكتمل + ملغي) GENERAL (عام)
+  // tasks, scoped in storage to the viewer's feed visibility. Lazy — the FE only
+  // calls this when the archive section is expanded, so it never bloats the 30s
+  // my-tasks poll. Path has 2 segments after field-tasks (archive is a literal),
+  // and is registered BEFORE /api/field-tasks/:id so :id never captures it.
+  app.get("/api/field-tasks/archive", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const archived = await storage.getArchivedGeneralTasks({
+        id: user.id, role: user.role, departmentId: user.departmentId,
+      });
+      res.json(archived);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب المهام المنجزة" });
+    }
+  });
+
   // ITEM 1 — case-scoped field tasks: ALL field tasks on a case, gated by CASE
   // ACCESS (canViewCase, delegation-aware via req.actingContext — 4c-1). Whoever
   // can VIEW the case sees the case's complete task picture (the assigned lawyer
