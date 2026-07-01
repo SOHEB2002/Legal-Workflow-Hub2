@@ -27,6 +27,9 @@ export type ActingIdentity = {
 };
 
 export type ActingDelegator = ActingIdentity & {
+  // Delegator's display name — denormalized here (resolved once per request in
+  // getActingContext) so audit writes can stamp "نيابةً عن <name>" synchronously.
+  name: string;
   scope: "all_cases" | "specific_cases";
   specificCaseIds: string[];
 };
@@ -65,6 +68,7 @@ export async function getActingContext(
       specificCaseIds: delegationsTable.specificCaseIds,
       role: users.role,
       departmentId: users.departmentId,
+      name: users.name,
     })
     .from(delegationsTable)
     .innerJoin(users, eq(delegationsTable.fromUserId, users.id))
@@ -83,6 +87,7 @@ export async function getActingContext(
     userId: r.fromUserId,
     role: r.role,
     departmentId: r.departmentId ?? null,
+    name: r.name || r.fromUserId,
     scope: r.scope === "specific_cases" ? "specific_cases" : "all_cases",
     specificCaseIds: Array.isArray(r.specificCaseIds) ? (r.specificCaseIds as string[]) : [],
   }));
@@ -108,6 +113,23 @@ export function actingIdentitiesFor(ctx: ActingContext, caseId: string | null): 
     }
   }
   return out;
+}
+
+// Item-5 Phase 1 — the actor's DISPLAY NAME for an audit/activity write. When
+// the action falls within one or more active delegations that apply to this
+// entity (same all_cases / specific_cases rule as actingIdentitiesFor), returns
+// "مها الزهراني (نيابةً عن سارة الدوسري)"; with no applicable delegation returns
+// selfName unchanged — byte-identical to a non-delegated write. Over-stamps by
+// design: if the delegate ALSO had their own access, we still note the
+// delegation (fail-safe for an audit trail). ctx is optional so call sites can
+// pass req.actingContext directly (undefined on non-/api or unauth requests).
+export function actorDisplayName(ctx: ActingContext | undefined, caseId: string | null, selfName: string): string {
+  if (!ctx || ctx.delegators.length === 0) return selfName;
+  const applicable = ctx.delegators.filter(
+    (d) => d.scope === "all_cases" || (caseId != null && d.specificCaseIds.includes(caseId)),
+  );
+  if (applicable.length === 0) return selfName;
+  return `${selfName} (نيابةً عن ${applicable.map((d) => d.name).join("، ")})`;
 }
 
 // Identity expansion: the set of user ids the actor may stand in for on this entity.

@@ -138,6 +138,7 @@ import { invalidateUserCache } from "./index";
 import {
   type ActingContext,
   actingIdentitiesFor,
+  actorDisplayName,
   hasEffectiveRole,
   effectiveDeptHeadDepts,
   effectiveIdsFor,
@@ -181,6 +182,36 @@ interface AuthRequest extends Request {
     name: string;
     departmentId: string | null;
   };
+}
+
+// Item-5 Phase 1 — stamp the actor's display name with "(نيابةً عن X)" when a
+// write happens under an active delegation that applies to this case. Thin
+// wrappers over the storage writes so each call site is a clean swap; the
+// resolution (0/1/>1 applicable delegators for the caseId) lives in
+// actorDisplayName. Non-delegated writes are byte-identical.
+async function logCaseActivityActing(
+  req: AuthRequest,
+  data: Parameters<typeof storage.logCaseActivity>[0],
+) {
+  return storage.logCaseActivity({
+    ...data,
+    userName: actorDisplayName(req.actingContext, data.caseId, data.userName),
+  });
+}
+
+// General-task thread events. Only case-LINKED tasks are stamped: a standalone
+// general task (caseId=null) must NOT falsely inherit an all_cases delegation
+// (it would tag the delegate's OWN unrelated task as "نيابةً عن"). caseId-linked
+// general tasks stamp like any other case activity.
+async function createGeneralTaskEventActing(
+  req: AuthRequest,
+  caseId: string | null,
+  data: Parameters<typeof storage.createGeneralTaskEvent>[0],
+) {
+  return storage.createGeneralTaskEvent({
+    ...data,
+    actorName: caseId ? actorDisplayName(req.actingContext, caseId, data.actorName ?? "") : data.actorName,
+  });
 }
 
 const loginLimiter = rateLimit({
@@ -1790,7 +1821,7 @@ export async function registerRoutes(
       }
 
       try {
-        await storage.logCaseActivity({
+        await logCaseActivityActing(req, {
           caseId: newCase.id,
           userId: createdBy,
           userName: createdBy,
@@ -1883,7 +1914,7 @@ export async function registerRoutes(
         }
       }
       
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: caseItem.id,
         userId: user.id,
         userName: user.name,
@@ -1942,7 +1973,7 @@ export async function registerRoutes(
         }
       }
       
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: caseItem.id,
         userId: user.id,
         userName: user.name,
@@ -1990,7 +2021,7 @@ export async function registerRoutes(
         });
       }
       
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: caseItem.id,
         userId: user.id,
         userName: user.name,
@@ -2058,10 +2089,11 @@ export async function registerRoutes(
           : "تحرير_صحيفة_الدعوى";
       }
 
+      const skipActorName = actorDisplayName(req.actingContext, caseItem.id, user.name);
       const stageHistory: CaseStageTransition[] = [
         ...existingHistory,
-        { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: user.name, notes: "تجاوز تلقائي" },
-        { stage: skipTarget, timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
+        { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: skipActorName, notes: "تجاوز تلقائي" },
+        { stage: skipTarget, timestamp: now, userId: user.id, userName: skipActorName, notes: skipNote },
       ];
 
       // Step 1: update the case (the only critical operation)
@@ -2084,7 +2116,7 @@ export async function registerRoutes(
 
       // Step 2: best-effort activity log — must not fail the request
       try {
-        await storage.logCaseActivity({
+        await logCaseActivityActing(req, {
           caseId: caseItem.id,
           userId: user.id,
           userName: user.name,
@@ -2601,7 +2633,7 @@ export async function registerRoutes(
             stage: req.body.currentStage,
             timestamp: new Date().toISOString(),
             userId: user.id,
-            userName: user.name || user.id,
+            userName: actorDisplayName(req.actingContext, String(req.params.id), user.name || user.id),
             notes: req.body.stageChangeNotes || "",
           },
         ];
@@ -2622,7 +2654,7 @@ export async function registerRoutes(
           req.body.struckOffDate = null;
           req.body.struckOffReopenDeadline = null;
           try {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -2668,7 +2700,7 @@ export async function registerRoutes(
       if (user && existing) {
         try {
           if (isDeptTransfer) {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -2685,7 +2717,7 @@ export async function registerRoutes(
               }),
             });
           } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -2704,7 +2736,7 @@ export async function registerRoutes(
               existing.isSettlementCase
             ) {
               if (req.body.currentStage === "مقفلة") {
-                await storage.logCaseActivity({
+                await logCaseActivityActing(req, {
                   caseId: String(req.params.id),
                   userId: user.id,
                   userName: user.name || user.id,
@@ -2717,7 +2749,7 @@ export async function registerRoutes(
               ) {
                 const prevClassification = existing.caseClassification || "منظورة_بالمحكمة";
                 const newClassification = req.body.caseClassification || prevClassification;
-                await storage.logCaseActivity({
+                await logCaseActivityActing(req, {
                   caseId: String(req.params.id),
                   userId: user.id,
                   userName: user.name || user.id,
@@ -2735,7 +2767,7 @@ export async function registerRoutes(
               }
             }
           } else {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -4245,7 +4277,7 @@ export async function registerRoutes(
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة القضية للجنة" });
 
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.returnCaseToCommittee(lawCase.id, {
         notes,
         performedBy: reqUser.id,
@@ -4300,7 +4332,7 @@ export async function registerRoutes(
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
 
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.pauseCase(lawCase.id, {
         reason,
         performedBy: reqUser.id,
@@ -4346,7 +4378,7 @@ export async function registerRoutes(
       }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.unpauseCase(lawCase.id, {
         notes,
         performedBy: reqUser.id,
@@ -6137,7 +6169,7 @@ export async function registerRoutes(
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
 
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.awaitCaseCompletion(lawCase.id, {
         reason,
         performedBy: reqUser.id,
@@ -6201,7 +6233,7 @@ export async function registerRoutes(
       }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const result = await storage.resumeCaseFromCompletion(lawCase.id, {
         notes,
         performedBy: reqUser.id,
@@ -6956,7 +6988,7 @@ export async function registerRoutes(
 
       if (user && validatedData.caseId) {
         try {
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: validatedData.caseId,
             userId: user.id,
             userName: user.name || user.id,
@@ -7216,7 +7248,7 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (reqUser && effectiveCaseId) {
         try {
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: effectiveCaseId,
             userId: reqUser.id,
             userName: reqUser.name || reqUser.id,
@@ -7264,7 +7296,7 @@ export async function registerRoutes(
           });
           if (reqUser) {
             try {
-              await storage.logCaseActivity({
+              await logCaseActivityActing(req, {
                 caseId: effectiveCaseId,
                 userId: reqUser.id,
                 userName: reqUser.name || reqUser.id,
@@ -7479,7 +7511,7 @@ export async function registerRoutes(
               const activeCount = await getActiveMemoCount(effectiveCaseId);
               await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount });
 
-              await storage.logCaseActivity({
+              await logCaseActivityActing(req, {
                 caseId: effectiveCaseId,
                 userId: reqUser.id,
                 userName: reqUser.name || reqUser.id,
@@ -7518,7 +7550,7 @@ export async function registerRoutes(
           caseUpdate.struckOffReopenDeadline = reopenDeadline;
           await storage.updateCase(effectiveCaseId, caseUpdate);
 
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: effectiveCaseId,
             userId: reqUser.id,
             userName: reqUser.name || reqUser.id,
@@ -7586,7 +7618,7 @@ export async function registerRoutes(
             caseUpdate.status = "مغلق";
             caseUpdate.closedAt = new Date().toISOString();
             await storage.updateCase(effectiveCaseId, caseUpdate);
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
               userId: reqUser.id,
               userName: reqUser.name || reqUser.id,
@@ -7604,7 +7636,7 @@ export async function registerRoutes(
             caseUpdate.isSettlementCase = false;
             caseUpdate.caseClassification = "قيد_الدراسة";
             await storage.updateCase(effectiveCaseId, caseUpdate);
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
               userId: reqUser.id,
               userName: reqUser.name || reqUser.id,
@@ -7628,7 +7660,7 @@ export async function registerRoutes(
               caseUpdate.status = "مغلق";
               caseUpdate.closedAt = new Date().toISOString();
               await storage.updateCase(effectiveCaseId, caseUpdate);
-              await storage.logCaseActivity({
+              await logCaseActivityActing(req, {
                 caseId: effectiveCaseId,
                 userId: reqUser.id,
                 userName: reqUser.name || reqUser.id,
@@ -7658,9 +7690,9 @@ export async function registerRoutes(
             await storage.pauseCase(effectiveCaseId, {
               reason: SETTLEMENT_LINK_MISSING_PAUSE_REASON,
               performedBy: reqUser.id,
-              performerName: reqUser.name || reqUser.id,
+              performerName: actorDisplayName(req.actingContext, effectiveCaseId, reqUser.name || reqUser.id),
             });
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
               userId: reqUser.id,
               userName: reqUser.name || reqUser.id,
@@ -8097,7 +8129,7 @@ export async function registerRoutes(
       // general complete-with-result). Best-effort: never fail the completion.
       if (isGeneralComplete) {
         try {
-          await storage.createGeneralTaskEvent({
+          await createGeneralTaskEventActing(req, updated.caseId, {
             fieldTaskId: updated.id, actorId: user.id, actorName: user.name || user.id,
             eventType: GeneralTaskEventType.RESULT_SUBMITTED, body: updated.completionNotes || "",
           });
@@ -8117,7 +8149,7 @@ export async function registerRoutes(
       // are deferred to the action-hub UI increment — see report.
       if (existingTask.status !== "مكتمل" && updated.status === "مكتمل" && updated.caseId) {
         try {
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: updated.caseId,
             userId: user.id,
             userName: user.name || user.id,
@@ -8181,7 +8213,7 @@ export async function registerRoutes(
         // fail the close. caseId-less general tasks just close silently.
         if (updated?.caseId) {
           try {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: updated.caseId,
               userId: user.id,
               userName: user.name || user.id,
@@ -8194,7 +8226,7 @@ export async function registerRoutes(
         }
         // Sub-step 4.6 — thread event: requester closed (تم الاطلاع), no text.
         try {
-          await storage.createGeneralTaskEvent({
+          await createGeneralTaskEventActing(req, task.caseId, {
             fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
             eventType: GeneralTaskEventType.REVIEWED_CLOSED, body: null,
           });
@@ -8216,7 +8248,7 @@ export async function registerRoutes(
         });
         // Sub-step 4.6 — thread event: requester sent it back with a note (ملاحظة).
         try {
-          await storage.createGeneralTaskEvent({
+          await createGeneralTaskEventActing(req, task.caseId, {
             fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
             eventType: GeneralTaskEventType.RETURNED_WITH_NOTE, body: reviewNote,
           });
@@ -8300,7 +8332,7 @@ export async function registerRoutes(
       // Thread event: DISTRIBUTED — actor = the distributing head; body notes the
       // member it went to (best-effort; a logging failure must not fail the op).
       try {
-        await storage.createGeneralTaskEvent({
+        await createGeneralTaskEventActing(req, task.caseId, {
           fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
           eventType: GeneralTaskEventType.DISTRIBUTED,
           body: `إلى: ${assignee.name || assignee.id}`,
@@ -8377,7 +8409,7 @@ export async function registerRoutes(
           assignedTo: requester,
         });
         try {
-          await storage.createGeneralTaskEvent({
+          await createGeneralTaskEventActing(req, task.caseId, {
             fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
             eventType: GeneralTaskEventType.APPROVED, body: null,
           });
@@ -8398,7 +8430,7 @@ export async function registerRoutes(
           reviewNote,
         });
         try {
-          await storage.createGeneralTaskEvent({
+          await createGeneralTaskEventActing(req, task.caseId, {
             fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
             eventType: GeneralTaskEventType.RETURNED_WITH_NOTE, body: reviewNote,
           });
@@ -9631,7 +9663,7 @@ export async function registerRoutes(
         userId: user.id,
         userName,
       });
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: String(req.params.id),
         userId: user.id,
         userName,
@@ -9719,7 +9751,7 @@ export async function registerRoutes(
       const deadline = await storage.createLegalDeadline(validated);
       if (validated.caseId) {
         const user = req.user!;
-        await storage.logCaseActivity({
+        await logCaseActivityActing(req, {
           caseId: validated.caseId,
           userId: user.id,
           userName: user.name,
