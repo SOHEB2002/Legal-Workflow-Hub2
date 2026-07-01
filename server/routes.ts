@@ -8014,16 +8014,20 @@ export async function registerRoutes(
         }
       }
 
-      // Sub-step 4 — general (عام) complete-with-result. A finished general task
-      // does NOT close directly: it returns to its ORIGINAL requester for review
-      // (بانتظار_الاطلاع), flipping assignedTo → originalRequesterId and stamping
-      // workerId = the worker. EXCEPTION: a self-assigned task (the worker IS the
-      // requester) has nothing to review → it closes normally (مكتمل). Guarded on
-      // taskType === عام, so non-general field/auto/collection tasks keep their
-      // exact current complete→مكتمل behavior. (The dept-routed path-2 branch —
-      // member→dept_head approval — lands in sub-step 7; routedDepartmentId is
-      // null on every general task until then, so only this person-direct branch
-      // is reachable now.)
+      // Sub-step 4 + 7 — general (عام) complete-with-result, PATH-AWARE. A
+      // finished general task does NOT close directly; where it goes depends on
+      // how it was routed:
+      //   PATH-2 (routedDepartmentId set) — the member's result goes UP to the
+      //     dept_head of the routed department for approval (بانتظار_الاعتماد,
+      //     assignedTo = head, workerId = worker). If the worker IS that head
+      //     (distributed to himself in sub-step 6), his own approval is skipped
+      //     and the result goes straight to the requester like path-1.
+      //   PATH-1 (routedDepartmentId null) — unchanged sub-step-4 behavior: back
+      //     to the ORIGINAL requester for review (بانتظار_الاطلاع, assignedTo →
+      //     originalRequesterId, workerId = worker). EXCEPTION: a self-assigned
+      //     task (worker IS requester) has nothing to review → closes (مكتمل).
+      // Guarded on taskType === عام, so non-general field/auto/collection tasks
+      // keep their exact current complete→مكتمل behavior.
       let updatePayload: Partial<FieldTask> = req.body;
       const isGeneralComplete =
         existingTask.taskType === FieldTaskType.GENERAL &&
@@ -8039,7 +8043,28 @@ export async function registerRoutes(
         // requester so a legacy/edge null can't recur on this task.
         const requester = existingTask.originalRequesterId || existingTask.assignedBy;
         const heal = existingTask.originalRequesterId ? {} : { originalRequesterId: requester };
-        updatePayload = worker === requester
+        // Sub-step 7 — resolve the path-2 approver. Same authoritative source as
+        // creation/distribute (the users query, never departments.headId). The
+        // approval branch is taken ONLY for exactly one head who is not the
+        // worker; a head-less (0) or multi-head (>1, a data anomaly the creation
+        // gate normally blocks) department must NOT strand the task → fall
+        // through to the path-1 requester routing so it can't get stuck.
+        let approvalHeadId: string | null = null;
+        if (existingTask.routedDepartmentId) {
+          const heads = await storage.getDepartmentHeads(existingTask.routedDepartmentId);
+          const workerIsHead = heads.some((h) => h.id === worker);
+          if (!workerIsHead) {
+            if (heads.length === 1) {
+              approvalHeadId = heads[0].id;
+            } else {
+              console.error(`[field-tasks PATCH] dept-routed complete: routed department ${existingTask.routedDepartmentId} has ${heads.length} heads — routing task ${existingTask.id} to the requester instead of approval`);
+            }
+          }
+          // workerIsHead → skip his own approval: fall through to requester.
+        }
+        updatePayload = approvalHeadId
+          ? { ...req.body, ...heal, status: FieldTaskStatus.AWAITING_APPROVAL, assignedTo: approvalHeadId, workerId: worker }
+          : worker === requester
           ? { ...req.body, ...heal, workerId: worker } // self-assigned → close normally
           : { ...req.body, ...heal, status: FieldTaskStatus.AWAITING_REVIEW, assignedTo: requester, workerId: worker };
       }
