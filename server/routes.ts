@@ -13,6 +13,7 @@ import {
   insertFieldTaskSchema,
   generalTaskReviewSchema,
   generalTaskDistributeSchema,
+  generalTaskApproveSchema,
   FieldTaskStatus,
   FieldTaskType,
   GeneralTaskEventType,
@@ -8293,6 +8294,105 @@ export async function registerRoutes(
       return res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في إسناد المهمة" });
+    }
+  });
+
+  // Sub-step 8 — dept_head APPROVES or RETURNS a member's result on a
+  // dept-routed general (عام) task sitting in بانتظار_الاعتماد (put there by the
+  // sub-step-7 complete routing). Mirrors /review and /distribute. Two decisions:
+  //   • اعتماد (approve, DEFAULT, no text) → بانتظار_الاطلاع assigned to the
+  //     ORIGINAL requester; workerId unchanged. The existing requester-review
+  //     (GENERAL_TASK_REVIEW) flow takes over. Writes an APPROVED (اعتماد) event.
+  //   • ملاحظة (send back, note REQUIRED) → قيد_الانتظار back to the member who
+  //     produced it (workerId), reviewNote = the note. The member fixes and
+  //     re-completes, which sub-step 7 routes back to بانتظار_الاعتماد for
+  //     approval AGAIN (the loop is automatic). Writes a RETURNED_WITH_NOTE
+  //     (ملاحظة) event — same type as the requester's send-back; the actor name
+  //     distinguishes who returned it.
+  // Access gate: a dept_head of the task's routedDepartmentId (delegation-aware),
+  // or a branch_manager — identical to /distribute.
+  app.post("/api/field-tasks/:id/approve", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const bodyCheck = generalTaskApproveSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const decision = String(req.body?.decision || "");
+      const reviewNote = String(req.body?.reviewNote || "");
+
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (task.taskType !== FieldTaskType.GENERAL) {
+        return res.status(400).json({ error: "هذا الإجراء خاص بالمهام العامة فقط" });
+      }
+      if (!task.routedDepartmentId) {
+        return res.status(400).json({ error: "هذه المهمة ليست موجَّهة إلى قسم" });
+      }
+      if (task.status !== FieldTaskStatus.AWAITING_APPROVAL) {
+        return res.status(400).json({ error: "المهمة ليست بانتظار الاعتماد" });
+      }
+
+      // Access gate — delegation-aware, identical to /distribute: a branch_manager
+      // (firm-wide) or a dept_head of the ROUTED department (own dept travels
+      // with the inherited head role via effectiveDeptHeadDepts). No acting
+      // context → the actor's own role/dept.
+      const ctx = req.actingContext;
+      const scopeCaseId = task.caseId ?? null;
+      const isManager = ctx
+        ? hasEffectiveRole(ctx, scopeCaseId, "branch_manager")
+        : user.role === "branch_manager";
+      const isRoutedHead = ctx
+        ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
+        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+      if (!isManager && !isRoutedHead) {
+        return res.status(403).json({ error: "لا تملك صلاحية اعتماد هذه المهمة" });
+      }
+
+      if (decision === "اعتماد") {
+        // Approve → to the ORIGINAL requester for their review. Fall back to
+        // assignedBy for a legacy null requester (same idiom as /review + the
+        // PATCH complete branch) so assignedTo can never land on null. workerId
+        // is intentionally NOT touched — it still points at the member.
+        const requester = task.originalRequesterId || task.assignedBy;
+        const updated = await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.AWAITING_REVIEW,
+          assignedTo: requester,
+        });
+        try {
+          await storage.createGeneralTaskEvent({
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.APPROVED, body: null,
+          });
+        } catch (e) {
+          console.error("[field-tasks approve] general-task event write failed:", e);
+        }
+        return res.json(updated);
+      }
+      if (decision === "ملاحظة") {
+        if (!reviewNote.trim()) {
+          return res.status(400).json({ error: "الملاحظة مطلوبة عند الإرجاع" });
+        }
+        // Send back to the member who produced the result (workerId), mirroring
+        // the requester's /review send-back exactly.
+        const updated = await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.PENDING,
+          assignedTo: task.workerId || task.assignedTo,
+          reviewNote,
+        });
+        try {
+          await storage.createGeneralTaskEvent({
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.RETURNED_WITH_NOTE, body: reviewNote,
+          });
+        } catch (e) {
+          console.error("[field-tasks approve] general-task event write failed:", e);
+        }
+        return res.json(updated);
+      }
+      return res.status(400).json({ error: "قرار الاعتماد غير صحيح" });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في اعتماد المهمة" });
     }
   });
 

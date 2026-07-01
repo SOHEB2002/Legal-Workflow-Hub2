@@ -245,7 +245,7 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 // are enforced server-side — we never duplicate that here). actionModeFor
 // returns the modal shape, or null for kinds PART 2 doesn't wire yet (those keep
 // a disabled placeholder; see the report's FLAGS).
-type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute";
+type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
   switch (task.kind) {
@@ -274,6 +274,11 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
       // sitting in بانتظار_التوزيع to a member of the routed department (or
       // himself) — sub-step 6. The member then does the work as a normal task.
       return { mode: "distribute", title: "إسناد المهمة" };
+    case MyTaskKind.GENERAL_TASK_APPROVE:
+      // The dept_head (or delegate / branch_manager) approves or returns the
+      // member's result on a بانتظار_الاعتماد task — sub-step 8. Approve → on to
+      // the requester; ملاحظة → back to the member. Shows the result + thread.
+      return { mode: "approve", title: "اعتماد نتيجة المهمة" };
     case MyTaskKind.CONSULTATION_CLOSING: return { mode: "reason", title: "إغلاق الاستشارة" };
     case MyTaskKind.HEARING_REPORT: return { mode: "report", title: "تقرير الجلسة" };
     case MyTaskKind.CASE_UNASSIGNED: return { mode: "assign", title: "إسناد القضية لمحامٍ" };
@@ -337,6 +342,13 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
       // delegate / manager) + validates the assignee is a routed-dept member or
       // the head himself, sets قيد_الانتظار, keeps routedDepartmentId.
       return { method: "POST", url: `/api/field-tasks/${e}/distribute`, body: { assignedTo: form.assigneeId } };
+    case MyTaskKind.GENERAL_TASK_APPROVE:
+      // اعتماد (approve) is the default; ملاحظة (return to the member) requires a
+      // note. Mirrors the /review body shape — the server enforces the note.
+      return { method: "POST", url: `/api/field-tasks/${e}/approve`, body: {
+        decision: form.decision === "ملاحظة" ? "ملاحظة" : "اعتماد",
+        reviewNote: form.notes,
+      } };
     case MyTaskKind.CONSULTATION_CLOSING: return { method: "POST", url: `/api/consultations/${e}/early-close`, body: { reason: form.reason } };
     case MyTaskKind.HEARING_REPORT:
       return { method: "POST", url: `/api/hearings/${e}/report`, body: {
@@ -366,6 +378,7 @@ const EVENT_BADGE_CLASS: Record<string, string> = {
   [GeneralTaskEventType.RESULT_SUBMITTED]:   "border-green-400 text-green-700 dark:text-green-400",
   [GeneralTaskEventType.RETURNED_WITH_NOTE]: "border-amber-400 text-amber-700 dark:text-amber-400",
   [GeneralTaskEventType.REVIEWED_CLOSED]:    "border-muted-foreground/40 text-muted-foreground",
+  [GeneralTaskEventType.APPROVED]:           "border-emerald-500 text-emerald-700 dark:text-emerald-400",
 };
 
 interface ThreadEvent { id: string; actorName: string | null; eventType: string; body: string | null; createdAt: string; }
@@ -769,9 +782,11 @@ export default function MyTasksPage() {
   };
 
   const currentMode = actionTask ? actionModeFor(actionTask)?.mode : undefined;
-  // The full field task behind a GENERAL_TASK_REVIEW item (carries the worker's
-  // result + workerId, which the feed item does not).
-  const reviewTask = actionTask && currentMode === "review" ? getTaskById(actionTask.entityId) : undefined;
+  // The full field task behind a GENERAL_TASK_REVIEW (requester) or
+  // GENERAL_TASK_APPROVE (dept_head) item — both show the worker's result +
+  // workerId + proof, which the feed item does not carry.
+  const reviewTask = actionTask && (currentMode === "review" || currentMode === "approve")
+    ? getTaskById(actionTask.entityId) : undefined;
   // When a GENERAL_TASK (do-the-work) was sent back by the requester via ملاحظة,
   // its reviewNote carries what to fix. Surface it in the worker's complete modal
   // so they can correct before re-completing. Only general (عام) tasks set
@@ -1058,6 +1073,34 @@ export default function MyTasksPage() {
                   {form.decision === "ملاحظة" && (
                     <div className="space-y-1"><Label>الملاحظة (مطلوبة)</Label>
                       <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-review-note" /></div>
+                  )}
+                </>
+              )}
+
+              {currentMode === "approve" && (
+                <>
+                  <GeneralTaskThread taskId={actionTask.entityId} />
+                  <div className="space-y-1"><Label>نتيجة المنفّذ</Label>
+                    <div className="rounded-md border p-2 text-sm bg-muted/30 whitespace-pre-wrap" data-testid="text-approve-result">
+                      <BidiText>{reviewTask?.completionNotes?.trim() || "—"}</BidiText></div>
+                    {reviewTask?.workerId && (
+                      <p className="text-xs text-muted-foreground">النتيجة من: {users.find((u) => u.id === reviewTask.workerId)?.name || reviewTask.workerId}</p>
+                    )}
+                    {reviewTask?.proofFileLink?.trim() && (
+                      <p className="text-xs text-muted-foreground">رابط الإثبات: <BidiText>{reviewTask.proofFileLink}</BidiText></p>
+                    )}
+                  </div>
+                  <div className="space-y-1"><Label>القرار</Label>
+                    <Select value={form.decision === "ملاحظة" ? "ملاحظة" : "اعتماد"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                      <SelectTrigger data-testid="select-approve-decision"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="اعتماد">اعتماد</SelectItem>
+                        <SelectItem value="ملاحظة">إرجاع بملاحظة (للمنفّذ)</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                  {form.decision === "ملاحظة" && (
+                    <div className="space-y-1"><Label>الملاحظة (مطلوبة)</Label>
+                      <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-approve-note" /></div>
                   )}
                 </>
               )}

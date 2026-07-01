@@ -2044,8 +2044,9 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
 export const GeneralTaskEventType = {
   DISTRIBUTED:        "توزيع",      // dept_head handed a dept-routed task to a member (sub-step 6)
   RESULT_SUBMITTED:   "إنجاز",      // worker submitted a result
-  RETURNED_WITH_NOTE: "ملاحظة",     // requester sent it back with a note
+  RETURNED_WITH_NOTE: "ملاحظة",     // requester OR dept_head sent it back with a note
   REVIEWED_CLOSED:    "تم_الاطلاع", // requester closed it (no text)
+  APPROVED:           "اعتماد",     // dept_head approved a member's result → on to the requester (sub-step 8)
 } as const;
 
 export type GeneralTaskEventTypeValue = typeof GeneralTaskEventType[keyof typeof GeneralTaskEventType];
@@ -2056,6 +2057,7 @@ export const GeneralTaskEventTypeLabels: Record<GeneralTaskEventTypeValue, strin
   "إنجاز": "إنجاز",
   "ملاحظة": "ملاحظة",
   "تم_الاطلاع": "تم الاطلاع",
+  "اعتماد": "اعتماد",
 };
 
 // ==================== تخصص المهام (Task-routing specialty) ====================
@@ -4161,6 +4163,14 @@ export const generalTaskReviewSchema = z.object({
 // the handler enforces the real rules (active + routed-dept membership).
 export const generalTaskDistributeSchema = z.object({
   assignedTo: z.string().optional(),
+}).passthrough();
+
+// Sub-step 8 — dept_head approves (اعتماد) or returns-with-note (ملاحظة) a
+// member's result on a بانتظار_الاعتماد dept-routed general task. Tolerant gate;
+// the handler enforces the decision values + required note.
+export const generalTaskApproveSchema = z.object({
+  decision: z.string().optional(),
+  reviewNote: z.string().optional(),
 }).passthrough();
 
 // ---- 2D' V2a — cases/consultations non-workflow Tier-2 bodies ----
