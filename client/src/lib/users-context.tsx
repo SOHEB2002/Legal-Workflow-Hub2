@@ -10,15 +10,11 @@ import {
   VacationStatusValue,
   DelegationType,
   Team,
-  UserCustomPermission,
   UserActivityLog,
   UserSession,
   UserStats,
   ActivityLogEntityTypeValue,
   ActivityActionValue,
-  PermissionType,
-  RolePermissions,
-  UserRoleType,
 } from "@shared/schema";
 
 const generateId = () => `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -27,7 +23,6 @@ interface UsersContextType {
   extendedUsers: ExtendedUser[];
   vacations: UserVacation[];
   teams: Team[];
-  customPermissions: UserCustomPermission[];
   activityLogs: UserActivityLog[];
   sessions: UserSession[];
   
@@ -55,10 +50,6 @@ interface UsersContextType {
   changeTeamLead: (teamId: string, newLeaderId: string) => void;
   getTeamWorkload: (teamId: string) => { totalCases: number; totalConsultations: number; avgWorkload: number };
   getTeamById: (id: string) => Team | undefined;
-  
-  grantCustomPermission: (userId: string, permissions: string[], reason: string, expiresAt: string | null) => void;
-  revokeCustomPermission: (userId: string) => void;
-  getEffectivePermissions: (userId: string) => PermissionType[];
   
   logActivity: (userId: string, action: ActivityActionValue, entityType: ActivityLogEntityTypeValue, entityId: string | null, details: Record<string, unknown>) => void;
   getUserActivityLog: (userId: string, filters?: { action?: string; entityType?: string; startDate?: string; endDate?: string }) => UserActivityLog[];
@@ -119,11 +110,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     return saved ? JSON.parse(saved) : [];
   });
   
-  const [customPermissions, setCustomPermissions] = useState<UserCustomPermission[]>(() => {
-    const saved = localStorage.getItem("user_custom_permissions");
-    return saved ? JSON.parse(saved) : [];
-  });
-  
   const [activityLogs, setActivityLogs] = useState<UserActivityLog[]>(() => {
     const saved = localStorage.getItem("user_activity_logs");
     return saved ? JSON.parse(saved) : [];
@@ -145,10 +131,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem("user_teams", JSON.stringify(teams));
   }, [teams]);
-  
-  useEffect(() => {
-    localStorage.setItem("user_custom_permissions", JSON.stringify(customPermissions));
-  }, [customPermissions]);
   
   useEffect(() => {
     localStorage.setItem("user_activity_logs", JSON.stringify(activityLogs));
@@ -388,51 +370,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     return teams.find(t => t.id === id);
   }, [teams]);
 
-  const grantCustomPermission = useCallback((
-    userId: string, 
-    permissions: string[], 
-    reason: string, 
-    expiresAt: string | null
-  ) => {
-    const existing = customPermissions.find(p => p.userId === userId);
-    if (existing) {
-      setCustomPermissions(prev => prev.map(p => 
-        p.userId === userId ? { ...p, additionalPermissions: permissions, reason, expiresAt } : p
-      ));
-    } else {
-      const newPermission: UserCustomPermission = {
-        id: generateId(),
-        userId,
-        additionalPermissions: permissions,
-        restrictedPermissions: [],
-        reason,
-        grantedBy: "",
-        expiresAt,
-        createdAt: new Date().toISOString(),
-      };
-      setCustomPermissions(prev => [...prev, newPermission]);
-    }
-  }, [customPermissions]);
-
-  const revokeCustomPermission = useCallback((userId: string) => {
-    setCustomPermissions(prev => prev.filter(p => p.userId !== userId));
-  }, []);
-
-  const getEffectivePermissions = useCallback((userId: string): PermissionType[] => {
-    const user = extendedUsers.find(u => u.id === userId);
-    if (!user) return [];
-    
-    const rolePermissions = RolePermissions[user.role as UserRoleType] || [];
-    const custom = customPermissions.find(p => p.userId === userId);
-    
-    if (!custom) return rolePermissions;
-    
-    const effective = new Set([...rolePermissions, ...custom.additionalPermissions]);
-    custom.restrictedPermissions.forEach(p => effective.delete(p as PermissionType));
-    
-    return Array.from(effective) as PermissionType[];
-  }, [extendedUsers, customPermissions]);
-
   const logActivity = useCallback((
     userId: string, 
     action: ActivityActionValue, 
@@ -533,7 +470,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     extendedUsers,
     vacations,
     teams,
-    customPermissions,
     activityLogs,
     sessions,
     addUser,
@@ -558,9 +494,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     changeTeamLead,
     getTeamWorkload,
     getTeamById,
-    grantCustomPermission,
-    revokeCustomPermission,
-    getEffectivePermissions,
     logActivity,
     getUserActivityLog,
     getRecentActivities,

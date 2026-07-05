@@ -47,7 +47,6 @@ import { useLocation } from "wouter";
 import type { User as UserType, UserRoleType, UserStatusValue, TaskSpecialtyValue } from "@shared/schema";
 import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels, TaskSpecialty, TaskSpecialtyLabels } from "@shared/schema";
 import { VacationDialog } from "@/components/users/vacation-dialog";
-import { CustomPermissionsDialog } from "@/components/users/custom-permissions-dialog";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 
 function getRoleBadgeColor(role: UserRoleType) {
@@ -104,7 +103,6 @@ export default function UsersPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
   const [showVacationDialog, setShowVacationDialog] = useState(false);
-  const [showPermissionsDialog, setShowPermissionsDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -696,19 +694,10 @@ export default function UsersPage() {
                             جدولة إجازة
                           </DropdownMenuItem>
                         )}
-                        {!isDepartmentHead && (
-                          <DropdownMenuItem
-                            data-testid={`button-custom-permissions-${u.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setUserToAction(u);
-                              setShowPermissionsDialog(true);
-                            }}
-                          >
-                            <Shield className="w-4 h-4 ml-2" />
-                            تخصيص الصلاحيات
-                          </DropdownMenuItem>
-                        )}
+                        {/* RESERVED: "تخصيص الصلاحيات" (custom-permissions) menu entry removed here.
+                            The old localStorage-only dialog was dead/unenforced and misleading; deleted.
+                            This slot is reserved for the future server-backed admin_support
+                            fine-grained task-type assignment feature — rebuild the entry here then. */}
                         <DropdownMenuItem
                           data-testid={`button-activity-log-${u.id}`}
                           onClick={(e) => {
@@ -1295,11 +1284,6 @@ export default function UsersPage() {
       <VacationDialog
         open={showVacationDialog}
         onOpenChange={setShowVacationDialog}
-        user={userToAction}
-      />
-      <CustomPermissionsDialog
-        open={showPermissionsDialog}
-        onOpenChange={setShowPermissionsDialog}
         user={userToAction}
       />
     </div>
