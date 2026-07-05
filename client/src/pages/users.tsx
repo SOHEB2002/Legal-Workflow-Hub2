@@ -88,7 +88,7 @@ function getStatusBadgeColor(status: UserStatusValue) {
 
 
 export default function UsersPage() {
-  const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers, changePassword } = useAuth();
+  const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { extendedUsers } = useUsers();
   const { toast } = useToast();
@@ -129,10 +129,6 @@ export default function UsersPage() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showResetPasswordDialog, setShowResetPasswordDialog] = useState(false);
-  const [showOwnPasswordDialog, setShowOwnPasswordDialog] = useState(false);
-  const [ownCurrentPassword, setOwnCurrentPassword] = useState("");
-  const [ownNewPassword, setOwnNewPassword] = useState("");
-  const [changingOwnPassword, setChangingOwnPassword] = useState(false);
   const [userToAction, setUserToAction] = useState<UserType | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [deleteDeps, setDeleteDeps] = useState<{
@@ -451,32 +447,6 @@ export default function UsersPage() {
     return user?.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE;
   };
 
-  // Own-account password change — reuses the self-service /api/auth/change-password
-  // path (auth-context.changePassword; the same one on the profile الأمان tab),
-  // which verifies the current password server-side. Never touches the
-  // manager-only PATCH /api/users/:id password route.
-  const handleChangeOwnPassword = async () => {
-    if (!ownCurrentPassword || !ownNewPassword) {
-      toast({ variant: "destructive", title: "خطأ", description: "الرجاء إدخال كلمة المرور الحالية والجديدة" });
-      return;
-    }
-    if (ownNewPassword.length < 6) {
-      toast({ variant: "destructive", title: "خطأ", description: "كلمة المرور يجب أن تكون 6 أحرف على الأقل" });
-      return;
-    }
-    setChangingOwnPassword(true);
-    const result = await changePassword(ownCurrentPassword, ownNewPassword);
-    setChangingOwnPassword(false);
-    if (result.success) {
-      toast({ title: "تم تغيير كلمة المرور بنجاح" });
-      setShowOwnPasswordDialog(false);
-      setOwnCurrentPassword("");
-      setOwnNewPassword("");
-    } else {
-      toast({ variant: "destructive", title: "فشل تغيير كلمة المرور", description: result.error });
-    }
-  };
-
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -691,21 +661,8 @@ export default function UsersPage() {
                           <ArrowLeftRight className="w-4 h-4 ml-2" />
                           تفويض
                         </DropdownMenuItem>
-                        {/* Universal — change YOUR OWN password (own row only). */}
-                        {u.id === user?.id && (
-                          <DropdownMenuItem
-                            data-testid={`button-change-own-password-${u.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOwnCurrentPassword("");
-                              setOwnNewPassword("");
-                              setShowOwnPasswordDialog(true);
-                            }}
-                          >
-                            <Key className="w-4 h-4 ml-2" />
-                            تعديل كلمة المرور
-                          </DropdownMenuItem>
-                        )}
+                        {/* Regular users get ONLY تفويض here. Own-password change lives
+                            on the profile page (الأمان tab) — not duplicated on this page. */}
                         {/* Admin actions — managers only; also 403-gated server-side. */}
                         {isManager && (
                           <>
@@ -1294,48 +1251,6 @@ export default function UsersPage() {
               disabled={!newPassword || newPassword.length < 6}
             >
               إعادة تعيين
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Own-account password change (self-service; verifies current password). */}
-      <Dialog open={showOwnPasswordDialog} onOpenChange={setShowOwnPasswordDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>تعديل كلمة المرور</DialogTitle>
-            <DialogDescription>تغيير كلمة مرور حسابك</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>كلمة المرور الحالية *</Label>
-              <Input
-                data-testid="input-own-current-password"
-                type="password"
-                value={ownCurrentPassword}
-                onChange={(e) => setOwnCurrentPassword(e.target.value)}
-                placeholder="كلمة المرور الحالية"
-              />
-            </div>
-            <div>
-              <Label>كلمة المرور الجديدة *</Label>
-              <Input
-                data-testid="input-own-new-password"
-                type="password"
-                value={ownNewPassword}
-                onChange={(e) => setOwnNewPassword(e.target.value)}
-                placeholder="كلمة المرور الجديدة (6 أحرف على الأقل)"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowOwnPasswordDialog(false)}>إلغاء</Button>
-            <Button
-              data-testid="button-confirm-own-password"
-              onClick={handleChangeOwnPassword}
-              disabled={!ownCurrentPassword || !ownNewPassword || ownNewPassword.length < 6 || changingOwnPassword}
-            >
-              {changingOwnPassword ? "جارٍ الحفظ..." : "حفظ"}
             </Button>
           </DialogFooter>
         </DialogContent>
