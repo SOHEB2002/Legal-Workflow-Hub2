@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +37,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, AlertTriangle, Loader2 } from "lucide-react";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, AlertTriangle, Loader2, ArrowLeftRight } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
@@ -87,7 +88,7 @@ function getStatusBadgeColor(status: UserStatusValue) {
 
 
 export default function UsersPage() {
-  const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
+  const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers, changePassword } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { extendedUsers } = useUsers();
   const { toast } = useToast();
@@ -95,6 +96,29 @@ export default function UsersPage() {
 
   const isDepartmentHead = user?.role === "department_head";
   const userDepartmentId = user?.departmentId || "";
+  // Manager tier (branch_manager / department_head) keeps the full admin surface;
+  // everyone else gets a read-only directory + the two universal actions
+  // (تفويض on any row, تعديل كلمة المرور on their OWN row). The admin actions
+  // below are all wrapped in this flag AND already 403-gated server-side.
+  const isManager = permissions.canManageUsers;
+
+  // PART 2 — transparency badges: all currently-valid delegations (public,
+  // lean id-pairs) mapped by party so each row can show مُفوِّض / نائب عن.
+  // One query, no N+1; names resolved from the already-loaded users list.
+  const { data: activeDelegations = [] } = useQuery<{ fromUserId: string; toUserId: string }[]>({
+    queryKey: ["/api/delegations/active"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/delegations/active");
+      return res.json();
+    },
+  });
+  const delegatesByFrom = new Map<string, string[]>();
+  const delegatorsByTo = new Map<string, string[]>();
+  for (const d of activeDelegations) {
+    delegatesByFrom.set(d.fromUserId, [...(delegatesByFrom.get(d.fromUserId) ?? []), d.toUserId]);
+    delegatorsByTo.set(d.toUserId, [...(delegatorsByTo.get(d.toUserId) ?? []), d.fromUserId]);
+  }
+  const userName = (id: string) => users.find((u) => u.id === id)?.name || id;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
@@ -105,6 +129,10 @@ export default function UsersPage() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showResetPasswordDialog, setShowResetPasswordDialog] = useState(false);
+  const [showOwnPasswordDialog, setShowOwnPasswordDialog] = useState(false);
+  const [ownCurrentPassword, setOwnCurrentPassword] = useState("");
+  const [ownNewPassword, setOwnNewPassword] = useState("");
+  const [changingOwnPassword, setChangingOwnPassword] = useState(false);
   const [userToAction, setUserToAction] = useState<UserType | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [deleteDeps, setDeleteDeps] = useState<{
@@ -423,34 +451,46 @@ export default function UsersPage() {
     return user?.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE;
   };
 
-  if (!permissions.canManageUsers) {
-    return (
-      <div className="p-6">
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Shield className="w-12 h-12 text-muted-foreground mb-4" />
-            <h2 className="text-xl font-semibold mb-2">غير مصرح</h2>
-            <p className="text-muted-foreground">ليس لديك صلاحية للوصول لهذه الصفحة</p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  // Own-account password change — reuses the self-service /api/auth/change-password
+  // path (auth-context.changePassword; the same one on the profile الأمان tab),
+  // which verifies the current password server-side. Never touches the
+  // manager-only PATCH /api/users/:id password route.
+  const handleChangeOwnPassword = async () => {
+    if (!ownCurrentPassword || !ownNewPassword) {
+      toast({ variant: "destructive", title: "خطأ", description: "الرجاء إدخال كلمة المرور الحالية والجديدة" });
+      return;
+    }
+    if (ownNewPassword.length < 6) {
+      toast({ variant: "destructive", title: "خطأ", description: "كلمة المرور يجب أن تكون 6 أحرف على الأقل" });
+      return;
+    }
+    setChangingOwnPassword(true);
+    const result = await changePassword(ownCurrentPassword, ownNewPassword);
+    setChangingOwnPassword(false);
+    if (result.success) {
+      toast({ title: "تم تغيير كلمة المرور بنجاح" });
+      setShowOwnPasswordDialog(false);
+      setOwnCurrentPassword("");
+      setOwnNewPassword("");
+    } else {
+      toast({ variant: "destructive", title: "فشل تغيير كلمة المرور", description: result.error });
+    }
+  };
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">
-            {isDepartmentHead ? "موظفو القسم" : "إدارة المستخدمين"}
+            {isManager ? (isDepartmentHead ? "موظفو القسم" : "إدارة المستخدمين") : "المستخدمون"}
           </h1>
           <p className="text-muted-foreground">
-            {isDepartmentHead
-              ? `عرض الموظفين التابعين لقسمك`
-              : "إدارة حسابات وصلاحيات المستخدمين"}
+            {isManager
+              ? (isDepartmentHead ? "عرض الموظفين التابعين لقسمك" : "إدارة حسابات وصلاحيات المستخدمين")
+              : "دليل المستخدمين — أنشئ تفويضاً من أي صف"}
           </p>
         </div>
-        {!isDepartmentHead && (
+        {isManager && !isDepartmentHead && (
           <Button data-testid="button-add-user" onClick={() => { resetForm(); setShowAddDialog(true); }}>
             <Plus className="w-4 h-4 ml-2" />
             إضافة مستخدم
@@ -590,6 +630,20 @@ export default function UsersPage() {
                       <div>
                         <p className="font-medium"><BidiText>{u.name}</BidiText></p>
                         <p className="text-sm text-muted-foreground"><LtrInline>@{u.username}</LtrInline></p>
+                        {(delegatesByFrom.has(u.id) || delegatorsByTo.has(u.id)) && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {delegatesByFrom.get(u.id)?.map((toId) => (
+                              <Badge key={`from-${toId}`} variant="outline" className="text-xs bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30">
+                                مُفوِّض ← <BidiText>{userName(toId)}</BidiText>
+                              </Badge>
+                            ))}
+                            {delegatorsByTo.get(u.id)?.map((fromId) => (
+                              <Badge key={`to-${fromId}`} variant="outline" className="text-xs bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30">
+                                نائب عن <BidiText>{userName(fromId)}</BidiText>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </TableCell>
@@ -626,6 +680,36 @@ export default function UsersPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        {/* Universal — delegate to this user (fromUser = you, set server-side). */}
+                        <DropdownMenuItem
+                          data-testid={`button-delegate-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/delegations?to=${u.id}`);
+                          }}
+                        >
+                          <ArrowLeftRight className="w-4 h-4 ml-2" />
+                          تفويض
+                        </DropdownMenuItem>
+                        {/* Universal — change YOUR OWN password (own row only). */}
+                        {u.id === user?.id && (
+                          <DropdownMenuItem
+                            data-testid={`button-change-own-password-${u.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOwnCurrentPassword("");
+                              setOwnNewPassword("");
+                              setShowOwnPasswordDialog(true);
+                            }}
+                          >
+                            <Key className="w-4 h-4 ml-2" />
+                            تعديل كلمة المرور
+                          </DropdownMenuItem>
+                        )}
+                        {/* Admin actions — managers only; also 403-gated server-side. */}
+                        {isManager && (
+                          <>
+                        {!isDepartmentHead && <DropdownMenuSeparator />}
                         {!isDepartmentHead && (
                           <DropdownMenuItem
                             data-testid={`button-edit-${u.id}`}
@@ -707,6 +791,8 @@ export default function UsersPage() {
                               <Trash2 className="w-4 h-4 ml-2" />
                               حذف
                             </DropdownMenuItem>
+                          </>
+                        )}
                           </>
                         )}
                       </DropdownMenuContent>
@@ -1202,12 +1288,54 @@ export default function UsersPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowResetPasswordDialog(false)}>إلغاء</Button>
-            <Button 
-              data-testid="button-confirm-reset-password" 
+            <Button
+              data-testid="button-confirm-reset-password"
               onClick={handleResetPassword}
               disabled={!newPassword || newPassword.length < 6}
             >
               إعادة تعيين
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Own-account password change (self-service; verifies current password). */}
+      <Dialog open={showOwnPasswordDialog} onOpenChange={setShowOwnPasswordDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>تعديل كلمة المرور</DialogTitle>
+            <DialogDescription>تغيير كلمة مرور حسابك</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>كلمة المرور الحالية *</Label>
+              <Input
+                data-testid="input-own-current-password"
+                type="password"
+                value={ownCurrentPassword}
+                onChange={(e) => setOwnCurrentPassword(e.target.value)}
+                placeholder="كلمة المرور الحالية"
+              />
+            </div>
+            <div>
+              <Label>كلمة المرور الجديدة *</Label>
+              <Input
+                data-testid="input-own-new-password"
+                type="password"
+                value={ownNewPassword}
+                onChange={(e) => setOwnNewPassword(e.target.value)}
+                placeholder="كلمة المرور الجديدة (6 أحرف على الأقل)"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowOwnPasswordDialog(false)}>إلغاء</Button>
+            <Button
+              data-testid="button-confirm-own-password"
+              onClick={handleChangeOwnPassword}
+              disabled={!ownCurrentPassword || !ownNewPassword || ownNewPassword.length < 6 || changingOwnPassword}
+            >
+              {changingOwnPassword ? "جارٍ الحفظ..." : "حفظ"}
             </Button>
           </DialogFooter>
         </DialogContent>

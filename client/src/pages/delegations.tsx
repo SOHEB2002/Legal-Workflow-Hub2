@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -24,6 +25,7 @@ import { DualDateDisplay } from "@/components/ui/dual-date-display";
 export default function DelegationsPage() {
   const { toast } = useToast();
   const { user, users } = useAuth();
+  const search = useSearch();
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [form, setForm] = useState({
     toUserId: "",
@@ -33,6 +35,17 @@ export default function DelegationsPage() {
     endDate: "",
     scope: "all_cases" as string,
   });
+
+  // Deep-link from the المستخدمون page: "?to=<userId>" pre-selects that user as
+  // the delegate and opens the create dialog (fromUserId is always the caller,
+  // set server-side). Skips self (can't delegate to yourself).
+  useEffect(() => {
+    const to = new URLSearchParams(search).get("to");
+    if (to && to !== user?.id) {
+      setForm((f) => ({ ...f, toUserId: to }));
+      setShowAddDialog(true);
+    }
+  }, [search, user?.id]);
 
   const { data: delegations = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/delegations'],

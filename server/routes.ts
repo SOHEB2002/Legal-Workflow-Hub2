@@ -9876,6 +9876,33 @@ export async function registerRoutes(
     }
   });
 
+  // المستخدمون transparency badges — every CURRENTLY-VALID delegation
+  // (status نشط + approved + today within start–end) as lean {fromUserId,
+  // toUserId} pairs, readable by EVERY authenticated user so the users page can
+  // show "who is currently acting for whom". Deliberately public and minimal:
+  // no reason/details/dates exposed; the FE maps the two ids to names from the
+  // already-loaded users list (no N+1). Same validity predicate as the act-as
+  // resolver (getActingContext): نشط + approvedBy set + in-window. startDate/
+  // endDate are varchar "YYYY-MM-DD" → direct lexical comparison is correct.
+  // Registered BEFORE /:id (a literal) so the :id capture never swallows it.
+  app.get("/api/delegations/active", requireAuth, async (_req: AuthRequest, res) => {
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const all = await storage.getAllDelegations();
+      const active = all
+        .filter((d) =>
+          d.status === "نشط" &&
+          d.approvedBy != null &&
+          d.startDate <= today &&
+          d.endDate >= today,
+        )
+        .map((d) => ({ fromUserId: d.fromUserId, toUserId: d.toUserId }));
+      res.json(active);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التفويضات النشطة" });
+    }
+  });
+
   // Item 2 — single delegation (for the approval modal's details block). Gate
   // mirrors the list scope: a party (delegator/delegate) or a manager/approver
   // may read it. Registered AFTER /acting-as (a literal) so the :id capture

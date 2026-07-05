@@ -89,14 +89,18 @@ const menuItems: MenuItem[] = [
     url: "/delegations",
     icon: ArrowLeftRight,
   },
-];
-
-const adminMenuItems = [
+  // Now open to EVERY authenticated user (moved out of الإدارة): any employee
+  // can browse the user list and create a delegation from a row. All mutating
+  // actions stay role-gated server-side; the page hides admin actions for
+  // non-managers. Fields are non-sensitive here.
   {
     title: "المستخدمين",
     url: "/users",
     icon: UserCog,
   },
+];
+
+const adminMenuItems = [
   {
     title: "سجل النشاط",
     url: "/activity-log",
