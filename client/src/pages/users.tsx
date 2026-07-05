@@ -36,7 +36,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, Palmtree, AlertTriangle, Loader2 } from "lucide-react";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, AlertTriangle, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
@@ -46,7 +46,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import type { User as UserType, UserRoleType, UserStatusValue, TaskSpecialtyValue } from "@shared/schema";
 import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels, TaskSpecialty, TaskSpecialtyLabels } from "@shared/schema";
-import { VacationDialog } from "@/components/users/vacation-dialog";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 
 function getRoleBadgeColor(role: UserRoleType) {
@@ -90,7 +89,7 @@ function getStatusBadgeColor(status: UserStatusValue) {
 export default function UsersPage() {
   const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
-  const { extendedUsers, isUserOnVacation } = useUsers();
+  const { extendedUsers } = useUsers();
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
@@ -102,7 +101,6 @@ export default function UsersPage() {
   const [departmentFilter, setDepartmentFilter] = useState<string>(isDepartmentHead ? userDepartmentId : "all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
-  const [showVacationDialog, setShowVacationDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -411,8 +409,6 @@ export default function UsersPage() {
       matchesStatus = userStatus === UserStatus.ACTIVE;
     } else if (statusFilter === "inactive") {
       matchesStatus = userStatus === UserStatus.INACTIVE;
-    } else if (statusFilter === "on_vacation") {
-      matchesStatus = userStatus === UserStatus.ON_VACATION || isUserOnVacation(u.id);
     } else if (statusFilter === "suspended") {
       matchesStatus = userStatus === UserStatus.SUSPENDED;
     }
@@ -423,7 +419,6 @@ export default function UsersPage() {
   const getUserStatus = (userId: string): UserStatusValue => {
     const extended = extendedUsers.find(eu => eu.id === userId);
     if (extended?.status) return extended.status;
-    if (isUserOnVacation(userId)) return UserStatus.ON_VACATION;
     const user = users.find(u => u.id === userId);
     return user?.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE;
   };
@@ -562,7 +557,6 @@ export default function UsersPage() {
                 <SelectItem value="all">جميع الحالات</SelectItem>
                 <SelectItem value="active">نشط</SelectItem>
                 <SelectItem value="inactive">غير نشط</SelectItem>
-                <SelectItem value="on_vacation">في إجازة</SelectItem>
                 <SelectItem value="suspended">موقوف</SelectItem>
               </SelectContent>
             </Select>
@@ -681,19 +675,10 @@ export default function UsersPage() {
                           <Eye className="w-4 h-4 ml-2" />
                           عرض الملف الشخصي
                         </DropdownMenuItem>
-                        {!isDepartmentHead && (
-                          <DropdownMenuItem
-                            data-testid={`button-schedule-vacation-${u.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setUserToAction(u);
-                              setShowVacationDialog(true);
-                            }}
-                          >
-                            <Palmtree className="w-4 h-4 ml-2" />
-                            جدولة إجازة
-                          </DropdownMenuItem>
-                        )}
+                        {/* RESERVED: "جدولة إجازة" (leave) menu entry removed here.
+                            The old localStorage-only vacation scheduler was per-browser and
+                            unenforced; deleted. A real server-backed leave system is planned
+                            (approving leave will create a delegation) — rebuild the entry here then. */}
                         {/* RESERVED: "تخصيص الصلاحيات" (custom-permissions) menu entry removed here.
                             The old localStorage-only dialog was dead/unenforced and misleading; deleted.
                             This slot is reserved for the future server-backed admin_support
@@ -1281,11 +1266,6 @@ export default function UsersPage() {
         </DialogContent>
       </Dialog>
 
-      <VacationDialog
-        open={showVacationDialog}
-        onOpenChange={setShowVacationDialog}
-        user={userToAction}
-      />
     </div>
   );
 }
