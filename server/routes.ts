@@ -363,7 +363,7 @@ function canViewMemoActivitiesIdentity(u: CaseActorIdentity, memo: any, parentCa
   return false;
 }
 
-function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
+function canActOnHearingIdentity(u: { id: string; role: string }, hearing: any): boolean {
   // Phase 5 B/M4 — department_head removed so the server mirrors the FE
   // hearing-action contract (hearings.tsx canActOnHearing = attending lawyer /
   // branch_manager / admin_support). The UI never surfaces a hearing action to
@@ -373,9 +373,23 @@ function canActOnHearing(user: { id: string; role: string }, hearing: any): bool
   // 403s every viewer write before the handler, and result/report/close are
   // the only (write) call sites. Effective write-actors: attending lawyer /
   // branch_manager / admin_support.
-  if (["branch_manager", "admin_support", "viewer"].includes(user.role)) return true;
-  if (hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
+  if (["branch_manager", "admin_support", "viewer"].includes(u.role)) return true;
+  if (hearing.attendingLawyerId && hearing.attendingLawyerId === u.id) return true;
   return false;
+}
+// Delegation-aware wrapper — mirrors the canModifyCase idiom (identity fn +
+// actingIdentitiesFor expansion) so a delegate standing in for the attending
+// lawyer can act on the hearing, exactly like every other case action. Keyed on
+// the hearing's parent case id so specific_cases delegations scope correctly;
+// non-case scoping is impossible here (a hearing always has a caseId). With no
+// ctx the identity set is exactly [self] → byte-identical to the old check, so
+// NON-delegated allow/deny is unchanged. The distinct attending-lawyer semantics
+// are preserved per-identity (we do NOT fold into canModifyCase, which grants a
+// broader role set and would loosen the gate for non-delegated users too).
+function canActOnHearing(user: { id: string; role: string }, hearing: any, ctx?: ActingContext): boolean {
+  if (!ctx) return canActOnHearingIdentity(user, hearing);
+  return actingIdentitiesFor(ctx, hearing.caseId ?? null)
+    .some((i) => canActOnHearingIdentity({ id: i.userId, role: i.role }, hearing));
 }
 
 async function validateAssignedUsersActive(userIds: string[]): Promise<{ valid: boolean; inactiveUsers: string[] }> {
@@ -7153,7 +7167,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (hearing.hearingDate) {
@@ -7731,7 +7745,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.result) {
@@ -7769,7 +7783,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {
@@ -7795,7 +7809,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       const updated = await storage.updateHearing(hearingId, { agencyVerificationAckAt: new Date().toISOString() });
@@ -7813,7 +7827,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {
