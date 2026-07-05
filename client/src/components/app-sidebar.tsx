@@ -81,30 +81,29 @@ const menuItems: MenuItem[] = [
     url: "/notifications",
     icon: Bell,
   },
-  // Item 4 — open to EVERY authenticated user (was manager-only under الإدارة).
-  // The delegator is usually a regular employee, so they need the entry point;
-  // the /delegations list is role-scoped server-side.
-  {
-    title: "التفويضات",
-    url: "/delegations",
-    icon: ArrowLeftRight,
-  },
-  // Now open to EVERY authenticated user (moved out of الإدارة): any employee
-  // can browse the user list and create a delegation from a row. All mutating
-  // actions stay role-gated server-side; the page hides admin actions for
-  // non-managers. Fields are non-sensitive here.
+];
+
+// الإدارة section. The GROUP renders for every authenticated user, but each item
+// keeps its own visibility: المستخدمين and التفويضات are open to all (both are
+// role-scoped server-side / on their own pages); سجل النشاط stays manager-only
+// via `managerOnly` (filtered by canManageUsers below) — unchanged audience.
+// Order is intentional: المستخدمين → التفويضات → سجل النشاط.
+const adminMenuItems: (MenuItem & { managerOnly?: boolean })[] = [
   {
     title: "المستخدمين",
     url: "/users",
     icon: UserCog,
   },
-];
-
-const adminMenuItems = [
+  {
+    title: "التفويضات",
+    url: "/delegations",
+    icon: ArrowLeftRight,
+  },
   {
     title: "سجل النشاط",
     url: "/activity-log",
     icon: FileText,
+    managerOnly: true,
   },
 ];
 
@@ -253,12 +252,13 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {permissions.canManageUsers && (
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-sidebar-foreground/60">الإدارة</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {adminMenuItems.map((item) => (
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-sidebar-foreground/60">الإدارة</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {adminMenuItems
+                .filter((item) => !item.managerOnly || permissions.canManageUsers)
+                .map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
                       asChild
@@ -272,10 +272,9 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
         <SidebarGroup>
           <SidebarGroupLabel className="text-sidebar-foreground/60">سير العمل</SidebarGroupLabel>
