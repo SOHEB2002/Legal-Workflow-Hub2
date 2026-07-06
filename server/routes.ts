@@ -110,6 +110,9 @@ import {
   markSectionViewedSchema,
   updateContractSchema,
   updateHearingSchema,
+  canManageUsers,
+  AssignableAdminSupportTaskKind,
+  setAdminSupportTaskAssignmentSchema,
   SIDEBAR_SECTIONS,
   type SidebarSectionValue,
   type UserRoleType,
@@ -9402,6 +9405,53 @@ export async function registerRoutes(
       const success = await storage.deleteSavedFilter(String(req.params.id));
       if (!success) return res.status(404).json({ error: "الفلتر غير موجود" });
       res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ==================== Admin_support task-routing assignments (Phase 1) ====================
+  // Manager-only firm-wide config: which admin_support user owns each assignable
+  // task type (collection / consultation_closing / session_report_export). Reads
+  // and writes the mapping table ONLY — does NOT affect task routing yet (a later
+  // sub-step wires routing to this table). Gated with canManageUsers server-side,
+  // so a non-manager hitting these directly gets 403 (not just a hidden nav item).
+  app.get("/api/admin-support-task-assignments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!canManageUsers(req.user!.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية للوصول إلى إسناد مهام الدعم الإداري" });
+      }
+      const rows = await storage.getAdminSupportTaskAssignments();
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put("/api/admin-support-task-assignments/:taskType", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!canManageUsers(req.user!.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتعديل إسناد مهام الدعم الإداري" });
+      }
+      const taskType = String(req.params.taskType);
+      const assignableTypes = Object.values(AssignableAdminSupportTaskKind) as string[];
+      if (!assignableTypes.includes(taskType)) {
+        return res.status(400).json({ error: "نوع المهمة غير صالح" });
+      }
+      const parsed = setAdminSupportTaskAssignmentSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "بيانات الإسناد غير صالحة" });
+      }
+      const assigneeUserId = parsed.data.assigneeUserId ?? null;
+      // A provided assignee must be an ACTIVE admin_support user; null clears it.
+      if (assigneeUserId) {
+        const target = await storage.getUser(assigneeUserId);
+        if (!target || target.role !== "admin_support" || !target.isActive) {
+          return res.status(400).json({ error: "يجب اختيار موظف دعم إداري نشط" });
+        }
+      }
+      const row = await storage.setAdminSupportTaskAssignment(taskType, assigneeUserId);
+      res.json(row);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

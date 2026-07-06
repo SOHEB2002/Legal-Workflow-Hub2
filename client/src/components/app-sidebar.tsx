@@ -105,6 +105,12 @@ const adminMenuItems: (MenuItem & { managerOnly?: boolean })[] = [
     icon: FileText,
     managerOnly: true,
   },
+  {
+    title: "إسناد مهام الدعم",
+    url: "/admin-support-tasks",
+    icon: ClipboardList,
+    managerOnly: true,
+  },
 ];
 
 const workflowMenuItems = [

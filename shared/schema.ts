@@ -5195,3 +5195,11 @@ export const AssignableAdminSupportTaskClass: Record<AssignableAdminSupportTaskK
 
 // Select type for the mapping table (declared with the table above).
 export type AdminSupportTaskAssignment = typeof adminSupportTaskAssignments.$inferSelect;
+
+// Tolerant PUT-body gate for the assignment settings screen (validation-patterns
+// discipline: passthrough, all-optional, handler does the semantic checks).
+// assigneeUserId: a user id, null to clear (unassign), or omitted (→ null). The
+// task type comes from the URL param, validated against AssignableAdminSupportTaskKind.
+export const setAdminSupportTaskAssignmentSchema = z.object({
+  assigneeUserId: z.string().nullable().optional(),
+}).passthrough();
