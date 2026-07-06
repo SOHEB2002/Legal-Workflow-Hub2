@@ -1261,7 +1261,7 @@ export default function MemosPage() {
                                 variant="outline"
                                 className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
                                 data-testid={`badge-memo-awaiting-${memo.id}`}
-                                title="بانتظار استكمال البيانات"
+                                title="بانتظار استكمال المرفقات والبيانات"
                               >
                                 <AlertTriangle className="w-2.5 h-2.5 ml-1" />
                                 بانتظار
@@ -1634,7 +1634,7 @@ export default function MemosPage() {
                   >
                     <div className="flex items-center gap-2 font-medium">
                       <AlertTriangle className="w-4 h-4" />
-                      هذه المذكرة بانتظار استكمال البيانات
+                      هذه المذكرة بانتظار استكمال المرفقات والبيانات
                     </div>
                     {detailMemo.savedStage && (
                       <div className="mt-1 text-xs">
@@ -1972,10 +1972,10 @@ export default function MemosPage() {
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-amber-600" />
-              بانتظار استكمال البيانات
+              بانتظار استكمال المرفقات والبيانات
             </AlertDialogTitle>
             <AlertDialogDescription>
-              ستُحفظ حالة المذكرة الحالية كلقطة، وتُوضع المذكرة بانتظار استكمال البيانات.
+              ستُحفظ حالة المذكرة الحالية كلقطة، وتُوضع المذكرة بانتظار استكمال المرفقات والبيانات.
               عند اكتمال البيانات استخدم زر "تم الاستكمال" للعودة.
             </AlertDialogDescription>
           </AlertDialogHeader>

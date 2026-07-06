@@ -2617,7 +2617,7 @@ export type ContractStageValue = typeof ContractStage[keyof typeof ContractStage
 
 export const ContractStageLabels: Record<ContractStageValue, string> = {
   "استلام":                       "استلام",
-  "استكمال_البيانات_والمرفقات":  "استكمال البيانات والمرفقات",
+  "استكمال_البيانات_والمرفقات":  "استكمال المرفقات والبيانات",
   "تحرير":                        "تحرير",
   "مراجعة_داخلية":               "مراجعة داخلية",
   "لجنة_مراجعة":                  "لجنة مراجعة",
@@ -2802,7 +2802,7 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   general_note:           "ملاحظة عامة",
   paused:                 "تعليق",
   unpaused:               "إلغاء التعليق",
-  await_completion:       "بانتظار استكمال البيانات والمرفقات",
+  await_completion:       "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
   completion_skipped:     "تجاوز مرحلة الاستكمال",
   contract_type_changed:  "تغيير نوع العقد",
