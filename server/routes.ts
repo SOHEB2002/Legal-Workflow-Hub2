@@ -4283,6 +4283,27 @@ export async function registerRoutes(
     }
   });
 
+  // "تم" acknowledge for the MEMO data-completion reminder. Unlike the other
+  // three work-types (stage-gated), the memo task is gated on the memo's
+  // awaiting_completion latch (set by the "بانتظار استكمال البيانات" button);
+  // this stamps data_completion_last_ack_at=now to suppress the reminder for 2
+  // days. The task fully clears when the memo's resume-from-completion flips
+  // awaiting_completion off. Same actor set as the other memo state changes.
+  app.post("/api/memos/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
+      if (!allowed) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      const updated = await storage.updateMemo(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging memo data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
   app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;

@@ -735,6 +735,12 @@ export const memos = pgTable("memos", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // data-completion reminder ack (memo awaiting-completion latch). Mirrors
+  // lawCases.dataCompletionLastAckAt — the feed suppresses the
+  // data_completion_memo task for 2 days after each ack. The task is gated on
+  // awaiting_completion=true (memos have no data-completion STAGE; the button
+  // is the trigger), and clears when resume-from-completion flips the latch off.
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   // Phase-9 — review-workflow stage column. Mirrors the consultations
   // currentStage axis but with memo-specific labels (جاهزة_للرفع /
   // مرفوعة instead of جاهزة_للإرسال / منجزة). Nullable because legacy
@@ -3113,6 +3119,7 @@ export interface Memo {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  dataCompletionLastAckAt: string | null;
   // Phase-9 — review-workflow stage. Null on legacy memos until the
   // backfill in script/backfill-memo-stages.sql runs. New memos start
   // at MemoStage.RECEIVED ("استلام").

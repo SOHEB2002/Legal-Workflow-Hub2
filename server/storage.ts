@@ -917,6 +917,7 @@ function mapDbMemo(dbMemo: any): Memo {
     pausedAt: toISOStringOrNull(dbMemo.pausedAt),
     awaitingCompletion: dbMemo.awaitingCompletion ?? false,
     savedStage: dbMemo.savedStage ?? null,
+    dataCompletionLastAckAt: toISOStringOrNull(dbMemo.dataCompletionLastAckAt),
     // Phase-9 — review-workflow stage. Legacy rows pre-backfill surface
     // as null; the FE treats null as "no stage yet" (legacy status flow).
     currentStage: dbMemo.currentStage ?? null,
@@ -2106,12 +2107,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getMemoById(id);
     if (!existing) return undefined;
 
-    const { createdAt, updatedAt, startedAt, completedAt, submittedAt, reviewedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, startedAt, completedAt, submittedAt, reviewedAt, dataCompletionLastAckAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (startedAt) updateData.startedAt = new Date(startedAt);
     if (completedAt) updateData.completedAt = new Date(completedAt);
     if (submittedAt) updateData.submittedAt = new Date(submittedAt);
     if (reviewedAt) updateData.reviewedAt = new Date(reviewedAt);
+    if (dataCompletionLastAckAt !== undefined) {
+      updateData.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
+    }
 
     await db.update(memos).set(updateData).where(eq(memos.id, id));
     return this.getMemoById(id);
@@ -3000,6 +3004,7 @@ export class DatabaseStorage implements IStorage {
     let dataCompletionCaseOwner = "";
     let dataCompletionConsultationOwner = "";
     let dataCompletionContractOwner = "";
+    let dataCompletionMemoOwner = "";
     if (isAdminSupport || firmWideScoped) {
       const taskAssignments = await this.getAdminSupportTaskAssignments();
       const routingUsers = await this.getAllUsers();
@@ -3009,14 +3014,16 @@ export class DatabaseStorage implements IStorage {
         AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT, taskAssignments, routingUsers);
       collectionOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.COLLECTION, taskAssignments, routingUsers);
-      // Data-completion is per work-type. Sub-steps 1+2 wire case / consultation
-      // / contract; the _memo owner is resolved in sub-step 3 with its block.
+      // Data-completion is per work-type — case / consultation / contract fire
+      // at their data-completion STAGE; memo fires on its awaiting-completion latch.
       dataCompletionCaseOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE, taskAssignments, routingUsers);
       dataCompletionConsultationOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION, taskAssignments, routingUsers);
       dataCompletionContractOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.DATA_COMPLETION_CONTRACT, taskAssignments, routingUsers);
+      dataCompletionMemoOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO, taskAssignments, routingUsers);
     }
 
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
@@ -3463,6 +3470,31 @@ export class DatabaseStorage implements IStorage {
         }
       } catch (e) {
         console.error("[getMyTasks] data_completion_contract block failed — skipping:", e);
+      }
+    }
+
+    // ---- 14d. Data-completion (MEMO work-type) — button-triggered, NOT stage.
+    // Memos have no data-completion stage; the "بانتظار استكمال البيانات" button
+    // sets awaiting_completion=true, which is the gate here. 2-day ack-suppression
+    // (data_completion_last_ack_at) mirrors the other three; the task fully clears
+    // when the memo's resume-from-completion flips awaiting_completion off. Routed
+    // via the data_completion_memo mapping (assignee → own task; unset → the
+    // branch_manager's unassigned pool). Guarded like the sibling blocks.
+    if (dataCompletionMemoOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
+          .from(memos).where(and(
+            eq(memos.awaitingCompletion, true),
+            sql`(${memos.dataCompletionLastAckAt} IS NULL OR ${memos.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionMemoOwner;
+          tasks.push({ id: `data_completion_memo:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_MEMO,
+            title: `استكمال المرفقات والبيانات — مذكرة: ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId ?? null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_memo block failed — skipping:", e);
       }
     }
 
