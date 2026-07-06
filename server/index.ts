@@ -9,7 +9,8 @@ import { startScheduler } from "./scheduler";
 import { storage } from "./storage";
 import { pool } from "./db";
 import { readFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { setupWebSocket } from "./websocket";
 
 const app = express();
@@ -179,7 +180,11 @@ app.use((req, res, next) => {
   // Apply DB indexes on every startup (all statements use IF NOT EXISTS so
   // this is fully idempotent and safe to run repeatedly).
   try {
-    const indexSql = readFileSync(join(__dirname, "migrate-indexes.sql"), "utf8");
+    // ESM (tsx/dev) has no __dirname; derive the module dir from
+    // import.meta.url. esbuild shims import.meta.url in the prod CJS bundle,
+    // so this resolves correctly in both run modes.
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    const indexSql = readFileSync(join(moduleDir, "migrate-indexes.sql"), "utf8");
     // Split on semicolons and run each statement individually
     const statements = indexSql
       .split(";")
@@ -193,82 +198,14 @@ app.use((req, res, next) => {
     console.error("Failed to apply DB indexes:", err);
   }
 
-  // One-time idempotent classification migration.
-  //   1. Rename legacy value literals to the new scheme.
-  //   2. Promote cases whose currentStage means they're actually in court.
-  //   3. Revert cases that were wrongly promoted while still in pre-trial
-  //      review/conciliation stages (bug from a previous release).
-  // All three steps use plain UPDATEs and are safe to run on every boot.
-  try {
-    await pool.query(
-      `UPDATE cases SET case_classification = 'قيد_الدراسة' WHERE case_classification = 'قضية_جديدة'`,
-    );
-    await pool.query(
-      `UPDATE cases SET case_classification = 'منظورة_بالمحكمة' WHERE case_classification = 'قضية_مقيدة'`,
-    );
-    await pool.query(
-      `UPDATE cases
-         SET case_classification = 'منظورة_بالمحكمة',
-             client_role = COALESCE(NULLIF(client_role, ''), 'مدعي')
-       WHERE case_classification = 'قيد_الدراسة'
-         AND current_stage IN (
-           'منظورة',
-           'منظورة_استئناف',
-           'محكوم_حكم_ابتدائي',
-           'محكوم_حكم_نهائي',
-           'تحصيل'
-         )`,
-    );
-    await pool.query(
-      `UPDATE cases
-         SET case_classification = 'قيد_الدراسة'
-       WHERE case_classification = 'منظورة_بالمحكمة'
-         AND current_stage IN (
-           'مداولة_الصلح',
-           'أغلق_طلب_الصلح',
-           'قيد_التدقيق_في_تراضي',
-           'قيد_التدقيق_في_ناجز',
-           'قيد_التدقيق_في_معين'
-         )`,
-    );
-    console.log("Case classification migration applied successfully.");
-  } catch (err) {
-    console.error("Failed to apply classification migration:", err);
-  }
-
-  // One-time idempotent backfill for cases created while the client-side
-  // DEFAULT_DEPARTMENTS list had ids "1" and "2" inverted relative to the
-  // server seed. Any case whose department_id is one of the hardcoded
-  // "1".."4" values but doesn't match its case_type is fixed up to the
-  // correct server id. Cases pointing at real custom department UUIDs are
-  // left alone.
-  //   Server seed (storage.ts:initializeDefaultData):
-  //     "1" → عام   "2" → تجاري   "3" → عمالي   "4" → إداري
-  try {
-    const fixes: Array<{ caseType: string; correctId: string }> = [
-      { caseType: "عام", correctId: "1" },
-      { caseType: "تجاري", correctId: "2" },
-      { caseType: "عمالي", correctId: "3" },
-      { caseType: "إداري", correctId: "4" },
-    ];
-    let totalFixed = 0;
-    for (const { caseType, correctId } of fixes) {
-      const result = await pool.query(
-        `UPDATE cases
-            SET department_id = $1
-          WHERE case_type = $2
-            AND department_id IN ('1','2','3','4')
-            AND department_id <> $1`,
-        [correctId, caseType],
-      );
-      totalFixed += result.rowCount ?? 0;
-    }
-    if (totalFixed > 0) {
-      console.log(`Department backfill: corrected ${totalFixed} case(s) with mismatched department_id.`);
-    }
-  } catch (err) {
-    console.error("Failed to apply department backfill:", err);
-  }
+  // NOTE: two one-time boot migrations were removed here (case classification
+  // migration + department-id backfill). Both targeted a `cases` relation that
+  // does not exist (the table is `law_cases`), so they threw
+  // `relation "cases" does not exist` on every boot and never executed. Their
+  // intent was superseded by the live stage-bar flow (classification) and a
+  // since-corrected client department list (backfill); nothing at runtime
+  // depended on them. Removed rather than repointed at `law_cases`, since
+  // repointing would activate dormant UPDATEs against live data.
 
   setupWebSocket(httpServer);
   await registerRoutes(httpServer, app);
