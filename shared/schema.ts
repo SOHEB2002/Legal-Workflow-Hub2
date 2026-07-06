@@ -220,6 +220,10 @@ export const consultations = pgTable("consultations", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // data-completion reminder ack (consultation at its استكمال_المرفقات_والبيانات
+  // stage). Mirrors lawCases.dataCompletionLastAckAt — the unified-tasks feed
+  // suppresses the data_completion_consultation task for 2 days after each ack.
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   // Committee-referral form fields (نموذج الإحالة للجنة المراجعة).
   // Mirrors lawCases.internalReviewerId / priority — set when the
   // assigned lawyer hands the file to the committee. priority_reason
@@ -414,6 +418,10 @@ export const contracts = pgTable("contracts", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // data-completion reminder ack (contract at its استكمال_البيانات_والمرفقات
+  // stage). Mirrors lawCases.dataCompletionLastAckAt — the unified-tasks feed
+  // suppresses the data_completion_contract task for 2 days after each ack.
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   createdBy:          varchar("created_by", { length: 255 }).notNull(),
   createdAt:          timestamp("created_at").defaultNow(),
   updatedAt:          timestamp("updated_at").defaultNow(),
@@ -2398,6 +2406,7 @@ export interface Consultation {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  dataCompletionLastAckAt: string | null;
   // Committee-referral fields. internalReviewerId is set/cleared by
   // department_head / admin_support / branch_manager (mirrors cases /
   // memos). priority + priorityReason are editable by anyone who can
@@ -2821,6 +2830,7 @@ export interface Contract {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  dataCompletionLastAckAt: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

@@ -643,6 +643,7 @@ function mapDbConsultation(dbCon: any): Consultation {
     pausedAt: toISOStringOrNull(dbCon.pausedAt),
     awaitingCompletion: dbCon.awaitingCompletion ?? false,
     savedStage: dbCon.savedStage ?? null,
+    dataCompletionLastAckAt: toISOStringOrNull(dbCon.dataCompletionLastAckAt),
     // Committee-referral fields. All nullable so legacy rows
     // (pre-add-consultation-committee-fields migration) surface as null.
     internalReviewerId: dbCon.internalReviewerId ?? null,
@@ -697,6 +698,7 @@ function mapDbContract(row: any): Contract {
     pausedAt: toISOStringOrNull(row.pausedAt),
     awaitingCompletion: row.awaitingCompletion ?? false,
     savedStage: row.savedStage ?? null,
+    dataCompletionLastAckAt: toISOStringOrNull(row.dataCompletionLastAckAt),
     createdBy: row.createdBy,
     createdAt: toISOString(row.createdAt),
     updatedAt: toISOString(row.updatedAt),
@@ -1375,7 +1377,7 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getConsultationById(id);
     if (!existing) return undefined;
 
-    const { createdAt, updatedAt, closedAt, followUpStartedAt, expectedDeliveryDate, ...updateFields } = data;
+    const { createdAt, updatedAt, closedAt, followUpStartedAt, expectedDeliveryDate, dataCompletionLastAckAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     // Date-mode timestamp columns: the interface types these as ISO strings,
     // but Drizzle expects Date. Convert here (mirrors closedAt) so callers
@@ -1388,6 +1390,9 @@ export class DatabaseStorage implements IStorage {
     }
     if (expectedDeliveryDate !== undefined) {
       updateData.expectedDeliveryDate = expectedDeliveryDate ? new Date(expectedDeliveryDate) : null;
+    }
+    if (dataCompletionLastAckAt !== undefined) {
+      updateData.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
     }
     await db.update(consultations).set(updateData).where(eq(consultations.id, id));
 
@@ -2993,6 +2998,8 @@ export class DatabaseStorage implements IStorage {
     let sessionReportExportOwner = "";
     let collectionOwner = "";
     let dataCompletionCaseOwner = "";
+    let dataCompletionConsultationOwner = "";
+    let dataCompletionContractOwner = "";
     if (isAdminSupport || firmWideScoped) {
       const taskAssignments = await this.getAdminSupportTaskAssignments();
       const routingUsers = await this.getAllUsers();
@@ -3002,11 +3009,14 @@ export class DatabaseStorage implements IStorage {
         AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT, taskAssignments, routingUsers);
       collectionOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.COLLECTION, taskAssignments, routingUsers);
-      // Data-completion is per work-type; sub-step 1 wires only the CASE key.
-      // _consultation / _contract / _memo owners are resolved in sub-steps 2/3
-      // alongside their generation blocks.
+      // Data-completion is per work-type. Sub-steps 1+2 wire case / consultation
+      // / contract; the _memo owner is resolved in sub-step 3 with its block.
       dataCompletionCaseOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE, taskAssignments, routingUsers);
+      dataCompletionConsultationOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION, taskAssignments, routingUsers);
+      dataCompletionContractOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION_CONTRACT, taskAssignments, routingUsers);
     }
 
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
@@ -3398,6 +3408,45 @@ export class DatabaseStorage implements IStorage {
         const ownerId = dataCompletionCaseOwner;
         tasks.push({ id: `data_completion_case:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CASE,
           title: `استكمال المرفقات والبيانات — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+      }
+    }
+
+    // ---- 14b. Data-completion (CONSULTATION work-type) — mirrors the case
+    // block: surfaces while an active consultation sits at its data-completion
+    // stage (استكمال_المرفقات_والبيانات), 2-day ack-suppression, routed via the
+    // data_completion_consultation mapping (assignee → own task; unset → the
+    // branch_manager's unassigned pool). status="active" filter added (sibling
+    // consultation queries all scope to active; a closed one shouldn't remind).
+    if (dataCompletionConsultationOwner === uid || firmWideScoped) {
+      const rows = await db.select({ id: consultations.id, consultationNumber: consultations.consultationNumber })
+        .from(consultations).where(and(
+          eq(consultations.status, "active"),
+          eq(consultations.currentStage, "استكمال_المرفقات_والبيانات"),
+          sql`(${consultations.dataCompletionLastAckAt} IS NULL OR ${consultations.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+        ));
+      for (const r of rows) {
+        const ownerId = dataCompletionConsultationOwner;
+        tasks.push({ id: `data_completion_consultation:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONSULTATION,
+          title: `استكمال المرفقات والبيانات — استشارة ${r.consultationNumber}`, entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+      }
+    }
+
+    // ---- 14c. Data-completion (CONTRACT work-type) — mirrors the case block:
+    // active contract at its data-completion stage (استكمال_البيانات_والمرفقات),
+    // 2-day ack-suppression, routed via the data_completion_contract mapping.
+    if (dataCompletionContractOwner === uid || firmWideScoped) {
+      const rows = await db.select({ id: contracts.id, contractNumber: contracts.contractNumber })
+        .from(contracts).where(and(
+          eq(contracts.status, "active"),
+          eq(contracts.currentStage, "استكمال_البيانات_والمرفقات"),
+          sql`(${contracts.dataCompletionLastAckAt} IS NULL OR ${contracts.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+        ));
+      for (const r of rows) {
+        const ownerId = dataCompletionContractOwner;
+        tasks.push({ id: `data_completion_contract:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONTRACT,
+          title: `استكمال المرفقات والبيانات — عقد ${r.contractNumber}`, entityType: "contract", entityId: r.id, caseId: null,
           ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
       }
     }
@@ -4618,9 +4667,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined> {
-    const { createdAt, updatedAt, closedAt, ...rest } = data;
+    const { createdAt, updatedAt, closedAt, dataCompletionLastAckAt, ...rest } = data;
     const update: any = { ...rest, updatedAt: new Date() };
     if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
+    if (dataCompletionLastAckAt !== undefined) {
+      update.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
+    }
     await db.update(contracts).set(update).where(eq(contracts.id, id));
     return this.getContractById(id);
   }

@@ -346,9 +346,11 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
   }
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { method: "POST", url: `/api/hearings/${e}/mark-report-exported` };
-    // Sub-step 1 wires only the CASE ack endpoint; _consultation/_contract/_memo
-    // ack routes land with their generation in sub-steps 2/3.
+    // Each data-completion work-type acks its own entity (mirrors the case route).
+    // _memo ack lands with its generation in sub-step 3.
     case MyTaskKind.DATA_COMPLETION_CASE: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
+    case MyTaskKind.DATA_COMPLETION_CONSULTATION: return { method: "POST", url: `/api/consultations/${e}/ack-data-completion` };
+    case MyTaskKind.DATA_COMPLETION_CONTRACT: return { method: "POST", url: `/api/contracts/${e}/ack-data-completion` };
     case MyTaskKind.AGENCY_VERIFICATION: return { method: "POST", url: `/api/hearings/${e}/ack-agency-verification` };
     case MyTaskKind.DELEGATION_APPROVAL:
       // اعتماد (default) → /approve; رفض → /reject with the required reason.

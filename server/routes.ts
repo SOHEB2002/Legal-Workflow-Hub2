@@ -4243,6 +4243,46 @@ export async function registerRoutes(
     }
   });
 
+  // "تم" acknowledge for the CONSULTATION data-completion reminder — mirrors the
+  // case route above (stamps data_completion_last_ack_at=now so the feed
+  // suppresses the data_completion_consultation task for 2 days, then
+  // re-surfaces if the consultation is still at استكمال_المرفقات_والبيانات).
+  app.post("/api/consultations/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (!canModifyConsultation(user, consultation, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const updated = await storage.updateConsultation(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging consultation data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
+  // "تم" acknowledge for the CONTRACT data-completion reminder — mirrors the
+  // case route above (stamps data_completion_last_ack_at=now so the feed
+  // suppresses the data_completion_contract task for 2 days, then re-surfaces
+  // if the contract is still at استكمال_البيانات_والمرفقات).
+  app.post("/api/contracts/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!canModifyContract(user, contract, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const updated = await storage.updateContract(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging contract data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
   app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
