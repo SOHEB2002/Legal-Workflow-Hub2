@@ -992,6 +992,19 @@ export const supportTickets = pgTable("support_tickets", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Admin_support fine-grained task routing (Phase 1). Central mapping: each
+// assignable admin_support task type → exactly ONE owner. One row per task_type
+// (the PK enforces single-owner-per-type at the DB level). assigneeUserId is
+// NULLABLE: NULL = unassigned → the task falls to the manager's unassigned group
+// (Phase-1 routing lands in a later sub-step). Additive table, created on
+// dev+prod via script/add-admin-support-task-assignments.sql (db:push
+// unavailable); this declaration exists so Drizzle can query it.
+export const adminSupportTaskAssignments = pgTable("admin_support_task_assignments", {
+  taskType: varchar("task_type", { length: 50 }).primaryKey(),
+  assigneeUserId: varchar("assignee_user_id", { length: 255 }),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // ==================== Drizzle Insert Schemas ====================
 
 export const insertUserDbSchema = createInsertSchema(users).omit({ createdAt: true, updatedAt: true });
@@ -5148,3 +5161,37 @@ export function taskSpecialtyClass(entityType: MyTaskEntityType, caseId: string 
       return null;
   }
 }
+
+// ==================== Admin_support fine-grained task routing (Phase 1) ====================
+// The THREE task kinds that are ALREADY admin_support-routed today and can be
+// mapped to a specific owner via the admin_support_task_assignments table.
+// (data_completion / agency_verification / execution are Phase 2 — not here.)
+// Each kind carries the specialty class the FEED already derives for it (via
+// taskSpecialtyClass on the kind's source entity), so the feed's existing class
+// labels/filters stay unchanged when routing moves to this mapping:
+//   collection            → field_task w/ caseId → ترافع (LITIGATION)
+//   consultation_closing  → consultation         → استشارات (CONSULTATIONS)
+//   session_report_export → hearing              → ترافع (LITIGATION)
+export const AssignableAdminSupportTaskKind = {
+  COLLECTION: MyTaskKind.COLLECTION,
+  CONSULTATION_CLOSING: MyTaskKind.CONSULTATION_CLOSING,
+  SESSION_REPORT_EXPORT: MyTaskKind.SESSION_REPORT_EXPORT,
+} as const;
+
+export type AssignableAdminSupportTaskKindValue =
+  typeof AssignableAdminSupportTaskKind[keyof typeof AssignableAdminSupportTaskKind];
+
+export const AssignableAdminSupportTaskLabels: Record<AssignableAdminSupportTaskKindValue, string> = {
+  [AssignableAdminSupportTaskKind.COLLECTION]: "التحصيل",
+  [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: "إغلاق الاستشارات",
+  [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: "تصدير تقارير الجلسات",
+};
+
+export const AssignableAdminSupportTaskClass: Record<AssignableAdminSupportTaskKindValue, TaskSpecialtyValue> = {
+  [AssignableAdminSupportTaskKind.COLLECTION]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: TaskSpecialty.CONSULTATIONS,
+  [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: TaskSpecialty.LITIGATION,
+};
+
+// Select type for the mapping table (declared with the table above).
+export type AdminSupportTaskAssignment = typeof adminSupportTaskAssignments.$inferSelect;

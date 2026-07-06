@@ -8,6 +8,7 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
+  type AdminSupportTaskAssignment,
   type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, FieldTaskStatus, taskSpecialtyClass,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
@@ -21,6 +22,7 @@ import {
   ContractStage, ContractStatus, ContractActivityType,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
+  adminSupportTaskAssignments,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationDeliveryExtensions, consultationActivityLog,
@@ -195,6 +197,12 @@ export interface IStorage {
   createSavedFilter(userId: string, data: InsertSavedFilter): Promise<SavedFilter>;
   updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined>;
   deleteSavedFilter(id: string): Promise<boolean>;
+
+  // Admin_support fine-grained task routing (Phase 1). The central task_type →
+  // assignee mapping. get returns every row (one per assigned type); set upserts
+  // one row (assigneeUserId null clears it → the type becomes unassigned).
+  getAdminSupportTaskAssignments(): Promise<AdminSupportTaskAssignment[]>;
+  setAdminSupportTaskAssignment(taskType: string, assigneeUserId: string | null): Promise<AdminSupportTaskAssignment>;
 
   // Sidebar "new since last visit" counts. Counts items per section
   // visible to the user that were created/assigned after their
@@ -2693,6 +2701,25 @@ export class DatabaseStorage implements IStorage {
   async deleteSavedFilter(id: string): Promise<boolean> {
     const result = await db.delete(savedFilters).where(eq(savedFilters.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ==================== Admin_support task assignments (Phase 1) ====================
+  async getAdminSupportTaskAssignments(): Promise<AdminSupportTaskAssignment[]> {
+    return await db.select().from(adminSupportTaskAssignments);
+  }
+
+  // Upsert one task_type → assignee row (PK = task_type, so at most one row per
+  // type). assigneeUserId null clears the assignment (type becomes unassigned).
+  // updatedAt is date-mode; pass a Date, never a string.
+  async setAdminSupportTaskAssignment(taskType: string, assigneeUserId: string | null): Promise<AdminSupportTaskAssignment> {
+    const [row] = await db.insert(adminSupportTaskAssignments)
+      .values({ taskType, assigneeUserId, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: adminSupportTaskAssignments.taskType,
+        set: { assigneeUserId, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
   }
 
   // ==================== Sidebar Section Views ====================
