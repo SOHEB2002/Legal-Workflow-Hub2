@@ -2980,15 +2980,18 @@ export class DatabaseStorage implements IStorage {
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
     const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
 
-    // Phase-1 admin_support per-type routing: resolve the owner of the two
-    // COMPUTED assignable kinds ONCE (identity-independent). Each goes to its
-    // mapped assignee IFF that user is still an active admin_support, else ""
-    // (unassigned → the branch_manager's pool). Only loaded when the viewer could
-    // actually receive/manage them (an assignee is admin_support; the pool is the
+    // Phase-1 admin_support per-type routing: resolve the owner of the three
+    // assignable kinds ONCE (identity-independent). Each goes to its mapped
+    // assignee IFF that user is still an active admin_support, else "" (unassigned
+    // → the branch_manager's pool). Only loaded when the viewer could actually
+    // receive/manage them (an assignee is admin_support; the pool is the
     // branch_manager) — a lawyer/dept_head never sees these, so no extra reads for
-    // them. (collection is resolved at creation-time in routes, not here.)
+    // them. collection is resolved LIVE here too (Option C): its stored field_task
+    // assigned_to is ignored for feed ownership, so mapping changes apply
+    // immediately — true parity with consultation_closing / session_report_export.
     let consultationClosingOwner = "";
     let sessionReportExportOwner = "";
+    let collectionOwner = "";
     if (isAdminSupport || firmWideScoped) {
       const taskAssignments = await this.getAdminSupportTaskAssignments();
       const routingUsers = await this.getAllUsers();
@@ -2996,6 +2999,8 @@ export class DatabaseStorage implements IStorage {
         AssignableAdminSupportTaskKind.CONSULTATION_CLOSING, taskAssignments, routingUsers);
       sessionReportExportOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT, taskAssignments, routingUsers);
+      collectionOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.COLLECTION, taskAssignments, routingUsers);
     }
 
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
@@ -3200,6 +3205,11 @@ export class DatabaseStorage implements IStorage {
         ? await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, ""), ftActionable))
         : [];
       for (const r of [...rows, ...unassigned]) {
+        // Collection (تحصيل) is emitted by the dedicated LIVE-resolve block below
+        // (Option C parity): its owner comes from the mapping, not the stored
+        // assigned_to, so it must NOT be emitted here (where ownerId would read the
+        // stale stored value). Skip it; every other field task is byte-unchanged.
+        if (r.title.startsWith("إعداد خطاب تحصيل")) continue;
         const isCollection = r.title.startsWith("إعداد خطاب تحصيل");
         // Manually-created general tasks (taskType "عام") get their own kind so
         // the feed labels/routes them distinctly from auto/field tasks. Auto
@@ -3396,6 +3406,33 @@ export class DatabaseStorage implements IStorage {
         tasks.push({ id: `session_report_export:${r.id}`, kind: MyTaskKind.SESSION_REPORT_EXPORT,
           title: `تصدير تقرير الجلسة (PDF) — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
           caseId: r.caseId, ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "export" });
+      }
+    }
+
+    // ---- 16. Collection (تحصيل) — Phase-1 per-type LIVE routing (Option C) ----
+    // Collection tasks are stored field_tasks, but their OWNER is resolved LIVE
+    // from the mapping (collectionOwner) — the stored assigned_to is IGNORED for
+    // feed ownership — so changing/clearing the assignment applies immediately,
+    // exactly like consultation_closing / session_report_export. Fetched
+    // viewer-independently (all open collection tasks), then gated by the resolved
+    // owner: emitted ONLY for the assignee (own task) or the branch_manager (team;
+    // unset/inactive → "" → the unassigned pool). The creation notification is a
+    // separate channel and is untouched. actionHint mirrors the old field-task
+    // block (assigned → complete, unassigned → assign).
+    if (collectionOwner === uid || firmWideScoped) {
+      const rows = await db.select({ id: fieldTasks.id, caseId: fieldTasks.caseId,
+        title: fieldTasks.title, dueDate: fieldTasks.dueDate })
+        .from(fieldTasks).where(and(
+          sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
+          sql`${fieldTasks.title} LIKE ${"إعداد خطاب تحصيل%"}`,
+        ));
+      for (const r of rows) {
+        const ownerId = collectionOwner;
+        tasks.push({ id: `collection:${r.id}`, kind: MyTaskKind.COLLECTION,
+          title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+          ownerId, ownerScope: scopeOf(ownerId),
+          dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
+          actionHint: ownerId ? "complete" : "assign" });
       }
     }
 
