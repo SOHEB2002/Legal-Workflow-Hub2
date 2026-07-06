@@ -18,8 +18,6 @@ import {
   FieldTaskType,
   GeneralTaskEventType,
   type FieldTask,
-  TaskSpecialty,
-  type TaskSpecialtyValue,
   insertAttachmentSchema,
   insertMemoSchema,
   hearingResultSchema,
@@ -112,6 +110,7 @@ import {
   updateHearingSchema,
   canManageUsers,
   AssignableAdminSupportTaskKind,
+  resolveAdminSupportAssignee,
   setAdminSupportTaskAssignmentSchema,
   SIDEBAR_SECTIONS,
   type SidebarSectionValue,
@@ -716,22 +715,6 @@ function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   return false;
 }
 
-// Route an auto-created admin_support task to the active admin_support whose
-// taskSpecialties includes the task's class. Returns the unassigned sentinel
-// "" (the system's canonical "غير مسند" value, e.g. auto-memos write
-// primaryLawyerId || responsibleLawyerId || "") when no matching active
-// specialist exists, so the task lands unassigned for a manager/admin_support
-// to distribute manually — instead of the old arbitrary "first admin_support".
-function selectSpecialistAssignee(allUsers: any[], specialty: TaskSpecialtyValue): string {
-  const match = allUsers.find(
-    (u: any) =>
-      u.role === "admin_support" &&
-      u.isActive &&
-      Array.isArray(u.taskSpecialties) &&
-      u.taskSpecialties.includes(specialty),
-  );
-  return match?.id || "";
-}
 
 function validateStageTransition(
   currentStage: string,
@@ -2691,9 +2674,10 @@ export async function registerRoutes(
       if (shouldCreateCollectionTask) {
         try {
           const allUsers = await storage.getAllUsers();
-          // Collection (تحصيل) is litigation-class work → route to the
-          // litigation admin_support specialist; "" (unassigned) if none.
-          const assignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
+          // Collection (تحصيل) → the per-type assignee from the admin_support
+          // task-routing mapping; "" (unassigned pool) if unset or inactive.
+          const assignments = await storage.getAdminSupportTaskAssignments();
+          const assignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
           const collectionTask = await storage.createFieldTask(
             {
               title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
@@ -7431,9 +7415,10 @@ export async function registerRoutes(
               caseUpdate.currentStage = "محكوم_حكم_نهائي";
               await storage.updateCase(effectiveCaseId, caseUpdate);
 
-              // Auto-create collection task → litigation specialist ("" if none)
+              // Auto-create collection task → per-type assignee ("" if unset/inactive)
               const allUsers = await storage.getAllUsers();
-              const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
+              const assignments = await storage.getAdminSupportTaskAssignments();
+              const collectionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
               const collectionTask = await storage.createFieldTask({
                 title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
                 description: `صدر حكم نهائي ${judgmentType} - يرجى إعداد خطاب تحصيل`,
@@ -7601,9 +7586,10 @@ export async function registerRoutes(
 
         // ==================== CONCILIATION: SETTLEMENT REACHED (تم_الصلح) ====================
         else if (data.result === HearingResult.SETTLEMENT_REACHED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "تم_الصلح")) {
-          // Auto-create collection task → litigation specialist ("" if none)
+          // Auto-create collection task → per-type assignee ("" if unset/inactive)
           const allUsers = await storage.getAllUsers();
-          const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
+          const assignments = await storage.getAdminSupportTaskAssignments();
+          const collectionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
           const collectionTask = await storage.createFieldTask({
             title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
             description: `تم الصلح - يرجى إعداد خطاب تحصيل`,

@@ -10,6 +10,7 @@ import {
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   type AdminSupportTaskAssignment,
   type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, FieldTaskStatus, taskSpecialtyClass,
+  AssignableAdminSupportTaskKind, resolveAdminSupportAssignee,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -2979,6 +2980,24 @@ export class DatabaseStorage implements IStorage {
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
     const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
 
+    // Phase-1 admin_support per-type routing: resolve the owner of the two
+    // COMPUTED assignable kinds ONCE (identity-independent). Each goes to its
+    // mapped assignee IFF that user is still an active admin_support, else ""
+    // (unassigned → the branch_manager's pool). Only loaded when the viewer could
+    // actually receive/manage them (an assignee is admin_support; the pool is the
+    // branch_manager) — a lawyer/dept_head never sees these, so no extra reads for
+    // them. (collection is resolved at creation-time in routes, not here.)
+    let consultationClosingOwner = "";
+    let sessionReportExportOwner = "";
+    if (isAdminSupport || firmWideScoped) {
+      const taskAssignments = await this.getAdminSupportTaskAssignments();
+      const routingUsers = await this.getAllUsers();
+      consultationClosingOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.CONSULTATION_CLOSING, taskAssignments, routingUsers);
+      sessionReportExportOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT, taskAssignments, routingUsers);
+    }
+
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
     // Conservative "lawyer must act" stage set (see report: exact set is a
     // refinement point). Excludes review/committee/platform/admin-owned stages.
@@ -3324,15 +3343,22 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // ---- 13. Consultation closing (admin_support) — firm-wide (admin_support is not dept-scoped) ----
-    if (isAdminSupport) {
+    // ---- 13. Consultation closing — Phase-1 per-type routing ----
+    // Goes to the mapped assignee (shown as their own task) and to the
+    // branch_manager (team view; an unset/inactive assignee → ownerId "" → the
+    // manager's unassigned pool). Emitted ONLY for the assignee or the
+    // branch_manager — no more broadcast to every admin_support. (scopeOf returns
+    // "self" for any non-team viewer, so a non-owner admin_support must be
+    // excluded here, not merely scoped.)
+    if (consultationClosingOwner === uid || firmWideScoped) {
       const rows = await db.select({ id: consultations.id, type: consultations.consultationType })
         .from(consultations).where(and(eq(consultations.status, "active"),
           inArray(consultations.currentStage, ["جاهزة_للإرسال", "منجزة"])));
       for (const r of rows) {
+        const ownerId = consultationClosingOwner;
         tasks.push({ id: `consultation_closing:${r.id}`, kind: MyTaskKind.CONSULTATION_CLOSING,
           title: `استشارة جاهزة للإغلاق (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "close" });
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "close" });
       }
     }
 
@@ -3354,18 +3380,22 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // ---- 15. Session-report PDF export (admin_support) — after the lawyer ----
-    // wrote the hearing report (reportCompleted) and it hasn't been exported yet.
-    // Litigation class (hearing). Clears when sessionReportExported flips true.
-    if (isAdminSupport) {
+    // ---- 15. Session-report PDF export — Phase-1 per-type routing ----
+    // Surfaces after the lawyer wrote the hearing report (reportCompleted) and it
+    // hasn't been exported yet. Routed to the mapped assignee (own task) + the
+    // branch_manager (team / unassigned "" pool when unset/inactive); emitted ONLY
+    // for the assignee or the branch_manager — no broadcast. Litigation class
+    // (hearing). Clears when sessionReportExported flips true.
+    if (sessionReportExportOwner === uid || firmWideScoped) {
       const rows = await db.select({ id: hearings.id, caseId: hearings.caseId, caseNumber: lawCases.caseNumber })
         .from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
         .where(and(eq(hearings.reportCompleted, true),
           sql`COALESCE(${hearings.sessionReportExported}, false) = false`));
       for (const r of rows) {
+        const ownerId = sessionReportExportOwner;
         tasks.push({ id: `session_report_export:${r.id}`, kind: MyTaskKind.SESSION_REPORT_EXPORT,
           title: `تصدير تقرير الجلسة (PDF) — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
-          caseId: r.caseId, ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "export" });
+          caseId: r.caseId, ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "export" });
       }
     }
 

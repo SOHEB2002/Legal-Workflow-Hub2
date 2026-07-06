@@ -5203,3 +5203,19 @@ export type AdminSupportTaskAssignment = typeof adminSupportTaskAssignments.$inf
 export const setAdminSupportTaskAssignmentSchema = z.object({
   assigneeUserId: z.string().nullable().optional(),
 }).passthrough();
+
+// Resolve the owner of an assignable admin_support task type from the mapping:
+// returns the saved assignee IFF it is still an ACTIVE admin_support user, else
+// "" (the unassigned sentinel → the task falls to the manager's unassigned
+// group). Pure/structural so it's shared by collection creation-time routing
+// (server/routes) and the computed feed (server/storage).
+export function resolveAdminSupportAssignee(
+  taskType: AssignableAdminSupportTaskKindValue,
+  assignments: Array<{ taskType: string; assigneeUserId: string | null }>,
+  users: Array<{ id: string; role: string; isActive: boolean }>,
+): string {
+  const assigneeId = assignments.find((a) => a.taskType === taskType)?.assigneeUserId ?? null;
+  if (!assigneeId) return "";
+  const u = users.find((x) => x.id === assigneeId);
+  return u && u.role === "admin_support" && u.isActive ? assigneeId : "";
+}
