@@ -263,7 +263,7 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 // are enforced server-side — we never duplicate that here). actionModeFor
 // returns the modal shape, or null for kinds PART 2 doesn't wire yet (those keep
 // a disabled placeholder; see the report's FLAGS).
-type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve" | "delegationDecision";
+type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve" | "delegationDecision" | "executionRequest";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
   // Unassigned admin_support task (only ever surfaced to the branch_manager's
@@ -292,6 +292,10 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
       return task.ownerId
         ? { mode: "complete", title: "إكمال المهمة" }
         : { mode: "assign", title: "إسناد المهمة لموظف" };
+    case MyTaskKind.EXECUTION:
+      // Assigned → record رقم طلب التنفيذ (input modal); unassigned is handled by
+      // the isUnassignedTypeTask branch above (→ "إسناد" sets the mapping).
+      return { mode: "executionRequest", title: "رفع طلب تنفيذ" };
     case MyTaskKind.GENERAL_TASK_REVIEW:
       // The original requester reviews the returned result: تم الاطلاع (close) or
       // ملاحظة (send back to the worker). The modal also shows the worker's result.
@@ -328,12 +332,14 @@ interface ActionForm {
   // (item 7); field-task assign uses assigneeId only.
   assigneeId: string; assignTarget: "lawyer" | "department"; assignDeptId: string;
   hearingReport: string; recommendations: string; nextSteps: string; contactCompleted: string;
+  executionRequestNumber: string;
 }
 const EMPTY_FORM: ActionForm = {
   notes: "", proofDescription: "", proofFileLink: "",
   reason: "", decision: InternalReviewDecision.PASSED,
   assigneeId: "", assignTarget: "lawyer", assignDeptId: "",
   hearingReport: "", recommendations: "", nextSteps: "", contactCompleted: "no",
+  executionRequestNumber: "",
 };
 
 // Build the (method, url, body) for a task action. Reuses existing endpoints.
@@ -371,6 +377,10 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
             proofDescription: form.proofDescription, proofFileLink: form.proofFileLink,
           } }
         : { method: "PATCH", url: `/api/field-tasks/${e}`, body: { assignedTo: form.assigneeId } };
+    case MyTaskKind.EXECUTION:
+      // Assigned → record رقم طلب التنفيذ (→ case activity log + complete the task).
+      // Unassigned is handled above by isUnassignedTypeTask (→ sets the mapping).
+      return { method: "POST", url: `/api/field-tasks/${e}/execution-request`, body: { executionRequestNumber: form.executionRequestNumber } };
     case MyTaskKind.GENERAL_TASK_REVIEW:
       // تم الاطلاع (close) is the default; ملاحظة (send back) requires a note.
       // form.decision carries "ملاحظة" only when the user picks it (leftover
@@ -747,6 +757,7 @@ export default function MyTasksPage() {
     const mode = actionModeFor(actionTask)?.mode;
     if (mode === "reason" && !form.reason.trim()) { toast({ title: "السبب مطلوب", variant: "destructive" }); return; }
     if (mode === "report" && !form.hearingReport.trim()) { toast({ title: "نص التقرير مطلوب", variant: "destructive" }); return; }
+    if (mode === "executionRequest" && !form.executionRequestNumber.trim()) { toast({ title: "رقم طلب التنفيذ مطلوب", variant: "destructive" }); return; }
     if (mode === "assign") {
       const toDept = actionTask.kind === MyTaskKind.CASE_UNASSIGNED && form.assignTarget === "department";
       if (toDept && !form.assignDeptId) { toast({ title: "اختر القسم المسند إليه", variant: "destructive" }); return; }
@@ -1160,6 +1171,11 @@ export default function MyTasksPage() {
               {currentMode === "reason" && (
                 <div className="space-y-1"><Label>سبب الإغلاق</Label>
                   <Textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} data-testid="input-reason" /></div>
+              )}
+
+              {currentMode === "executionRequest" && (
+                <div className="space-y-1"><Label>رقم طلب التنفيذ</Label>
+                  <Input value={form.executionRequestNumber} onChange={(e) => setForm({ ...form, executionRequestNumber: e.target.value })} data-testid="input-execution-request-number" /></div>
               )}
 
               {currentMode === "decision" && (

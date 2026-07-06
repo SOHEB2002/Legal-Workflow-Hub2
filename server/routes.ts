@@ -4304,6 +4304,47 @@ export async function registerRoutes(
     }
   });
 
+  // Complete an EXECUTION (تنفيذ) task by recording رقم طلب التنفيذ. The number is
+  // written ONLY to the case activity log (the sole record — no case column; a
+  // future execution-requests page extracts from the log) and the field_task is
+  // marked complete. Gated like the field-task PATCH: the assignee, OR anyone who
+  // can modify the parent case (admin_support / branch_manager / dept_head(own) /
+  // the case's lawyer). Delegation actorDisplayName stamping applies if acting-as.
+  app.post("/api/field-tasks/:id/execution-request", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (!task.caseId) return res.status(400).json({ error: "المهمة غير مرتبطة بقضية" });
+      const parentCase = await storage.getCaseById(task.caseId);
+      const canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+      if (task.assignedTo !== user.id && !canModifyParent) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const executionRequestNumber = String(req.body?.executionRequestNumber ?? "").trim();
+      if (!executionRequestNumber) {
+        return res.status(400).json({ error: "رقم طلب التنفيذ مطلوب" });
+      }
+      const actorName = actorDisplayName(req.actingContext, task.caseId, user.name || user.id);
+      await logCaseActivityActing(req, {
+        caseId: task.caseId,
+        userId: user.id,
+        userName: user.name || user.id,
+        actionType: "execution_request_filed",
+        title: `تم رفع طلب تنفيذ رقم ${executionRequestNumber} بواسطة ${actorName}`,
+        details: `رقم طلب التنفيذ: ${executionRequestNumber}`,
+      });
+      const updated = await storage.updateFieldTask(String(req.params.id), {
+        status: FieldTaskStatus.COMPLETED,
+        completionNotes: `رقم طلب التنفيذ: ${executionRequestNumber}`,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error filing execution request:", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل طلب التنفيذ" });
+    }
+  });
+
   app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -7491,6 +7532,25 @@ export async function registerRoutes(
               }, reqUser.id);
               await notifyFieldTaskCreated(collectionTask, reqUser); // D4
               createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
+
+              // Execution fires ONLY for a final FOR-US judgment (لصالحنا), NOT
+              // جزئي — ALONGSIDE the collection task above. Same live routing via
+              // the execution mapping key (assignee → own task; unset → the
+              // branch_manager's unassigned pool). Collection is left unchanged.
+              if (judgmentType === "لصالحنا") {
+                const executionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.EXECUTION, assignments, allUsers);
+                const executionTask = await storage.createFieldTask({
+                  title: `رفع طلب تنفيذ — قضية رقم ${existingCase.caseNumber}`,
+                  description: `صدر حكم نهائي لصالحنا - يرجى رفع طلب تنفيذ في محكمة التنفيذ`,
+                  taskType: "متابعة_محكمة",
+                  caseId: effectiveCaseId,
+                  assignedTo: executionAssignee,
+                  priority: "عاجل",
+                  dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+                }, reqUser.id);
+                await notifyFieldTaskCreated(executionTask, reqUser); // D4
+                createdTasks.push({ type: "execution_task", id: executionTask.id, description: "مهمة رفع طلب تنفيذ" });
+              }
 
               // Transition to collection
               const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];

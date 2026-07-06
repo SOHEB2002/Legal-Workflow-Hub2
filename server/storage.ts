@@ -3001,6 +3001,7 @@ export class DatabaseStorage implements IStorage {
     let consultationClosingOwner = "";
     let sessionReportExportOwner = "";
     let collectionOwner = "";
+    let executionOwner = "";
     let dataCompletionCaseOwner = "";
     let dataCompletionConsultationOwner = "";
     let dataCompletionContractOwner = "";
@@ -3014,6 +3015,8 @@ export class DatabaseStorage implements IStorage {
         AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT, taskAssignments, routingUsers);
       collectionOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.COLLECTION, taskAssignments, routingUsers);
+      executionOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.EXECUTION, taskAssignments, routingUsers);
       // Data-completion is per work-type — case / consultation / contract fire
       // at their data-completion STAGE; memo fires on its awaiting-completion latch.
       dataCompletionCaseOwner = resolveAdminSupportAssignee(
@@ -3541,6 +3544,32 @@ export class DatabaseStorage implements IStorage {
           ownerId, ownerScope: scopeOf(ownerId),
           dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
           actionHint: ownerId ? "complete" : "assign" });
+      }
+    }
+
+    // ---- 17. Execution (تنفيذ) — per-type LIVE routing, mirrors collection.
+    // Stored field_tasks titled "رفع طلب تنفيذ …", created ONLY on a final
+    // for-us judgment (alongside collection; NOT on a صلح). Owner resolved LIVE
+    // via executionOwner (assignee → own task; unset → branch_manager pool).
+    // Guarded so a failure here can't empty the whole feed.
+    if (executionOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: fieldTasks.id, caseId: fieldTasks.caseId,
+          title: fieldTasks.title, dueDate: fieldTasks.dueDate })
+          .from(fieldTasks).where(and(
+            sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
+            sql`${fieldTasks.title} LIKE ${"رفع طلب تنفيذ%"}`,
+          ));
+        for (const r of rows) {
+          const ownerId = executionOwner;
+          tasks.push({ id: `execution:${r.id}`, kind: MyTaskKind.EXECUTION,
+            title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+            ownerId, ownerScope: scopeOf(ownerId),
+            dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
+            actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] execution block failed — skipping:", e);
       }
     }
 
