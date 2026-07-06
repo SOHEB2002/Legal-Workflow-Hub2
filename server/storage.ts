@@ -2980,7 +2980,7 @@ export class DatabaseStorage implements IStorage {
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
     const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
 
-    // Phase-1 admin_support per-type routing: resolve the owner of the three
+    // Phase-1 admin_support per-type routing: resolve the owner of the four
     // assignable kinds ONCE (identity-independent). Each goes to its mapped
     // assignee IFF that user is still an active admin_support, else "" (unassigned
     // → the branch_manager's pool). Only loaded when the viewer could actually
@@ -2992,6 +2992,7 @@ export class DatabaseStorage implements IStorage {
     let consultationClosingOwner = "";
     let sessionReportExportOwner = "";
     let collectionOwner = "";
+    let dataCompletionOwner = "";
     if (isAdminSupport || firmWideScoped) {
       const taskAssignments = await this.getAdminSupportTaskAssignments();
       const routingUsers = await this.getAllUsers();
@@ -3001,6 +3002,8 @@ export class DatabaseStorage implements IStorage {
         AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT, taskAssignments, routingUsers);
       collectionOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.COLLECTION, taskAssignments, routingUsers);
+      dataCompletionOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION, taskAssignments, routingUsers);
     }
 
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
@@ -3372,21 +3375,27 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // ---- 14. Data-completion (admin_support) — cases at the data-completion stage ----
+    // ---- 14. Data-completion — Phase-2 per-type LIVE routing ----
     // Surfaces while a case sits at استكمال_البيانات, suppressed for 2 days after
     // each "تم" acknowledge (data_completion_last_ack_at), then re-surfaces if
     // the case is STILL at that stage (the client may still owe data). The
-    // 2-day window is computed in SQL against NOW().
-    if (isAdminSupport) {
+    // 2-day window is computed in SQL against NOW(). Routed via the mapping
+    // (dataCompletionOwner) exactly like collection/consultation_closing/
+    // session_report_export: emitted ONLY for the mapped assignee (own task) or
+    // the branch_manager (team; unset/inactive → "" → the manager's unassigned
+    // pool, where "إسناد" sets the type mapping going forward). No more broadcast
+    // to every admin_support.
+    if (dataCompletionOwner === uid || firmWideScoped) {
       const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
         .from(lawCases).where(and(
           eq(lawCases.currentStage, "استكمال_البيانات"),
           sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
         ));
       for (const r of rows) {
+        const ownerId = dataCompletionOwner;
         tasks.push({ id: `data_completion:${r.id}`, kind: MyTaskKind.DATA_COMPLETION,
           title: `استكمال البيانات والتواصل مع العميل — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "complete" });
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
       }
     }
 

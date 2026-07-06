@@ -216,7 +216,7 @@ function EntityLinkPicker({
 // التواصل" acknowledgement, and session_report_export confirms the export.
 const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
   [MyTaskKind.SESSION_REPORT_EXPORT]: "تأكيد التصدير",
-  [MyTaskKind.DATA_COMPLETION]: "تم التواصل",
+  [MyTaskKind.DATA_COMPLETION]: "تم الطلب من العميل",
   // Requester's informational view of a routed task awaiting distribution — no
   // action for them; the (disabled) button just restates the state.
   [MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION]: "بانتظار الإسناد",
