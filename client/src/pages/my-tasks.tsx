@@ -46,8 +46,9 @@ const HEARING_RESULT_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED,
 ]);
 
-// The 3 assignable admin_support task types (collection / consultation_closing /
-// session_report_export). When one is UNASSIGNED (ownerId="") it only ever
+// The assignable admin_support task types (collection / execution /
+// consultation_closing / session_report_export / the 4 data_completion work-types).
+// When one is UNASSIGNED (ownerId="") it only ever
 // surfaces to the branch_manager's pool, and the manager's "إسناد" SETS THE TYPE
 // OWNER via the mapping (uniform sub-step-4 path) — not a per-instance assign.
 const ASSIGNABLE_TYPE_KINDS = new Set<string>(Object.values(AssignableAdminSupportTaskKind));
@@ -73,6 +74,7 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   memo_pending: { icon: FileText, label: "مذكرة" },
   review_pending: { icon: ClipboardCheck, label: "مراجعة" },
   collection: { icon: FileSignature, label: "خطاب تحصيل" },
+  execution: { icon: Gavel, label: "طلب تنفيذ" },
   legal_deadline: { icon: CalendarClock, label: "موعد قانوني" },
   field_task: { icon: ClipboardList, label: "مهمة ميدانية" },
   general_task: { icon: ListChecks, label: "مهمة عامة" },

@@ -5096,6 +5096,7 @@ export const MyTaskKind = {
   MEMO_PENDING: "memo_pending",           // assigned memo not yet filed
   REVIEW_PENDING: "review_pending",       // internal/committee review awaiting this reviewer
   COLLECTION: "collection",               // collection (تحصيل) field task, incl. unassigned ""
+  EXECUTION: "execution",                 // execution (تنفيذ) field task — رفع طلب تنفيذ after a final for-us judgment; incl. unassigned ""
   LEGAL_DEADLINE: "legal_deadline",       // approaching/overdue legal deadline
   FIELD_TASK: "field_task",               // assigned field task
   GENERAL_TASK: "general_task",           // manually-created general (عام) task — the assignee's do-the-work step, incl. unassigned ""
@@ -5207,6 +5208,7 @@ export const AssignableAdminSupportTaskKind = {
   DATA_COMPLETION_CONSULTATION: MyTaskKind.DATA_COMPLETION_CONSULTATION,
   DATA_COMPLETION_CONTRACT: MyTaskKind.DATA_COMPLETION_CONTRACT,
   DATA_COMPLETION_MEMO: MyTaskKind.DATA_COMPLETION_MEMO,
+  EXECUTION: MyTaskKind.EXECUTION,
 } as const;
 
 export type AssignableAdminSupportTaskKindValue =
@@ -5220,6 +5222,7 @@ export const AssignableAdminSupportTaskLabels: Record<AssignableAdminSupportTask
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION]: "استكمال المرفقات والبيانات — الاستشارات",
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONTRACT]: "استكمال المرفقات والبيانات — العقود",
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: "استكمال المرفقات والبيانات — المذكرات",
+  [AssignableAdminSupportTaskKind.EXECUTION]: "التنفيذ",
 };
 
 // Single specialty class per kind, for the settings-screen hint only (NOT
@@ -5234,6 +5237,7 @@ export const AssignableAdminSupportTaskClass: Partial<Record<AssignableAdminSupp
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION]: TaskSpecialty.CONSULTATIONS,
   // DATA_COMPLETION_CONTRACT omitted — contracts are outside the two-class domain.
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.EXECUTION]: TaskSpecialty.LITIGATION,
 };
 
 // Select type for the mapping table (declared with the table above).
