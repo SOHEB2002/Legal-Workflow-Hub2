@@ -3398,17 +3398,24 @@ export class DatabaseStorage implements IStorage {
     // the branch_manager (team; unset/inactive → "" → the manager's unassigned
     // pool, where "إسناد" sets the type mapping going forward). The consultation
     // / contract / memo work-types get their own blocks in sub-steps 2/3.
+    // Each data-completion block is isolated in try/catch: a failure here (e.g. a
+    // missing column mid-migration) must degrade to "no tasks for THIS block",
+    // never throw out of getMyTasks and empty the entire feed.
     if (dataCompletionCaseOwner === uid || firmWideScoped) {
-      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-        .from(lawCases).where(and(
-          eq(lawCases.currentStage, "استكمال_البيانات"),
-          sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
-        ));
-      for (const r of rows) {
-        const ownerId = dataCompletionCaseOwner;
-        tasks.push({ id: `data_completion_case:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CASE,
-          title: `استكمال المرفقات والبيانات — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+      try {
+        const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+          .from(lawCases).where(and(
+            eq(lawCases.currentStage, "استكمال_البيانات"),
+            sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionCaseOwner;
+          tasks.push({ id: `data_completion_case:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CASE,
+            title: `استكمال المرفقات والبيانات — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_case block failed — skipping:", e);
       }
     }
 
@@ -3419,17 +3426,21 @@ export class DatabaseStorage implements IStorage {
     // branch_manager's unassigned pool). status="active" filter added (sibling
     // consultation queries all scope to active; a closed one shouldn't remind).
     if (dataCompletionConsultationOwner === uid || firmWideScoped) {
-      const rows = await db.select({ id: consultations.id, consultationNumber: consultations.consultationNumber })
-        .from(consultations).where(and(
-          eq(consultations.status, "active"),
-          eq(consultations.currentStage, "استكمال_المرفقات_والبيانات"),
-          sql`(${consultations.dataCompletionLastAckAt} IS NULL OR ${consultations.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
-        ));
-      for (const r of rows) {
-        const ownerId = dataCompletionConsultationOwner;
-        tasks.push({ id: `data_completion_consultation:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONSULTATION,
-          title: `استكمال المرفقات والبيانات — استشارة ${r.consultationNumber}`, entityType: "consultation", entityId: r.id, caseId: null,
-          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+      try {
+        const rows = await db.select({ id: consultations.id, consultationNumber: consultations.consultationNumber })
+          .from(consultations).where(and(
+            eq(consultations.status, "active"),
+            eq(consultations.currentStage, "استكمال_المرفقات_والبيانات"),
+            sql`(${consultations.dataCompletionLastAckAt} IS NULL OR ${consultations.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionConsultationOwner;
+          tasks.push({ id: `data_completion_consultation:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONSULTATION,
+            title: `استكمال المرفقات والبيانات — استشارة ${r.consultationNumber}`, entityType: "consultation", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_consultation block failed — skipping:", e);
       }
     }
 
@@ -3437,17 +3448,21 @@ export class DatabaseStorage implements IStorage {
     // active contract at its data-completion stage (استكمال_البيانات_والمرفقات),
     // 2-day ack-suppression, routed via the data_completion_contract mapping.
     if (dataCompletionContractOwner === uid || firmWideScoped) {
-      const rows = await db.select({ id: contracts.id, contractNumber: contracts.contractNumber })
-        .from(contracts).where(and(
-          eq(contracts.status, "active"),
-          eq(contracts.currentStage, "استكمال_البيانات_والمرفقات"),
-          sql`(${contracts.dataCompletionLastAckAt} IS NULL OR ${contracts.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
-        ));
-      for (const r of rows) {
-        const ownerId = dataCompletionContractOwner;
-        tasks.push({ id: `data_completion_contract:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONTRACT,
-          title: `استكمال المرفقات والبيانات — عقد ${r.contractNumber}`, entityType: "contract", entityId: r.id, caseId: null,
-          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+      try {
+        const rows = await db.select({ id: contracts.id, contractNumber: contracts.contractNumber })
+          .from(contracts).where(and(
+            eq(contracts.status, "active"),
+            eq(contracts.currentStage, "استكمال_البيانات_والمرفقات"),
+            sql`(${contracts.dataCompletionLastAckAt} IS NULL OR ${contracts.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionContractOwner;
+          tasks.push({ id: `data_completion_contract:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONTRACT,
+            title: `استكمال المرفقات والبيانات — عقد ${r.contractNumber}`, entityType: "contract", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_contract block failed — skipping:", e);
       }
     }
 
