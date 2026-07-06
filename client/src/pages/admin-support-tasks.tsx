@@ -101,13 +101,17 @@ export default function AdminSupportTasksPage() {
               >
                 <div className="sm:w-64">
                   <Label className="font-semibold">{AssignableAdminSupportTaskLabels[taskType]}</Label>
-                  <div className="text-xs text-muted-foreground">
-                    {/* data_completion is cross-entity → no single class ("متعدد"). */}
-                    التخصص: {(() => {
-                      const cls = AssignableAdminSupportTaskClass[taskType];
-                      return cls ? TaskSpecialtyLabels[cls] : "متعدد";
-                    })()}
-                  </div>
+                  {/* Specialty hint only where a class exists; the four
+                      data-completion rows are grouped by their shared label
+                      prefix, and contract has no two-class specialty. */}
+                  {(() => {
+                    const cls = AssignableAdminSupportTaskClass[taskType];
+                    return cls ? (
+                      <div className="text-xs text-muted-foreground">
+                        التخصص: {TaskSpecialtyLabels[cls]}
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
                 <div className="flex-1 max-w-sm">
                   <Select

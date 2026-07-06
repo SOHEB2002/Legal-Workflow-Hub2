@@ -5089,7 +5089,14 @@ export const MyTaskKind = {
   CONTACT_FOLLOWUP: "contact_followup",   // contact follow-up due
   DELEGATION_APPROVAL: "delegation_approval", // pending delegation approval (dept_head)
   CONSULTATION_CLOSING: "consultation_closing", // consultation ready to close (admin_support)
-  DATA_COMPLETION: "data_completion",     // case at data-completion stage (admin_support)
+  // Data-completion is routed per WORK TYPE — one assignee per entity kind.
+  // case/consultation/contract fire at their data-completion STAGE; memo fires
+  // on its awaiting-completion latch. (Sub-step 1: only _CASE generates; the
+  // other three are assignable-but-dormant until sub-steps 2/3 add generation.)
+  DATA_COMPLETION_CASE: "data_completion_case",                 // case at data-completion stage (admin_support)
+  DATA_COMPLETION_CONSULTATION: "data_completion_consultation", // consultation at data-completion stage (dormant until sub-step 2)
+  DATA_COMPLETION_CONTRACT: "data_completion_contract",         // contract at data-completion stage (dormant until sub-step 3)
+  DATA_COMPLETION_MEMO: "data_completion_memo",                 // memo awaiting completion (dormant until sub-step 3)
   AGENCY_VERIFICATION: "agency_verification", // verify agency before a near hearing
   SESSION_REPORT_EXPORT: "session_report_export", // export session-report PDF (admin_support)
 } as const;
@@ -5167,16 +5174,22 @@ export function taskSpecialtyClass(entityType: MyTaskEntityType, caseId: string 
 // table (one row per task_type). Each kind's specialty class is derived by the
 // FEED via taskSpecialtyClass on the kind's source entity, so the feed's class
 // labels/filters stay unchanged:
-//   collection            → field_task w/ caseId → ترافع (LITIGATION)
-//   consultation_closing  → consultation         → استشارات (CONSULTATIONS)
-//   session_report_export → hearing              → ترافع (LITIGATION)
-//   data_completion       → CROSS-ENTITY (case/consultation/contract/memo at the
-//                           data-completion stage) → no single class (see below)
+//   collection             → field_task w/ caseId → ترافع (LITIGATION)
+//   consultation_closing   → consultation         → استشارات (CONSULTATIONS)
+//   session_report_export  → hearing               → ترافع (LITIGATION)
+//   data_completion_*      → per WORK TYPE, one assignee per entity kind:
+//     _case         → case at data-completion stage          → ترافع (LITIGATION)
+//     _consultation → consultation at data-completion stage   → استشارات (CONSULTATIONS)
+//     _contract     → contract at data-completion stage       → (no class)
+//     _memo         → memo awaiting-completion latch          → ترافع (LITIGATION)
 export const AssignableAdminSupportTaskKind = {
   COLLECTION: MyTaskKind.COLLECTION,
   CONSULTATION_CLOSING: MyTaskKind.CONSULTATION_CLOSING,
   SESSION_REPORT_EXPORT: MyTaskKind.SESSION_REPORT_EXPORT,
-  DATA_COMPLETION: MyTaskKind.DATA_COMPLETION,
+  DATA_COMPLETION_CASE: MyTaskKind.DATA_COMPLETION_CASE,
+  DATA_COMPLETION_CONSULTATION: MyTaskKind.DATA_COMPLETION_CONSULTATION,
+  DATA_COMPLETION_CONTRACT: MyTaskKind.DATA_COMPLETION_CONTRACT,
+  DATA_COMPLETION_MEMO: MyTaskKind.DATA_COMPLETION_MEMO,
 } as const;
 
 export type AssignableAdminSupportTaskKindValue =
@@ -5186,17 +5199,24 @@ export const AssignableAdminSupportTaskLabels: Record<AssignableAdminSupportTask
   [AssignableAdminSupportTaskKind.COLLECTION]: "التحصيل",
   [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: "إغلاق الاستشارات",
   [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: "تصدير تقارير الجلسات",
-  [AssignableAdminSupportTaskKind.DATA_COMPLETION]: "استكمال البيانات من العميل",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE]: "استكمال المرفقات والبيانات — القضايا",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION]: "استكمال المرفقات والبيانات — الاستشارات",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONTRACT]: "استكمال المرفقات والبيانات — العقود",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: "استكمال المرفقات والبيانات — المذكرات",
 };
 
 // Single specialty class per kind, for the settings-screen hint only (NOT
-// routing — routing derives class per-task via taskSpecialtyClass). data_completion
-// is CROSS-ENTITY (case→ترافع, consultation→استشارات, contract→null, memo→ترافع),
-// so it has NO single class and is omitted here → the settings screen shows "متعدد".
+// routing — routing derives class per-task via taskSpecialtyClass). Each
+// data_completion work-type now maps to its own entity's class; contract has
+// no class in the two-class domain → omitted (settings screen shows no hint).
 export const AssignableAdminSupportTaskClass: Partial<Record<AssignableAdminSupportTaskKindValue, TaskSpecialtyValue>> = {
   [AssignableAdminSupportTaskKind.COLLECTION]: TaskSpecialty.LITIGATION,
   [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: TaskSpecialty.CONSULTATIONS,
   [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION]: TaskSpecialty.CONSULTATIONS,
+  // DATA_COMPLETION_CONTRACT omitted — contracts are outside the two-class domain.
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: TaskSpecialty.LITIGATION,
 };
 
 // Select type for the mapping table (declared with the table above).

@@ -83,7 +83,10 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   contact_followup: { icon: Phone, label: "متابعة عميل" },
   delegation_approval: { icon: Stamp, label: "اعتماد تفويض" },
   consultation_closing: { icon: CheckSquare, label: "إغلاق استشارة" },
-  data_completion: { icon: ClipboardList, label: "استكمال بيانات" },
+  data_completion_case: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
+  data_completion_consultation: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
+  data_completion_contract: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
+  data_completion_memo: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
   agency_verification: { icon: ClipboardCheck, label: "التحقق من الوكالة" },
   session_report_export: { icon: FileDown, label: "تصدير تقرير الجلسة" },
 };
@@ -216,7 +219,10 @@ function EntityLinkPicker({
 // التواصل" acknowledgement, and session_report_export confirms the export.
 const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
   [MyTaskKind.SESSION_REPORT_EXPORT]: "تأكيد التصدير",
-  [MyTaskKind.DATA_COMPLETION]: "تم الطلب من العميل",
+  [MyTaskKind.DATA_COMPLETION_CASE]: "تم الطلب من العميل",
+  [MyTaskKind.DATA_COMPLETION_CONSULTATION]: "تم الطلب من العميل",
+  [MyTaskKind.DATA_COMPLETION_CONTRACT]: "تم الطلب من العميل",
+  [MyTaskKind.DATA_COMPLETION_MEMO]: "تم الطلب من العميل",
   // Requester's informational view of a routed task awaiting distribution — no
   // action for them; the (disabled) button just restates the state.
   [MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION]: "بانتظار الإسناد",
@@ -265,7 +271,11 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
   if (isUnassignedTypeTask(task)) return { mode: "assign", title: "إسناد نوع المهمة لموظف الدعم" };
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { mode: "confirm", title: "تأكيد تصدير تقرير الجلسة" };
-    case MyTaskKind.DATA_COMPLETION: return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
+    case MyTaskKind.DATA_COMPLETION_CASE:
+    case MyTaskKind.DATA_COMPLETION_CONSULTATION:
+    case MyTaskKind.DATA_COMPLETION_CONTRACT:
+    case MyTaskKind.DATA_COMPLETION_MEMO:
+      return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
     case MyTaskKind.AGENCY_VERIFICATION: return { mode: "confirm", title: "تأكيد التحقق من الوكالة" };
     case MyTaskKind.DELEGATION_APPROVAL: return { mode: "delegationDecision", title: "قرار التفويض" };
     case MyTaskKind.CONTACT_FOLLOWUP: return { mode: "confirm", title: "إنهاء متابعة العميل" };
@@ -336,7 +346,9 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
   }
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { method: "POST", url: `/api/hearings/${e}/mark-report-exported` };
-    case MyTaskKind.DATA_COMPLETION: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
+    // Sub-step 1 wires only the CASE ack endpoint; _consultation/_contract/_memo
+    // ack routes land with their generation in sub-steps 2/3.
+    case MyTaskKind.DATA_COMPLETION_CASE: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
     case MyTaskKind.AGENCY_VERIFICATION: return { method: "POST", url: `/api/hearings/${e}/ack-agency-verification` };
     case MyTaskKind.DELEGATION_APPROVAL:
       // اعتماد (default) → /approve; رفض → /reject with the required reason.
