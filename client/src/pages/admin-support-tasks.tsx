@@ -102,7 +102,11 @@ export default function AdminSupportTasksPage() {
                 <div className="sm:w-64">
                   <Label className="font-semibold">{AssignableAdminSupportTaskLabels[taskType]}</Label>
                   <div className="text-xs text-muted-foreground">
-                    التخصص: {TaskSpecialtyLabels[AssignableAdminSupportTaskClass[taskType]]}
+                    {/* data_completion is cross-entity → no single class ("متعدد"). */}
+                    التخصص: {(() => {
+                      const cls = AssignableAdminSupportTaskClass[taskType];
+                      return cls ? TaskSpecialtyLabels[cls] : "متعدد";
+                    })()}
                   </div>
                 </div>
                 <div className="flex-1 max-w-sm">

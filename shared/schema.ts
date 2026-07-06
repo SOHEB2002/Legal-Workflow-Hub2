@@ -5162,20 +5162,21 @@ export function taskSpecialtyClass(entityType: MyTaskEntityType, caseId: string 
   }
 }
 
-// ==================== Admin_support fine-grained task routing (Phase 1) ====================
-// The THREE task kinds that are ALREADY admin_support-routed today and can be
-// mapped to a specific owner via the admin_support_task_assignments table.
-// (data_completion / agency_verification / execution are Phase 2 — not here.)
-// Each kind carries the specialty class the FEED already derives for it (via
-// taskSpecialtyClass on the kind's source entity), so the feed's existing class
-// labels/filters stay unchanged when routing moves to this mapping:
+// ==================== Admin_support fine-grained task routing ====================
+// Task kinds that route to a specific owner via the admin_support_task_assignments
+// table (one row per task_type). Each kind's specialty class is derived by the
+// FEED via taskSpecialtyClass on the kind's source entity, so the feed's class
+// labels/filters stay unchanged:
 //   collection            → field_task w/ caseId → ترافع (LITIGATION)
 //   consultation_closing  → consultation         → استشارات (CONSULTATIONS)
 //   session_report_export → hearing              → ترافع (LITIGATION)
+//   data_completion       → CROSS-ENTITY (case/consultation/contract/memo at the
+//                           data-completion stage) → no single class (see below)
 export const AssignableAdminSupportTaskKind = {
   COLLECTION: MyTaskKind.COLLECTION,
   CONSULTATION_CLOSING: MyTaskKind.CONSULTATION_CLOSING,
   SESSION_REPORT_EXPORT: MyTaskKind.SESSION_REPORT_EXPORT,
+  DATA_COMPLETION: MyTaskKind.DATA_COMPLETION,
 } as const;
 
 export type AssignableAdminSupportTaskKindValue =
@@ -5185,9 +5186,14 @@ export const AssignableAdminSupportTaskLabels: Record<AssignableAdminSupportTask
   [AssignableAdminSupportTaskKind.COLLECTION]: "التحصيل",
   [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: "إغلاق الاستشارات",
   [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: "تصدير تقارير الجلسات",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION]: "استكمال البيانات من العميل",
 };
 
-export const AssignableAdminSupportTaskClass: Record<AssignableAdminSupportTaskKindValue, TaskSpecialtyValue> = {
+// Single specialty class per kind, for the settings-screen hint only (NOT
+// routing — routing derives class per-task via taskSpecialtyClass). data_completion
+// is CROSS-ENTITY (case→ترافع, consultation→استشارات, contract→null, memo→ترافع),
+// so it has NO single class and is omitted here → the settings screen shows "متعدد".
+export const AssignableAdminSupportTaskClass: Partial<Record<AssignableAdminSupportTaskKindValue, TaskSpecialtyValue>> = {
   [AssignableAdminSupportTaskKind.COLLECTION]: TaskSpecialty.LITIGATION,
   [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: TaskSpecialty.CONSULTATIONS,
   [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: TaskSpecialty.LITIGATION,
