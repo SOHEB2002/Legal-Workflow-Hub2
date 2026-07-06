@@ -34,6 +34,7 @@ import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
+  AssignableAdminSupportTaskKind,
   GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
   type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
@@ -44,6 +45,15 @@ import {
 const HEARING_RESULT_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED,
 ]);
+
+// The 3 assignable admin_support task types (collection / consultation_closing /
+// session_report_export). When one is UNASSIGNED (ownerId="") it only ever
+// surfaces to the branch_manager's pool, and the manager's "إسناد" SETS THE TYPE
+// OWNER via the mapping (uniform sub-step-4 path) — not a per-instance assign.
+const ASSIGNABLE_TYPE_KINDS = new Set<string>(Object.values(AssignableAdminSupportTaskKind));
+function isUnassignedTypeTask(task: MyTaskItem): boolean {
+  return !task.ownerId && ASSIGNABLE_TYPE_KINDS.has(task.kind);
+}
 
 // case_work + case review_pending open the SHARED CaseStagePanel (the same
 // case-progress-bar + workflow callbacks the cases page uses). memo/contract/
@@ -248,6 +258,11 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve" | "delegationDecision";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
+  // Unassigned admin_support task (only ever surfaced to the branch_manager's
+  // pool) → the action is "إسناد" which SETS THE TYPE OWNER (uniform across all 3
+  // assignable kinds), not a per-instance assignment. Assigned ones fall through
+  // to their normal do-the-work action below.
+  if (isUnassignedTypeTask(task)) return { mode: "assign", title: "إسناد نوع المهمة لموظف الدعم" };
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { mode: "confirm", title: "تأكيد تصدير تقرير الجلسة" };
     case MyTaskKind.DATA_COMPLETION: return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
@@ -312,6 +327,13 @@ const EMPTY_FORM: ActionForm = {
 // Build the (method, url, body) for a task action. Reuses existing endpoints.
 function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: string; url: string; body?: unknown } {
   const e = task.entityId;
+  // Unassigned admin_support task → "إسناد" SETS THE TYPE MAPPING: the chosen
+  // admin_support becomes this task type's owner going forward (uniform across all
+  // 3 assignable kinds; the feed re-resolves live so the task leaves the pool).
+  // task.kind is the task_type key; the server gates this (canManageUsers).
+  if (isUnassignedTypeTask(task)) {
+    return { method: "PUT", url: `/api/admin-support-task-assignments/${task.kind}`, body: { assigneeUserId: form.assigneeId } };
+  }
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { method: "POST", url: `/api/hearings/${e}/mark-report-exported` };
     case MyTaskKind.DATA_COMPLETION: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
@@ -475,7 +497,7 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
         onClick={() => actionable && onAction(task)}
         data-testid={`task-action-${task.id}`}
       >
-        {KIND_ACTION_LABEL[task.kind] ?? ACTION_LABEL[task.actionHint] ?? "إجراء"}
+        {isUnassignedTypeTask(task) ? ACTION_LABEL.assign : (KIND_ACTION_LABEL[task.kind] ?? ACTION_LABEL[task.actionHint] ?? "إجراء")}
       </Button>
     </div>
   );
@@ -1166,9 +1188,13 @@ export default function MyTasksPage() {
                       <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
                         <SelectTrigger data-testid="select-assignee"><SelectValue placeholder="اختر موظفاً" /></SelectTrigger>
                         <SelectContent>
-                          {users.filter((u) => u.isActive).map((u) => (
-                            <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                          ))}
+                          {/* Type-mapping assign (the 3 admin_support kinds) → pick from
+                              ACTIVE admin_support only; every other assign keeps all users. */}
+                          {users
+                            .filter((u) => u.isActive && (!actionTask || !isUnassignedTypeTask(actionTask) || u.role === "admin_support"))
+                            .map((u) => (
+                              <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                            ))}
                         </SelectContent>
                       </Select></div>
                   )}
