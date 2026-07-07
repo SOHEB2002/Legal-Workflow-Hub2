@@ -563,6 +563,7 @@ function mapDbCase(dbCase: any): LawCase {
     pausedAt: toISOStringOrNull(dbCase.pausedAt),
     awaitingCompletion: dbCase.awaitingCompletion ?? false,
     savedStage: dbCase.savedStage ?? null,
+    agencyIssuanceRequested: dbCase.agencyIssuanceRequested ?? false,
   };
 }
 
@@ -770,6 +771,7 @@ function mapDbHearing(dbHearing: any): Hearing {
     reportCompleted: dbHearing.reportCompleted ?? false,
     sessionReportExported: dbHearing.sessionReportExported ?? false,
     agencyVerificationAckAt: toISOStringOrNull(dbHearing.agencyVerificationAckAt),
+    agencyVerificationAnswer: dbHearing.agencyVerificationAnswer ?? null,
     adminTasksCreated: dbHearing.adminTasksCreated ?? false,
     opponentMemos: dbHearing.opponentMemos || "",
     hearingMinutes: dbHearing.hearingMinutes || "",

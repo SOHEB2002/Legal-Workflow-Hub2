@@ -131,6 +131,11 @@ export const lawCases = pgTable("law_cases", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // Set true when the responsible lawyer answers "لا يوجد وكالة" on the
+  // agency-verification task → drives + tracks the admin_support "إصدار وكالة"
+  // task (generated in sub-step 2); cleared when the issuance is completed.
+  // Purely additive (ADD COLUMN).
+  agencyIssuanceRequested: boolean("agency_issuance_requested").notNull().default(false),
 }, (t) => ({
   // Phase-2 deploy split — FK temporarily declared application-side only.
   // Apply via script/apply-fk-constraints.sql with statement_timeout
@@ -520,6 +525,11 @@ export const hearings = pgTable("hearings", {
   // an upcoming hearing) — set when acknowledged; suppresses that hearing's
   // reminder. Purely additive (ADD COLUMN).
   agencyVerificationAckAt: timestamp("agency_verification_ack_at"),
+  // The responsible lawyer's answer to the agency-verification task
+  // (يوجد / لا يوجد). NULL until answered. "لا يوجد" is what sub-step 2 reads
+  // (via law_cases.agency_issuance_requested) to generate the admin_support
+  // "إصدار وكالة" task. Purely additive (ADD COLUMN).
+  agencyVerificationAnswer: varchar("agency_verification_answer", { length: 20 }),
   adminTasksCreated: boolean("admin_tasks_created").default(false),
   opponentMemos: text("opponent_memos").default(""),
   hearingMinutes: text("hearing_minutes").default(""),
@@ -2359,6 +2369,7 @@ export interface LawCase {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  agencyIssuanceRequested: boolean;
 }
 
 export interface CaseComment {
@@ -2983,6 +2994,7 @@ export interface Hearing {
   reportCompleted: boolean;
   sessionReportExported: boolean;
   agencyVerificationAckAt: string | null;
+  agencyVerificationAnswer: string | null;
   adminTasksCreated: boolean;
   opponentMemos: string;
   hearingMinutes: string;

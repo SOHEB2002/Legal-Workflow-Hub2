@@ -263,7 +263,7 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 // are enforced server-side — we never duplicate that here). actionModeFor
 // returns the modal shape, or null for kinds PART 2 doesn't wire yet (those keep
 // a disabled placeholder; see the report's FLAGS).
-type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve" | "delegationDecision" | "executionRequest";
+type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve" | "delegationDecision" | "executionRequest" | "agencyAnswer";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
   // Unassigned admin_support task (only ever surfaced to the branch_manager's
@@ -278,7 +278,7 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
     case MyTaskKind.DATA_COMPLETION_CONTRACT:
     case MyTaskKind.DATA_COMPLETION_MEMO:
       return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
-    case MyTaskKind.AGENCY_VERIFICATION: return { mode: "confirm", title: "تأكيد التحقق من الوكالة" };
+    case MyTaskKind.AGENCY_VERIFICATION: return { mode: "agencyAnswer", title: "التحقق من الوكالة" };
     case MyTaskKind.DELEGATION_APPROVAL: return { mode: "delegationDecision", title: "قرار التفويض" };
     case MyTaskKind.CONTACT_FOLLOWUP: return { mode: "confirm", title: "إنهاء متابعة العميل" };
     case MyTaskKind.LEGAL_DEADLINE: return { mode: "confirm", title: "إنجاز الموعد القانوني" };
@@ -359,7 +359,10 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
     case MyTaskKind.DATA_COMPLETION_CONSULTATION: return { method: "POST", url: `/api/consultations/${e}/ack-data-completion` };
     case MyTaskKind.DATA_COMPLETION_CONTRACT: return { method: "POST", url: `/api/contracts/${e}/ack-data-completion` };
     case MyTaskKind.DATA_COMPLETION_MEMO: return { method: "POST", url: `/api/memos/${e}/ack-data-completion` };
-    case MyTaskKind.AGENCY_VERIFICATION: return { method: "POST", url: `/api/hearings/${e}/ack-agency-verification` };
+    case MyTaskKind.AGENCY_VERIFICATION:
+      // Two-option answer: يوجد (task ends) / لا يوجد (task ends + flags the case
+      // for the sub-step-2 admin_support issuance). Defaults to يوجد if untouched.
+      return { method: "POST", url: `/api/hearings/${e}/agency-verify`, body: { answer: form.decision === "لا يوجد" ? "لا يوجد" : "يوجد" } };
     case MyTaskKind.DELEGATION_APPROVAL:
       // اعتماد (default) → /approve; رفض → /reject with the required reason.
       return form.decision === "رفض"
@@ -1347,6 +1350,19 @@ export default function MyTasksPage() {
                       <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-delegation-reject-reason" /></div>
                   )}
                 </>
+              )}
+
+              {currentMode === "agencyAnswer" && (
+                <div className="space-y-1"><Label>هل توجد وكالة لهذه القضية؟</Label>
+                  <Select value={form.decision === "لا يوجد" ? "لا يوجد" : "يوجد"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                    <SelectTrigger data-testid="select-agency-answer"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="يوجد">يوجد وكالة</SelectItem>
+                      <SelectItem value="لا يوجد">لا يوجد وكالة</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">عند اختيار "لا يوجد وكالة" سيتم تسجيل الحاجة إلى إصدار وكالة لهذه القضية.</p>
+                </div>
               )}
 
               {currentMode === "confirm" && (

@@ -7907,14 +7907,22 @@ export async function registerRoutes(
     }
   });
 
-  // "تم" acknowledge for the agency-verification reminder — stamps
-  // agency_verification_ack_at=now so the unified-tasks feed stops surfacing
-  // that hearing's agency_verification task. Same actors as the other hearing
-  // actions (attending lawyer / admin_support / branch_manager via
-  // canActOnHearing).
-  app.post("/api/hearings/:id/ack-agency-verification", requireAuth, async (req: AuthRequest, res) => {
+  // Agency-verification task ANSWER — the responsible lawyer answers the
+  // weekend-aware "two days before hearing" verify task with يوجد / لا يوجد.
+  // EITHER answer ENDS the lawyer's task (stamps agency_verification_ack_at=now
+  // so the unified-tasks feed stops surfacing it, and records the answer).
+  // "لا يوجد" ADDITIONALLY flags the case (agency_issuance_requested=true) — the
+  // signal sub-step 2 will read to generate the admin_support "إصدار وكالة" task
+  // (no generation here yet). Same actors as the other hearing actions
+  // (attending lawyer / admin_support / branch_manager via canActOnHearing).
+  app.post("/api/hearings/:id/agency-verify", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);
+      const body = req.body ?? {};
+      const answer = typeof body.answer === "string" ? body.answer : "";
+      if (answer !== "يوجد" && answer !== "لا يوجد") {
+        return res.status(400).json({ error: "قيمة الإجابة غير صحيحة" });
+      }
       const hearing = await storage.getHearingById(hearingId);
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
@@ -7922,11 +7930,19 @@ export async function registerRoutes(
       if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
-      const updated = await storage.updateHearing(hearingId, { agencyVerificationAckAt: new Date().toISOString() });
+      // End the lawyer's verify task for this hearing (latch + recorded answer).
+      const updated = await storage.updateHearing(hearingId, {
+        agencyVerificationAckAt: new Date().toISOString(),
+        agencyVerificationAnswer: answer,
+      });
+      // "لا يوجد" → flag the case so sub-step 2 can generate the issuance task.
+      if (answer === "لا يوجد" && hearing.caseId) {
+        await storage.updateCase(hearing.caseId, { agencyIssuanceRequested: true });
+      }
       res.json(updated);
     } catch (error) {
-      console.error("Error acknowledging agency verification:", error);
-      res.status(500).json({ error: "حدث خطأ في تأكيد التحقق من الوكالة" });
+      console.error("Error answering agency verification:", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل إجابة التحقق من الوكالة" });
     }
   });
 
