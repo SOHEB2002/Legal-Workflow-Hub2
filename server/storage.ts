@@ -3090,7 +3090,10 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 3-5 + agency. Hearings (attend / unrecorded-overdue / report) ----
-    {
+    // GUARDED (mirrors the data_completion / execution / agency blocks): a failure
+    // here degrades to "no hearing tasks this run" and never throws out of
+    // getMyTasks to empty the whole feed.
+    try {
       const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND ${hearings.reportCompleted} = false))`;
       const where = firmWideScoped
         ? hActionable
@@ -3125,13 +3128,21 @@ export class DatabaseStorage implements IStorage {
               title: `جلسة انقضت دون تسجيل نتيجتها — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
               caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: true, actionHint: "record" });
           } else {
-            tasks.push({ id: `hearing_attend:${r.id}`, kind: MyTaskKind.HEARING_ATTEND,
-              title: `حضور جلسة — قضية ${r.caseNumber} بتاريخ ${r.date}`, entityType: "hearing", entityId: r.id,
-              caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
+            // Hearing-day actions (attend / record the result) surface ONLY from
+            // the hearing's OWN day onward — never before. On the day → this attend
+            // task; after the day still unrecorded → the hearing_unrecorded
+            // (overdue) branch above keeps it showing until the result is recorded.
+            // A FUTURE hearing (date > today) shows NOTHING here (the bug fix).
+            if (r.date === today) {
+              tasks.push({ id: `hearing_attend:${r.id}`, kind: MyTaskKind.HEARING_ATTEND,
+                title: `حضور جلسة — قضية ${r.caseNumber} بتاريخ ${r.date}`, entityType: "hearing", entityId: r.id,
+                caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
+            }
             // Agency verification — surfaces once we reach the weekend-aware
             // "2 days before" lead (Fri/Sat skipped; Sunday hearing → Thursday),
             // and only until acknowledged ("تم") for this hearing. Collected now,
-            // grouped below.
+            // grouped below. INTENTIONALLY 2 days BEFORE the hearing — must NOT be
+            // gated on today; this is the one pre-hearing item, left untouched.
             if (agencyVerificationLeadDate(r.date) <= today && !r.agencyVerificationAckAt) {
               verifyCandidates.push({ hearingId: r.id, caseId: r.caseId, caseNumber: r.caseNumber,
                 date: r.date, ownerId, clientKey: (r.clientIndividualName || r.clientCompanyName || "").trim() });
@@ -3167,6 +3178,8 @@ export class DatabaseStorage implements IStorage {
           actionHint: "verify", groupMemberIds: memberIds,
         });
       }
+    } catch (e) {
+      console.error("[getMyTasks] hearings block failed — skipping:", e);
     }
 
     // ---- 6. memo_pending — assigned memo not yet filed ----
