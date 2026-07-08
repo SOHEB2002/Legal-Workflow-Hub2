@@ -46,6 +46,14 @@ const HEARING_RESULT_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED,
 ]);
 
+// The general (عام) task kinds — every lifecycle state of a manually-created
+// task. Their requester + free-text details live on the FULL field task (via
+// getTaskById), not the feed item, so we surface them on the card + in the modal.
+const GENERAL_KINDS = new Set<MyTaskKindValue>([
+  MyTaskKind.GENERAL_TASK, MyTaskKind.GENERAL_TASK_REVIEW, MyTaskKind.GENERAL_TASK_DISTRIBUTE,
+  MyTaskKind.GENERAL_TASK_APPROVE, MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION,
+]);
+
 // The assignable admin_support task types (collection / execution /
 // consultation_closing / session_report_export / the 4 data_completion work-types).
 // When one is UNASSIGNED (ownerId="") it only ever
@@ -501,6 +509,15 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
   const Icon = meta?.icon ?? ClipboardList;
   const { getTaskById } = useFieldTasks();
   const { departments } = useDepartments();
+  const { users } = useAuth();
+  // General (عام) task context lives on the full field task, not the feed item:
+  // WHO requested it (originalRequesterId, written once at creation; assignedBy as
+  // a fallback) and its free-text details (description). Surface both so the actor
+  // knows what the task is and who asked for it. Non-general kinds skip the lookup.
+  const generalFt = GENERAL_KINDS.has(task.kind) ? getTaskById(task.entityId) : undefined;
+  const requesterId = generalFt?.originalRequesterId || generalFt?.assignedBy || "";
+  const requesterName = requesterId ? (users.find((u) => u.id === requesterId)?.name || requesterId) : "";
+  const generalDetails = generalFt?.description?.trim() || "";
   // Dept-routed (path-2) context: show which department the task is flowing
   // through so the head and the requester have it at a glance. Only path-2
   // general tasks carry routedDepartmentId; every other kind leaves it null.
@@ -538,10 +555,16 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
         </div>
         <div className="mt-1 flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
           <span>{meta?.label ?? task.kind}</span>
+          {requesterName && (<><span>•</span><span data-testid={`task-requester-${task.id}`}>من: <BidiText>{requesterName}</BidiText></span></>)}
           {routedDeptName && (<><span>•</span><span data-testid={`task-routed-dept-${task.id}`}>القسم: <BidiText>{routedDeptName}</BidiText></span></>)}
           {task.dueDate && (<><span>•</span><DualDateDisplay date={task.dueDate} /></>)}
           {task.isOverdue && <Badge variant="destructive" className="text-[10px]">متأخرة</Badge>}
         </div>
+        {generalDetails && (
+          <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2" data-testid={`task-details-${task.id}`}>
+            <BidiText>{generalDetails}</BidiText>
+          </p>
+        )}
       </div>
       <Button
         size="sm"
@@ -1178,6 +1201,22 @@ export default function MyTasksPage() {
           {actionTask && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground"><BidiText>{actionTask.title}</BidiText></p>
+
+              {/* General (عام) task context: WHO requested it + the details, both
+                  read from the full field task (not carried on the feed item). */}
+              {GENERAL_KINDS.has(actionTask.kind) && (() => {
+                const ft = getTaskById(actionTask.entityId);
+                const rid = ft?.originalRequesterId || ft?.assignedBy || "";
+                const rname = rid ? userName(rid) : "";
+                const details = ft?.description?.trim() || "";
+                if (!rname && !details) return null;
+                return (
+                  <div className="rounded-md border p-2 text-sm space-y-1" data-testid="general-task-context">
+                    {rname && <div><span className="text-muted-foreground">من: </span><BidiText>{rname}</BidiText></div>}
+                    {details && <div><span className="text-muted-foreground">التفاصيل: </span><BidiText>{details}</BidiText></div>}
+                  </div>
+                );
+              })()}
 
               {currentMode === "complete" && (
                 <>
