@@ -13,7 +13,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send,
+  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send, Eye,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -505,7 +505,7 @@ function GeneralTaskThread({ taskId }: { taskId: string }) {
   );
 }
 
-function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void }) {
+function TaskRow({ task, onAction, onDetails }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void; onDetails: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
   const { getTaskById } = useFieldTasks();
@@ -567,6 +567,19 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
           </p>
         )}
       </div>
+      {/* General (عام) tasks: a "تفاصيل" eye button → full requester + description +
+          linked entity (the card can't fit a long description or the entity link). */}
+      {GENERAL_KINDS.has(task.kind) && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onDetails(task)}
+          title="تفاصيل المهمة"
+          data-testid={`task-details-btn-${task.id}`}
+        >
+          <Eye className="h-4 w-4" />
+        </Button>
+      )}
       <Button
         size="sm"
         variant="outline"
@@ -659,6 +672,11 @@ export default function MyTasksPage() {
   // workerId live on the full field task, not the feed item; the field-tasks
   // context already has it loaded app-wide (the requester is assignedTo/assignedBy).
   const { getTaskById } = useFieldTasks();
+  // Entity lists for resolving a general task's linked entity in the تفاصيل view.
+  const { cases } = useCases();
+  const { consultations } = useConsultations();
+  const { contracts } = useContracts();
+  const { getClientName } = useClients();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [specialtyFilter, setSpecialtyFilter] = useState<"all" | TaskSpecialtyValue>("all");
@@ -677,6 +695,9 @@ export default function MyTasksPage() {
   const [stageCase, setStageCase] = useState<LawCase | null>(null);
   // Memo advance panel (the shared component) target
   const [advanceMemo, setAdvanceMemo] = useState<Memo | null>(null);
+  // General (عام) task details ("تفاصيل") target — requester + full description +
+  // linked entity, read from the full field task (the feed item can't carry them).
+  const [detailsTask, setDetailsTask] = useState<MyTaskItem | null>(null);
 
   // Create-task dialog
   const [showCreate, setShowCreate] = useState(false);
@@ -974,7 +995,7 @@ export default function MyTasksPage() {
           titleClass="text-xs font-semibold text-muted-foreground" testId={`team-member-${id}`} />
         {open && (items.length === 0
           ? <p className="ps-6 text-xs text-muted-foreground">لا يوجد</p>
-          : <div className="space-y-2">{items.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>)}
+          : <div className="space-y-2">{items.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>)}
       </div>
     );
   };
@@ -1052,7 +1073,7 @@ export default function MyTasksPage() {
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Flame className="h-4 w-4" /> المستعجلة — جلسات وإسناد قضايا
               </h2>
-              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
+              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
             </section>
           )}
 
@@ -1061,7 +1082,7 @@ export default function MyTasksPage() {
             {rest.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">لا توجد مهام أخرى.</p>
             ) : (
-              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
+              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
             )}
           </section>
 
@@ -1080,7 +1101,7 @@ export default function MyTasksPage() {
               {unassignedPool.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="text-xs font-semibold text-muted-foreground">مهام غير مُسندة</h3>
-                  <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
+                  <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
                 </div>
               )}
             </section>
@@ -1141,7 +1162,7 @@ export default function MyTasksPage() {
                   <div className="space-y-2 rounded-md border p-3">
                     <GroupHeader open={open} onToggle={() => toggle(key)} title="مهام غير مُسندة" count={unassignedPool.length}
                       titleClass="text-sm font-bold" testId="team-pool-unassigned" />
-                    {open && <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>}
+                    {open && <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>}
                   </div>
                 );
               })()}
@@ -1494,6 +1515,57 @@ export default function MyTasksPage() {
               </p>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== General (عام) task details ("تفاصيل") ===== */}
+      <Dialog open={!!detailsTask} onOpenChange={(o) => !o && setDetailsTask(null)}>
+        <DialogContent dir="rtl" data-testid="dialog-general-details">
+          <DialogHeader><DialogTitle>تفاصيل المهمة</DialogTitle></DialogHeader>
+          {detailsTask && (() => {
+            // Requester + full description + linked entity live on the FULL field
+            // task (loaded app-wide), not the feed item. A general task links to at
+            // most ONE of case / consultation / contract / client (no memo link in
+            // the model); resolve whichever is set to its number/title.
+            const ft = getTaskById(detailsTask.entityId);
+            const requester = ft ? userName(ft.originalRequesterId || ft.assignedBy) : "";
+            const holder = ft?.assignedTo ? userName(ft.assignedTo) : "";
+            const deptName = ft?.routedDepartmentId
+              ? (departments.find((d) => d.id === ft.routedDepartmentId)?.name || ft.routedDepartmentId)
+              : "";
+            const linked = !ft ? ""
+              : ft.caseId ? `قضية ${cases.find((c) => c.id === ft.caseId)?.caseNumber ?? ft.caseId}`
+              : ft.consultationId ? `استشارة ${consultations.find((c) => c.id === ft.consultationId)?.consultationNumber ?? ft.consultationId}`
+              : ft.contractId ? `عقد ${contracts.find((c) => c.id === ft.contractId)?.contractNumber || contracts.find((c) => c.id === ft.contractId)?.title || ft.contractId}`
+              : ft.clientId ? `عميل ${getClientName(ft.clientId)}`
+              : "";
+            const desc = ft?.description?.trim() || "";
+            const note = ft?.reviewNote?.trim() || "";
+            return (
+              <div className="space-y-3 text-sm">
+                <div className="font-medium"><BidiText>{detailsTask.title}</BidiText></div>
+                <div className="space-y-1">
+                  <div><span className="text-muted-foreground">من: </span><BidiText>{requester || "—"}</BidiText></div>
+                  {linked && <div><span className="text-muted-foreground">مرتبطة بـ: </span><BidiText>{linked}</BidiText></div>}
+                  {holder && <div><span className="text-muted-foreground">لدى: </span><BidiText>{holder}</BidiText></div>}
+                  {deptName && <div><span className="text-muted-foreground">القسم: </span><BidiText>{deptName}</BidiText></div>}
+                  {ft?.status && <div><span className="text-muted-foreground">الحالة: </span>{ft.status}</div>}
+                  {ft?.dueDate && <div className="flex items-center gap-1"><span className="text-muted-foreground">الاستحقاق: </span><DualDateDisplay date={ft.dueDate} /></div>}
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-1">التفاصيل</p>
+                  <div className="max-h-60 overflow-y-auto rounded-md border p-2 whitespace-pre-wrap break-words" data-testid="general-details-description">
+                    {desc ? <BidiText>{desc}</BidiText> : <span className="text-muted-foreground">لا يوجد وصف</span>}
+                  </div>
+                </div>
+                {note && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-2">
+                    <span className="font-semibold">ملاحظة الإعادة: </span><BidiText>{note}</BidiText>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
