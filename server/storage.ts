@@ -3225,11 +3225,12 @@ export class DatabaseStorage implements IStorage {
 
       // Consultations now carry a designated reviewer at internal review too
       // (mirrors cases) — surface to that reviewer.
-      const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType })
+      const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType,
+          consultationNumber: consultations.consultationNumber })
         .from(consultations).where(and(eq(consultations.internalReviewerId, uid),
           eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية")));
       for (const r of consultReviewRows) tasks.push({ id: `review_pending:consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-        title: `مراجعة داخلية بانتظارك — استشارة (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+        title: `مراجعة داخلية بانتظارك — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
         ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
 
       // Committee: cases_review_head chairs cases + memos; consultations_review_head chairs consultations + contracts.
@@ -3246,10 +3247,11 @@ export class DatabaseStorage implements IStorage {
           ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
       }
       if (isConsultationsReviewHead) {
-        const conc = await db.select({ id: consultations.id, type: consultations.consultationType })
+        const conc = await db.select({ id: consultations.id, type: consultations.consultationType,
+          consultationNumber: consultations.consultationNumber })
           .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة")));
         for (const r of conc) tasks.push({ id: `review_pending:committee_consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-          title: `قرار لجنة المراجعة — استشارة (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+          title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
           ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
         const ctc = await db.select({ id: contracts.id, title: contracts.title })
           .from(contracts).where(eq(contracts.currentStage, "لجنة_مراجعة"));
@@ -3448,13 +3450,14 @@ export class DatabaseStorage implements IStorage {
     // "self" for any non-team viewer, so a non-owner admin_support must be
     // excluded here, not merely scoped.)
     if (consultationClosingOwner === uid || firmWideScoped) {
-      const rows = await db.select({ id: consultations.id, type: consultations.consultationType })
+      const rows = await db.select({ id: consultations.id, type: consultations.consultationType,
+          consultationNumber: consultations.consultationNumber })
         .from(consultations).where(and(eq(consultations.status, "active"),
           inArray(consultations.currentStage, ["جاهزة_للإرسال", "منجزة"])));
       for (const r of rows) {
         const ownerId = consultationClosingOwner;
         tasks.push({ id: `consultation_closing:${r.id}`, kind: MyTaskKind.CONSULTATION_CLOSING,
-          title: `استشارة جاهزة للإغلاق (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+          title: `استشارة ${r.consultationNumber} جاهزة للإغلاق (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
           ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "close" });
       }
     }
