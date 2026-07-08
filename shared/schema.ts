@@ -5174,6 +5174,13 @@ export interface MyTaskItem {
   // head-less task that just got a head stays assignedTo="" → outside that
   // context's scope). Undefined for every other feed kind.
   routedDepartmentId?: string | null;
+  // GROUPED agency tasks only (agency_verification / agency_issuance): the
+  // underlying entity ids a single completion must act on — hearing ids for
+  // verify, field_task ids for issuance. Same-client (exact name) + same-lawyer
+  // + same pre-hearing window collapse into ONE task. Always carries ≥1 id (a
+  // group of 1 = one element), so the completion path is uniform. Undefined for
+  // every other kind.
+  groupMemberIds?: string[];
 }
 
 // Classify a task into its specialty domain (ترافع litigation / استشارات

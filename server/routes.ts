@@ -18,6 +18,7 @@ import {
   FieldTaskType,
   GeneralTaskEventType,
   type FieldTask,
+  type Hearing,
   insertAttachmentSchema,
   insertMemoSchema,
   hearingResultSchema,
@@ -4345,42 +4346,60 @@ export async function registerRoutes(
     }
   });
 
-  // Complete an AGENCY_ISSUANCE (إصدار وكالة) task with a simple confirm. Records a
-  // case-activity-log event for traceability (mirrors how execution logs its
-  // number), marks the field_task complete, and CLEARS the case's
-  // agencyIssuanceRequested latch so a future pre-hearing "لا يوجد" can re-fire.
-  // Gated like the field-task PATCH: the assignee, OR anyone who can modify the
-  // parent case (admin_support / branch_manager / dept_head(own) / the lawyer).
-  // Delegation actorDisplayName stamping applies if acting-as.
-  app.post("/api/field-tasks/:id/agency-issuance", requireAuth, async (req: AuthRequest, res) => {
+  // Complete an AGENCY_ISSUANCE (إصدار وكالة) GROUP task (sub-step 3) with a simple
+  // confirm. One "تم إصدار الوكالة" satisfies EVERY case in the group (same موكّل →
+  // one الوكالة covers all his cases): for each grouped field_task it records a
+  // case-activity-log event (traceability, mirrors how execution logs its number),
+  // marks the field_task complete, and CLEARS that case's agencyIssuanceRequested
+  // latch so a future pre-hearing "لا يوجد" can re-fire. A group of 1 is the normal
+  // single case. Each field_task is gated like the field-task PATCH: the assignee,
+  // OR anyone who can modify its parent case — every member is gated before any
+  // write. Delegation actorDisplayName stamping applies if acting-as.
+  app.post("/api/field-tasks/agency-issuance-group", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
-      const task = await storage.getFieldTaskById(String(req.params.id));
-      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
-      if (!task.caseId) return res.status(400).json({ error: "المهمة غير مرتبطة بقضية" });
-      const parentCase = await storage.getCaseById(task.caseId);
-      const canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
-      if (task.assignedTo !== user.id && !canModifyParent) {
-        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      const body = req.body ?? {};
+      const fieldTaskIds: string[] = Array.isArray(body.fieldTaskIds)
+        ? Array.from(new Set((body.fieldTaskIds as unknown[]).map((x) => String(x)).filter(Boolean)))
+        : [];
+      if (fieldTaskIds.length === 0) {
+        return res.status(400).json({ error: "لم يتم تحديد أي مهمة" });
       }
-      const actorName = actorDisplayName(req.actingContext, task.caseId, user.name || user.id);
-      await logCaseActivityActing(req, {
-        caseId: task.caseId,
-        userId: user.id,
-        userName: user.name || user.id,
-        actionType: "agency_issued",
-        title: `تم إصدار وكالة بواسطة ${actorName}`,
-        details: `تم إصدار الوكالة للقضية`,
-      });
-      const updated = await storage.updateFieldTask(String(req.params.id), {
-        status: FieldTaskStatus.COMPLETED,
-        completionNotes: `تم إصدار الوكالة`,
-      });
-      // Clear the latch so a future pre-hearing "لا يوجد" can request a new issuance.
-      await storage.updateCase(task.caseId, { agencyIssuanceRequested: false });
-      res.json(updated);
+      // Load + gate ALL members first (the group is built from the caller's own
+      // routed tasks) — a failure on any means an invalid request, never a partial.
+      const members: { task: FieldTask; caseId: string }[] = [];
+      for (const tid of fieldTaskIds) {
+        const task = await storage.getFieldTaskById(tid);
+        if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+        if (!task.caseId) return res.status(400).json({ error: "المهمة غير مرتبطة بقضية" });
+        const parentCase = await storage.getCaseById(task.caseId);
+        const canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+        if (task.assignedTo !== user.id && !canModifyParent) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+        members.push({ task, caseId: task.caseId });
+      }
+      // One confirm satisfies all: log + complete + clear the latch per member.
+      for (const { task, caseId } of members) {
+        const actorName = actorDisplayName(req.actingContext, caseId, user.name || user.id);
+        await logCaseActivityActing(req, {
+          caseId,
+          userId: user.id,
+          userName: user.name || user.id,
+          actionType: "agency_issued",
+          title: `تم إصدار وكالة بواسطة ${actorName}`,
+          details: `تم إصدار الوكالة للقضية`,
+        });
+        await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.COMPLETED,
+          completionNotes: `تم إصدار الوكالة`,
+        });
+        // Clear the latch so a future pre-hearing "لا يوجد" can request a new issuance.
+        await storage.updateCase(caseId, { agencyIssuanceRequested: false });
+      }
+      res.json({ success: true, count: members.length });
     } catch (error) {
-      console.error("Error completing agency issuance:", error);
+      console.error("Error completing agency issuance (group):", error);
       res.status(500).json({ error: "حدث خطأ في تسجيل إصدار الوكالة" });
     }
   });
@@ -7947,70 +7966,87 @@ export async function registerRoutes(
     }
   });
 
-  // Agency-verification task ANSWER — the responsible lawyer answers the
-  // weekend-aware "two days before hearing" verify task with يوجد / لا يوجد.
-  // EITHER answer ENDS the lawyer's task (stamps agency_verification_ack_at=now
-  // so the unified-tasks feed stops surfacing it, and records the answer).
-  // "لا يوجد" ADDITIONALLY flags the case (agency_issuance_requested=true) — the
-  // signal sub-step 2 will read to generate the admin_support "إصدار وكالة" task
-  // (no generation here yet). Same actors as the other hearing actions
-  // (attending lawyer / admin_support / branch_manager via canActOnHearing).
-  app.post("/api/hearings/:id/agency-verify", requireAuth, async (req: AuthRequest, res) => {
+  // Agency-verification GROUP answer (sub-step 3) — the responsible lawyer answers
+  // the weekend-aware "two days before hearing" verify task with يوجد / لا يوجد for
+  // a WHOLE group at once. Same موكّل (exact client name) + same lawyer + same
+  // pre-hearing window collapse into ONE task; a group of 1 is the normal single
+  // case. The one answer applies to EVERY hearing in the group: either answer ends
+  // each hearing's verify task (stamps agency_verification_ack_at=now + records the
+  // answer). "لا يوجد" additionally generates, ONCE PER CASE, the admin_support
+  // "إصدار وكالة" issuance task (idempotent on the case flag). Same actors as the
+  // other hearing actions (attending lawyer / admin_support / branch_manager via
+  // canActOnHearing) — every hearing in the group is gated before any write.
+  app.post("/api/hearings/agency-verify-group", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const hearingId = String(req.params.id);
       const body = req.body ?? {};
       const answer = typeof body.answer === "string" ? body.answer : "";
       if (answer !== "يوجد" && answer !== "لا يوجد") {
         return res.status(400).json({ error: "قيمة الإجابة غير صحيحة" });
       }
-      const hearing = await storage.getHearingById(hearingId);
-      if (!hearing) {
-        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      const hearingIds: string[] = Array.isArray(body.hearingIds)
+        ? Array.from(new Set((body.hearingIds as unknown[]).map((x) => String(x)).filter(Boolean)))
+        : [];
+      if (hearingIds.length === 0) {
+        return res.status(400).json({ error: "لم يتم تحديد أي جلسة" });
       }
-      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      // Load + gate ALL hearings first: the group is only ever built from the
+      // caller's own owned hearings, so a failure on any one means an invalid
+      // request (404/403) — never a partial write.
+      const loadedHearings: Hearing[] = [];
+      for (const hid of hearingIds) {
+        const hearing = await storage.getHearingById(hid);
+        if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
+        if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+          return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+        }
+        loadedHearings.push(hearing);
       }
-      // End the lawyer's verify task for this hearing (latch + recorded answer).
-      const updated = await storage.updateHearing(hearingId, {
-        agencyVerificationAckAt: new Date().toISOString(),
-        agencyVerificationAnswer: answer,
-      });
-      // "لا يوجد" → generate the admin_support "إصدار وكالة" issuance task and latch
-      // the case flag. Idempotent on the FALSE→TRUE transition: multiple hearings
-      // each answered "لا يوجد" won't stack duplicate issuance tasks (the flag is
-      // cleared on completion, so a later lapse can re-fire). Routed via the agency
-      // issuance mapping (assignee → own task; unset → the branch_manager pool).
-      if (answer === "لا يوجد" && hearing.caseId) {
-        const parentCase = await storage.getCaseById(hearing.caseId);
-        if (parentCase && !parentCase.agencyIssuanceRequested) {
-          // DEFENSIVE GUARD: create the task FIRST, then latch the flag. If
-          // generation throws it is logged (never swallowed) and the flag stays
-          // false so a later "لا يوجد" retries — no silent stuck state. The lawyer's
-          // answer is already saved (updateHearing above), so a generation failure
-          // never fails the answer submission itself.
-          try {
-            const allUsers = await storage.getAllUsers();
-            const assignments = await storage.getAdminSupportTaskAssignments();
-            const issuanceAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.AGENCY_ISSUANCE, assignments, allUsers);
-            const issuanceTask = await storage.createFieldTask({
-              title: `إصدار وكالة — قضية رقم ${parentCase.caseNumber}`,
-              description: `لا توجد وكالة سارية على القضية قبل الجلسة - يرجى إصدار وكالة`,
-              taskType: "متابعة_محكمة",
-              caseId: hearing.caseId,
-              assignedTo: issuanceAssignee,
-              priority: "عاجل",
-              dueDate: hearing.hearingDate || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-            }, req.user!.id);
-            await notifyFieldTaskCreated(issuanceTask, req.user!);
-            await storage.updateCase(hearing.caseId, { agencyIssuanceRequested: true });
-          } catch (genErr) {
-            console.error("Error generating agency issuance task:", genErr);
+      // Apply the answer to every hearing in the group (latch + recorded answer).
+      const nowIso = new Date().toISOString();
+      for (const hearing of loadedHearings) {
+        await storage.updateHearing(hearing.id, {
+          agencyVerificationAckAt: nowIso,
+          agencyVerificationAnswer: answer,
+        });
+      }
+      // "لا يوجد" → generate the admin_support issuance task ONCE PER CASE in the
+      // group (a case can appear via >1 hearing → dedupe by caseId). Idempotent on
+      // the FALSE→TRUE case-flag transition; create-first / latch-after so a
+      // generation failure leaves the flag false to retry (logged, never a silent
+      // stuck state, and never fails the answer already saved above). All cases in a
+      // group share the same mapping, so the assignee is resolved once.
+      if (answer === "لا يوجد") {
+        const caseIds = Array.from(new Set(loadedHearings.map((h) => h.caseId).filter((c): c is string => !!c)));
+        if (caseIds.length > 0) {
+          const allUsers = await storage.getAllUsers();
+          const assignments = await storage.getAdminSupportTaskAssignments();
+          const issuanceAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.AGENCY_ISSUANCE, assignments, allUsers);
+          const hearingByCase = new Map(loadedHearings.map((h) => [h.caseId, h]));
+          for (const caseId of caseIds) {
+            try {
+              const parentCase = await storage.getCaseById(caseId);
+              if (!parentCase || parentCase.agencyIssuanceRequested) continue;
+              const hearing = hearingByCase.get(caseId);
+              const issuanceTask = await storage.createFieldTask({
+                title: `إصدار وكالة — قضية رقم ${parentCase.caseNumber}`,
+                description: `لا توجد وكالة سارية على القضية قبل الجلسة - يرجى إصدار وكالة`,
+                taskType: "متابعة_محكمة",
+                caseId,
+                assignedTo: issuanceAssignee,
+                priority: "عاجل",
+                dueDate: hearing?.hearingDate || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              }, req.user!.id);
+              await notifyFieldTaskCreated(issuanceTask, req.user!);
+              await storage.updateCase(caseId, { agencyIssuanceRequested: true });
+            } catch (genErr) {
+              console.error("Error generating agency issuance task for case", caseId, genErr);
+            }
           }
         }
       }
-      res.json(updated);
+      res.json({ success: true, count: loadedHearings.length });
     } catch (error) {
-      console.error("Error answering agency verification:", error);
+      console.error("Error answering agency verification (group):", error);
       res.status(500).json({ error: "حدث خطأ في تسجيل إجابة التحقق من الوكالة" });
     }
   });

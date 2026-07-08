@@ -3094,12 +3094,21 @@ export class DatabaseStorage implements IStorage {
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), hActionable)
         : and(eq(hearings.attendingLawyerId, uid), hActionable);
+      // clients LEFT-joined for the agency-verification grouping key (the موكّل's
+      // exact name = individualName for individuals, companyName otherwise).
       const rows = await db.select({
         id: hearings.id, caseId: hearings.caseId, date: hearings.hearingDate, status: hearings.status,
         result: hearings.result, reportCompleted: hearings.reportCompleted,
         attendingLawyerId: hearings.attendingLawyerId, caseNumber: lawCases.caseNumber,
         agencyVerificationAckAt: hearings.agencyVerificationAckAt,
-      }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id)).where(where);
+        clientIndividualName: clients.individualName, clientCompanyName: clients.companyName,
+      }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
+        .leftJoin(clients, eq(lawCases.clientId, clients.id)).where(where);
+      // Agency-verification candidates are collected here and GROUPED after the
+      // loop (same client + same lawyer + same pre-hearing window → ONE task);
+      // every other hearing task stays per-hearing exactly as before.
+      const verifyCandidates: { hearingId: string; caseId: string; caseNumber: string;
+        date: string; ownerId: string; clientKey: string }[] = [];
       for (const r of rows) {
         const ownerId = r.attendingLawyerId || "";
         const ownerScope = scopeOf(ownerId);
@@ -3118,14 +3127,42 @@ export class DatabaseStorage implements IStorage {
               caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
             // Agency verification — surfaces once we reach the weekend-aware
             // "2 days before" lead (Fri/Sat skipped; Sunday hearing → Thursday),
-            // and only until acknowledged ("تم") for this hearing.
+            // and only until acknowledged ("تم") for this hearing. Collected now,
+            // grouped below.
             if (agencyVerificationLeadDate(r.date) <= today && !r.agencyVerificationAckAt) {
-              tasks.push({ id: `agency_verification:${r.id}`, kind: MyTaskKind.AGENCY_VERIFICATION,
-                title: `التحقق من الوكالة قبل الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
-                caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "verify" });
+              verifyCandidates.push({ hearingId: r.id, caseId: r.caseId, caseNumber: r.caseNumber,
+                date: r.date, ownerId, clientKey: (r.clientIndividualName || r.clientCompanyName || "").trim() });
             }
           }
         }
+      }
+      // GROUP the agency-verification candidates by EXACT client name + attending
+      // lawyer. A client with several hearings in the same pre-hearing window under
+      // one lawyer becomes ONE task listing all case numbers (one answer applies to
+      // all via the group route). Empty client name is never grouped (keyed by the
+      // hearing id → each stands alone). A group of 1 is byte-equivalent to the old
+      // per-hearing task. The lawyer id (no spaces) is the LAST token → splitting
+      // on the final space recovers (name, lawyer) uniquely → no key collision.
+      const verifyGroups = new Map<string, typeof verifyCandidates>();
+      for (const c of verifyCandidates) {
+        const key = c.clientKey ? `${c.clientKey} ${c.ownerId}` : ` solo ${c.hearingId}`;
+        const g = verifyGroups.get(key);
+        if (g) g.push(c); else verifyGroups.set(key, [c]);
+      }
+      for (const g of Array.from(verifyGroups.values())) {
+        const memberIds = g.map((m) => m.hearingId);
+        const nums = g.map((m) => m.caseNumber);
+        const ownerId = g[0].ownerId;
+        const earliest = g.reduce((a, m) => (m.date < a ? m.date : a), g[0].date);
+        tasks.push({
+          id: `agency_verification:${[...memberIds].sort().join("_")}`, kind: MyTaskKind.AGENCY_VERIFICATION,
+          title: nums.length > 1
+            ? `التحقق من الوكالة قبل الجلسة — قضايا ${nums.join("، ")}`
+            : `التحقق من الوكالة قبل الجلسة — قضية ${nums[0]}`,
+          entityType: "hearing", entityId: g[0].hearingId, caseId: g[0].caseId,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: earliest, isOverdue: false,
+          actionHint: "verify", groupMemberIds: memberIds,
+        });
       }
     }
 
@@ -3589,19 +3626,49 @@ export class DatabaseStorage implements IStorage {
     // here can't empty the whole feed.
     if (agencyIssuanceOwner === uid || firmWideScoped) {
       try {
+        // lawCases + clients joined so the issuance tasks can be GROUPED by the
+        // موكّل's exact name (mirrors the verify grouping) — one client = one
+        // issuance task covering all his cases.
         const rows = await db.select({ id: fieldTasks.id, caseId: fieldTasks.caseId,
-          title: fieldTasks.title, dueDate: fieldTasks.dueDate })
-          .from(fieldTasks).where(and(
+          dueDate: fieldTasks.dueDate, caseNumber: lawCases.caseNumber,
+          clientIndividualName: clients.individualName, clientCompanyName: clients.companyName })
+          .from(fieldTasks)
+          .leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+          .leftJoin(clients, eq(lawCases.clientId, clients.id))
+          .where(and(
             sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
             sql`${fieldTasks.title} LIKE ${"إصدار وكالة%"}`,
           ));
+        const ownerId = agencyIssuanceOwner;
+        // GROUP issuance field_tasks by EXACT client name (the block's owner is
+        // fixed, so the key is name only). Empty client name never groups (keyed by
+        // field_task id → stands alone). A group of 1 == the old single task; one
+        // "تم إصدار الوكالة" then satisfies every case in the group (group route).
+        const issuanceGroups = new Map<string, typeof rows>();
         for (const r of rows) {
-          const ownerId = agencyIssuanceOwner;
-          tasks.push({ id: `agency_issuance:${r.id}`, kind: MyTaskKind.AGENCY_ISSUANCE,
-            title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+          const clientKey = (r.clientIndividualName || r.clientCompanyName || "").trim();
+          const key = clientKey ? `c ${clientKey}` : `solo ${r.id}`;
+          const g = issuanceGroups.get(key);
+          if (g) g.push(r); else issuanceGroups.set(key, [r]);
+        }
+        for (const g of Array.from(issuanceGroups.values())) {
+          const memberIds = g.map((m) => m.id);
+          const nums = g.map((m) => m.caseNumber).filter((n): n is string => !!n);
+          const earliest = g.reduce<string | null>((a, m) => {
+            if (!m.dueDate) return a;
+            return a && a < m.dueDate ? a : m.dueDate;
+          }, null);
+          tasks.push({
+            id: `agency_issuance:${[...memberIds].sort().join("_")}`, kind: MyTaskKind.AGENCY_ISSUANCE,
+            title: nums.length > 1
+              ? `إصدار وكالة — قضايا رقم ${nums.join("، ")}`
+              : `إصدار وكالة — قضية رقم ${nums[0] ?? ""}`,
+            entityType: "field_task", entityId: g[0].id, caseId: g[0].caseId ?? null,
             ownerId, ownerScope: scopeOf(ownerId),
-            dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
-            actionHint: ownerId ? "complete" : "assign" });
+            dueDate: earliest, isOverdue: !!earliest && earliest < today,
+            actionHint: ownerId ? "complete" : "assign",
+            groupMemberIds: memberIds,
+          });
         }
       } catch (e) {
         console.error("[getMyTasks] agency issuance block failed — skipping:", e);

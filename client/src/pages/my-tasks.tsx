@@ -366,11 +366,21 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
     case MyTaskKind.AGENCY_VERIFICATION:
       // Two-option answer: يوجد (task ends) / لا يوجد (task ends + flags the case
       // for the sub-step-2 admin_support issuance). Defaults to يوجد if untouched.
-      return { method: "POST", url: `/api/hearings/${e}/agency-verify`, body: { answer: form.decision === "لا يوجد" ? "لا يوجد" : "يوجد" } };
+      // Grouped (sub-step 3): one answer applies to ALL hearings of the same موكّل
+      // under this lawyer in the window. groupMemberIds carries them (≥1; a group
+      // of 1 falls back to the single entityId).
+      return { method: "POST", url: `/api/hearings/agency-verify-group`, body: {
+        hearingIds: task.groupMemberIds ?? [e],
+        answer: form.decision === "لا يوجد" ? "لا يوجد" : "يوجد",
+      } };
     case MyTaskKind.AGENCY_ISSUANCE:
-      // Simple confirm (تم إصدار الوكالة → case activity log + complete + clear the
-      // latch). Unassigned is handled above by isUnassignedTypeTask (→ sets mapping).
-      return { method: "POST", url: `/api/field-tasks/${e}/agency-issuance` };
+      // Simple confirm (تم إصدار الوكالة → per-case activity log + complete + clear
+      // the latch). Grouped (sub-step 3): one confirm satisfies EVERY case of the
+      // same موكّل (groupMemberIds; ≥1, a group of 1 falls back to entityId).
+      // Unassigned is handled above by isUnassignedTypeTask (→ sets the mapping).
+      return { method: "POST", url: `/api/field-tasks/agency-issuance-group`, body: {
+        fieldTaskIds: task.groupMemberIds ?? [e],
+      } };
     case MyTaskKind.DELEGATION_APPROVAL:
       // اعتماد (default) → /approve; رفض → /reject with the required reason.
       return form.decision === "رفض"
