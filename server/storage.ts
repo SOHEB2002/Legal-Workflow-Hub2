@@ -3184,7 +3184,16 @@ export class DatabaseStorage implements IStorage {
 
     // ---- 6. memo_pending — assigned memo not yet filed ----
     {
-      const mActionable = sql`COALESCE(${memos.currentStage}, '') <> 'مرفوعة' AND ${memos.status} <> 'ملغاة'`;
+      // Stage-of-turn filter (mirrors case_work's LAWYER_WORK_STAGES): while a memo
+      // sits at مراجعة_داخلية or لجنة_مراجعة it is the INTERNAL REVIEWER's / COMMITTEE
+      // HEAD's turn — it must NOT surface as an action-less "memo_pending" task to
+      // the assignee/author. It already surfaces to the correct person as an
+      // ACTIONABLE review_pending task in block 7 (internalReviewerId at internal
+      // review; cases_review_head at committee). Every other non-filed stage
+      // (استلام / تحرير / الأخذ_بالملاحظات / جاهزة_للرفع) is genuinely the assignee's
+      // turn and still surfaces. COALESCE keeps null-stage legacy memos surfacing
+      // exactly as before (NULL NOT IN (…) would otherwise drop them).
+      const mActionable = sql`COALESCE(${memos.currentStage}, '') NOT IN ('مرفوعة', 'مراجعة_داخلية', 'لجنة_مراجعة') AND ${memos.status} <> 'ملغاة'`;
       const where = firmWideScoped
         ? and(mActionable, sql`${memos.assignedTo} <> ''`)
         : deptHeadScoped
