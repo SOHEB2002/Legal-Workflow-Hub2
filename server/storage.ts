@@ -3005,6 +3005,7 @@ export class DatabaseStorage implements IStorage {
     let collectionOwner = "";
     let executionOwner = "";
     let agencyIssuanceOwner = "";
+    let contractSendOwner = "";
     let dataCompletionCaseOwner = "";
     let dataCompletionConsultationOwner = "";
     let dataCompletionContractOwner = "";
@@ -3022,6 +3023,8 @@ export class DatabaseStorage implements IStorage {
         AssignableAdminSupportTaskKind.EXECUTION, taskAssignments, routingUsers);
       agencyIssuanceOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.AGENCY_ISSUANCE, taskAssignments, routingUsers);
+      contractSendOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.CONTRACT_SEND, taskAssignments, routingUsers);
       // Data-completion is per work-type — case / consultation / contract fire
       // at their data-completion STAGE; memo fires on its awaiting-completion latch.
       dataCompletionCaseOwner = resolveAdminSupportAssignee(
@@ -3672,6 +3675,31 @@ export class DatabaseStorage implements IStorage {
         }
       } catch (e) {
         console.error("[getMyTasks] agency issuance block failed — skipping:", e);
+      }
+    }
+
+    // ---- 19. Contract send (إرسال العقد) — per-type LIVE routing, mirrors
+    // consultation_closing. Surfaces contracts sitting at the جاهزة_للإرسال stage
+    // (committee-approved, awaiting send) to contractSendOwner (assignee → own
+    // task; unset → the branch_manager pool). Completing it ("تم الإرسال") advances
+    // the contract to مغلقة so it stops surfacing — no tracking flag needed.
+    // Guarded so a failure here can't empty the whole feed.
+    if (contractSendOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: contracts.id, title: contracts.title })
+          .from(contracts).where(and(
+            eq(contracts.status, "active"),
+            eq(contracts.currentStage, "جاهزة_للإرسال"),
+          ));
+        for (const r of rows) {
+          const ownerId = contractSendOwner;
+          tasks.push({ id: `contract_send:${r.id}`, kind: MyTaskKind.CONTRACT_SEND,
+            title: `إرسال العقد — ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false,
+            actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] contract send block failed — skipping:", e);
       }
     }
 

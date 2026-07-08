@@ -5687,6 +5687,47 @@ export async function registerRoutes(
     }
   });
 
+  // Contract send (إرسال العقد) completion — the admin_support person confirms
+  // "تم الإرسال" on the جاهزة_للإرسال sender task. Auto-advances the contract to
+  // مغلقة (the terminal stage — sending IS the end) via updateContractAndLog, and
+  // records "تم إرسال العقد بواسطة <name>" to the activity log (delegation
+  // actorDisplayName stamping; contracts have no caseId so all_cases delegators
+  // stamp). Gated to admin_support / branch_manager — mirrors the READY→CLOSED
+  // stage-transition rule (contract-send is mapping-routed, no per-instance
+  // assignee). Guards on status active + currentStage جاهزة_للإرسال.
+  app.post("/api/contracts/:id/mark-sent", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!["admin_support", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإرسال العقد" });
+      }
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.currentStage !== ContractStage.READY) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة جاهزة للإرسال" });
+      }
+      const actorName = actorDisplayName(req.actingContext, null, reqUser.name || reqUser.id);
+      const updated = await storage.updateContractAndLog(contract.id, {
+        status: "closed",
+        currentStage: ContractStage.CLOSED,
+        closedAt: new Date().toISOString(),
+      }, {
+        activityType: ContractActivityType.SENT,
+        description: `تم إرسال العقد بواسطة ${actorName}`,
+        metadata: { fromStage: contract.currentStage },
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إرسال العقد" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error marking contract sent:", error);
+      res.status(500).json({ error: "حدث خطأ في إرسال العقد" });
+    }
+  });
+
   // Pause / unpause / await-completion / resume / skip-completion —
   // same gate across all four (branch_manager / admin_support /
   // department_head own dept / assigned lawyer) and same payload shape

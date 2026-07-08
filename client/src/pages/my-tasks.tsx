@@ -13,7 +13,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive,
+  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -91,6 +91,7 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   data_completion_memo: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
   agency_verification: { icon: ClipboardCheck, label: "التحقق من الوكالة" },
   agency_issuance: { icon: Stamp, label: "إصدار وكالة" },
+  contract_send: { icon: Send, label: "إرسال العقد" },
   session_report_export: { icon: FileDown, label: "تصدير تقرير الجلسة" },
 };
 
@@ -222,6 +223,7 @@ function EntityLinkPicker({
 // التواصل" acknowledgement, and session_report_export confirms the export.
 const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
   [MyTaskKind.SESSION_REPORT_EXPORT]: "تأكيد التصدير",
+  [MyTaskKind.CONTRACT_SEND]: "تم الإرسال",
   [MyTaskKind.DATA_COMPLETION_CASE]: "تم الطلب من العميل",
   [MyTaskKind.DATA_COMPLETION_CONSULTATION]: "تم الطلب من العميل",
   [MyTaskKind.DATA_COMPLETION_CONTRACT]: "تم الطلب من العميل",
@@ -274,6 +276,9 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
   if (isUnassignedTypeTask(task)) return { mode: "assign", title: "إسناد نوع المهمة لموظف الدعم" };
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { mode: "confirm", title: "تأكيد تصدير تقرير الجلسة" };
+    // Assigned admin_support send task → simple confirm (تم الإرسال → contract goes
+    // to مغلقة); unassigned is handled by the isUnassignedTypeTask branch above.
+    case MyTaskKind.CONTRACT_SEND: return { mode: "confirm", title: "تأكيد إرسال العقد" };
     case MyTaskKind.DATA_COMPLETION_CASE:
     case MyTaskKind.DATA_COMPLETION_CONSULTATION:
     case MyTaskKind.DATA_COMPLETION_CONTRACT:
@@ -358,6 +363,8 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
   }
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { method: "POST", url: `/api/hearings/${e}/mark-report-exported` };
+    // "تم الإرسال" → contract auto-advances جاهزة_للإرسال → مغلقة + activity log.
+    case MyTaskKind.CONTRACT_SEND: return { method: "POST", url: `/api/contracts/${e}/mark-sent` };
     // Each data-completion work-type acks its own entity (mirrors the case route).
     case MyTaskKind.DATA_COMPLETION_CASE: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
     case MyTaskKind.DATA_COMPLETION_CONSULTATION: return { method: "POST", url: `/api/consultations/${e}/ack-data-completion` };

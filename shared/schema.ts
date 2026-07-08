@@ -2795,6 +2795,7 @@ export const ContractActivityType = {
   // edits that drive the committee form.
   REVIEWER_ASSIGNED:        "reviewer_assigned",
   PRIORITY_SET:             "priority_set",
+  SENT:                     "contract_sent",
 } as const;
 
 export type ContractActivityTypeValue =
@@ -2823,6 +2824,7 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   attachment_deleted:     "حذف مرفق",
   reviewer_assigned:      "تعيين مراجع داخلي",
   priority_set:           "تحديث الأولوية",
+  contract_sent:          "إرسال العقد",
 };
 
 export interface Contract {
@@ -5130,6 +5132,7 @@ export const MyTaskKind = {
   AGENCY_VERIFICATION: "agency_verification", // lawyer verifies agency before a near hearing (يوجد/لا يوجد)
   AGENCY_ISSUANCE: "agency_issuance", // admin_support issues the agency (إصدار وكالة) after a "لا يوجد" answer; incl. unassigned ""
   SESSION_REPORT_EXPORT: "session_report_export", // export session-report PDF (admin_support)
+  CONTRACT_SEND: "contract_send", // admin_support sends an approved contract (إرسال العقد) at جاهزة_للإرسال → مغلقة; incl. unassigned ""
 } as const;
 
 export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
@@ -5230,6 +5233,7 @@ export const AssignableAdminSupportTaskKind = {
   DATA_COMPLETION_MEMO: MyTaskKind.DATA_COMPLETION_MEMO,
   EXECUTION: MyTaskKind.EXECUTION,
   AGENCY_ISSUANCE: MyTaskKind.AGENCY_ISSUANCE,
+  CONTRACT_SEND: MyTaskKind.CONTRACT_SEND,
 } as const;
 
 export type AssignableAdminSupportTaskKindValue =
@@ -5245,6 +5249,7 @@ export const AssignableAdminSupportTaskLabels: Record<AssignableAdminSupportTask
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: "استكمال المرفقات والبيانات — المذكرات",
   [AssignableAdminSupportTaskKind.EXECUTION]: "التنفيذ",
   [AssignableAdminSupportTaskKind.AGENCY_ISSUANCE]: "إصدار الوكالة",
+  [AssignableAdminSupportTaskKind.CONTRACT_SEND]: "إرسال العقد",
 };
 
 // Single specialty class per kind, for the settings-screen hint only (NOT
@@ -5257,7 +5262,8 @@ export const AssignableAdminSupportTaskClass: Partial<Record<AssignableAdminSupp
   [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: TaskSpecialty.LITIGATION,
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE]: TaskSpecialty.LITIGATION,
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION]: TaskSpecialty.CONSULTATIONS,
-  // DATA_COMPLETION_CONTRACT omitted — contracts are outside the two-class domain.
+  // DATA_COMPLETION_CONTRACT + CONTRACT_SEND omitted — contracts are outside the
+  // two-class domain (no specialty hint on those settings rows).
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: TaskSpecialty.LITIGATION,
   [AssignableAdminSupportTaskKind.EXECUTION]: TaskSpecialty.LITIGATION,
   [AssignableAdminSupportTaskKind.AGENCY_ISSUANCE]: TaskSpecialty.LITIGATION,
