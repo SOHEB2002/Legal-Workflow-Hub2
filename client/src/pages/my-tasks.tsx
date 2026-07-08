@@ -34,9 +34,9 @@ import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
-  AssignableAdminSupportTaskKind,
+  AssignableAdminSupportTaskKind, MemoStageLabels,
   GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
-  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
+  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo, type MemoStageValue,
   type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
 } from "@shared/schema";
 
@@ -1426,8 +1426,30 @@ export default function MyTasksPage() {
         <DialogContent dir="rtl" data-testid="dialog-memo-advance">
           <DialogHeader><DialogTitle>تقدّم المذكرة</DialogTitle></DialogHeader>
           {advanceMemo && (
-            <div className="flex flex-wrap gap-2">
-              <MemoAdvancePanel memo={advanceMemo} onChanged={refreshAfterAction} />
+            <div className="space-y-3">
+              {/* Context — ALWAYS shown so the modal is never empty and the memo's
+                  stage is visible even at stages MemoAdvancePanel has no button for
+                  (internal review / committee / take-notes). */}
+              <div className="rounded-md border p-3 text-sm space-y-1" data-testid="memo-advance-context">
+                <div className="font-medium">{advanceMemo.title}</div>
+                <div>
+                  <span className="text-muted-foreground">المرحلة الحالية: </span>
+                  {MemoStageLabels[advanceMemo.currentStage as MemoStageValue] ?? advanceMemo.currentStage ?? "—"}
+                </div>
+                {advanceMemo.awaitingCompletion && (
+                  <div className="text-amber-600">بانتظار استكمال البيانات والمرفقات</div>
+                )}
+              </div>
+              {/* Linear lawyer-advance buttons (بدء التحرير / إرسال للمراجعة الداخلية /
+                  تم الرفع) — render only where they apply to the current stage. */}
+              <div className="flex flex-wrap gap-2">
+                <MemoAdvancePanel memo={advanceMemo} onChanged={refreshAfterAction} />
+              </div>
+              {/* When no advance button applies, the memo moves through its review
+                  path (not from here) — explain instead of showing an empty modal. */}
+              <p className="text-xs text-muted-foreground">
+                إجراءات المراجعة الداخلية وقرار اللجنة والأخذ بالملاحظات تتم عبر مسار مراجعة المذكرة.
+              </p>
             </div>
           )}
         </DialogContent>
