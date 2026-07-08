@@ -29,12 +29,13 @@ import { OnBehalfBadge } from "@/components/acting-for-banner";
 import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { CaseStagePanel } from "@/components/case-stage-panel";
 import { MemoAdvancePanel } from "@/components/memo-advance-panel";
+import { MemoStagesBar } from "@/components/memo-stages-bar";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
-  AssignableAdminSupportTaskKind, MemoStageLabels,
+  AssignableAdminSupportTaskKind,
   GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo, type MemoStageValue,
   type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
@@ -1460,32 +1461,34 @@ export default function MyTasksPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ===== Memo advance panel (shared with the memos page) ===== */}
+      {/* ===== Memo stage timeline + advance (MemoStagesBar shared with the memos page) ===== */}
       <Dialog open={!!advanceMemo} onOpenChange={(o) => !o && setAdvanceMemo(null)}>
-        <DialogContent dir="rtl" data-testid="dialog-memo-advance">
-          <DialogHeader><DialogTitle>تقدّم المذكرة</DialogTitle></DialogHeader>
+        <DialogContent dir="rtl" className="max-w-2xl" data-testid="dialog-memo-advance">
+          <DialogHeader><DialogTitle>مسار المذكرة</DialogTitle></DialogHeader>
           {advanceMemo && (
-            <div className="space-y-3">
-              {/* Context — ALWAYS shown so the modal is never empty and the memo's
-                  stage is visible even at stages MemoAdvancePanel has no button for
-                  (internal review / committee / take-notes). */}
-              <div className="rounded-md border p-3 text-sm space-y-1" data-testid="memo-advance-context">
-                <div className="font-medium">{advanceMemo.title}</div>
-                <div>
-                  <span className="text-muted-foreground">المرحلة الحالية: </span>
-                  {MemoStageLabels[advanceMemo.currentStage as MemoStageValue] ?? advanceMemo.currentStage ?? "—"}
+            <div className="space-y-4 min-w-0">
+              <div className="text-sm font-medium"><BidiText>{advanceMemo.title}</BidiText></div>
+              {/* The memo STAGE BAR — the same numbered-circle timeline the memos
+                  page renders and the parallel of the case "مسار القضية" bar; it is
+                  contained/scrollable via the component's own min-w-0 overflow-x-auto
+                  (the earlier layout fix). Hidden for legacy null-stage memos. */}
+              {advanceMemo.currentStage && (
+                <MemoStagesBar currentStage={advanceMemo.currentStage as MemoStageValue} />
+              )}
+              {advanceMemo.awaitingCompletion && (
+                <div className="text-sm text-amber-600" data-testid="memo-awaiting-completion">
+                  بانتظار استكمال البيانات والمرفقات
                 </div>
-                {advanceMemo.awaitingCompletion && (
-                  <div className="text-amber-600">بانتظار استكمال البيانات والمرفقات</div>
-                )}
-              </div>
-              {/* Linear lawyer-advance buttons (بدء التحرير / إرسال للمراجعة الداخلية /
-                  تم الرفع) — render only where they apply to the current stage. */}
+              )}
+              {/* The stage-transition ACTION for the current stage (بدء التحرير /
+                  إرسال للمراجعة الداخلية / تم الرفع) — shown alongside the timeline so
+                  the modal both DISPLAYS the stage and lets the assignee act, exactly
+                  like the case modal. */}
               <div className="flex flex-wrap gap-2">
                 <MemoAdvancePanel memo={advanceMemo} onChanged={refreshAfterAction} />
               </div>
-              {/* When no advance button applies, the memo moves through its review
-                  path (not from here) — explain instead of showing an empty modal. */}
+              {/* Internal-review / committee / take-notes decisions are taken by the
+                  reviewer/committee via their own review tasks, not from here. */}
               <p className="text-xs text-muted-foreground">
                 إجراءات المراجعة الداخلية وقرار اللجنة والأخذ بالملاحظات تتم عبر مسار مراجعة المذكرة.
               </p>
