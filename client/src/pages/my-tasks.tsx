@@ -90,6 +90,7 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   data_completion_contract: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
   data_completion_memo: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
   agency_verification: { icon: ClipboardCheck, label: "التحقق من الوكالة" },
+  agency_issuance: { icon: Stamp, label: "إصدار وكالة" },
   session_report_export: { icon: FileDown, label: "تصدير تقرير الجلسة" },
 };
 
@@ -279,6 +280,9 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
     case MyTaskKind.DATA_COMPLETION_MEMO:
       return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
     case MyTaskKind.AGENCY_VERIFICATION: return { mode: "agencyAnswer", title: "التحقق من الوكالة" };
+    // Assigned admin_support issuance task → simple confirm (تم إصدار الوكالة);
+    // unassigned is handled by the isUnassignedTypeTask branch above (→ "إسناد").
+    case MyTaskKind.AGENCY_ISSUANCE: return { mode: "confirm", title: "تأكيد إصدار الوكالة" };
     case MyTaskKind.DELEGATION_APPROVAL: return { mode: "delegationDecision", title: "قرار التفويض" };
     case MyTaskKind.CONTACT_FOLLOWUP: return { mode: "confirm", title: "إنهاء متابعة العميل" };
     case MyTaskKind.LEGAL_DEADLINE: return { mode: "confirm", title: "إنجاز الموعد القانوني" };
@@ -363,6 +367,10 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
       // Two-option answer: يوجد (task ends) / لا يوجد (task ends + flags the case
       // for the sub-step-2 admin_support issuance). Defaults to يوجد if untouched.
       return { method: "POST", url: `/api/hearings/${e}/agency-verify`, body: { answer: form.decision === "لا يوجد" ? "لا يوجد" : "يوجد" } };
+    case MyTaskKind.AGENCY_ISSUANCE:
+      // Simple confirm (تم إصدار الوكالة → case activity log + complete + clear the
+      // latch). Unassigned is handled above by isUnassignedTypeTask (→ sets mapping).
+      return { method: "POST", url: `/api/field-tasks/${e}/agency-issuance` };
     case MyTaskKind.DELEGATION_APPROVAL:
       // اعتماد (default) → /approve; رفض → /reject with the required reason.
       return form.decision === "رفض"

@@ -4345,6 +4345,46 @@ export async function registerRoutes(
     }
   });
 
+  // Complete an AGENCY_ISSUANCE (إصدار وكالة) task with a simple confirm. Records a
+  // case-activity-log event for traceability (mirrors how execution logs its
+  // number), marks the field_task complete, and CLEARS the case's
+  // agencyIssuanceRequested latch so a future pre-hearing "لا يوجد" can re-fire.
+  // Gated like the field-task PATCH: the assignee, OR anyone who can modify the
+  // parent case (admin_support / branch_manager / dept_head(own) / the lawyer).
+  // Delegation actorDisplayName stamping applies if acting-as.
+  app.post("/api/field-tasks/:id/agency-issuance", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (!task.caseId) return res.status(400).json({ error: "المهمة غير مرتبطة بقضية" });
+      const parentCase = await storage.getCaseById(task.caseId);
+      const canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+      if (task.assignedTo !== user.id && !canModifyParent) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const actorName = actorDisplayName(req.actingContext, task.caseId, user.name || user.id);
+      await logCaseActivityActing(req, {
+        caseId: task.caseId,
+        userId: user.id,
+        userName: user.name || user.id,
+        actionType: "agency_issued",
+        title: `تم إصدار وكالة بواسطة ${actorName}`,
+        details: `تم إصدار الوكالة للقضية`,
+      });
+      const updated = await storage.updateFieldTask(String(req.params.id), {
+        status: FieldTaskStatus.COMPLETED,
+        completionNotes: `تم إصدار الوكالة`,
+      });
+      // Clear the latch so a future pre-hearing "لا يوجد" can request a new issuance.
+      await storage.updateCase(task.caseId, { agencyIssuanceRequested: false });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error completing agency issuance:", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل إصدار الوكالة" });
+    }
+  });
+
   app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -7935,9 +7975,38 @@ export async function registerRoutes(
         agencyVerificationAckAt: new Date().toISOString(),
         agencyVerificationAnswer: answer,
       });
-      // "لا يوجد" → flag the case so sub-step 2 can generate the issuance task.
+      // "لا يوجد" → generate the admin_support "إصدار وكالة" issuance task and latch
+      // the case flag. Idempotent on the FALSE→TRUE transition: multiple hearings
+      // each answered "لا يوجد" won't stack duplicate issuance tasks (the flag is
+      // cleared on completion, so a later lapse can re-fire). Routed via the agency
+      // issuance mapping (assignee → own task; unset → the branch_manager pool).
       if (answer === "لا يوجد" && hearing.caseId) {
-        await storage.updateCase(hearing.caseId, { agencyIssuanceRequested: true });
+        const parentCase = await storage.getCaseById(hearing.caseId);
+        if (parentCase && !parentCase.agencyIssuanceRequested) {
+          // DEFENSIVE GUARD: create the task FIRST, then latch the flag. If
+          // generation throws it is logged (never swallowed) and the flag stays
+          // false so a later "لا يوجد" retries — no silent stuck state. The lawyer's
+          // answer is already saved (updateHearing above), so a generation failure
+          // never fails the answer submission itself.
+          try {
+            const allUsers = await storage.getAllUsers();
+            const assignments = await storage.getAdminSupportTaskAssignments();
+            const issuanceAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.AGENCY_ISSUANCE, assignments, allUsers);
+            const issuanceTask = await storage.createFieldTask({
+              title: `إصدار وكالة — قضية رقم ${parentCase.caseNumber}`,
+              description: `لا توجد وكالة سارية على القضية قبل الجلسة - يرجى إصدار وكالة`,
+              taskType: "متابعة_محكمة",
+              caseId: hearing.caseId,
+              assignedTo: issuanceAssignee,
+              priority: "عاجل",
+              dueDate: hearing.hearingDate || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            }, req.user!.id);
+            await notifyFieldTaskCreated(issuanceTask, req.user!);
+            await storage.updateCase(hearing.caseId, { agencyIssuanceRequested: true });
+          } catch (genErr) {
+            console.error("Error generating agency issuance task:", genErr);
+          }
+        }
       }
       res.json(updated);
     } catch (error) {

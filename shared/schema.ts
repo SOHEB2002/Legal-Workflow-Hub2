@@ -5127,7 +5127,8 @@ export const MyTaskKind = {
   DATA_COMPLETION_CONSULTATION: "data_completion_consultation", // consultation at data-completion stage (dormant until sub-step 2)
   DATA_COMPLETION_CONTRACT: "data_completion_contract",         // contract at data-completion stage (dormant until sub-step 3)
   DATA_COMPLETION_MEMO: "data_completion_memo",                 // memo awaiting completion (dormant until sub-step 3)
-  AGENCY_VERIFICATION: "agency_verification", // verify agency before a near hearing
+  AGENCY_VERIFICATION: "agency_verification", // lawyer verifies agency before a near hearing (يوجد/لا يوجد)
+  AGENCY_ISSUANCE: "agency_issuance", // admin_support issues the agency (إصدار وكالة) after a "لا يوجد" answer; incl. unassigned ""
   SESSION_REPORT_EXPORT: "session_report_export", // export session-report PDF (admin_support)
 } as const;
 
@@ -5221,6 +5222,7 @@ export const AssignableAdminSupportTaskKind = {
   DATA_COMPLETION_CONTRACT: MyTaskKind.DATA_COMPLETION_CONTRACT,
   DATA_COMPLETION_MEMO: MyTaskKind.DATA_COMPLETION_MEMO,
   EXECUTION: MyTaskKind.EXECUTION,
+  AGENCY_ISSUANCE: MyTaskKind.AGENCY_ISSUANCE,
 } as const;
 
 export type AssignableAdminSupportTaskKindValue =
@@ -5235,6 +5237,7 @@ export const AssignableAdminSupportTaskLabels: Record<AssignableAdminSupportTask
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONTRACT]: "استكمال المرفقات والبيانات — العقود",
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: "استكمال المرفقات والبيانات — المذكرات",
   [AssignableAdminSupportTaskKind.EXECUTION]: "التنفيذ",
+  [AssignableAdminSupportTaskKind.AGENCY_ISSUANCE]: "إصدار الوكالة",
 };
 
 // Single specialty class per kind, for the settings-screen hint only (NOT
@@ -5250,6 +5253,7 @@ export const AssignableAdminSupportTaskClass: Partial<Record<AssignableAdminSupp
   // DATA_COMPLETION_CONTRACT omitted — contracts are outside the two-class domain.
   [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: TaskSpecialty.LITIGATION,
   [AssignableAdminSupportTaskKind.EXECUTION]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.AGENCY_ISSUANCE]: TaskSpecialty.LITIGATION,
 };
 
 // Select type for the mapping table (declared with the table above).

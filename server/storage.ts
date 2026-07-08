@@ -3004,6 +3004,7 @@ export class DatabaseStorage implements IStorage {
     let sessionReportExportOwner = "";
     let collectionOwner = "";
     let executionOwner = "";
+    let agencyIssuanceOwner = "";
     let dataCompletionCaseOwner = "";
     let dataCompletionConsultationOwner = "";
     let dataCompletionContractOwner = "";
@@ -3019,6 +3020,8 @@ export class DatabaseStorage implements IStorage {
         AssignableAdminSupportTaskKind.COLLECTION, taskAssignments, routingUsers);
       executionOwner = resolveAdminSupportAssignee(
         AssignableAdminSupportTaskKind.EXECUTION, taskAssignments, routingUsers);
+      agencyIssuanceOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.AGENCY_ISSUANCE, taskAssignments, routingUsers);
       // Data-completion is per work-type — case / consultation / contract fire
       // at their data-completion STAGE; memo fires on its awaiting-completion latch.
       dataCompletionCaseOwner = resolveAdminSupportAssignee(
@@ -3237,7 +3240,10 @@ export class DatabaseStorage implements IStorage {
         // (Option C parity): its owner comes from the mapping, not the stored
         // assigned_to, so it must NOT be emitted here (where ownerId would read the
         // stale stored value). Skip it; every other field task is byte-unchanged.
-        if (r.title.startsWith("إعداد خطاب تحصيل")) continue;
+        // Agency-issuance (إصدار وكالة) is the same case: its owner is resolved LIVE
+        // by the dedicated block below (via agencyIssuanceOwner, not the stored
+        // assigned_to), so it must NOT be emitted here too or it would double-surface.
+        if (r.title.startsWith("إعداد خطاب تحصيل") || r.title.startsWith("إصدار وكالة")) continue;
         const isCollection = r.title.startsWith("إعداد خطاب تحصيل");
         // Manually-created general tasks (taskType "عام") get their own kind so
         // the feed labels/routes them distinctly from auto/field tasks. Auto
@@ -3572,6 +3578,33 @@ export class DatabaseStorage implements IStorage {
         }
       } catch (e) {
         console.error("[getMyTasks] execution block failed — skipping:", e);
+      }
+    }
+
+    // ---- 18. Agency issuance (إصدار وكالة) — per-type LIVE routing, mirrors
+    // execution/collection. Stored field_tasks titled "إصدار وكالة …", created
+    // when the responsible lawyer answers "لا يوجد وكالة" on the pre-hearing verify
+    // task (routes agency-verify). Owner resolved LIVE via agencyIssuanceOwner
+    // (assignee → own task; unset → branch_manager pool). Guarded so a failure
+    // here can't empty the whole feed.
+    if (agencyIssuanceOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: fieldTasks.id, caseId: fieldTasks.caseId,
+          title: fieldTasks.title, dueDate: fieldTasks.dueDate })
+          .from(fieldTasks).where(and(
+            sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
+            sql`${fieldTasks.title} LIKE ${"إصدار وكالة%"}`,
+          ));
+        for (const r of rows) {
+          const ownerId = agencyIssuanceOwner;
+          tasks.push({ id: `agency_issuance:${r.id}`, kind: MyTaskKind.AGENCY_ISSUANCE,
+            title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+            ownerId, ownerScope: scopeOf(ownerId),
+            dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
+            actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] agency issuance block failed — skipping:", e);
       }
     }
 
