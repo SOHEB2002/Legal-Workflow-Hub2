@@ -3067,6 +3067,17 @@ export class DatabaseStorage implements IStorage {
 
     // ---- 2. case_unassigned — unassigned case in dept (dept_head assigns) ----
     if (teamScoped) {
+      // Resolve each department's head so an unassigned case files UNDER that
+      // head (ownerScope via scopeOf): for a dept_head viewer the head is
+      // himself → "self" (byte-identical to before); for the firm-wide manager
+      // it's the case-dept's head → "team". A department with NO active head
+      // emits NO task — it stays dormant and reappears on that head's own
+      // getMyTasks run once a head is assigned (single-head enforced in product).
+      const heads = await db.select({ id: users.id, departmentId: users.departmentId })
+        .from(users)
+        .where(and(eq(users.role, "department_head"), eq(users.isActive, true)));
+      const deptHeadByDept = new Map<string, string>();
+      for (const h of heads) if (h.departmentId) deptHeadByDept.set(h.departmentId, h.id);
       const unassignedWhere = firmWideScoped
         ? and(
             sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
@@ -3077,14 +3088,16 @@ export class DatabaseStorage implements IStorage {
             sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
             sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
           );
-      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber, departmentId: lawCases.departmentId })
         .from(lawCases).where(unassignedWhere);
       for (const r of rows) {
+        const deptHeadId = r.departmentId ? deptHeadByDept.get(r.departmentId) : undefined;
+        if (!deptHeadId) continue; // no active head → dormant; surfaces when a head is assigned
         tasks.push({
           id: `case_unassigned:${r.id}`, kind: MyTaskKind.CASE_UNASSIGNED,
           title: `قضية غير مُسندة بحاجة لإسناد — ${r.caseNumber}`,
           entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "assign",
+          ownerId: deptHeadId, ownerScope: scopeOf(deptHeadId), dueDate: null, isOverdue: false, actionHint: "assign",
         });
       }
     }
