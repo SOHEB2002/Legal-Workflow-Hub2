@@ -7748,19 +7748,6 @@ export async function registerRoutes(
               });
             }
           }
-
-          // Always create client contact task for judgments
-          const contactTask = await storage.createFieldTask({
-            title: `إبلاغ العميل بنتيجة الحكم — قضية رقم ${existingCase.caseNumber}`,
-            description: `صدر حكم ${judgmentType || ""} (${isFinal ? "نهائي" : "ابتدائي"}) - يرجى إبلاغ العميل بالتفاصيل`,
-            taskType: "زيارة_عميل",
-            caseId: effectiveCaseId,
-            assignedTo: lawyerAssignee,
-            priority: "عاجل",
-            dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          }, reqUser.id);
-          await notifyFieldTaskCreated(contactTask, reqUser); // D4
-          createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
         }
 
         // ==================== PATH C: STRUCK OFF (شطب) ====================
