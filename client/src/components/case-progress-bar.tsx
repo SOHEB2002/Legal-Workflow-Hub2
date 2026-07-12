@@ -403,7 +403,7 @@ export function CaseProgressBar({
   };
 
   return (
-    <div className="w-full space-y-4" dir="rtl">
+    <div className="w-full min-w-0 space-y-4" dir="rtl">
       {normalizedStage === "الأخذ_بالملاحظات" && reviewNotes && reviewNotes.trim() && (
         <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 mb-4" dir="rtl">
           <div className="flex items-center gap-2 mb-2">
@@ -419,7 +419,7 @@ export function CaseProgressBar({
           <p className="text-amber-700 text-sm">{reviewNotes}</p>
         </div>
       )}
-      <div className="flex items-center justify-between gap-2 overflow-x-auto pb-2">
+      <div className="flex items-center justify-between gap-2 overflow-x-auto min-w-0 pb-2">
         {stagesOrder.map((stage, index) => {
           const status = getStageStatus(index);
           return (

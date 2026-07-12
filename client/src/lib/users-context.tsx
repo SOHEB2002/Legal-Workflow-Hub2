@@ -5,29 +5,19 @@ import {
   ExtendedUser,
   UserStatus,
   UserStatusValue,
-  UserVacation,
-  VacationStatus,
-  VacationStatusValue,
-  DelegationType,
   Team,
-  UserCustomPermission,
   UserActivityLog,
   UserSession,
   UserStats,
   ActivityLogEntityTypeValue,
   ActivityActionValue,
-  PermissionType,
-  RolePermissions,
-  UserRoleType,
 } from "@shared/schema";
 
 const generateId = () => `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
 interface UsersContextType {
   extendedUsers: ExtendedUser[];
-  vacations: UserVacation[];
   teams: Team[];
-  customPermissions: UserCustomPermission[];
   activityLogs: UserActivityLog[];
   sessions: UserSession[];
   
@@ -39,14 +29,6 @@ interface UsersContextType {
   getUsersByDepartment: (departmentId: string) => ExtendedUser[];
   getUsersByTeam: (teamId: string) => ExtendedUser[];
   
-  scheduleVacation: (userId: string, vacationData: Partial<UserVacation>) => UserVacation;
-  cancelVacation: (vacationId: string) => void;
-  getActiveVacations: () => UserVacation[];
-  getUpcomingVacations: () => UserVacation[];
-  getUserVacations: (userId: string) => UserVacation[];
-  checkVacationConflicts: (userId: string, startDate: string, endDate: string) => UserVacation | null;
-  autoReassignOnVacation: (userId: string) => void;
-
   createTeam: (teamData: Partial<Team>) => Team;
   updateTeam: (id: string, teamData: Partial<Team>) => void;
   deleteTeam: (id: string) => void;
@@ -55,10 +37,6 @@ interface UsersContextType {
   changeTeamLead: (teamId: string, newLeaderId: string) => void;
   getTeamWorkload: (teamId: string) => { totalCases: number; totalConsultations: number; avgWorkload: number };
   getTeamById: (id: string) => Team | undefined;
-  
-  grantCustomPermission: (userId: string, permissions: string[], reason: string, expiresAt: string | null) => void;
-  revokeCustomPermission: (userId: string) => void;
-  getEffectivePermissions: (userId: string) => PermissionType[];
   
   logActivity: (userId: string, action: ActivityActionValue, entityType: ActivityLogEntityTypeValue, entityId: string | null, details: Record<string, unknown>) => void;
   getUserActivityLog: (userId: string, filters?: { action?: string; entityType?: string; startDate?: string; endDate?: string }) => UserActivityLog[];
@@ -69,8 +47,6 @@ interface UsersContextType {
   getUserStats: (userId: string) => UserStats;
   refreshUserStats: (userId: string) => void;
   
-  isUserOnVacation: (userId: string) => boolean;
-  getAvailableUsersForAssignment: (departmentId?: string) => ExtendedUser[];
 }
 
 const defaultStats: UserStats = {
@@ -109,18 +85,8 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     });
   }, [authUsers, localExtensions]);
   
-  const [vacations, setVacations] = useState<UserVacation[]>(() => {
-    const saved = localStorage.getItem("user_vacations");
-    return saved ? JSON.parse(saved) : [];
-  });
-  
   const [teams, setTeams] = useState<Team[]>(() => {
     const saved = localStorage.getItem("user_teams");
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  const [customPermissions, setCustomPermissions] = useState<UserCustomPermission[]>(() => {
-    const saved = localStorage.getItem("user_custom_permissions");
     return saved ? JSON.parse(saved) : [];
   });
   
@@ -139,16 +105,8 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   }, [localExtensions]);
   
   useEffect(() => {
-    localStorage.setItem("user_vacations", JSON.stringify(vacations));
-  }, [vacations]);
-  
-  useEffect(() => {
     localStorage.setItem("user_teams", JSON.stringify(teams));
   }, [teams]);
-  
-  useEffect(() => {
-    localStorage.setItem("user_custom_permissions", JSON.stringify(customPermissions));
-  }, [customPermissions]);
   
   useEffect(() => {
     localStorage.setItem("user_activity_logs", JSON.stringify(activityLogs));
@@ -264,58 +222,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     return extendedUsers.filter(u => u.teamId === teamId);
   }, [extendedUsers]);
 
-  const scheduleVacation = useCallback((userId: string, vacationData: Partial<UserVacation>): UserVacation => {
-    const newVacation: UserVacation = {
-      id: generateId(),
-      userId,
-      startDate: vacationData.startDate || "",
-      endDate: vacationData.endDate || "",
-      reason: vacationData.reason || "",
-      delegateTo: vacationData.delegateTo || null,
-      delegationType: vacationData.delegationType || DelegationType.FULL,
-      autoReassign: vacationData.autoReassign ?? false,
-      status: VacationStatus.SCHEDULED,
-      createdAt: new Date().toISOString(),
-    };
-    setVacations(prev => [...prev, newVacation]);
-    return newVacation;
-  }, []);
-
-  const cancelVacation = useCallback((vacationId: string) => {
-    setVacations(prev => prev.map(v => 
-      v.id === vacationId ? { ...v, status: VacationStatus.CANCELLED as VacationStatusValue } : v
-    ));
-  }, []);
-
-  const getActiveVacations = useCallback((): UserVacation[] => {
-    return vacations.filter(v => v.status === VacationStatus.ACTIVE);
-  }, [vacations]);
-
-  const getUpcomingVacations = useCallback((): UserVacation[] => {
-    const now = new Date().toISOString();
-    return vacations.filter(v => v.status === VacationStatus.SCHEDULED && v.startDate > now);
-  }, [vacations]);
-
-  const getUserVacations = useCallback((userId: string): UserVacation[] => {
-    return vacations.filter(v => v.userId === userId);
-  }, [vacations]);
-
-  const checkVacationConflicts = useCallback((userId: string, startDate: string, endDate: string): UserVacation | null => {
-    return vacations.find(v => 
-      v.userId === userId && 
-      (v.status === VacationStatus.SCHEDULED || v.status === VacationStatus.ACTIVE) &&
-      (
-        (startDate >= v.startDate && startDate <= v.endDate) ||
-        (endDate >= v.startDate && endDate <= v.endDate) ||
-        (startDate <= v.startDate && endDate >= v.endDate)
-      )
-    ) || null;
-  }, [vacations]);
-
-  const autoReassignOnVacation = useCallback((userId: string) => {
-    // Auto reassign cases for user on vacation
-  }, []);
-
   const createTeam = useCallback((teamData: Partial<Team>): Team => {
     const newTeam: Team = {
       id: generateId(),
@@ -387,51 +293,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
   const getTeamById = useCallback((id: string): Team | undefined => {
     return teams.find(t => t.id === id);
   }, [teams]);
-
-  const grantCustomPermission = useCallback((
-    userId: string, 
-    permissions: string[], 
-    reason: string, 
-    expiresAt: string | null
-  ) => {
-    const existing = customPermissions.find(p => p.userId === userId);
-    if (existing) {
-      setCustomPermissions(prev => prev.map(p => 
-        p.userId === userId ? { ...p, additionalPermissions: permissions, reason, expiresAt } : p
-      ));
-    } else {
-      const newPermission: UserCustomPermission = {
-        id: generateId(),
-        userId,
-        additionalPermissions: permissions,
-        restrictedPermissions: [],
-        reason,
-        grantedBy: "",
-        expiresAt,
-        createdAt: new Date().toISOString(),
-      };
-      setCustomPermissions(prev => [...prev, newPermission]);
-    }
-  }, [customPermissions]);
-
-  const revokeCustomPermission = useCallback((userId: string) => {
-    setCustomPermissions(prev => prev.filter(p => p.userId !== userId));
-  }, []);
-
-  const getEffectivePermissions = useCallback((userId: string): PermissionType[] => {
-    const user = extendedUsers.find(u => u.id === userId);
-    if (!user) return [];
-    
-    const rolePermissions = RolePermissions[user.role as UserRoleType] || [];
-    const custom = customPermissions.find(p => p.userId === userId);
-    
-    if (!custom) return rolePermissions;
-    
-    const effective = new Set([...rolePermissions, ...custom.additionalPermissions]);
-    custom.restrictedPermissions.forEach(p => effective.delete(p as PermissionType));
-    
-    return Array.from(effective) as PermissionType[];
-  }, [extendedUsers, customPermissions]);
 
   const logActivity = useCallback((
     userId: string, 
@@ -505,35 +366,9 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     // Refresh stats placeholder
   }, []);
 
-  const isUserOnVacation = useCallback((userId: string): boolean => {
-    const now = new Date().toISOString();
-    return vacations.some(v => 
-      v.userId === userId && 
-      v.status === VacationStatus.ACTIVE &&
-      v.startDate <= now && 
-      v.endDate >= now
-    );
-  }, [vacations]);
-
-  const getAvailableUsersForAssignment = useCallback((departmentId?: string): ExtendedUser[] => {
-    let available = extendedUsers.filter(u => 
-      u.status === UserStatus.ACTIVE && 
-      u.isActive && 
-      !isUserOnVacation(u.id)
-    );
-    
-    if (departmentId) {
-      available = available.filter(u => u.departmentId === departmentId);
-    }
-    
-    return available;
-  }, [extendedUsers, isUserOnVacation]);
-
   const value: UsersContextType = {
     extendedUsers,
-    vacations,
     teams,
-    customPermissions,
     activityLogs,
     sessions,
     addUser,
@@ -543,13 +378,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     getUserById,
     getUsersByDepartment,
     getUsersByTeam,
-    scheduleVacation,
-    cancelVacation,
-    getActiveVacations,
-    getUpcomingVacations,
-    getUserVacations,
-    checkVacationConflicts,
-    autoReassignOnVacation,
     createTeam,
     updateTeam,
     deleteTeam,
@@ -558,9 +386,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     changeTeamLead,
     getTeamWorkload,
     getTeamById,
-    grantCustomPermission,
-    revokeCustomPermission,
-    getEffectivePermissions,
     logActivity,
     getUserActivityLog,
     getRecentActivities,
@@ -568,8 +393,6 @@ export function UsersProvider({ children }: { children: ReactNode }) {
     getLoginHistory,
     getUserStats,
     refreshUserStats,
-    isUserOnVacation,
-    getAvailableUsersForAssignment,
   };
 
   return (

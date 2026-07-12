@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,11 +12,16 @@ import {
 } from "@/components/ui/dialog";
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
-  UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Pin, Users, Plus,
+  UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
+  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send, Eye,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
+import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useCases } from "@/lib/cases-context";
+import { useConsultations } from "@/lib/consultations-context";
+import { useContracts } from "@/lib/contracts-context";
+import { useClients } from "@/lib/clients-context";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
@@ -24,11 +29,16 @@ import { OnBehalfBadge } from "@/components/acting-for-banner";
 import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { CaseStagePanel } from "@/components/case-stage-panel";
 import { MemoAdvancePanel } from "@/components/memo-advance-panel";
+import { MemoStagesBar } from "@/components/memo-stages-bar";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
-  MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, InternalReviewDecision,
-  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo,
+  MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
+  AssignableAdminSupportTaskKind,
+  GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
+  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo, type MemoStageValue,
+  type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
 } from "@shared/schema";
 
 // hearing_attend / hearing_unrecorded open the SHARED hearing-result dialog
@@ -36,6 +46,24 @@ import {
 const HEARING_RESULT_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED,
 ]);
+
+// The general (عام) task kinds — every lifecycle state of a manually-created
+// task. Their requester + free-text details live on the FULL field task (via
+// getTaskById), not the feed item, so we surface them on the card + in the modal.
+const GENERAL_KINDS = new Set<MyTaskKindValue>([
+  MyTaskKind.GENERAL_TASK, MyTaskKind.GENERAL_TASK_REVIEW, MyTaskKind.GENERAL_TASK_DISTRIBUTE,
+  MyTaskKind.GENERAL_TASK_APPROVE, MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION,
+]);
+
+// The assignable admin_support task types (collection / execution /
+// consultation_closing / session_report_export / the 4 data_completion work-types).
+// When one is UNASSIGNED (ownerId="") it only ever
+// surfaces to the branch_manager's pool, and the manager's "إسناد" SETS THE TYPE
+// OWNER via the mapping (uniform sub-step-4 path) — not a per-instance assign.
+const ASSIGNABLE_TYPE_KINDS = new Set<string>(Object.values(AssignableAdminSupportTaskKind));
+function isUnassignedTypeTask(task: MyTaskItem): boolean {
+  return !task.ownerId && ASSIGNABLE_TYPE_KINDS.has(task.kind);
+}
 
 // case_work + case review_pending open the SHARED CaseStagePanel (the same
 // case-progress-bar + workflow callbacks the cases page uses). memo/contract/
@@ -55,13 +83,24 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   memo_pending: { icon: FileText, label: "مذكرة" },
   review_pending: { icon: ClipboardCheck, label: "مراجعة" },
   collection: { icon: FileSignature, label: "خطاب تحصيل" },
+  execution: { icon: Gavel, label: "طلب تنفيذ" },
   legal_deadline: { icon: CalendarClock, label: "موعد قانوني" },
   field_task: { icon: ClipboardList, label: "مهمة ميدانية" },
+  general_task: { icon: ListChecks, label: "مهمة عامة" },
+  general_task_review: { icon: ClipboardCheck, label: "مراجعة نتيجة مهمة" },
+  general_task_distribute: { icon: UserPlus, label: "إسناد مهمة" },
+  general_task_awaiting_distribution: { icon: Clock, label: "بانتظار إسناد القسم" },
+  general_task_approve: { icon: Stamp, label: "اعتماد نتيجة مهمة" },
   contact_followup: { icon: Phone, label: "متابعة عميل" },
   delegation_approval: { icon: Stamp, label: "اعتماد تفويض" },
   consultation_closing: { icon: CheckSquare, label: "إغلاق استشارة" },
-  data_completion: { icon: ClipboardList, label: "استكمال بيانات" },
+  data_completion_case: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
+  data_completion_consultation: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
+  data_completion_contract: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
+  data_completion_memo: { icon: ClipboardList, label: "استكمال المرفقات والبيانات" },
   agency_verification: { icon: ClipboardCheck, label: "التحقق من الوكالة" },
+  agency_issuance: { icon: Stamp, label: "إصدار وكالة" },
+  contract_send: { icon: Send, label: "إرسال العقد" },
   session_report_export: { icon: FileDown, label: "تصدير تقرير الجلسة" },
 };
 
@@ -72,7 +111,143 @@ const ACTION_LABEL: Record<MyTaskActionHint, string> = {
   follow_up: "متابعة", verify: "تحقق", close: "إغلاق",
 };
 
-// Pinned to the top: hearings (+ their actions) and case-assignment tasks.
+// ----- General-task optional entity link -----
+// A manually-created general (عام) task may optionally be linked to ONE of a
+// case / consultation / contract / client (or none = free-standing). The picker
+// reuses the existing entity context lists (no new fetchers) and writes the id
+// into the matching field (caseId / consultationId / contractId / clientId).
+type LinkType = "none" | "case" | "consultation" | "contract" | "client";
+const LINK_TYPE_LABELS: Record<LinkType, string> = {
+  none: "بدون ربط", case: "قضية", consultation: "استشارة", contract: "عقد", client: "عميل",
+};
+
+function EntityLinkPicker({
+  linkType, linkId, onChange,
+}: {
+  linkType: LinkType;
+  linkId: string;
+  onChange: (linkType: LinkType, linkId: string) => void;
+}) {
+  const { cases } = useCases();
+  const { consultations } = useConsultations();
+  const { contracts } = useContracts();
+  const { clients, getClientName } = useClients();
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  // Candidate {id,label,sublabel} list for the active link type, drawn from the
+  // already-loaded context lists (search by number/name + the secondary field).
+  const options: { id: string; label: string; sublabel: string }[] =
+    linkType === "case"
+      ? cases.map((c) => ({ id: c.id, label: c.caseNumber, sublabel: getClientName(c.clientId) }))
+      : linkType === "consultation"
+      ? consultations.map((c) => ({ id: c.id, label: c.consultationNumber, sublabel: getClientName(c.clientId) }))
+      : linkType === "contract"
+      ? contracts.map((c) => ({ id: c.id, label: c.contractNumber, sublabel: c.title }))
+      : linkType === "client"
+      ? clients.map((c) => ({ id: c.id, label: getClientName(c.id), sublabel: c.phone || "" }))
+      : [];
+
+  const q = search.trim().toLowerCase();
+  const filtered = (q
+    ? options.filter((o) => o.label.toLowerCase().includes(q) || o.sublabel.toLowerCase().includes(q))
+    : options
+  ).slice(0, 50);
+  const selectedLabel = linkId ? options.find((o) => o.id === linkId)?.label ?? "" : "";
+
+  return (
+    <div className="space-y-2">
+      <Label>ربط بكيان (اختياري)</Label>
+      <div className="grid grid-cols-2 gap-3">
+        <Select
+          value={linkType}
+          onValueChange={(v) => { onChange(v as LinkType, ""); setSearch(""); }}
+        >
+          <SelectTrigger data-testid="select-link-type"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {(Object.keys(LINK_TYPE_LABELS) as LinkType[]).map((t) => (
+              <SelectItem key={t} value={t}>{LINK_TYPE_LABELS[t]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {linkType !== "none" && (
+          <div ref={wrapperRef} className="relative">
+            <div className="relative">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              <Input
+                data-testid="input-link-search"
+                value={open || !selectedLabel ? search : selectedLabel}
+                onChange={(e) => { setSearch(e.target.value); setOpen(true); if (linkId) onChange(linkType, ""); }}
+                onFocus={() => setOpen(true)}
+                placeholder={`ابحث عن ${LINK_TYPE_LABELS[linkType]}…`}
+                className="pr-9 pl-8"
+              />
+              {linkId && (
+                <button
+                  type="button"
+                  onClick={() => { onChange(linkType, ""); setSearch(""); }}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  data-testid="button-clear-link"
+                ><X className="w-4 h-4" /></button>
+              )}
+            </div>
+            {open && (
+              <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-md max-h-[200px] overflow-y-auto">
+                {filtered.length > 0 ? filtered.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    data-testid={`option-link-${o.id}`}
+                    className="w-full text-right px-3 py-2 text-sm hover-elevate cursor-pointer flex items-center justify-between gap-2"
+                    onClick={() => { onChange(linkType, o.id); setSearch(""); setOpen(false); }}
+                  >
+                    <span>{o.label}</span>
+                    {o.sublabel && <span className="text-muted-foreground text-xs">{o.sublabel}</span>}
+                  </button>
+                )) : (
+                  <div className="px-3 py-2 text-sm text-muted-foreground text-center">لا توجد نتائج</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Per-kind button-label override (takes precedence over ACTION_LABEL[actionHint]).
+// Used where a kind needs a more specific verb than its generic hint and that
+// hint is shared by other kinds — e.g. data_completion uses the "complete" hint
+// (shared with field_task/collection/legal_deadline) but is really a "تم
+// التواصل" acknowledgement, and session_report_export confirms the export.
+const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
+  [MyTaskKind.SESSION_REPORT_EXPORT]: "تأكيد التصدير",
+  [MyTaskKind.CONTRACT_SEND]: "تم الإرسال",
+  [MyTaskKind.DATA_COMPLETION_CASE]: "تم الطلب من العميل",
+  [MyTaskKind.DATA_COMPLETION_CONSULTATION]: "تم الطلب من العميل",
+  [MyTaskKind.DATA_COMPLETION_CONTRACT]: "تم الطلب من العميل",
+  [MyTaskKind.DATA_COMPLETION_MEMO]: "تم الطلب من العميل",
+  // Requester's informational view of a routed task awaiting distribution — no
+  // action for them; the (disabled) button just restates the state.
+  [MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION]: "بانتظار الإسناد",
+  // Dept-routed task awaiting the head's assignment — the verb is "إسناد",
+  // more specific than the generic "assign" hint it shares.
+  [MyTaskKind.GENERAL_TASK_DISTRIBUTE]: "إسناد",
+};
+
+// Pinned to the top under the "المستعجلة" (urgent) heading: hearings (+ their
+// actions: report/agency) and unassigned case-assignment tasks. The internal
+// "pinned" naming is the pin-to-top mechanism; the user-facing label is urgent.
 const PINNED_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED, MyTaskKind.HEARING_REPORT,
   MyTaskKind.AGENCY_VERIFICATION, MyTaskKind.CASE_UNASSIGNED,
@@ -100,18 +275,59 @@ function pinAndSort(tasks: MyTaskItem[]): MyTaskItem[] {
 // are enforced server-side — we never duplicate that here). actionModeFor
 // returns the modal shape, or null for kinds PART 2 doesn't wire yet (those keep
 // a disabled placeholder; see the report's FLAGS).
-type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report";
+type ActionMode = "confirm" | "complete" | "decision" | "assign" | "reason" | "report" | "review" | "distribute" | "approve" | "delegationDecision" | "executionRequest" | "agencyAnswer";
 
 function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | null {
+  // Unassigned admin_support task (only ever surfaced to the branch_manager's
+  // pool) → the action is "إسناد" which SETS THE TYPE OWNER (uniform across all 3
+  // assignable kinds), not a per-instance assignment. Assigned ones fall through
+  // to their normal do-the-work action below.
+  if (isUnassignedTypeTask(task)) return { mode: "assign", title: "إسناد نوع المهمة لموظف الدعم" };
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { mode: "confirm", title: "تأكيد تصدير تقرير الجلسة" };
-    case MyTaskKind.DATA_COMPLETION: return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
-    case MyTaskKind.AGENCY_VERIFICATION: return { mode: "confirm", title: "تأكيد التحقق من الوكالة" };
-    case MyTaskKind.DELEGATION_APPROVAL: return { mode: "confirm", title: "اعتماد التفويض" };
+    // Assigned admin_support send task → simple confirm (تم الإرسال → contract goes
+    // to مغلقة); unassigned is handled by the isUnassignedTypeTask branch above.
+    case MyTaskKind.CONTRACT_SEND: return { mode: "confirm", title: "تأكيد إرسال العقد" };
+    case MyTaskKind.DATA_COMPLETION_CASE:
+    case MyTaskKind.DATA_COMPLETION_CONSULTATION:
+    case MyTaskKind.DATA_COMPLETION_CONTRACT:
+    case MyTaskKind.DATA_COMPLETION_MEMO:
+      return { mode: "confirm", title: "تأكيد التواصل لاستكمال البيانات" };
+    case MyTaskKind.AGENCY_VERIFICATION: return { mode: "agencyAnswer", title: "التحقق من الوكالة" };
+    // Assigned admin_support issuance task → simple confirm (تم إصدار الوكالة);
+    // unassigned is handled by the isUnassignedTypeTask branch above (→ "إسناد").
+    case MyTaskKind.AGENCY_ISSUANCE: return { mode: "confirm", title: "تأكيد إصدار الوكالة" };
+    case MyTaskKind.DELEGATION_APPROVAL: return { mode: "delegationDecision", title: "قرار التفويض" };
     case MyTaskKind.CONTACT_FOLLOWUP: return { mode: "confirm", title: "إنهاء متابعة العميل" };
     case MyTaskKind.LEGAL_DEADLINE: return { mode: "confirm", title: "إنجاز الموعد القانوني" };
     case MyTaskKind.FIELD_TASK:
-    case MyTaskKind.COLLECTION: return { mode: "complete", title: "إكمال المهمة" };
+    case MyTaskKind.COLLECTION:
+    // General (عام) tasks share the basic complete/assign action for now; the
+    // complete-with-result → return-to-requester lifecycle lands in sub-step 3.
+    case MyTaskKind.GENERAL_TASK:
+      // Unassigned pool item (server sends actionHint:"assign") → assign it;
+      // an assigned task → complete it (write the result note on completion).
+      return task.ownerId
+        ? { mode: "complete", title: "إكمال المهمة" }
+        : { mode: "assign", title: "إسناد المهمة لموظف" };
+    case MyTaskKind.EXECUTION:
+      // Assigned → record رقم طلب التنفيذ (input modal); unassigned is handled by
+      // the isUnassignedTypeTask branch above (→ "إسناد" sets the mapping).
+      return { mode: "executionRequest", title: "رفع طلب تنفيذ" };
+    case MyTaskKind.GENERAL_TASK_REVIEW:
+      // The original requester reviews the returned result: تم الاطلاع (close) or
+      // ملاحظة (send back to the worker). The modal also shows the worker's result.
+      return { mode: "review", title: "مراجعة نتيجة المهمة" };
+    case MyTaskKind.GENERAL_TASK_DISTRIBUTE:
+      // The dept_head (or a delegate / branch_manager) hands a dept-routed task
+      // sitting in بانتظار_التوزيع to a member of the routed department (or
+      // himself) — sub-step 6. The member then does the work as a normal task.
+      return { mode: "distribute", title: "إسناد المهمة" };
+    case MyTaskKind.GENERAL_TASK_APPROVE:
+      // The dept_head (or delegate / branch_manager) approves or returns the
+      // member's result on a بانتظار_الاعتماد task — sub-step 8. Approve → on to
+      // the requester; ملاحظة → back to the member. Shows the result + thread.
+      return { mode: "approve", title: "اعتماد نتيجة المهمة" };
     case MyTaskKind.CONSULTATION_CLOSING: return { mode: "reason", title: "إغلاق الاستشارة" };
     case MyTaskKind.HEARING_REPORT: return { mode: "report", title: "تقرير الجلسة" };
     case MyTaskKind.CASE_UNASSIGNED: return { mode: "assign", title: "إسناد القضية لمحامٍ" };
@@ -130,31 +346,97 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
 interface ActionForm {
   notes: string; proofDescription: string; proofFileLink: string;
   reason: string; decision: string;
-  assigneeId: string;
+  // case_unassigned can route to a specific lawyer OR a whole department
+  // (item 7); field-task assign uses assigneeId only.
+  assigneeId: string; assignTarget: "lawyer" | "department"; assignDeptId: string;
   hearingReport: string; recommendations: string; nextSteps: string; contactCompleted: string;
+  executionRequestNumber: string;
 }
 const EMPTY_FORM: ActionForm = {
   notes: "", proofDescription: "", proofFileLink: "",
   reason: "", decision: InternalReviewDecision.PASSED,
-  assigneeId: "",
+  assigneeId: "", assignTarget: "lawyer", assignDeptId: "",
   hearingReport: "", recommendations: "", nextSteps: "", contactCompleted: "no",
+  executionRequestNumber: "",
 };
 
 // Build the (method, url, body) for a task action. Reuses existing endpoints.
 function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: string; url: string; body?: unknown } {
   const e = task.entityId;
+  // Unassigned admin_support task → "إسناد" SETS THE TYPE MAPPING: the chosen
+  // admin_support becomes this task type's owner going forward (uniform across all
+  // 3 assignable kinds; the feed re-resolves live so the task leaves the pool).
+  // task.kind is the task_type key; the server gates this (canManageUsers).
+  if (isUnassignedTypeTask(task)) {
+    return { method: "PUT", url: `/api/admin-support-task-assignments/${task.kind}`, body: { assigneeUserId: form.assigneeId } };
+  }
   switch (task.kind) {
     case MyTaskKind.SESSION_REPORT_EXPORT: return { method: "POST", url: `/api/hearings/${e}/mark-report-exported` };
-    case MyTaskKind.DATA_COMPLETION: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
-    case MyTaskKind.AGENCY_VERIFICATION: return { method: "POST", url: `/api/hearings/${e}/ack-agency-verification` };
-    case MyTaskKind.DELEGATION_APPROVAL: return { method: "POST", url: `/api/delegations/${e}/approve` };
+    // "تم الإرسال" → contract auto-advances جاهزة_للإرسال → مغلقة + activity log.
+    case MyTaskKind.CONTRACT_SEND: return { method: "POST", url: `/api/contracts/${e}/mark-sent` };
+    // Each data-completion work-type acks its own entity (mirrors the case route).
+    case MyTaskKind.DATA_COMPLETION_CASE: return { method: "POST", url: `/api/cases/${e}/ack-data-completion` };
+    case MyTaskKind.DATA_COMPLETION_CONSULTATION: return { method: "POST", url: `/api/consultations/${e}/ack-data-completion` };
+    case MyTaskKind.DATA_COMPLETION_CONTRACT: return { method: "POST", url: `/api/contracts/${e}/ack-data-completion` };
+    case MyTaskKind.DATA_COMPLETION_MEMO: return { method: "POST", url: `/api/memos/${e}/ack-data-completion` };
+    case MyTaskKind.AGENCY_VERIFICATION:
+      // Two-option answer: يوجد (task ends) / لا يوجد (task ends + flags the case
+      // for the sub-step-2 admin_support issuance). Defaults to يوجد if untouched.
+      // Grouped (sub-step 3): one answer applies to ALL hearings of the same موكّل
+      // under this lawyer in the window. groupMemberIds carries them (≥1; a group
+      // of 1 falls back to the single entityId).
+      return { method: "POST", url: `/api/hearings/agency-verify-group`, body: {
+        hearingIds: task.groupMemberIds ?? [e],
+        answer: form.decision === "لا يوجد" ? "لا يوجد" : "يوجد",
+      } };
+    case MyTaskKind.AGENCY_ISSUANCE:
+      // Simple confirm (تم إصدار الوكالة → per-case activity log + complete + clear
+      // the latch). Grouped (sub-step 3): one confirm satisfies EVERY case of the
+      // same موكّل (groupMemberIds; ≥1, a group of 1 falls back to entityId).
+      // Unassigned is handled above by isUnassignedTypeTask (→ sets the mapping).
+      return { method: "POST", url: `/api/field-tasks/agency-issuance-group`, body: {
+        fieldTaskIds: task.groupMemberIds ?? [e],
+      } };
+    case MyTaskKind.DELEGATION_APPROVAL:
+      // اعتماد (default) → /approve; رفض → /reject with the required reason.
+      return form.decision === "رفض"
+        ? { method: "POST", url: `/api/delegations/${e}/reject`, body: { reason: form.notes } }
+        : { method: "POST", url: `/api/delegations/${e}/approve` };
     case MyTaskKind.CONTACT_FOLLOWUP: return { method: "PATCH", url: `/api/contact-logs/${e}`, body: { followUpCompleted: true } };
     case MyTaskKind.LEGAL_DEADLINE: return { method: "PATCH", url: `/api/legal-deadlines/${e}`, body: { status: "مكتمل" } };
     case MyTaskKind.FIELD_TASK:
     case MyTaskKind.COLLECTION:
-      return { method: "PATCH", url: `/api/field-tasks/${e}`, body: {
-        status: FieldTaskStatus.COMPLETED, completionNotes: form.notes,
-        proofDescription: form.proofDescription, proofFileLink: form.proofFileLink,
+    case MyTaskKind.GENERAL_TASK:
+      // Unassigned pool → assign (set assignedTo); otherwise complete the task.
+      return task.ownerId
+        ? { method: "PATCH", url: `/api/field-tasks/${e}`, body: {
+            status: FieldTaskStatus.COMPLETED, completionNotes: form.notes,
+            proofDescription: form.proofDescription, proofFileLink: form.proofFileLink,
+          } }
+        : { method: "PATCH", url: `/api/field-tasks/${e}`, body: { assignedTo: form.assigneeId } };
+    case MyTaskKind.EXECUTION:
+      // Assigned → record رقم طلب التنفيذ (→ case activity log + complete the task).
+      // Unassigned is handled above by isUnassignedTypeTask (→ sets the mapping).
+      return { method: "POST", url: `/api/field-tasks/${e}/execution-request`, body: { executionRequestNumber: form.executionRequestNumber } };
+    case MyTaskKind.GENERAL_TASK_REVIEW:
+      // تم الاطلاع (close) is the default; ملاحظة (send back) requires a note.
+      // form.decision carries "ملاحظة" only when the user picks it (leftover
+      // decision values from other modes coerce to close).
+      return { method: "POST", url: `/api/field-tasks/${e}/review`, body: {
+        decision: form.decision === "ملاحظة" ? "ملاحظة" : "تم_الاطلاع",
+        reviewNote: form.notes,
+      } };
+    case MyTaskKind.GENERAL_TASK_DISTRIBUTE:
+      // Dedicated endpoint — the server resolves the gate (routed-dept head /
+      // delegate / manager) + validates the assignee is a routed-dept member or
+      // the head himself, sets قيد_الانتظار, keeps routedDepartmentId.
+      return { method: "POST", url: `/api/field-tasks/${e}/distribute`, body: { assignedTo: form.assigneeId } };
+    case MyTaskKind.GENERAL_TASK_APPROVE:
+      // اعتماد (approve) is the default; ملاحظة (return to the member) requires a
+      // note. Mirrors the /review body shape — the server enforces the note.
+      return { method: "POST", url: `/api/field-tasks/${e}/approve`, body: {
+        decision: form.decision === "ملاحظة" ? "ملاحظة" : "اعتماد",
+        reviewNote: form.notes,
       } };
     case MyTaskKind.CONSULTATION_CLOSING: return { method: "POST", url: `/api/consultations/${e}/early-close`, body: { reason: form.reason } };
     case MyTaskKind.HEARING_REPORT:
@@ -162,7 +444,13 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
         hearingReport: form.hearingReport, recommendations: form.recommendations,
         nextSteps: form.nextSteps, contactCompleted: form.contactCompleted === "yes",
       } };
-    case MyTaskKind.CASE_UNASSIGNED: return { method: "PATCH", url: `/api/cases/${e}`, body: { primaryLawyerId: form.assigneeId } };
+    case MyTaskKind.CASE_UNASSIGNED:
+      // Reuse PATCH /api/cases/:id: routing to a department sets departmentId
+      // (a case assigned to a dept-but-no-lawyer — the dept_head then picks a
+      // lawyer); routing to a lawyer sets primaryLawyerId (item 7).
+      return form.assignTarget === "department"
+        ? { method: "PATCH", url: `/api/cases/${e}`, body: { departmentId: form.assignDeptId } }
+        : { method: "PATCH", url: `/api/cases/${e}`, body: { primaryLawyerId: form.assigneeId } };
     case MyTaskKind.REVIEW_PENDING: {
       const isCommittee = task.id.includes(":committee_");
       const base = task.entityType === "memo" ? "memos" : task.entityType === "contract" ? "contracts" : "consultations";
@@ -172,9 +460,80 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
   }
 }
 
-function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void }) {
+// Colour-coded badge per event type (extensible — path-2 توزيع/اعتماد slot in
+// here later with no other change).
+const EVENT_BADGE_CLASS: Record<string, string> = {
+  [GeneralTaskEventType.DISTRIBUTED]:        "border-blue-400 text-blue-700 dark:text-blue-400",
+  [GeneralTaskEventType.RESULT_SUBMITTED]:   "border-green-400 text-green-700 dark:text-green-400",
+  [GeneralTaskEventType.RETURNED_WITH_NOTE]: "border-amber-400 text-amber-700 dark:text-amber-400",
+  [GeneralTaskEventType.REVIEWED_CLOSED]:    "border-muted-foreground/40 text-muted-foreground",
+  [GeneralTaskEventType.APPROVED]:           "border-emerald-500 text-emerald-700 dark:text-emerald-400",
+};
+
+interface ThreadEvent { id: string; actorName: string | null; eventType: string; body: string | null; createdAt: string; }
+
+// The general (عام) task الأخذ والعطا thread — a chronological (oldest→newest)
+// conversation of lifecycle events. Fetched per task (key ['field-task-events',
+// id]); shown in the worker complete + requester review modals. Renders nothing
+// for a task that has no events yet (a fresh task).
+function GeneralTaskThread({ taskId }: { taskId: string }) {
+  const { data: events, isLoading } = useQuery<ThreadEvent[]>({
+    queryKey: ["field-task-events", taskId],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/field-tasks/${taskId}/events`);
+      return res.json();
+    },
+  });
+  if (isLoading) return <p className="text-xs text-muted-foreground">جارٍ تحميل النشاط…</p>;
+  if (!events || events.length === 0) return null;
+  return (
+    <div className="space-y-2 max-h-44 overflow-y-auto rounded-md border p-2 bg-muted/20" data-testid="general-task-thread">
+      <p className="text-xs font-semibold text-muted-foreground">سجل الأخذ والعطا</p>
+      {events.map((e) => (
+        <div key={e.id} className="text-sm border-t pt-1 first:border-t-0 first:pt-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">{e.actorName || "—"}</span>
+            <Badge variant="outline" className={`text-[10px] ${EVENT_BADGE_CLASS[e.eventType] ?? ""}`}>
+              {GeneralTaskEventTypeLabels[e.eventType as GeneralTaskEventTypeValue] ?? e.eventType}
+            </Badge>
+            <DualDateDisplay date={e.createdAt} showTime compact className="text-xs text-muted-foreground" />
+          </div>
+          {e.body?.trim() && <p className="mt-0.5 text-muted-foreground"><BidiText>{e.body}</BidiText></p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TaskRow({ task, onAction, onDetails }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void; onDetails: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
+  const { getTaskById } = useFieldTasks();
+  const { departments } = useDepartments();
+  const { users } = useAuth();
+  // General (عام) task context lives on the full field task, not the feed item:
+  // WHO requested it (originalRequesterId, written once at creation; assignedBy as
+  // a fallback) and its free-text details (description). Surface both so the actor
+  // knows what the task is and who asked for it. Non-general kinds skip the lookup.
+  const generalFt = GENERAL_KINDS.has(task.kind) ? getTaskById(task.entityId) : undefined;
+  const requesterId = generalFt?.originalRequesterId || generalFt?.assignedBy || "";
+  const requesterName = requesterId ? (users.find((u) => u.id === requesterId)?.name || requesterId) : "";
+  const generalDetails = generalFt?.description?.trim() || "";
+  // Dept-routed (path-2) context: show which department the task is flowing
+  // through so the head and the requester have it at a glance. Only path-2
+  // general tasks carry routedDepartmentId; every other kind leaves it null.
+  const routedDeptName = task.routedDepartmentId
+    ? (departments.find((d) => d.id === task.routedDepartmentId)?.name || task.routedDepartmentId)
+    : "";
+  // The awaiting-distribution row is INFORMATIONAL for the requester (no action
+  // — it waits on the dept_head), so its disabled button must not promise a
+  // "coming soon" activation like the genuinely-unwired kinds do.
+  const isInfoOnly = task.kind === MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION;
+  // A general (عام) task back in the worker's list WITH a reviewNote was returned
+  // for edits (ملاحظة) — flag it so the worker sees it's a returned task, not a
+  // fresh one. Short-circuited for every non-general kind (no lookup cost).
+  const wasReturned = task.kind === MyTaskKind.GENERAL_TASK
+    && !!getTaskById(task.entityId)?.reviewNote?.trim();
   const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind)
     || isCaseStageKind(task) || task.kind === MyTaskKind.MEMO_PENDING;
   return (
@@ -191,22 +550,45 @@ function TaskRow({ task, onAction }: { task: MyTaskItem; onAction: (t: MyTaskIte
             <Badge variant="secondary" className="text-[10px]">{TaskSpecialtyLabels[task.specialtyClass]}</Badge>
           )}
           <OnBehalfBadge userId={task.onBehalfOfUserId} />
+          {wasReturned && (
+            <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700 dark:text-amber-400" data-testid="badge-returned">أُعيدت للتعديل</Badge>
+          )}
         </div>
         <div className="mt-1 flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
           <span>{meta?.label ?? task.kind}</span>
+          {requesterName && (<><span>•</span><span data-testid={`task-requester-${task.id}`}>من: <BidiText>{requesterName}</BidiText></span></>)}
+          {routedDeptName && (<><span>•</span><span data-testid={`task-routed-dept-${task.id}`}>القسم: <BidiText>{routedDeptName}</BidiText></span></>)}
           {task.dueDate && (<><span>•</span><DualDateDisplay date={task.dueDate} /></>)}
           {task.isOverdue && <Badge variant="destructive" className="text-[10px]">متأخرة</Badge>}
         </div>
+        {generalDetails && (
+          <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2" data-testid={`task-details-${task.id}`}>
+            <BidiText>{generalDetails}</BidiText>
+          </p>
+        )}
       </div>
+      {/* General (عام) tasks: a "تفاصيل" eye button → full requester + description +
+          linked entity (the card can't fit a long description or the entity link). */}
+      {GENERAL_KINDS.has(task.kind) && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onDetails(task)}
+          title="تفاصيل المهمة"
+          data-testid={`task-details-btn-${task.id}`}
+        >
+          <Eye className="h-4 w-4" />
+        </Button>
+      )}
       <Button
         size="sm"
         variant="outline"
         disabled={!actionable}
-        title={actionable ? undefined : "سيتم تفعيل هذا الإجراء قريباً"}
+        title={actionable ? undefined : isInfoOnly ? "بانتظار قيام رئيس القسم بإسناد المهمة" : "سيتم تفعيل هذا الإجراء قريباً"}
         onClick={() => actionable && onAction(task)}
         data-testid={`task-action-${task.id}`}
       >
-        {ACTION_LABEL[task.actionHint] ?? "إجراء"}
+        {isUnassignedTypeTask(task) ? ACTION_LABEL.assign : (KIND_ACTION_LABEL[task.kind] ?? ACTION_LABEL[task.actionHint] ?? "إجراء")}
       </Button>
     </div>
   );
@@ -223,10 +605,78 @@ function SummaryCard({ label, value, tone }: { label: string; value: number; ton
   );
 }
 
+// Clickable collapse/expand header (chevron + title + optional count badge),
+// used for every department / member / pool group in the supervisory views.
+// RTL: open → chevron points down; collapsed → points right (ChevronLeft).
+function GroupHeader({ open, onToggle, title, count, titleClass, testId }: {
+  open: boolean; onToggle: () => void; title: string; count?: number;
+  titleClass?: string; testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full items-center gap-2 text-right"
+      data-testid={testId}
+    >
+      {open
+        ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        : <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />}
+      <span className={`flex-1 min-w-0 ${titleClass ?? ""}`}><BidiText>{title}</BidiText></span>
+      {typeof count === "number" && (
+        <Badge variant="secondary" className="text-[10px]">{count}</Badge>
+      )}
+    </button>
+  );
+}
+
+// One archived (closed) general-task row in the "منجزة" section. Shows the
+// title + result + any last review note + when it closed; expanding it reveals
+// the full activity thread (read-only — the same GeneralTaskThread the modals
+// use). Self-contained expand state so many rows can open independently.
+function ArchiveRow({ task, workerName }: { task: FieldTask; workerName: string }) {
+  const [open, setOpen] = useState(false);
+  const cancelled = task.status === FieldTaskStatus.CANCELLED;
+  return (
+    <div className="rounded-md border bg-muted/20 p-3" data-testid={`archive-row-${task.id}`}>
+      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 text-right">
+        {open
+          ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          : <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />}
+        <span className="flex-1 min-w-0 text-sm font-medium"><BidiText>{task.title}</BidiText></span>
+        <Badge variant={cancelled ? "destructive" : "secondary"} className="text-[10px]">
+          {cancelled ? "ملغي" : "مكتمل"}
+        </Badge>
+      </button>
+      <div className="mt-1 ps-6 space-y-0.5 text-xs text-muted-foreground">
+        {task.completionNotes?.trim() && (
+          <p>النتيجة: <BidiText>{task.completionNotes}</BidiText></p>
+        )}
+        {task.workerId && <p>النتيجة من: <BidiText>{workerName}</BidiText></p>}
+        {task.reviewNote?.trim() && (
+          <p>آخر ملاحظة: <BidiText>{task.reviewNote}</BidiText></p>
+        )}
+        {task.completedAt && (
+          <p>أُغلقت: <DualDateDisplay date={task.completedAt} compact /></p>
+        )}
+      </div>
+      {open && <div className="mt-2 ps-6"><GeneralTaskThread taskId={task.id} /></div>}
+    </div>
+  );
+}
+
 export default function MyTasksPage() {
   const { user, users } = useAuth();
-  const { getDepartmentName } = useDepartments();
+  const { departments } = useDepartments();
+  // For the GENERAL_TASK_REVIEW modal — the worker's result (completionNotes) +
+  // workerId live on the full field task, not the feed item; the field-tasks
+  // context already has it loaded app-wide (the requester is assignedTo/assignedBy).
+  const { getTaskById } = useFieldTasks();
+  // Entity lists for resolving a general task's linked entity in the تفاصيل view.
   const { cases } = useCases();
+  const { consultations } = useConsultations();
+  const { contracts } = useContracts();
+  const { getClientName } = useClients();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [specialtyFilter, setSpecialtyFilter] = useState<"all" | TaskSpecialtyValue>("all");
@@ -235,20 +685,42 @@ export default function MyTasksPage() {
   const [actionTask, setActionTask] = useState<MyTaskItem | null>(null);
   const [form, setForm] = useState<ActionForm>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
+  // The full delegation record behind a DELEGATION_APPROVAL task — fetched on
+  // open so the decision modal can show from/to/reason/dates/scope (the feed
+  // item carries only the enriched title).
+  const [delegationRecord, setDelegationRecord] = useState<DelegationRecord | null>(null);
   // Hearing-result dialog (the shared component) target
   const [resultHearing, setResultHearing] = useState<Hearing | null>(null);
   // Case stage panel (the shared component) target
   const [stageCase, setStageCase] = useState<LawCase | null>(null);
   // Memo advance panel (the shared component) target
   const [advanceMemo, setAdvanceMemo] = useState<Memo | null>(null);
+  // General (عام) task details ("تفاصيل") target — requester + full description +
+  // linked entity, read from the full field task (the feed item can't carry them).
+  const [detailsTask, setDetailsTask] = useState<MyTaskItem | null>(null);
 
   // Create-task dialog
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({
     title: "", description: "", dueDate: "", priority: "متوسط",
-    caseId: "", assigneeId: "",
+    linkType: "none" as LinkType, linkId: "",
+    // Two-dropdown assignment (final design): two INDEPENDENT fields, no mode
+    // toggle. deptId = the القسم dropdown, assigneeId = the الشخص dropdown.
+    // A chosen person → path-1 person-direct; a dept alone → path-2 dept-routed.
+    // Open to every role.
+    deptId: "", assigneeId: "",
   });
   const [creating, setCreating] = useState(false);
+  // Collapsed group keys (dept:<id> / member:<id> / pool:<id>). Empty = all
+  // expanded by default; a key present means that group is collapsed.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const isOpen = (key: string) => !collapsed.has(key);
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
 
   const { data: tasks = [], isLoading } = useQuery<MyTaskItem[]>({
     queryKey: ["/api/my-tasks"],
@@ -256,22 +728,31 @@ export default function MyTasksPage() {
     enabled: !!user,
   });
 
+  // "منجزة" archive — closed general tasks, fetched LAZILY only when the section
+  // is expanded (never rides the 30s poll). Server scopes it to feed visibility.
+  // Collapsed by default. Invalidated by refreshAfterAction's "/api/" sweep, so
+  // closing a task refreshes it while open.
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const { data: archivedTasks = [], isLoading: archiveLoading } = useQuery<FieldTask[]>({
+    queryKey: ["/api/field-tasks/archive"],
+    enabled: !!user && archiveOpen,
+  });
+
   const userName = (id: string): string =>
     users.find((u) => u.id === id)?.name || (id ? id : "غير مُسند");
-  const ownerDeptName = (id: string): string => {
-    const u = users.find((x) => x.id === id);
-    return u?.departmentId ? getDepartmentName(u.departmentId) : "بدون قسم";
-  };
 
   const isAdminSupport = user?.role === "admin_support";
   const isDeptHead = user?.role === "department_head";
   const isBranchManager = user?.role === "branch_manager";
-  const canAssignToOthers = isBranchManager || isAdminSupport || isDeptHead;
-
-  // Assignee options for create: dept_head → own dept members; managers → anyone.
-  const assignableUsers = users.filter((u) => {
+  // Person dropdown (الشخص) options for the create modal — open to EVERY role.
+  // Filtered by the chosen department: a selected القسم narrows the list to that
+  // department's active members; with NO department chosen the FULL active-user
+  // list is offered (any department, incl. admin_support members + future
+  // committee members — admin_support is not a department row so it is only
+  // reachable through this no-department path).
+  const personOptions = users.filter((u) => {
     if (!u.isActive) return false;
-    if (isDeptHead && !isBranchManager) return u.departmentId === user?.departmentId;
+    if (createForm.deptId) return u.departmentId === createForm.deptId;
     return true;
   });
 
@@ -316,6 +797,18 @@ export default function MyTasksPage() {
       }
       return;
     }
+    if (task.kind === MyTaskKind.DELEGATION_APPROVAL) {
+      // Fetch the full delegation so the decision modal can show its details
+      // (from/to/reason/dates/scope), then open the generic modal.
+      try {
+        const res = await apiRequest("GET", `/api/delegations/${task.entityId}`);
+        setDelegationRecord(await res.json());
+        openAction(task);
+      } catch (err) {
+        toast({ title: "تعذّر فتح التفويض", description: extractApiError(err), variant: "destructive" });
+      }
+      return;
+    }
     openAction(task);
   }
 
@@ -326,6 +819,10 @@ export default function MyTasksPage() {
     await queryClient.invalidateQueries({
       predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/"),
     });
+    // The general-task thread query key (['field-task-events', id]) isn't under
+    // "/api/", so invalidate it explicitly — keeps the thread current after a
+    // worker-complete / requester send-back / close.
+    await queryClient.invalidateQueries({ queryKey: ["field-task-events"] });
   }
 
   async function submitAction() {
@@ -333,9 +830,23 @@ export default function MyTasksPage() {
     const mode = actionModeFor(actionTask)?.mode;
     if (mode === "reason" && !form.reason.trim()) { toast({ title: "السبب مطلوب", variant: "destructive" }); return; }
     if (mode === "report" && !form.hearingReport.trim()) { toast({ title: "نص التقرير مطلوب", variant: "destructive" }); return; }
-    if (mode === "assign" && !form.assigneeId) { toast({ title: "اختر المحامي المسند", variant: "destructive" }); return; }
+    if (mode === "executionRequest" && !form.executionRequestNumber.trim()) { toast({ title: "رقم طلب التنفيذ مطلوب", variant: "destructive" }); return; }
+    if (mode === "assign") {
+      const toDept = actionTask.kind === MyTaskKind.CASE_UNASSIGNED && form.assignTarget === "department";
+      if (toDept && !form.assignDeptId) { toast({ title: "اختر القسم المسند إليه", variant: "destructive" }); return; }
+      if (!toDept && !form.assigneeId) { toast({ title: "اختر المسند إليه", variant: "destructive" }); return; }
+    }
     if (mode === "decision" && form.decision === InternalReviewDecision.NEEDS_NOTES && !form.notes.trim()) {
       toast({ title: "الملاحظات مطلوبة عند الإرجاع", variant: "destructive" }); return;
+    }
+    if (mode === "review" && form.decision === "ملاحظة" && !form.notes.trim()) {
+      toast({ title: "الملاحظة مطلوبة عند الإعادة", variant: "destructive" }); return;
+    }
+    if (mode === "distribute" && !form.assigneeId) {
+      toast({ title: "اختر المسند إليه", variant: "destructive" }); return;
+    }
+    if (mode === "delegationDecision" && form.decision === "رفض" && !form.notes.trim()) {
+      toast({ title: "سبب الرفض مطلوب", variant: "destructive" }); return;
     }
     setSubmitting(true);
     try {
@@ -344,6 +855,7 @@ export default function MyTasksPage() {
       await refreshAfterAction();
       toast({ title: "تم تنفيذ الإجراء" });
       setActionTask(null);
+      setDelegationRecord(null);
     } catch (err) {
       toast({ title: "تعذّر تنفيذ الإجراء", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -355,23 +867,51 @@ export default function MyTasksPage() {
     if (!createForm.title.trim() || !createForm.dueDate) {
       toast({ title: "العنوان وتاريخ الاستحقاق مطلوبان", variant: "destructive" }); return;
     }
+    // Two-dropdown assignment (final design). The body is decided purely by
+    // WHICH field(s) are filled:
+    //   • person filled  → PATH-1 person-direct (assignedTo = that person). The
+    //     department, if also chosen, only filtered the person list — it is NOT
+    //     sent. Covers: dept+person, no-dept+person, and self-assign (pick self
+    //     → straight to مكتمل, the existing path-1 edge).
+    //   • dept only      → PATH-2 dept-routed (routedDepartmentId = dept). The
+    //     server resolves the head → assign; >1 → block; head-less → routed +
+    //     unassigned, waits for a head. (admin_support is not a dept row, so it
+    //     never reaches this path — its members are picked as persons instead.)
+    //   • neither        → validation error.
+    const dept = createForm.deptId;
+    const person = createForm.assigneeId;
+    if (!dept && !person) {
+      toast({ title: "اختر قسماً أو شخصاً", variant: "destructive" }); return;
+    }
     setCreating(true);
     try {
-      // Reuse the existing field-task create endpoint + its assignment logic.
-      // Default assignee = self; managers/dept_head may pick someone else.
-      await apiRequest("POST", "/api/field-tasks", {
+      // Manually-created tasks are GENERAL (عام) tasks. Reuse the existing
+      // field-task create endpoint + its assignment logic (default assignee =
+      // self; managers/dept_head may pick someone else). The optional entity
+      // link writes into exactly ONE of caseId/consultationId/contractId/
+      // clientId per the chosen link type; the rest stay null.
+      const { linkType, linkId } = createForm;
+      const baseBody = {
         title: createForm.title,
         description: createForm.description,
-        taskType: "أخرى",
+        taskType: FieldTaskType.GENERAL,
         priority: createForm.priority,
         dueDate: createForm.dueDate,
-        caseId: createForm.caseId || null,
-        assignedTo: (canAssignToOthers && createForm.assigneeId) ? createForm.assigneeId : user?.id,
-      });
+        caseId: linkType === "case" ? linkId || null : null,
+        consultationId: linkType === "consultation" ? linkId || null : null,
+        contractId: linkType === "contract" ? linkId || null : null,
+        clientId: linkType === "client" ? linkId || null : null,
+      };
+      // Person wins → person-direct body (byte-identical to the working path-1).
+      // Dept only → dept-route body (server resolves the head + sets status).
+      const body = person
+        ? { ...baseBody, assignedTo: person }
+        : { ...baseBody, routedDepartmentId: dept };
+      await apiRequest("POST", "/api/field-tasks", body);
       await queryClient.invalidateQueries({ queryKey: ["/api/my-tasks"] });
       toast({ title: "تمت إضافة المهمة" });
       setShowCreate(false);
-      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", caseId: "", assigneeId: "" });
+      setCreateForm({ title: "", description: "", dueDate: "", priority: "متوسط", linkType: "none", linkId: "", deptId: "", assigneeId: "" });
     } catch (err) {
       toast({ title: "تعذّرت إضافة المهمة", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -389,7 +929,10 @@ export default function MyTasksPage() {
 
   const pinned = own.filter((t) => PINNED_KINDS.has(t.kind)).sort(byTime);
   const rest = own.filter((t) => !PINNED_KINDS.has(t.kind)).sort(byTime);
-  const overdueCount = own.filter((t) => t.isOverdue).length;
+  // Count EVERY overdue row the user actually sees (own + team), so the card
+  // matches the red rows. The old `own`-only count read 0 for a manager whose
+  // overdue rows are all team-scoped (ownerScope:"team").
+  const overdueCount = visible.filter((t) => t.isOverdue).length;
 
   const teamByMember = new Map<string, MyTaskItem[]>();
   for (const t of team) {
@@ -397,17 +940,98 @@ export default function MyTasksPage() {
     arr.push(t);
     teamByMember.set(t.ownerId, arr);
   }
-  const teamByDept = new Map<string, Map<string, MyTaskItem[]>>();
-  for (const t of team) {
-    const dept = ownerDeptName(t.ownerId);
-    const members = teamByDept.get(dept) ?? new Map<string, MyTaskItem[]>();
-    const arr = members.get(t.ownerId) ?? [];
+
+  // ----- Supervisory rosters (dept_head "team" + branch_manager firm view) -----
+  // Driven by the USER ROSTER, not just task-owners, so every member shows even
+  // with zero tasks ("لا يوجد") and never silently disappears (item 5). Members
+  // sorted by Arabic name; their tasks urgent-first via pinAndSort.
+  const activeUsers = users.filter((u) => u.isActive);
+  const isLawyerRole = (r: string) => r === "employee" || r === "department_head";
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, "ar");
+  const memberTasks = (id: string) => pinAndSort(teamByMember.get(id) ?? []);
+  const memberTaskCount = (id: string) => teamByMember.get(id)?.length ?? 0;
+
+  // admin_support has no department, so it gets a dedicated section (item 8).
+  const adminSupportMembers = activeUsers.filter((u) => u.role === "admin_support").sort(byName);
+  // Each department → its lawyer members (employee + department_head) (item 5).
+  const deptRoster = departments
+    .map((d) => ({ dept: d, members: activeUsers.filter((u) => isLawyerRole(u.role) && u.departmentId === d.id).sort(byName) }))
+    .filter((g) => g.members.length > 0);
+  // Owners that appear in team tasks but aren't covered by the rosters above
+  // (data drift / a non-lawyer non-admin_support owner) — surfaced under a
+  // fallback group so a task is NEVER hidden. "" (unassigned) is the pool below.
+  const rosterIds = new Set<string>([
+    ...adminSupportMembers.map((u) => u.id),
+    ...deptRoster.flatMap((g) => g.members.map((u) => u.id)),
+  ]);
+  const leftoverOwnerIds = Array.from(teamByMember.keys()).filter((id) => id !== "" && !rosterIds.has(id));
+  const unassignedPool = pinAndSort(teamByMember.get("") ?? []);
+
+  // ----- "منجزة" archive derivation -----
+  // Newest-closed first (completedAt, falling back to updatedAt/createdAt so a
+  // cancelled task with no completedAt still sorts sanely). Supervisors additionally
+  // see it grouped by the WORKER who produced the result (workerId — reliably set
+  // on every completed general task; falls back to the creator for a task
+  // cancelled before anyone worked it).
+  const closedTs = (t: FieldTask) => t.completedAt || t.updatedAt || t.createdAt || "";
+  const archivedSorted = [...archivedTasks].sort((a, b) => closedTs(b).localeCompare(closedTs(a)));
+  const archiveByMember = new Map<string, FieldTask[]>();
+  for (const t of archivedSorted) {
+    const memberId = t.workerId || t.assignedBy || "";
+    const arr = archiveByMember.get(memberId) ?? [];
     arr.push(t);
-    members.set(t.ownerId, arr);
-    teamByDept.set(dept, members);
+    archiveByMember.set(memberId, arr);
   }
 
+  // One member row: collapsible header (name + task count), then the member's
+  // tasks or "لا يوجد" when they have none.
+  const renderMemberRow = (id: string, name: string) => {
+    const key = `member:${id}`;
+    const open = isOpen(key);
+    const items = memberTasks(id);
+    return (
+      <div key={id} className="space-y-2 ps-2">
+        <GroupHeader open={open} onToggle={() => toggle(key)} title={name} count={items.length}
+          titleClass="text-xs font-semibold text-muted-foreground" testId={`team-member-${id}`} />
+        {open && (items.length === 0
+          ? <p className="ps-6 text-xs text-muted-foreground">لا يوجد</p>
+          : <div className="space-y-2">{items.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>)}
+      </div>
+    );
+  };
+
   const currentMode = actionTask ? actionModeFor(actionTask)?.mode : undefined;
+  // The full field task behind a GENERAL_TASK_REVIEW (requester) or
+  // GENERAL_TASK_APPROVE (dept_head) item — both show the worker's result +
+  // workerId + proof, which the feed item does not carry.
+  const reviewTask = actionTask && (currentMode === "review" || currentMode === "approve")
+    ? getTaskById(actionTask.entityId) : undefined;
+  // When a GENERAL_TASK (do-the-work) was sent back by the requester via ملاحظة,
+  // its reviewNote carries what to fix. Surface it in the worker's complete modal
+  // so they can correct before re-completing. Only general (عام) tasks set
+  // reviewNote — collection/field/auto never do.
+  const returnedNote = actionTask && currentMode === "complete" && actionTask.kind === MyTaskKind.GENERAL_TASK
+    ? (getTaskById(actionTask.entityId)?.reviewNote || "").trim()
+    : "";
+  // Distribute modal (sub-step 6) — the routed department to list members from.
+  // A department_head can ONLY distribute a task routed to their OWN department
+  // (the server gate enforces exactly this: effectiveDeptHeadDepts → the head's
+  // own dept), so for a head the routed dept IS user.departmentId — authoritative
+  // and robust even if the feed item's optional routedDepartmentId didn't
+  // propagate. A branch_manager (or a delegate acting for a head, whose own role
+  // isn't department_head) can distribute another department's task, so they read
+  // it from the feed item (with the full field task as a fallback).
+  const distributeDeptId = currentMode !== "distribute" ? "" :
+    (isDeptHead
+      ? (user?.departmentId || "")
+      : (actionTask?.routedDepartmentId || getTaskById(actionTask?.entityId ?? "")?.routedDepartmentId || ""));
+  // Options = active members of the routed department PLUS the actor himself (the
+  // "distribute to myself" edge — a head whose own dept is the routed dept is
+  // already in the first set; the id clause also lets a branch_manager pick
+  // himself). dedup is natural (one row per user). The server re-validates this.
+  const distributeOptions = currentMode === "distribute"
+    ? users.filter((u) => u.isActive && (u.departmentId === distributeDeptId || u.id === user?.id))
+    : [];
 
   return (
     <div dir="rtl" className="p-4 md:p-6 space-y-6" data-testid="page-my-tasks">
@@ -436,7 +1060,7 @@ export default function MyTasksPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <SummaryCard label="مهامي" value={own.length} />
         <SummaryCard label="متأخرة" value={overdueCount} tone="danger" />
-        <SummaryCard label="مثبتة" value={pinned.length} />
+        <SummaryCard label="المستعجلة" value={pinned.length} />
         {(isDeptHead || isBranchManager) && <SummaryCard label="مهام الفريق" value={team.length} />}
       </div>
 
@@ -447,9 +1071,9 @@ export default function MyTasksPage() {
           {pinned.length > 0 && (
             <section className="space-y-2" data-testid="section-pinned">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <Pin className="h-4 w-4" /> مثبتة — جلسات وإسناد قضايا
+                <Flame className="h-4 w-4" /> المستعجلة — جلسات وإسناد قضايا
               </h2>
-              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
+              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
             </section>
           )}
 
@@ -458,55 +1082,172 @@ export default function MyTasksPage() {
             {rest.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">لا توجد مهام أخرى.</p>
             ) : (
-              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
+              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
             )}
           </section>
 
-          {isDeptHead && team.length > 0 && (
+          {/* dept_head — every member of THEIR department (item 5), each
+              member's list collapsible (item 6). */}
+          {isDeptHead && (
             <section className="space-y-3" data-testid="section-team">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" /> مهام الفريق
               </h2>
-              {Array.from(teamByMember.entries()).map(([ownerId, items]) => (
-                <div key={ownerId} className="space-y-2">
-                  <h3 className="text-xs font-semibold"><BidiText>{userName(ownerId)}</BidiText></h3>
-                  <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
+              {activeUsers
+                .filter((u) => isLawyerRole(u.role) && !!user?.departmentId && u.departmentId === user.departmentId)
+                .sort(byName)
+                .map((u) => renderMemberRow(u.id, u.name))}
+              {leftoverOwnerIds.map((id) => renderMemberRow(id, userName(id)))}
+              {unassignedPool.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold text-muted-foreground">مهام غير مُسندة</h3>
+                  <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
                 </div>
-              ))}
+              )}
             </section>
           )}
 
-          {isBranchManager && team.length > 0 && (
+          {/* branch_manager — firm-wide: department→member tree (collapsible at
+              both levels, item 6), a dedicated admin_support section (item 8,
+              also where turki/item 3 lands), every member shown even at zero
+              tasks (item 5), and the unassigned pool to assign from (item 2). */}
+          {isBranchManager && (
             <section className="space-y-4" data-testid="section-firm">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" /> مهام الفرع (حسب القسم)
               </h2>
-              {Array.from(teamByDept.entries()).map(([dept, members]) => (
-                <div key={dept} className="space-y-2 rounded-md border p-3">
-                  <h3 className="text-sm font-bold">{dept}</h3>
-                  {Array.from(members.entries()).map(([ownerId, items]) => (
-                    <div key={ownerId} className="space-y-2 ps-2">
-                      <h4 className="text-xs font-semibold text-muted-foreground"><BidiText>{userName(ownerId)}</BidiText></h4>
-                      <div className="space-y-2">{pinAndSort(items).map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} />)}</div>
-                    </div>
-                  ))}
-                </div>
-              ))}
+              {deptRoster.map(({ dept, members }) => {
+                const key = `dept:${dept.id}`;
+                const open = isOpen(key);
+                const count = members.reduce((n, u) => n + memberTaskCount(u.id), 0);
+                return (
+                  <div key={dept.id} className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title={dept.name} count={count}
+                      titleClass="text-sm font-bold" testId={`team-dept-${dept.id}`} />
+                    {open && members.map((u) => renderMemberRow(u.id, u.name))}
+                  </div>
+                );
+              })}
+
+              {adminSupportMembers.length > 0 && (() => {
+                const key = "dept:admin_support";
+                const open = isOpen(key);
+                const count = adminSupportMembers.reduce((n, u) => n + memberTaskCount(u.id), 0);
+                return (
+                  <div className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title="قسم الدعم الإداري" count={count}
+                      titleClass="text-sm font-bold" testId="team-dept-admin-support" />
+                    {open && adminSupportMembers.map((u) => renderMemberRow(u.id, u.name))}
+                  </div>
+                );
+              })()}
+
+              {leftoverOwnerIds.length > 0 && (() => {
+                const key = "dept:other";
+                const open = isOpen(key);
+                const count = leftoverOwnerIds.reduce((n, id) => n + memberTaskCount(id), 0);
+                return (
+                  <div className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title="أعضاء آخرون" count={count}
+                      titleClass="text-sm font-bold" testId="team-dept-other" />
+                    {open && leftoverOwnerIds.map((id) => renderMemberRow(id, userName(id)))}
+                  </div>
+                );
+              })()}
+
+              {unassignedPool.length > 0 && (() => {
+                const key = "pool:unassigned";
+                const open = isOpen(key);
+                return (
+                  <div className="space-y-2 rounded-md border p-3">
+                    <GroupHeader open={open} onToggle={() => toggle(key)} title="مهام غير مُسندة" count={unassignedPool.length}
+                      titleClass="text-sm font-bold" testId="team-pool-unassigned" />
+                    {open && <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>}
+                  </div>
+                );
+              })()}
             </section>
           )}
+
+          {/* ===== "منجزة" archive — collapsed by default, at the bottom.
+              Closed general tasks move here out of the active feed. Lazy-loaded
+              on expand; grouped by worker for supervisors, flat for a user. ===== */}
+          <section className="space-y-2" data-testid="section-archive">
+            <button
+              type="button"
+              onClick={() => setArchiveOpen((o) => !o)}
+              className="flex w-full items-center gap-2 text-sm font-semibold text-muted-foreground"
+              data-testid="archive-header"
+            >
+              {archiveOpen
+                ? <ChevronDown className="h-4 w-4 shrink-0" />
+                : <ChevronLeft className="h-4 w-4 shrink-0" />}
+              <Archive className="h-4 w-4 shrink-0" />
+              <span className="flex-1 text-right">منجزة</span>
+              {archiveOpen && <Badge variant="secondary" className="text-[10px]">{archivedSorted.length}</Badge>}
+            </button>
+            {archiveOpen && (
+              archiveLoading ? (
+                <p className="ps-6 text-sm text-muted-foreground">جارٍ التحميل…</p>
+              ) : archivedSorted.length === 0 ? (
+                <p className="ps-6 text-sm text-muted-foreground">لا توجد مهام منجزة.</p>
+              ) : (isDeptHead || isBranchManager) ? (
+                <div className="space-y-3">
+                  {Array.from(archiveByMember.entries()).map(([memberId, items]) => {
+                    const key = `archive-member:${memberId}`;
+                    const open = isOpen(key);
+                    return (
+                      <div key={memberId || "unknown"} className="space-y-2 ps-2">
+                        <GroupHeader open={open} onToggle={() => toggle(key)}
+                          title={memberId ? userName(memberId) : "غير محدد"} count={items.length}
+                          titleClass="text-xs font-semibold text-muted-foreground" testId={`archive-member-${memberId}`} />
+                        {open && <div className="space-y-2">{items.map((t) => <ArchiveRow key={t.id} task={t} workerName={userName(t.workerId || "")} />)}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {archivedSorted.map((t) => <ArchiveRow key={t.id} task={t} workerName={userName(t.workerId || "")} />)}
+                </div>
+              )
+            )}
+          </section>
         </>
       )}
 
       {/* ===== Action dialog ===== */}
-      <Dialog open={!!actionTask} onOpenChange={(o) => !o && setActionTask(null)}>
+      <Dialog open={!!actionTask} onOpenChange={(o) => { if (!o) { setActionTask(null); setDelegationRecord(null); } }}>
         <DialogContent dir="rtl" data-testid="dialog-action">
           <DialogHeader><DialogTitle>{actionTask ? actionModeFor(actionTask)?.title : ""}</DialogTitle></DialogHeader>
           {actionTask && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground"><BidiText>{actionTask.title}</BidiText></p>
 
+              {/* General (عام) task context: WHO requested it + the details, both
+                  read from the full field task (not carried on the feed item). */}
+              {GENERAL_KINDS.has(actionTask.kind) && (() => {
+                const ft = getTaskById(actionTask.entityId);
+                const rid = ft?.originalRequesterId || ft?.assignedBy || "";
+                const rname = rid ? userName(rid) : "";
+                const details = ft?.description?.trim() || "";
+                if (!rname && !details) return null;
+                return (
+                  <div className="rounded-md border p-2 text-sm space-y-1" data-testid="general-task-context">
+                    {rname && <div><span className="text-muted-foreground">من: </span><BidiText>{rname}</BidiText></div>}
+                    {details && <div><span className="text-muted-foreground">التفاصيل: </span><BidiText>{details}</BidiText></div>}
+                  </div>
+                );
+              })()}
+
               {currentMode === "complete" && (
                 <>
+                  {actionTask.kind === MyTaskKind.GENERAL_TASK && <GeneralTaskThread taskId={actionTask.entityId} />}
+                  {returnedNote && (
+                    <div className="rounded-md border border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-2 text-sm" data-testid="text-returned-note">
+                      <span className="font-semibold">ملاحظة المُراجِع: </span><BidiText>{returnedNote}</BidiText>
+                    </div>
+                  )}
                   <div className="space-y-1"><Label>ملاحظات الإنجاز</Label>
                     <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-notes" /></div>
                   <div className="space-y-1"><Label>وصف الإثبات (اختياري)</Label>
@@ -519,6 +1260,11 @@ export default function MyTasksPage() {
               {currentMode === "reason" && (
                 <div className="space-y-1"><Label>سبب الإغلاق</Label>
                   <Textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} data-testid="input-reason" /></div>
+              )}
+
+              {currentMode === "executionRequest" && (
+                <div className="space-y-1"><Label>رقم طلب التنفيذ</Label>
+                  <Input value={form.executionRequestNumber} onChange={(e) => setForm({ ...form, executionRequestNumber: e.target.value })} data-testid="input-execution-request-number" /></div>
               )}
 
               {currentMode === "decision" && (
@@ -537,15 +1283,43 @@ export default function MyTasksPage() {
               )}
 
               {currentMode === "assign" && (
-                <div className="space-y-1"><Label>المحامي المسند</Label>
-                  <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
-                    <SelectTrigger data-testid="select-assignee"><SelectValue placeholder="اختر محامياً" /></SelectTrigger>
-                    <SelectContent>
-                      {users.filter((u) => u.isActive).map((u) => (
-                        <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select></div>
+                <div className="space-y-3">
+                  {/* case_unassigned can route to a specific lawyer OR a whole
+                      department (item 7); field-task assign is lawyer-only. */}
+                  {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED && (
+                    <div className="space-y-1"><Label>إسناد إلى</Label>
+                      <Select value={form.assignTarget} onValueChange={(v) => setForm({ ...form, assignTarget: v as "lawyer" | "department" })}>
+                        <SelectTrigger data-testid="select-assign-target"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="lawyer">محامٍ محدد</SelectItem>
+                          <SelectItem value="department">قسم</SelectItem>
+                        </SelectContent>
+                      </Select></div>
+                  )}
+                  {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED && form.assignTarget === "department" ? (
+                    <div className="space-y-1"><Label>القسم المسند إليه</Label>
+                      <Select value={form.assignDeptId} onValueChange={(v) => setForm({ ...form, assignDeptId: v })}>
+                        <SelectTrigger data-testid="select-assign-dept"><SelectValue placeholder="اختر قسماً" /></SelectTrigger>
+                        <SelectContent>
+                          {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
+                        </SelectContent>
+                      </Select></div>
+                  ) : (
+                    <div className="space-y-1"><Label>{actionTask?.kind === MyTaskKind.CASE_UNASSIGNED ? "المحامي المسند" : "المسند إليه"}</Label>
+                      <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
+                        <SelectTrigger data-testid="select-assignee"><SelectValue placeholder="اختر موظفاً" /></SelectTrigger>
+                        <SelectContent>
+                          {/* Type-mapping assign (the 3 admin_support kinds) → pick from
+                              ACTIVE admin_support only; every other assign keeps all users. */}
+                          {users
+                            .filter((u) => u.isActive && (!actionTask || !isUnassignedTypeTask(actionTask) || u.role === "admin_support"))
+                            .map((u) => (
+                              <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select></div>
+                  )}
+                </div>
               )}
 
               {currentMode === "report" && (
@@ -564,13 +1338,126 @@ export default function MyTasksPage() {
                 </>
               )}
 
+              {currentMode === "review" && (
+                <>
+                  <GeneralTaskThread taskId={actionTask.entityId} />
+                  <div className="space-y-1"><Label>نتيجة المنفّذ</Label>
+                    <div className="rounded-md border p-2 text-sm bg-muted/30 whitespace-pre-wrap" data-testid="text-worker-result">
+                      <BidiText>{reviewTask?.completionNotes?.trim() || "—"}</BidiText></div>
+                    {reviewTask?.workerId && (
+                      <p className="text-xs text-muted-foreground">النتيجة من: {users.find((u) => u.id === reviewTask.workerId)?.name || reviewTask.workerId}</p>
+                    )}
+                    {reviewTask?.routedDepartmentId && (
+                      <p className="text-xs text-muted-foreground">القسم: <BidiText>{departments.find((d) => d.id === reviewTask.routedDepartmentId)?.name || reviewTask.routedDepartmentId}</BidiText></p>
+                    )}
+                    {reviewTask?.proofFileLink?.trim() && (
+                      <p className="text-xs text-muted-foreground">رابط الإثبات: <BidiText>{reviewTask.proofFileLink}</BidiText></p>
+                    )}
+                  </div>
+                  <div className="space-y-1"><Label>القرار</Label>
+                    <Select value={form.decision === "ملاحظة" ? "ملاحظة" : "تم_الاطلاع"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                      <SelectTrigger data-testid="select-review-decision"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="تم_الاطلاع">تم الاطلاع (إغلاق)</SelectItem>
+                        <SelectItem value="ملاحظة">ملاحظة (إعادة للمنفّذ)</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                  {form.decision === "ملاحظة" && (
+                    <div className="space-y-1"><Label>الملاحظة (مطلوبة)</Label>
+                      <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-review-note" /></div>
+                  )}
+                </>
+              )}
+
+              {currentMode === "approve" && (
+                <>
+                  <GeneralTaskThread taskId={actionTask.entityId} />
+                  <div className="space-y-1"><Label>نتيجة المنفّذ</Label>
+                    <div className="rounded-md border p-2 text-sm bg-muted/30 whitespace-pre-wrap" data-testid="text-approve-result">
+                      <BidiText>{reviewTask?.completionNotes?.trim() || "—"}</BidiText></div>
+                    {reviewTask?.workerId && (
+                      <p className="text-xs text-muted-foreground">النتيجة من: {users.find((u) => u.id === reviewTask.workerId)?.name || reviewTask.workerId}</p>
+                    )}
+                    {reviewTask?.routedDepartmentId && (
+                      <p className="text-xs text-muted-foreground">القسم: <BidiText>{departments.find((d) => d.id === reviewTask.routedDepartmentId)?.name || reviewTask.routedDepartmentId}</BidiText></p>
+                    )}
+                    {reviewTask?.proofFileLink?.trim() && (
+                      <p className="text-xs text-muted-foreground">رابط الإثبات: <BidiText>{reviewTask.proofFileLink}</BidiText></p>
+                    )}
+                  </div>
+                  <div className="space-y-1"><Label>القرار</Label>
+                    <Select value={form.decision === "ملاحظة" ? "ملاحظة" : "اعتماد"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                      <SelectTrigger data-testid="select-approve-decision"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="اعتماد">اعتماد</SelectItem>
+                        <SelectItem value="ملاحظة">إرجاع بملاحظة (للمنفّذ)</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                  {form.decision === "ملاحظة" && (
+                    <div className="space-y-1"><Label>الملاحظة (مطلوبة)</Label>
+                      <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-approve-note" /></div>
+                  )}
+                </>
+              )}
+
+              {currentMode === "distribute" && (
+                <div className="space-y-1"><Label>إسناد إلى (عضو من القسم أو أنت)</Label>
+                  <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
+                    <SelectTrigger data-testid="select-distribute-assignee"><SelectValue placeholder="اختر المسند إليه" /></SelectTrigger>
+                    <SelectContent>
+                      {distributeOptions.map((u) => (
+                        <SelectItem key={u.id} value={u.id}>{u.id === user?.id ? `${u.name} (أنا)` : u.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select></div>
+              )}
+
+              {currentMode === "delegationDecision" && (
+                <>
+                  {/* Details block (item 2): who ← whom, reason, window, scope. */}
+                  <div className="rounded-md border p-3 text-sm space-y-1 bg-muted/30" data-testid="delegation-details">
+                    <p>المفوِّض: <span className="font-medium"><BidiText>{userName(delegationRecord?.fromUserId ?? "")}</BidiText></span></p>
+                    <p>المفوَّض إليه: <span className="font-medium"><BidiText>{userName(delegationRecord?.toUserId ?? "")}</BidiText></span></p>
+                    <p>السبب: {delegationRecord ? (DelegationReasonLabels[delegationRecord.reason] || delegationRecord.reason) : "—"}
+                      {delegationRecord?.reasonDetails?.trim() ? <> — <BidiText>{delegationRecord.reasonDetails}</BidiText></> : null}</p>
+                    <p>المدة: {delegationRecord ? <>من <DualDateDisplay date={delegationRecord.startDate} /> إلى <DualDateDisplay date={delegationRecord.endDate} /></> : "—"}</p>
+                    <p>النطاق: {delegationRecord?.scope === "specific_cases" ? "قضايا محددة" : "جميع القضايا"}</p>
+                  </div>
+                  <div className="space-y-1"><Label>القرار</Label>
+                    <Select value={form.decision === "رفض" ? "رفض" : "اعتماد"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                      <SelectTrigger data-testid="select-delegation-decision"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="اعتماد">اعتماد</SelectItem>
+                        <SelectItem value="رفض">رفض</SelectItem>
+                      </SelectContent>
+                    </Select></div>
+                  {form.decision === "رفض" && (
+                    <div className="space-y-1"><Label>سبب الرفض (مطلوب)</Label>
+                      <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} data-testid="input-delegation-reject-reason" /></div>
+                  )}
+                </>
+              )}
+
+              {currentMode === "agencyAnswer" && (
+                <div className="space-y-1"><Label>هل توجد وكالة لهذه القضية؟</Label>
+                  <Select value={form.decision === "لا يوجد" ? "لا يوجد" : "يوجد"} onValueChange={(v) => setForm({ ...form, decision: v })}>
+                    <SelectTrigger data-testid="select-agency-answer"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="يوجد">يوجد وكالة</SelectItem>
+                      <SelectItem value="لا يوجد">لا يوجد وكالة</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">عند اختيار "لا يوجد وكالة" سيتم تسجيل الحاجة إلى إصدار وكالة لهذه القضية.</p>
+                </div>
+              )}
+
               {currentMode === "confirm" && (
                 <p className="text-sm">هل تريد تأكيد هذا الإجراء؟</p>
               )}
             </div>
           )}
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setActionTask(null)}>إلغاء</Button>
+            <Button variant="outline" onClick={() => { setActionTask(null); setDelegationRecord(null); }}>إلغاء</Button>
             <Button onClick={submitAction} disabled={submitting} data-testid="button-confirm-action">
               {submitting ? "جارٍ التنفيذ…" : "تأكيد"}
             </Button>
@@ -595,15 +1482,90 @@ export default function MyTasksPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ===== Memo advance panel (shared with the memos page) ===== */}
+      {/* ===== Memo stage timeline + advance (MemoStagesBar shared with the memos page) ===== */}
       <Dialog open={!!advanceMemo} onOpenChange={(o) => !o && setAdvanceMemo(null)}>
-        <DialogContent dir="rtl" data-testid="dialog-memo-advance">
-          <DialogHeader><DialogTitle>تقدّم المذكرة</DialogTitle></DialogHeader>
+        <DialogContent dir="rtl" className="max-w-2xl" data-testid="dialog-memo-advance">
+          <DialogHeader><DialogTitle>مسار المذكرة</DialogTitle></DialogHeader>
           {advanceMemo && (
-            <div className="flex flex-wrap gap-2">
-              <MemoAdvancePanel memo={advanceMemo} onChanged={refreshAfterAction} />
+            <div className="space-y-4 min-w-0">
+              <div className="text-sm font-medium"><BidiText>{advanceMemo.title}</BidiText></div>
+              {/* The memo STAGE BAR — the same numbered-circle timeline the memos
+                  page renders and the parallel of the case "مسار القضية" bar; it is
+                  contained/scrollable via the component's own min-w-0 overflow-x-auto
+                  (the earlier layout fix). Hidden for legacy null-stage memos. */}
+              {advanceMemo.currentStage && (
+                <MemoStagesBar currentStage={advanceMemo.currentStage as MemoStageValue} />
+              )}
+              {advanceMemo.awaitingCompletion && (
+                <div className="text-sm text-amber-600" data-testid="memo-awaiting-completion">
+                  بانتظار استكمال البيانات والمرفقات
+                </div>
+              )}
+              {/* The stage-transition ACTION for the current stage (بدء التحرير /
+                  إرسال للمراجعة الداخلية / تم الرفع) — shown alongside the timeline so
+                  the modal both DISPLAYS the stage and lets the assignee act, exactly
+                  like the case modal. */}
+              <div className="flex flex-wrap gap-2">
+                <MemoAdvancePanel memo={advanceMemo} onChanged={refreshAfterAction} />
+              </div>
+              {/* Internal-review / committee / take-notes decisions are taken by the
+                  reviewer/committee via their own review tasks, not from here. */}
+              <p className="text-xs text-muted-foreground">
+                إجراءات المراجعة الداخلية وقرار اللجنة والأخذ بالملاحظات تتم عبر مسار مراجعة المذكرة.
+              </p>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== General (عام) task details ("تفاصيل") ===== */}
+      <Dialog open={!!detailsTask} onOpenChange={(o) => !o && setDetailsTask(null)}>
+        <DialogContent dir="rtl" data-testid="dialog-general-details">
+          <DialogHeader><DialogTitle>تفاصيل المهمة</DialogTitle></DialogHeader>
+          {detailsTask && (() => {
+            // Requester + full description + linked entity live on the FULL field
+            // task (loaded app-wide), not the feed item. A general task links to at
+            // most ONE of case / consultation / contract / client (no memo link in
+            // the model); resolve whichever is set to its number/title.
+            const ft = getTaskById(detailsTask.entityId);
+            const requester = ft ? userName(ft.originalRequesterId || ft.assignedBy) : "";
+            const holder = ft?.assignedTo ? userName(ft.assignedTo) : "";
+            const deptName = ft?.routedDepartmentId
+              ? (departments.find((d) => d.id === ft.routedDepartmentId)?.name || ft.routedDepartmentId)
+              : "";
+            const linked = !ft ? ""
+              : ft.caseId ? `قضية ${cases.find((c) => c.id === ft.caseId)?.caseNumber ?? ft.caseId}`
+              : ft.consultationId ? `استشارة ${consultations.find((c) => c.id === ft.consultationId)?.consultationNumber ?? ft.consultationId}`
+              : ft.contractId ? `عقد ${contracts.find((c) => c.id === ft.contractId)?.contractNumber || contracts.find((c) => c.id === ft.contractId)?.title || ft.contractId}`
+              : ft.clientId ? `عميل ${getClientName(ft.clientId)}`
+              : "";
+            const desc = ft?.description?.trim() || "";
+            const note = ft?.reviewNote?.trim() || "";
+            return (
+              <div className="space-y-3 text-sm">
+                <div className="font-medium"><BidiText>{detailsTask.title}</BidiText></div>
+                <div className="space-y-1">
+                  <div><span className="text-muted-foreground">من: </span><BidiText>{requester || "—"}</BidiText></div>
+                  {linked && <div><span className="text-muted-foreground">مرتبطة بـ: </span><BidiText>{linked}</BidiText></div>}
+                  {holder && <div><span className="text-muted-foreground">لدى: </span><BidiText>{holder}</BidiText></div>}
+                  {deptName && <div><span className="text-muted-foreground">القسم: </span><BidiText>{deptName}</BidiText></div>}
+                  {ft?.status && <div><span className="text-muted-foreground">الحالة: </span>{ft.status}</div>}
+                  {ft?.dueDate && <div className="flex items-center gap-1"><span className="text-muted-foreground">الاستحقاق: </span><DualDateDisplay date={ft.dueDate} /></div>}
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-1">التفاصيل</p>
+                  <div className="max-h-60 overflow-y-auto rounded-md border p-2 whitespace-pre-wrap break-words" data-testid="general-details-description">
+                    {desc ? <BidiText>{desc}</BidiText> : <span className="text-muted-foreground">لا يوجد وصف</span>}
+                  </div>
+                </div>
+                {note && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-2">
+                    <span className="font-semibold">ملاحظة الإعادة: </span><BidiText>{note}</BidiText>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
@@ -618,7 +1580,7 @@ export default function MyTasksPage() {
               <Textarea value={createForm.description} onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1"><Label>تاريخ الاستحقاق</Label>
-                <Input type="date" value={createForm.dueDate} onChange={(e) => setCreateForm({ ...createForm, dueDate: e.target.value })} data-testid="input-create-due" /></div>
+                <HijriDatePicker value={createForm.dueDate} onChange={(v) => setCreateForm({ ...createForm, dueDate: v })} data-testid="input-create-due" /></div>
               <div className="space-y-1"><Label>الأولوية</Label>
                 <Select value={createForm.priority} onValueChange={(v) => setCreateForm({ ...createForm, priority: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -628,24 +1590,35 @@ export default function MyTasksPage() {
                   </SelectContent>
                 </Select></div>
             </div>
-            <div className="space-y-1"><Label>ربط بقضية (اختياري)</Label>
-              <Select value={createForm.caseId || "none"} onValueChange={(v) => setCreateForm({ ...createForm, caseId: v === "none" ? "" : v })}>
-                <SelectTrigger data-testid="select-create-case"><SelectValue placeholder="بدون قضية" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">بدون قضية</SelectItem>
-                  {cases.slice(0, 200).map((c) => (<SelectItem key={c.id} value={c.id}>{c.caseNumber}</SelectItem>))}
-                </SelectContent>
-              </Select></div>
-            {canAssignToOthers && (
-              <div className="space-y-1"><Label>إسناد إلى (افتراضياً أنت)</Label>
-                <Select value={createForm.assigneeId || "self"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "self" ? "" : v })}>
-                  <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
+            <EntityLinkPicker
+              linkType={createForm.linkType}
+              linkId={createForm.linkId}
+              onChange={(linkType, linkId) => setCreateForm({ ...createForm, linkType, linkId })}
+            />
+            {/* Two-dropdown assignment (final design) — open to EVERY role. No
+                mode toggle: fill the القسم dropdown, the الشخص dropdown, or both.
+                A chosen person → assigned directly to them; the القسم only
+                filters the person list (selecting it clears any prior person).
+                Dept alone → routed to the dept head for distribution. */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1"><Label>القسم</Label>
+                <Select value={createForm.deptId || "none"} onValueChange={(v) => setCreateForm({ ...createForm, deptId: v === "none" ? "" : v, assigneeId: "" })}>
+                  <SelectTrigger data-testid="select-create-dept"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="self">أنا</SelectItem>
-                    {assignableUsers.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
+                    <SelectItem value="none">بدون قسم</SelectItem>
+                    {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
                   </SelectContent>
                 </Select></div>
-            )}
+              <div className="space-y-1"><Label>الشخص</Label>
+                <Select value={createForm.assigneeId || "none"} onValueChange={(v) => setCreateForm({ ...createForm, assigneeId: v === "none" ? "" : v })}>
+                  <SelectTrigger data-testid="select-create-assignee"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">بدون شخص</SelectItem>
+                    {personOptions.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
+                  </SelectContent>
+                </Select></div>
+            </div>
+            <p className="text-xs text-muted-foreground">اختر شخصاً لإسناد المهمة إليه مباشرة، أو اختر قسماً فقط لإحالتها إلى رئيس القسم ليُسندها لعضو (وإن لم يوجد رئيس، تنتظر الإسناد حتى تعيينه). اختيار قسم يصفّي قائمة الأشخاص؛ بدون قسم تظهر كل الأسماء.</p>
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>إلغاء</Button>

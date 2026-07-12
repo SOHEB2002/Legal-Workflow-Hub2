@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -24,6 +25,7 @@ import { DualDateDisplay } from "@/components/ui/dual-date-display";
 export default function DelegationsPage() {
   const { toast } = useToast();
   const { user, users } = useAuth();
+  const search = useSearch();
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [form, setForm] = useState({
     toUserId: "",
@@ -33,6 +35,17 @@ export default function DelegationsPage() {
     endDate: "",
     scope: "all_cases" as string,
   });
+
+  // Deep-link from the المستخدمون page: "?to=<userId>" pre-selects that user as
+  // the delegate and opens the create dialog (fromUserId is always the caller,
+  // set server-side). Skips self (can't delegate to yourself).
+  useEffect(() => {
+    const to = new URLSearchParams(search).get("to");
+    if (to && to !== user?.id) {
+      setForm((f) => ({ ...f, toUserId: to }));
+      setShowAddDialog(true);
+    }
+  }, [search, user?.id]);
 
   const { data: delegations = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/delegations'],
@@ -58,17 +71,6 @@ export default function DelegationsPage() {
     },
   });
 
-  const approveMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await apiRequest("POST", `/api/delegations/${id}/approve`);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/delegations'] });
-      toast({ title: "تم اعتماد التفويض" });
-    },
-  });
-
   const cancelMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiRequest("PATCH", `/api/delegations/${id}`, { status: "ملغي" });
@@ -89,14 +91,26 @@ export default function DelegationsPage() {
     return u?.name || "غير محدد";
   }
 
-  function getStatusBadge(status: string) {
+  // A delegation is effective only once approved: the server stores it as
+  // status="نشط" with approvedBy=null until a manager approves it, so an
+  // unapproved "نشط" row is really "بانتظار الاعتماد" (display-level only — the
+  // stored status is untouched).
+  function isPendingApproval(d: any) {
+    return d.status === "نشط" && !d.approvedBy;
+  }
+
+  function getStatusBadge(d: any) {
+    if (isPendingApproval(d)) {
+      return <Badge variant="outline">بانتظار الاعتماد</Badge>;
+    }
     const map: Record<string, { variant: "default" | "secondary" | "outline" | "destructive"; label: string }> = {
-      "قيد_الانتظار": { variant: "outline", label: "قيد الانتظار" },
+      "قيد_الانتظار": { variant: "outline", label: "بانتظار الاعتماد" },
       "نشط": { variant: "default", label: "نشط" },
       "منتهي": { variant: "secondary", label: "منتهي" },
       "ملغي": { variant: "destructive", label: "ملغي" },
+      "مرفوض": { variant: "destructive", label: "مرفوض" },
     };
-    const item = map[status] || { variant: "outline" as const, label: status };
+    const item = map[d.status] || { variant: "outline" as const, label: d.status };
     return <Badge variant={item.variant}>{item.label}</Badge>;
   }
 
@@ -139,7 +153,7 @@ export default function DelegationsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">
-              {delegations.filter((d: any) => d.status === "نشط").length}
+              {delegations.filter((d: any) => d.status === "نشط" && d.approvedBy).length}
             </div>
           </CardContent>
         </Card>
@@ -150,7 +164,7 @@ export default function DelegationsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-yellow-600">
-              {delegations.filter((d: any) => d.status === "قيد_الانتظار").length}
+              {delegations.filter((d: any) => isPendingApproval(d)).length}
             </div>
           </CardContent>
         </Card>
@@ -204,22 +218,14 @@ export default function DelegationsPage() {
                     <TableCell className="text-center">
                       {d.scope === "all_cases" ? "جميع القضايا" : "قضايا محددة"}
                     </TableCell>
-                    <TableCell className="text-center">{getStatusBadge(d.status)}</TableCell>
+                    <TableCell className="text-center">{getStatusBadge(d)}</TableCell>
                     <TableCell className="text-center">
                       <div className="flex items-center justify-center gap-1">
-                        {d.status === "قيد_الانتظار" && canApprove && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => approveMutation.mutate(d.id)}
-                            disabled={approveMutation.isPending}
-                            data-testid={`button-approve-${d.id}`}
-                          >
-                            <CheckCircle className="h-3 w-3 ml-1" />
-                            اعتماد
-                          </Button>
-                        )}
-                        {(d.status === "قيد_الانتظار" || d.status === "نشط") && (d.fromUserId === user?.id || canApprove) && (
+                        {/* Approval/rejection happens ONLY through the مهامي task
+                            modal (with full details + reject reason). The old
+                            in-page "اعتماد" button was dead — it keyed on
+                            status "قيد_الانتظار", which the server never sets. */}
+                        {(d.status === "نشط") && (d.fromUserId === user?.id || canApprove) && (
                           <Button
                             size="sm"
                             variant="outline"

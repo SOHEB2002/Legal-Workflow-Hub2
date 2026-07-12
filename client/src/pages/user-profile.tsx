@@ -34,15 +34,13 @@ import {
   BarChart3,
   FileText,
   Users,
-  Palmtree,
   Shield,
   Lock,
   Eye,
   EyeOff,
 } from "lucide-react";
-import { UserRoleLabels, VacationStatusLabels, CaseStageLabels } from "@shared/schema";
-import type { UserRoleType, VacationStatusValue, CaseStageValue } from "@shared/schema";
-import { VacationDialog } from "@/components/users/vacation-dialog";
+import { UserRoleLabels, CaseStageLabels } from "@shared/schema";
+import type { UserRoleType, CaseStageValue } from "@shared/schema";
 
 export default function UserProfilePage() {
   const [, params] = useRoute("/user-profile/:id");
@@ -52,8 +50,7 @@ export default function UserProfilePage() {
   const { toast } = useToast();
   const { getDepartmentName } = useDepartments();
   const { 
-    extendedUsers, 
-    getUserVacations,
+    extendedUsers,
     getUserActivityLog,
     getTeamById,
     getUserStats,
@@ -61,7 +58,6 @@ export default function UserProfilePage() {
   const { cases } = useCases();
   const { consultations } = useConsultations();
 
-  const [showVacationDialog, setShowVacationDialog] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -99,7 +95,6 @@ export default function UserProfilePage() {
 
   const user = users.find(u => u.id === userId);
   const extendedUser = extendedUsers.find(eu => eu.id === userId);
-  const userVacations = userId ? getUserVacations(userId) : [];
   const activityLog = userId ? getUserActivityLog(userId).slice(0, 20) : [];
   const team = extendedUser?.teamId ? getTeamById(extendedUser.teamId) : null;
   const stats = userId ? getUserStats(userId) : null;
@@ -193,12 +188,8 @@ export default function UserProfilePage() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <Button variant="outline" onClick={() => setShowVacationDialog(true)}>
-                <Palmtree className="w-4 h-4 ml-2" />
-                جدولة إجازة
-              </Button>
-            </div>
+            {/* RESERVED: "جدولة إجازة" (leave) button removed — old localStorage-only
+                vacation scheduler was unenforced; a real server-backed leave system is planned. */}
           </div>
         </CardContent>
       </Card>
@@ -207,7 +198,6 @@ export default function UserProfilePage() {
         <TabsList className={`grid w-full ${isOwnProfile ? "grid-cols-6" : "grid-cols-5"}`}>
           <TabsTrigger value="stats" data-testid="tab-stats">الإحصائيات</TabsTrigger>
           <TabsTrigger value="cases" data-testid="tab-cases">القضايا</TabsTrigger>
-          <TabsTrigger value="vacations" data-testid="tab-vacations">الإجازات</TabsTrigger>
           <TabsTrigger value="activity" data-testid="tab-activity">سجل النشاط</TabsTrigger>
           <TabsTrigger value="permissions" data-testid="tab-permissions">الصلاحيات</TabsTrigger>
           {isOwnProfile && <TabsTrigger value="security" data-testid="tab-security">الأمان</TabsTrigger>}
@@ -299,44 +289,6 @@ export default function UserProfilePage() {
                     <TableRow>
                       <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                         لا توجد قضايا
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="vacations" className="mt-4">
-          <Card>
-            <CardContent className="pt-4">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="text-right">من</TableHead>
-                    <TableHead className="text-right">إلى</TableHead>
-                    <TableHead className="text-right">السبب</TableHead>
-                    <TableHead className="text-right">الحالة</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {userVacations.map((v) => (
-                    <TableRow key={v.id}>
-                      <TableCell><DualDateDisplay date={v.startDate} compact /></TableCell>
-                      <TableCell><DualDateDisplay date={v.endDate} compact /></TableCell>
-                      <TableCell>{v.reason || "-"}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {VacationStatusLabels[v.status as VacationStatusValue]}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {userVacations.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
-                        لا توجد إجازات
                       </TableCell>
                     </TableRow>
                   )}
@@ -470,12 +422,6 @@ export default function UserProfilePage() {
           </TabsContent>
         )}
       </Tabs>
-
-      <VacationDialog
-        open={showVacationDialog}
-        onOpenChange={setShowVacationDialog}
-        user={user}
-      />
     </div>
   );
 }

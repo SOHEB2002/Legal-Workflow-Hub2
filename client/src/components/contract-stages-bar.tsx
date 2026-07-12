@@ -38,7 +38,7 @@ export function ContractStagesBar({
 
   return (
     <div
-      className="flex items-center justify-between gap-2 overflow-x-auto pb-2"
+      className="flex items-center justify-between gap-2 overflow-x-auto min-w-0 pb-2"
       dir="rtl"
       data-testid="contract-stages-bar"
     >

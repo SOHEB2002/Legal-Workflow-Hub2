@@ -14,7 +14,7 @@ import {
   canSendNotifications,
   canSendReminders
 } from "@shared/schema";
-import { apiRequest, refreshAuthToken, getAuthHeaders } from "@/lib/queryClient";
+import { apiRequest, refreshAuthToken, getAuthHeaders, queryClient } from "@/lib/queryClient";
 
 interface AuthContextType {
   user: User | null;
@@ -110,6 +110,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem("lawfirm_token");
     localStorage.removeItem("lawfirm_csrf_token");
     localStorage.removeItem("lawfirm_user");
+    // Wipe ALL cached react-query data so the NEXT user who logs in on this same
+    // tab never renders this user's cached responses. Query keys are
+    // user-agnostic (e.g. ["/api/my-tasks"]) and the client defaults favor the
+    // cache (refetchOnMount:false, staleTime 60s, gcTime 5min), so without this
+    // the new session showed the previous user's tasks/notifications until the
+    // 30s poll or a hard refresh. clear() only touches the in-memory cache — it
+    // does NOT remove localStorage prefs (theme, favorites, filters).
+    queryClient.clear();
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);
       refreshTimerRef.current = null;
@@ -203,6 +211,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const data = await res.json();
       if (data.user) {
+        // Belt-and-suspenders: clear any residual cache from a PRIOR session
+        // before the new user's components mount, covering paths that reach
+        // login WITHOUT a preceding logout() (session-expiry re-login, or
+        // switching account directly). After a normal logout the cache is
+        // already empty, so this is a no-op there.
+        queryClient.clear();
         setUser(data.user);
         if (data.token) {
           localStorage.setItem("lawfirm_token", data.token);

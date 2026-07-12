@@ -83,21 +83,33 @@ const menuItems: MenuItem[] = [
   },
 ];
 
-const adminMenuItems = [
+// الإدارة section. The GROUP renders for every authenticated user, but each item
+// keeps its own visibility: المستخدمين and التفويضات are open to all (both are
+// role-scoped server-side / on their own pages); سجل النشاط stays manager-only
+// via `managerOnly` (filtered by canManageUsers below) — unchanged audience.
+// Order is intentional: المستخدمين → التفويضات → سجل النشاط.
+const adminMenuItems: (MenuItem & { managerOnly?: boolean })[] = [
   {
     title: "المستخدمين",
     url: "/users",
     icon: UserCog,
   },
   {
-    title: "سجل النشاط",
-    url: "/activity-log",
-    icon: FileText,
-  },
-  {
     title: "التفويضات",
     url: "/delegations",
     icon: ArrowLeftRight,
+  },
+  {
+    title: "سجل النشاط",
+    url: "/activity-log",
+    icon: FileText,
+    managerOnly: true,
+  },
+  {
+    title: "إسناد مهام الدعم",
+    url: "/admin-support-tasks",
+    icon: ClipboardList,
+    managerOnly: true,
   },
 ];
 
@@ -246,12 +258,13 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {permissions.canManageUsers && (
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-sidebar-foreground/60">الإدارة</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {adminMenuItems.map((item) => (
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-sidebar-foreground/60">الإدارة</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {adminMenuItems
+                .filter((item) => !item.managerOnly || permissions.canManageUsers)
+                .map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
                       asChild
@@ -265,10 +278,9 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
         <SidebarGroup>
           <SidebarGroupLabel className="text-sidebar-foreground/60">سير العمل</SidebarGroupLabel>

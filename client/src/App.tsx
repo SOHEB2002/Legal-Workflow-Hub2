@@ -57,6 +57,7 @@ const ReportsPage = lazy(() => import("@/pages/reports"));
 const MemosPage = lazy(() => import("@/pages/memos"));
 const SupportPage = lazy(() => import("@/pages/support"));
 const DelegationsPage = lazy(() => import("@/pages/delegations"));
+const AdminSupportTasksPage = lazy(() => import("@/pages/admin-support-tasks"));
 const TeamsPage = lazy(() => import("@/pages/teams"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
@@ -96,6 +97,7 @@ function Router() {
         <Route path="/memos" component={MemosPage} />
         <Route path="/support" component={SupportPage} />
         <Route path="/delegations" component={DelegationsPage} />
+        <Route path="/admin-support-tasks" component={AdminSupportTasksPage} />
         <Route path="/teams" component={TeamsPage} />
         <Route component={NotFound} />
       </Switch>

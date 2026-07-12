@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +37,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, Palmtree, AlertTriangle, Loader2 } from "lucide-react";
+import { Search, User, Shield, Building2, Phone, Mail, Plus, MoreHorizontal, Pencil, Trash2, Key, Power, Users, FileText, Eye, Briefcase, AlertTriangle, Loader2, ArrowLeftRight } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useUsers } from "@/lib/users-context";
@@ -46,8 +47,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import type { User as UserType, UserRoleType, UserStatusValue, TaskSpecialtyValue } from "@shared/schema";
 import { UserRole, UserRoleLabels, UserStatus, UserStatusLabels, TaskSpecialty, TaskSpecialtyLabels } from "@shared/schema";
-import { VacationDialog } from "@/components/users/vacation-dialog";
-import { CustomPermissionsDialog } from "@/components/users/custom-permissions-dialog";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 
 function getRoleBadgeColor(role: UserRoleType) {
@@ -91,20 +90,41 @@ function getStatusBadgeColor(status: UserStatusValue) {
 export default function UsersPage() {
   const { user, permissions, users, addUser, updateUser, resetPassword, toggleUserStatus, refetchUsers } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
-  const { extendedUsers, isUserOnVacation } = useUsers();
+  const { extendedUsers } = useUsers();
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
   const isDepartmentHead = user?.role === "department_head";
   const userDepartmentId = user?.departmentId || "";
+  // Manager tier (branch_manager / department_head) keeps the full admin surface;
+  // everyone else gets a read-only directory + the two universal actions
+  // (تفويض on any row, تعديل كلمة المرور on their OWN row). The admin actions
+  // below are all wrapped in this flag AND already 403-gated server-side.
+  const isManager = permissions.canManageUsers;
+
+  // PART 2 — transparency badges: all currently-valid delegations (public,
+  // lean id-pairs) mapped by party so each row can show مُفوِّض / نائب عن.
+  // One query, no N+1; names resolved from the already-loaded users list.
+  const { data: activeDelegations = [] } = useQuery<{ fromUserId: string; toUserId: string }[]>({
+    queryKey: ["/api/delegations/active"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/delegations/active");
+      return res.json();
+    },
+  });
+  const delegatesByFrom = new Map<string, string[]>();
+  const delegatorsByTo = new Map<string, string[]>();
+  for (const d of activeDelegations) {
+    delegatesByFrom.set(d.fromUserId, [...(delegatesByFrom.get(d.fromUserId) ?? []), d.toUserId]);
+    delegatorsByTo.set(d.toUserId, [...(delegatorsByTo.get(d.toUserId) ?? []), d.fromUserId]);
+  }
+  const userName = (id: string) => users.find((u) => u.id === id)?.name || id;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [departmentFilter, setDepartmentFilter] = useState<string>(isDepartmentHead ? userDepartmentId : "all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
-  const [showVacationDialog, setShowVacationDialog] = useState(false);
-  const [showPermissionsDialog, setShowPermissionsDialog] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -413,8 +433,6 @@ export default function UsersPage() {
       matchesStatus = userStatus === UserStatus.ACTIVE;
     } else if (statusFilter === "inactive") {
       matchesStatus = userStatus === UserStatus.INACTIVE;
-    } else if (statusFilter === "on_vacation") {
-      matchesStatus = userStatus === UserStatus.ON_VACATION || isUserOnVacation(u.id);
     } else if (statusFilter === "suspended") {
       matchesStatus = userStatus === UserStatus.SUSPENDED;
     }
@@ -425,39 +443,24 @@ export default function UsersPage() {
   const getUserStatus = (userId: string): UserStatusValue => {
     const extended = extendedUsers.find(eu => eu.id === userId);
     if (extended?.status) return extended.status;
-    if (isUserOnVacation(userId)) return UserStatus.ON_VACATION;
     const user = users.find(u => u.id === userId);
     return user?.isActive ? UserStatus.ACTIVE : UserStatus.INACTIVE;
   };
-
-  if (!permissions.canManageUsers) {
-    return (
-      <div className="p-6">
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Shield className="w-12 h-12 text-muted-foreground mb-4" />
-            <h2 className="text-xl font-semibold mb-2">غير مصرح</h2>
-            <p className="text-muted-foreground">ليس لديك صلاحية للوصول لهذه الصفحة</p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">
-            {isDepartmentHead ? "موظفو القسم" : "إدارة المستخدمين"}
+            {isManager ? (isDepartmentHead ? "موظفو القسم" : "إدارة المستخدمين") : "المستخدمون"}
           </h1>
           <p className="text-muted-foreground">
-            {isDepartmentHead
-              ? `عرض الموظفين التابعين لقسمك`
-              : "إدارة حسابات وصلاحيات المستخدمين"}
+            {isManager
+              ? (isDepartmentHead ? "عرض الموظفين التابعين لقسمك" : "إدارة حسابات وصلاحيات المستخدمين")
+              : "دليل المستخدمين — أنشئ تفويضاً من أي صف"}
           </p>
         </div>
-        {!isDepartmentHead && (
+        {isManager && !isDepartmentHead && (
           <Button data-testid="button-add-user" onClick={() => { resetForm(); setShowAddDialog(true); }}>
             <Plus className="w-4 h-4 ml-2" />
             إضافة مستخدم
@@ -564,7 +567,6 @@ export default function UsersPage() {
                 <SelectItem value="all">جميع الحالات</SelectItem>
                 <SelectItem value="active">نشط</SelectItem>
                 <SelectItem value="inactive">غير نشط</SelectItem>
-                <SelectItem value="on_vacation">في إجازة</SelectItem>
                 <SelectItem value="suspended">موقوف</SelectItem>
               </SelectContent>
             </Select>
@@ -598,6 +600,20 @@ export default function UsersPage() {
                       <div>
                         <p className="font-medium"><BidiText>{u.name}</BidiText></p>
                         <p className="text-sm text-muted-foreground"><LtrInline>@{u.username}</LtrInline></p>
+                        {(delegatesByFrom.has(u.id) || delegatorsByTo.has(u.id)) && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {delegatesByFrom.get(u.id)?.map((toId) => (
+                              <Badge key={`from-${toId}`} variant="outline" className="text-xs bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30">
+                                مُفوِّض ← <BidiText>{userName(toId)}</BidiText>
+                              </Badge>
+                            ))}
+                            {delegatorsByTo.get(u.id)?.map((fromId) => (
+                              <Badge key={`to-${fromId}`} variant="outline" className="text-xs bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30">
+                                نائب عن <BidiText>{userName(fromId)}</BidiText>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </TableCell>
@@ -634,6 +650,23 @@ export default function UsersPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        {/* Universal — delegate to this user (fromUser = you, set server-side). */}
+                        <DropdownMenuItem
+                          data-testid={`button-delegate-${u.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/delegations?to=${u.id}`);
+                          }}
+                        >
+                          <ArrowLeftRight className="w-4 h-4 ml-2" />
+                          تفويض
+                        </DropdownMenuItem>
+                        {/* Regular users get ONLY تفويض here. Own-password change lives
+                            on the profile page (الأمان tab) — not duplicated on this page. */}
+                        {/* Admin actions — managers only; also 403-gated server-side. */}
+                        {isManager && (
+                          <>
+                        {!isDepartmentHead && <DropdownMenuSeparator />}
                         {!isDepartmentHead && (
                           <DropdownMenuItem
                             data-testid={`button-edit-${u.id}`}
@@ -683,32 +716,14 @@ export default function UsersPage() {
                           <Eye className="w-4 h-4 ml-2" />
                           عرض الملف الشخصي
                         </DropdownMenuItem>
-                        {!isDepartmentHead && (
-                          <DropdownMenuItem
-                            data-testid={`button-schedule-vacation-${u.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setUserToAction(u);
-                              setShowVacationDialog(true);
-                            }}
-                          >
-                            <Palmtree className="w-4 h-4 ml-2" />
-                            جدولة إجازة
-                          </DropdownMenuItem>
-                        )}
-                        {!isDepartmentHead && (
-                          <DropdownMenuItem
-                            data-testid={`button-custom-permissions-${u.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setUserToAction(u);
-                              setShowPermissionsDialog(true);
-                            }}
-                          >
-                            <Shield className="w-4 h-4 ml-2" />
-                            تخصيص الصلاحيات
-                          </DropdownMenuItem>
-                        )}
+                        {/* RESERVED: "جدولة إجازة" (leave) menu entry removed here.
+                            The old localStorage-only vacation scheduler was per-browser and
+                            unenforced; deleted. A real server-backed leave system is planned
+                            (approving leave will create a delegation) — rebuild the entry here then. */}
+                        {/* RESERVED: "تخصيص الصلاحيات" (custom-permissions) menu entry removed here.
+                            The old localStorage-only dialog was dead/unenforced and misleading; deleted.
+                            This slot is reserved for the future server-backed admin_support
+                            fine-grained task-type assignment feature — rebuild the entry here then. */}
                         <DropdownMenuItem
                           data-testid={`button-activity-log-${u.id}`}
                           onClick={(e) => {
@@ -733,6 +748,8 @@ export default function UsersPage() {
                               <Trash2 className="w-4 h-4 ml-2" />
                               حذف
                             </DropdownMenuItem>
+                          </>
+                        )}
                           </>
                         )}
                       </DropdownMenuContent>
@@ -1228,8 +1245,8 @@ export default function UsersPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowResetPasswordDialog(false)}>إلغاء</Button>
-            <Button 
-              data-testid="button-confirm-reset-password" 
+            <Button
+              data-testid="button-confirm-reset-password"
               onClick={handleResetPassword}
               disabled={!newPassword || newPassword.length < 6}
             >
@@ -1292,16 +1309,6 @@ export default function UsersPage() {
         </DialogContent>
       </Dialog>
 
-      <VacationDialog
-        open={showVacationDialog}
-        onOpenChange={setShowVacationDialog}
-        user={userToAction}
-      />
-      <CustomPermissionsDialog
-        open={showPermissionsDialog}
-        onOpenChange={setShowPermissionsDialog}
-        user={userToAction}
-      />
     </div>
   );
 }

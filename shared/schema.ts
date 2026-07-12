@@ -131,6 +131,11 @@ export const lawCases = pgTable("law_cases", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // Set true when the responsible lawyer answers "لا يوجد وكالة" on the
+  // agency-verification task → drives + tracks the admin_support "إصدار وكالة"
+  // task (generated in sub-step 2); cleared when the issuance is completed.
+  // Purely additive (ADD COLUMN).
+  agencyIssuanceRequested: boolean("agency_issuance_requested").notNull().default(false),
 }, (t) => ({
   // Phase-2 deploy split — FK temporarily declared application-side only.
   // Apply via script/apply-fk-constraints.sql with statement_timeout
@@ -220,6 +225,10 @@ export const consultations = pgTable("consultations", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // data-completion reminder ack (consultation at its استكمال_المرفقات_والبيانات
+  // stage). Mirrors lawCases.dataCompletionLastAckAt — the unified-tasks feed
+  // suppresses the data_completion_consultation task for 2 days after each ack.
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   // Committee-referral form fields (نموذج الإحالة للجنة المراجعة).
   // Mirrors lawCases.internalReviewerId / priority — set when the
   // assigned lawyer hands the file to the committee. priority_reason
@@ -414,6 +423,10 @@ export const contracts = pgTable("contracts", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // data-completion reminder ack (contract at its استكمال_البيانات_والمرفقات
+  // stage). Mirrors lawCases.dataCompletionLastAckAt — the unified-tasks feed
+  // suppresses the data_completion_contract task for 2 days after each ack.
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   createdBy:          varchar("created_by", { length: 255 }).notNull(),
   createdAt:          timestamp("created_at").defaultNow(),
   updatedAt:          timestamp("updated_at").defaultNow(),
@@ -512,6 +525,11 @@ export const hearings = pgTable("hearings", {
   // an upcoming hearing) — set when acknowledged; suppresses that hearing's
   // reminder. Purely additive (ADD COLUMN).
   agencyVerificationAckAt: timestamp("agency_verification_ack_at"),
+  // The responsible lawyer's answer to the agency-verification task
+  // (يوجد / لا يوجد). NULL until answered. "لا يوجد" is what sub-step 2 reads
+  // (via law_cases.agency_issuance_requested) to generate the admin_support
+  // "إصدار وكالة" task. Purely additive (ADD COLUMN).
+  agencyVerificationAnswer: varchar("agency_verification_answer", { length: 20 }),
   adminTasksCreated: boolean("admin_tasks_created").default(false),
   opponentMemos: text("opponent_memos").default(""),
   hearingMinutes: text("hearing_minutes").default(""),
@@ -542,6 +560,24 @@ export const fieldTasks = pgTable("field_tasks", {
   taskType: varchar("task_type", { length: 50 }).notNull(),
   caseId: varchar("case_id", { length: 255 }),
   consultationId: varchar("consultation_id", { length: 255 }),
+  // Optional entity links for general (عام) tasks (additive, nullable) — a
+  // general task may be linked to a contract or a client as well as / instead
+  // of a case/consultation. Auto/field tasks leave these null.
+  contractId: varchar("contract_id", { length: 255 }),
+  clientId: varchar("client_id", { length: 255 }),
+  // Review note attached when a general (عام) task is sent for / returned from
+  // review (AWAITING_REVIEW lifecycle, wired in later sub-steps). Additive,
+  // defaults to "" — auto/field tasks never set it.
+  reviewNote: text("review_note").default(""),
+  // General (عام) task two-path lifecycle (additive, all nullable — auto/field
+  // tasks leave them null). originalRequesterId is the WRITE-ONCE return address
+  // (set at creation, never updated) so the result always returns to the creator
+  // regardless of reassignment churn; routedDepartmentId marks a dept-routed
+  // (path-2) task and which dept (null = person-direct path-1); workerId records
+  // who produced the CURRENT result (for send-back re-routing + "النتيجة من" display).
+  originalRequesterId: varchar("original_requester_id", { length: 255 }),
+  routedDepartmentId: varchar("routed_department_id", { length: 255 }),
+  workerId: varchar("worker_id", { length: 255 }),
   assignedTo: varchar("assigned_to", { length: 255 }).notNull(),
   assignedBy: varchar("assigned_by", { length: 255 }).notNull(),
   status: varchar("status", { length: 50 }).notNull(),
@@ -562,6 +598,32 @@ export const fieldTasks = pgTable("field_tasks", {
   // Batch M FK — applied via script/apply-fk-constraints.sql (commented; see law_cases note):
   // caseFk: foreignKey({ name: "field_tasks_case_id_fkey",
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
+}));
+
+// Sub-step 4.6 — general (عام) task activity thread (سجل الأخذ والعطا). One row
+// per lifecycle event so the full back-and-forth survives: completionNotes /
+// reviewNote OVERWRITE each cycle, this table ACCUMULATES. Keyed to the
+// field_task; only general tasks ever write events. event_type is a free varchar
+// (extensible) — path-2 توزيع/اعتماد add later with NO schema change. actor_name
+// is denormalized (like case_activity_log.user_name) so the FE needs no lookup.
+export const generalTaskEvents = pgTable("general_task_events", {
+  id:          varchar("id", { length: 255 }).primaryKey(),
+  fieldTaskId: varchar("field_task_id", { length: 255 }).notNull(),
+  actorId:     varchar("actor_id", { length: 255 }),
+  actorName:   varchar("actor_name", { length: 255 }),
+  eventType:   varchar("event_type", { length: 50 }).notNull(),
+  body:        text("body"),
+  createdAt:   timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  taskIdx:    index("general_task_events_task_idx").on(t.fieldTaskId),
+  createdIdx: index("general_task_events_created_at_idx").on(t.createdAt),
+  // FK mirrors memo_activity_log (cascade) — uncommented here, created with the
+  // table on dev via the Replit-Shell SQL (db:push is unavailable locally).
+  taskFk: foreignKey({
+    name: "general_task_events_field_task_id_fkey",
+    columns: [t.fieldTaskId],
+    foreignColumns: [fieldTasks.id],
+  }).onDelete("cascade"),
 }));
 
 export const contactLogs = pgTable("contact_logs", {
@@ -683,6 +745,12 @@ export const memos = pgTable("memos", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // data-completion reminder ack (memo awaiting-completion latch). Mirrors
+  // lawCases.dataCompletionLastAckAt — the feed suppresses the
+  // data_completion_memo task for 2 days after each ack. The task is gated on
+  // awaiting_completion=true (memos have no data-completion STAGE; the button
+  // is the trigger), and clears when resume-from-completion flips the latch off.
+  dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
   // Phase-9 — review-workflow stage column. Mirrors the consultations
   // currentStage axis but with memo-specific labels (جاهزة_للرفع /
   // مرفوعة instead of جاهزة_للإرسال / منجزة). Nullable because legacy
@@ -886,6 +954,9 @@ export const delegationsTable = pgTable("delegations_table", {
   specificCaseIds: jsonb("specific_case_ids"),
   approvedBy: varchar("approved_by", { length: 255 }),
   approvedAt: timestamp("approved_at"),
+  // Set when a delegation is REJECTED (status "مرفوض") via /api/delegations/:id/reject.
+  // Nullable/additive — pending/approved/cancelled/expired rows leave it null.
+  rejectionReason: text("rejection_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   // Unified-tasks I4a — delegation enforcement resolver filters by the delegate
@@ -942,6 +1013,19 @@ export const supportTickets = pgTable("support_tickets", {
   resolvedAt: timestamp("resolved_at"),
   closedAt: timestamp("closed_at"),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Admin_support fine-grained task routing (Phase 1). Central mapping: each
+// assignable admin_support task type → exactly ONE owner. One row per task_type
+// (the PK enforces single-owner-per-type at the DB level). assigneeUserId is
+// NULLABLE: NULL = unassigned → the task falls to the manager's unassigned group
+// (Phase-1 routing lands in a later sub-step). Additive table, created on
+// dev+prod via script/add-admin-support-task-assignments.sql (db:push
+// unavailable); this declaration exists so Drizzle can query it.
+export const adminSupportTaskAssignments = pgTable("admin_support_task_assignments", {
+  taskType: varchar("task_type", { length: 50 }).primaryKey(),
+  assigneeUserId: varchar("assignee_user_id", { length: 255 }),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -1954,6 +2038,10 @@ export const FieldTaskStatus = {
   IN_PROGRESS: "قيد_التنفيذ",
   COMPLETED: "مكتمل",
   CANCELLED: "ملغي",
+  AWAITING_REVIEW: "بانتظار_الاطلاع",
+  // General (عام) task path-2 (dept-routed) lifecycle states (additive):
+  AWAITING_DISTRIBUTION: "بانتظار_التوزيع", // sitting with the dept_head to hand to a member
+  AWAITING_APPROVAL: "بانتظار_الاعتماد",     // member's result awaiting the dept_head's approval
 } as const;
 
 export type FieldTaskStatusValue = typeof FieldTaskStatus[keyof typeof FieldTaskStatus];
@@ -1963,6 +2051,9 @@ export const FieldTaskStatusLabels: Record<FieldTaskStatusValue, string> = {
   "قيد_التنفيذ": "قيد التنفيذ",
   "مكتمل": "مكتمل",
   "ملغي": "ملغي",
+  "بانتظار_الاطلاع": "بانتظار الاطلاع",
+  "بانتظار_التوزيع": "بانتظار الإسناد",
+  "بانتظار_الاعتماد": "بانتظار الاعتماد",
 };
 
 // ==================== أنواع المهام الميدانية ====================
@@ -1972,6 +2063,7 @@ export const FieldTaskType = {
   CLIENT_VISIT: "زيارة_عميل",
   COURT_FOLLOW_UP: "متابعة_محكمة",
   OTHER: "أخرى",
+  GENERAL: "عام",
 } as const;
 
 export type FieldTaskTypeValue = typeof FieldTaskType[keyof typeof FieldTaskType];
@@ -1982,6 +2074,30 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
   "زيارة_عميل": "زيارة عميل",
   "متابعة_محكمة": "متابعة محكمة",
   "أخرى": "أخرى",
+  "عام": "مهمة عامة",
+};
+
+// ==================== أحداث المهام العامة (general-task activity thread) ====================
+// Extensible event types for the general (عام) task الأخذ والعطا thread. Path-2
+// (sub-step 7/8) adds DISTRIBUTED "توزيع" / APPROVED "اعتماد" here with no schema
+// change (event_type is a free varchar on the row).
+export const GeneralTaskEventType = {
+  DISTRIBUTED:        "توزيع",      // dept_head handed a dept-routed task to a member (sub-step 6)
+  RESULT_SUBMITTED:   "إنجاز",      // worker submitted a result
+  RETURNED_WITH_NOTE: "ملاحظة",     // requester OR dept_head sent it back with a note
+  REVIEWED_CLOSED:    "تم_الاطلاع", // requester closed it (no text)
+  APPROVED:           "اعتماد",     // dept_head approved a member's result → on to the requester (sub-step 8)
+} as const;
+
+export type GeneralTaskEventTypeValue = typeof GeneralTaskEventType[keyof typeof GeneralTaskEventType];
+
+export const GeneralTaskEventTypeLabels: Record<GeneralTaskEventTypeValue, string> = {
+  // Key (the stored event_type value) stays "توزيع"; the DISPLAYED label is "إسناد".
+  "توزيع": "إسناد",
+  "إنجاز": "إنجاز",
+  "ملاحظة": "ملاحظة",
+  "تم_الاطلاع": "تم الاطلاع",
+  "اعتماد": "اعتماد",
 };
 
 // ==================== تخصص المهام (Task-routing specialty) ====================
@@ -2253,6 +2369,7 @@ export interface LawCase {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  agencyIssuanceRequested: boolean;
 }
 
 export interface CaseComment {
@@ -2306,6 +2423,7 @@ export interface Consultation {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  dataCompletionLastAckAt: string | null;
   // Committee-referral fields. internalReviewerId is set/cleared by
   // department_head / admin_support / branch_manager (mirrors cases /
   // memos). priority + priorityReason are editable by anyone who can
@@ -2510,7 +2628,7 @@ export type ContractStageValue = typeof ContractStage[keyof typeof ContractStage
 
 export const ContractStageLabels: Record<ContractStageValue, string> = {
   "استلام":                       "استلام",
-  "استكمال_البيانات_والمرفقات":  "استكمال البيانات والمرفقات",
+  "استكمال_البيانات_والمرفقات":  "استكمال المرفقات والبيانات",
   "تحرير":                        "تحرير",
   "مراجعة_داخلية":               "مراجعة داخلية",
   "لجنة_مراجعة":                  "لجنة مراجعة",
@@ -2677,6 +2795,7 @@ export const ContractActivityType = {
   // edits that drive the committee form.
   REVIEWER_ASSIGNED:        "reviewer_assigned",
   PRIORITY_SET:             "priority_set",
+  SENT:                     "contract_sent",
 } as const;
 
 export type ContractActivityTypeValue =
@@ -2695,7 +2814,7 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   general_note:           "ملاحظة عامة",
   paused:                 "تعليق",
   unpaused:               "إلغاء التعليق",
-  await_completion:       "بانتظار استكمال البيانات والمرفقات",
+  await_completion:       "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
   completion_skipped:     "تجاوز مرحلة الاستكمال",
   contract_type_changed:  "تغيير نوع العقد",
@@ -2705,6 +2824,7 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   attachment_deleted:     "حذف مرفق",
   reviewer_assigned:      "تعيين مراجع داخلي",
   priority_set:           "تحديث الأولوية",
+  contract_sent:          "إرسال العقد",
 };
 
 export interface Contract {
@@ -2729,6 +2849,7 @@ export interface Contract {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  dataCompletionLastAckAt: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -2875,6 +2996,7 @@ export interface Hearing {
   reportCompleted: boolean;
   sessionReportExported: boolean;
   agencyVerificationAckAt: string | null;
+  agencyVerificationAnswer: string | null;
   adminTasksCreated: boolean;
   opponentMemos: string;
   hearingMinutes: string;
@@ -2927,6 +3049,12 @@ export interface FieldTask {
   taskType: FieldTaskTypeValue;
   caseId: string | null;
   consultationId: string | null;
+  contractId: string | null;
+  clientId: string | null;
+  reviewNote: string;
+  originalRequesterId: string | null;
+  routedDepartmentId: string | null;
+  workerId: string | null;
   assignedTo: string;
   assignedBy: string;
   status: FieldTaskStatusValue;
@@ -2938,6 +3066,19 @@ export interface FieldTask {
   proofFileLink: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// One general-task thread event (read shape). eventType is a plain string for
+// read-extensibility (mirrors MemoActivity.activityType) — future event types
+// never break this. actorName is denormalized for display.
+export interface GeneralTaskEvent {
+  id: string;
+  fieldTaskId: string;
+  actorId: string | null;
+  actorName: string | null;
+  eventType: string;
+  body: string | null;
+  createdAt: string;
 }
 
 // ==================== المرفقات ====================
@@ -2992,6 +3133,7 @@ export interface Memo {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  dataCompletionLastAckAt: string | null;
   // Phase-9 — review-workflow stage. Null on legacy memos until the
   // backfill in script/backfill-memo-stages.sql runs. New memos start
   // at MemoStage.RECEIVED ("استلام").
@@ -3280,9 +3422,11 @@ export type HearingReportInput = z.infer<typeof hearingReportSchema>;
 export const insertFieldTaskSchema = z.object({
   title: z.string().min(1, "عنوان المهمة مطلوب"),
   description: z.string().optional().default(""),
-  taskType: z.enum(["مراجعة_ميدانية", "تسليم_مستندات", "زيارة_عميل", "متابعة_محكمة", "أخرى"]),
+  taskType: z.enum(["مراجعة_ميدانية", "تسليم_مستندات", "زيارة_عميل", "متابعة_محكمة", "أخرى", "عام"]),
   caseId: z.string().nullable().optional(),
   consultationId: z.string().nullable().optional(),
+  contractId: z.string().nullable().optional(),
+  clientId: z.string().nullable().optional(),
   assignedTo: z.string().min(1, "الموظف المكلف مطلوب"),
   priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).default("متوسط"),
   dueDate: z.string().min(1, "تاريخ الاستحقاق مطلوب"),
@@ -3553,6 +3697,7 @@ export const NotificationType = {
   // إشعارات التفويض
   DELEGATION_REQUESTED: "delegation_requested",
   DELEGATION_APPROVED: "delegation_approved",
+  DELEGATION_REJECTED: "delegation_rejected",
   DELEGATION_EXPIRED: "delegation_expired",
 
   // متابعة التواصل
@@ -3619,6 +3764,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   legal_deadline_overdue: "موعد نظامي فائت",
   delegation_requested: "طلب تفويض",
   delegation_approved: "تم اعتماد التفويض",
+  delegation_rejected: "تم رفض التفويض",
   delegation_expired: "انتهاء التفويض",
   contact_followup_overdue: "متابعة تواصل متأخرة",
   hearing_update_overdue: "جلسة متأخرة التحديث",
@@ -4053,6 +4199,29 @@ export const workflowNotesSchema = z.object({
   notes: z.string().optional(),
 }).passthrough();
 
+// Sub-step 4 — general (عام) task requester-review body. decision is
+// "تم_الاطلاع" (close) or "ملاحظة" (send back); reviewNote required only for the
+// send-back (enforced in the handler, not here — tolerant gate per 2D').
+export const generalTaskReviewSchema = z.object({
+  decision: z.string().optional(),
+  reviewNote: z.string().optional(),
+}).passthrough();
+
+// Sub-step 6 — dept_head distributes a بانتظار_التوزيع dept-routed general task
+// to a member (assignedTo = the chosen member or himself). Tolerant gate;
+// the handler enforces the real rules (active + routed-dept membership).
+export const generalTaskDistributeSchema = z.object({
+  assignedTo: z.string().optional(),
+}).passthrough();
+
+// Sub-step 8 — dept_head approves (اعتماد) or returns-with-note (ملاحظة) a
+// member's result on a بانتظار_الاعتماد dept-routed general task. Tolerant gate;
+// the handler enforces the decision values + required note.
+export const generalTaskApproveSchema = z.object({
+  decision: z.string().optional(),
+  reviewNote: z.string().optional(),
+}).passthrough();
+
 // ---- 2D' V2a — cases/consultations non-workflow Tier-2 bodies ----
 
 export const updateCaseTaradiSchema = z.object({
@@ -4125,6 +4294,8 @@ export const updateFieldTaskSchema = z.object({
   taskType: z.string().optional(),
   caseId: z.string().nullable().optional(),
   consultationId: z.string().nullable().optional(),
+  contractId: z.string().nullable().optional(),
+  clientId: z.string().nullable().optional(),
   assignedTo: z.string().optional(),
   assignedBy: z.string().optional(),
   status: z.string().optional(),
@@ -4135,6 +4306,7 @@ export const updateFieldTaskSchema = z.object({
   completionNotes: z.string().optional(),
   proofDescription: z.string().optional(),
   proofFileLink: z.string().optional(),
+  reviewNote: z.string().optional(),
 }).passthrough();
 
 // Mirrors the legal_deadlines columns (status is the only field the FE
@@ -4938,14 +5110,29 @@ export const MyTaskKind = {
   MEMO_PENDING: "memo_pending",           // assigned memo not yet filed
   REVIEW_PENDING: "review_pending",       // internal/committee review awaiting this reviewer
   COLLECTION: "collection",               // collection (تحصيل) field task, incl. unassigned ""
+  EXECUTION: "execution",                 // execution (تنفيذ) field task — رفع طلب تنفيذ after a final for-us judgment; incl. unassigned ""
   LEGAL_DEADLINE: "legal_deadline",       // approaching/overdue legal deadline
   FIELD_TASK: "field_task",               // assigned field task
+  GENERAL_TASK: "general_task",           // manually-created general (عام) task — the assignee's do-the-work step, incl. unassigned ""
+  GENERAL_TASK_REVIEW: "general_task_review",         // general task result awaiting the ORIGINAL requester's review (تم الاطلاع / send-back)
+  GENERAL_TASK_DISTRIBUTE: "general_task_distribute", // dept-routed general task awaiting the dept_head distributing it to a member
+  GENERAL_TASK_AWAITING_DISTRIBUTION: "general_task_awaiting_distribution", // requester's informational view of a dept-routed task still awaiting distribution (esp. head-less dept, assignedTo="")
+  GENERAL_TASK_APPROVE: "general_task_approve",       // dept member's result awaiting the dept_head's approval before it returns to the requester
   CONTACT_FOLLOWUP: "contact_followup",   // contact follow-up due
   DELEGATION_APPROVAL: "delegation_approval", // pending delegation approval (dept_head)
   CONSULTATION_CLOSING: "consultation_closing", // consultation ready to close (admin_support)
-  DATA_COMPLETION: "data_completion",     // case at data-completion stage (admin_support)
-  AGENCY_VERIFICATION: "agency_verification", // verify agency before a near hearing
+  // Data-completion is routed per WORK TYPE — one assignee per entity kind.
+  // case/consultation/contract fire at their data-completion STAGE; memo fires
+  // on its awaiting-completion latch. (Sub-step 1: only _CASE generates; the
+  // other three are assignable-but-dormant until sub-steps 2/3 add generation.)
+  DATA_COMPLETION_CASE: "data_completion_case",                 // case at data-completion stage (admin_support)
+  DATA_COMPLETION_CONSULTATION: "data_completion_consultation", // consultation at data-completion stage (dormant until sub-step 2)
+  DATA_COMPLETION_CONTRACT: "data_completion_contract",         // contract at data-completion stage (dormant until sub-step 3)
+  DATA_COMPLETION_MEMO: "data_completion_memo",                 // memo awaiting completion (dormant until sub-step 3)
+  AGENCY_VERIFICATION: "agency_verification", // lawyer verifies agency before a near hearing (يوجد/لا يوجد)
+  AGENCY_ISSUANCE: "agency_issuance", // admin_support issues the agency (إصدار وكالة) after a "لا يوجد" answer; incl. unassigned ""
   SESSION_REPORT_EXPORT: "session_report_export", // export session-report PDF (admin_support)
+  CONTRACT_SEND: "contract_send", // admin_support sends an approved contract (إرسال العقد) at جاهزة_للإرسال → مغلقة; incl. unassigned ""
 } as const;
 
 export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
@@ -4984,6 +5171,19 @@ export interface MyTaskItem {
   // delegator (active approved delegation), this is the delegator's user id so
   // the FE can render "بالنيابة عن (name)". null = the user's own task.
   onBehalfOfUserId: string | null;
+  // For dept-routed general (عام) tasks only (GENERAL_TASK_DISTRIBUTE): the
+  // department the task was routed to, so the distribute modal can list that
+  // department's members WITHOUT depending on the field-tasks context (a
+  // head-less task that just got a head stays assignedTo="" → outside that
+  // context's scope). Undefined for every other feed kind.
+  routedDepartmentId?: string | null;
+  // GROUPED agency tasks only (agency_verification / agency_issuance): the
+  // underlying entity ids a single completion must act on — hearing ids for
+  // verify, field_task ids for issuance. Same-client (exact name) + same-lawyer
+  // + same pre-hearing window collapse into ONE task. Always carries ≥1 id (a
+  // group of 1 = one element), so the completion path is uniform. Undefined for
+  // every other kind.
+  groupMemberIds?: string[];
 }
 
 // Classify a task into its specialty domain (ترافع litigation / استشارات
@@ -5008,4 +5208,90 @@ export function taskSpecialtyClass(entityType: MyTaskEntityType, caseId: string 
     default: // contract, delegation
       return null;
   }
+}
+
+// ==================== Admin_support fine-grained task routing ====================
+// Task kinds that route to a specific owner via the admin_support_task_assignments
+// table (one row per task_type). Each kind's specialty class is derived by the
+// FEED via taskSpecialtyClass on the kind's source entity, so the feed's class
+// labels/filters stay unchanged:
+//   collection             → field_task w/ caseId → ترافع (LITIGATION)
+//   consultation_closing   → consultation         → استشارات (CONSULTATIONS)
+//   session_report_export  → hearing               → ترافع (LITIGATION)
+//   data_completion_*      → per WORK TYPE, one assignee per entity kind:
+//     _case         → case at data-completion stage          → ترافع (LITIGATION)
+//     _consultation → consultation at data-completion stage   → استشارات (CONSULTATIONS)
+//     _contract     → contract at data-completion stage       → (no class)
+//     _memo         → memo awaiting-completion latch          → ترافع (LITIGATION)
+export const AssignableAdminSupportTaskKind = {
+  COLLECTION: MyTaskKind.COLLECTION,
+  CONSULTATION_CLOSING: MyTaskKind.CONSULTATION_CLOSING,
+  SESSION_REPORT_EXPORT: MyTaskKind.SESSION_REPORT_EXPORT,
+  DATA_COMPLETION_CASE: MyTaskKind.DATA_COMPLETION_CASE,
+  DATA_COMPLETION_CONSULTATION: MyTaskKind.DATA_COMPLETION_CONSULTATION,
+  DATA_COMPLETION_CONTRACT: MyTaskKind.DATA_COMPLETION_CONTRACT,
+  DATA_COMPLETION_MEMO: MyTaskKind.DATA_COMPLETION_MEMO,
+  EXECUTION: MyTaskKind.EXECUTION,
+  AGENCY_ISSUANCE: MyTaskKind.AGENCY_ISSUANCE,
+  CONTRACT_SEND: MyTaskKind.CONTRACT_SEND,
+} as const;
+
+export type AssignableAdminSupportTaskKindValue =
+  typeof AssignableAdminSupportTaskKind[keyof typeof AssignableAdminSupportTaskKind];
+
+export const AssignableAdminSupportTaskLabels: Record<AssignableAdminSupportTaskKindValue, string> = {
+  [AssignableAdminSupportTaskKind.COLLECTION]: "التحصيل",
+  [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: "إغلاق الاستشارات",
+  [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: "تصدير تقارير الجلسات",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE]: "استكمال المرفقات والبيانات — القضايا",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION]: "استكمال المرفقات والبيانات — الاستشارات",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONTRACT]: "استكمال المرفقات والبيانات — العقود",
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: "استكمال المرفقات والبيانات — المذكرات",
+  [AssignableAdminSupportTaskKind.EXECUTION]: "التنفيذ",
+  [AssignableAdminSupportTaskKind.AGENCY_ISSUANCE]: "إصدار الوكالة",
+  [AssignableAdminSupportTaskKind.CONTRACT_SEND]: "إرسال العقد",
+};
+
+// Single specialty class per kind, for the settings-screen hint only (NOT
+// routing — routing derives class per-task via taskSpecialtyClass). Each
+// data_completion work-type now maps to its own entity's class; contract has
+// no class in the two-class domain → omitted (settings screen shows no hint).
+export const AssignableAdminSupportTaskClass: Partial<Record<AssignableAdminSupportTaskKindValue, TaskSpecialtyValue>> = {
+  [AssignableAdminSupportTaskKind.COLLECTION]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.CONSULTATION_CLOSING]: TaskSpecialty.CONSULTATIONS,
+  [AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION]: TaskSpecialty.CONSULTATIONS,
+  // DATA_COMPLETION_CONTRACT + CONTRACT_SEND omitted — contracts are outside the
+  // two-class domain (no specialty hint on those settings rows).
+  [AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.EXECUTION]: TaskSpecialty.LITIGATION,
+  [AssignableAdminSupportTaskKind.AGENCY_ISSUANCE]: TaskSpecialty.LITIGATION,
+};
+
+// Select type for the mapping table (declared with the table above).
+export type AdminSupportTaskAssignment = typeof adminSupportTaskAssignments.$inferSelect;
+
+// Tolerant PUT-body gate for the assignment settings screen (validation-patterns
+// discipline: passthrough, all-optional, handler does the semantic checks).
+// assigneeUserId: a user id, null to clear (unassign), or omitted (→ null). The
+// task type comes from the URL param, validated against AssignableAdminSupportTaskKind.
+export const setAdminSupportTaskAssignmentSchema = z.object({
+  assigneeUserId: z.string().nullable().optional(),
+}).passthrough();
+
+// Resolve the owner of an assignable admin_support task type from the mapping:
+// returns the saved assignee IFF it is still an ACTIVE admin_support user, else
+// "" (the unassigned sentinel → the task falls to the manager's unassigned
+// group). Pure/structural so it's shared by collection creation-time routing
+// (server/routes) and the computed feed (server/storage).
+export function resolveAdminSupportAssignee(
+  taskType: AssignableAdminSupportTaskKindValue,
+  assignments: Array<{ taskType: string; assigneeUserId: string | null }>,
+  users: Array<{ id: string; role: string; isActive: boolean }>,
+): string {
+  const assigneeId = assignments.find((a) => a.taskType === taskType)?.assigneeUserId ?? null;
+  if (!assigneeId) return "";
+  const u = users.find((x) => x.id === assigneeId);
+  return u && u.role === "admin_support" && u.isActive ? assigneeId : "";
 }

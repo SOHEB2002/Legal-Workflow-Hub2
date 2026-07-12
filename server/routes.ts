@@ -11,8 +11,14 @@ import {
   extendConsultationDeliverySchema,
   insertHearingSchema,
   insertFieldTaskSchema,
-  TaskSpecialty,
-  type TaskSpecialtyValue,
+  generalTaskReviewSchema,
+  generalTaskDistributeSchema,
+  generalTaskApproveSchema,
+  FieldTaskStatus,
+  FieldTaskType,
+  GeneralTaskEventType,
+  type FieldTask,
+  type Hearing,
   insertAttachmentSchema,
   insertMemoSchema,
   hearingResultSchema,
@@ -103,6 +109,10 @@ import {
   markSectionViewedSchema,
   updateContractSchema,
   updateHearingSchema,
+  canManageUsers,
+  AssignableAdminSupportTaskKind,
+  resolveAdminSupportAssignee,
+  setAdminSupportTaskAssignmentSchema,
   SIDEBAR_SECTIONS,
   type SidebarSectionValue,
   type UserRoleType,
@@ -131,6 +141,7 @@ import { invalidateUserCache } from "./index";
 import {
   type ActingContext,
   actingIdentitiesFor,
+  actorDisplayName,
   hasEffectiveRole,
   effectiveDeptHeadDepts,
   effectiveIdsFor,
@@ -174,6 +185,36 @@ interface AuthRequest extends Request {
     name: string;
     departmentId: string | null;
   };
+}
+
+// Item-5 Phase 1 — stamp the actor's display name with "(نيابةً عن X)" when a
+// write happens under an active delegation that applies to this case. Thin
+// wrappers over the storage writes so each call site is a clean swap; the
+// resolution (0/1/>1 applicable delegators for the caseId) lives in
+// actorDisplayName. Non-delegated writes are byte-identical.
+async function logCaseActivityActing(
+  req: AuthRequest,
+  data: Parameters<typeof storage.logCaseActivity>[0],
+) {
+  return storage.logCaseActivity({
+    ...data,
+    userName: actorDisplayName(req.actingContext, data.caseId, data.userName),
+  });
+}
+
+// General-task thread events. Only case-LINKED tasks are stamped: a standalone
+// general task (caseId=null) must NOT falsely inherit an all_cases delegation
+// (it would tag the delegate's OWN unrelated task as "نيابةً عن"). caseId-linked
+// general tasks stamp like any other case activity.
+async function createGeneralTaskEventActing(
+  req: AuthRequest,
+  caseId: string | null,
+  data: Parameters<typeof storage.createGeneralTaskEvent>[0],
+) {
+  return storage.createGeneralTaskEvent({
+    ...data,
+    actorName: caseId ? actorDisplayName(req.actingContext, caseId, data.actorName ?? "") : data.actorName,
+  });
 }
 
 const loginLimiter = rateLimit({
@@ -325,7 +366,7 @@ function canViewMemoActivitiesIdentity(u: CaseActorIdentity, memo: any, parentCa
   return false;
 }
 
-function canActOnHearing(user: { id: string; role: string }, hearing: any): boolean {
+function canActOnHearingIdentity(u: { id: string; role: string }, hearing: any): boolean {
   // Phase 5 B/M4 — department_head removed so the server mirrors the FE
   // hearing-action contract (hearings.tsx canActOnHearing = attending lawyer /
   // branch_manager / admin_support). The UI never surfaces a hearing action to
@@ -335,9 +376,23 @@ function canActOnHearing(user: { id: string; role: string }, hearing: any): bool
   // 403s every viewer write before the handler, and result/report/close are
   // the only (write) call sites. Effective write-actors: attending lawyer /
   // branch_manager / admin_support.
-  if (["branch_manager", "admin_support", "viewer"].includes(user.role)) return true;
-  if (hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
+  if (["branch_manager", "admin_support", "viewer"].includes(u.role)) return true;
+  if (hearing.attendingLawyerId && hearing.attendingLawyerId === u.id) return true;
   return false;
+}
+// Delegation-aware wrapper — mirrors the canModifyCase idiom (identity fn +
+// actingIdentitiesFor expansion) so a delegate standing in for the attending
+// lawyer can act on the hearing, exactly like every other case action. Keyed on
+// the hearing's parent case id so specific_cases delegations scope correctly;
+// non-case scoping is impossible here (a hearing always has a caseId). With no
+// ctx the identity set is exactly [self] → byte-identical to the old check, so
+// NON-delegated allow/deny is unchanged. The distinct attending-lawyer semantics
+// are preserved per-identity (we do NOT fold into canModifyCase, which grants a
+// broader role set and would loosen the gate for non-delegated users too).
+function canActOnHearing(user: { id: string; role: string }, hearing: any, ctx?: ActingContext): boolean {
+  if (!ctx) return canActOnHearingIdentity(user, hearing);
+  return actingIdentitiesFor(ctx, hearing.caseId ?? null)
+    .some((i) => canActOnHearingIdentity({ id: i.userId, role: i.role }, hearing));
 }
 
 async function validateAssignedUsersActive(userIds: string[]): Promise<{ valid: boolean; inactiveUsers: string[] }> {
@@ -661,22 +716,6 @@ function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   return false;
 }
 
-// Route an auto-created admin_support task to the active admin_support whose
-// taskSpecialties includes the task's class. Returns the unassigned sentinel
-// "" (the system's canonical "غير مسند" value, e.g. auto-memos write
-// primaryLawyerId || responsibleLawyerId || "") when no matching active
-// specialist exists, so the task lands unassigned for a manager/admin_support
-// to distribute manually — instead of the old arbitrary "first admin_support".
-function selectSpecialistAssignee(allUsers: any[], specialty: TaskSpecialtyValue): string {
-  const match = allUsers.find(
-    (u: any) =>
-      u.role === "admin_support" &&
-      u.isActive &&
-      Array.isArray(u.taskSpecialties) &&
-      u.taskSpecialties.includes(specialty),
-  );
-  return match?.id || "";
-}
 
 function validateStageTransition(
   currentStage: string,
@@ -1783,7 +1822,7 @@ export async function registerRoutes(
       }
 
       try {
-        await storage.logCaseActivity({
+        await logCaseActivityActing(req, {
           caseId: newCase.id,
           userId: createdBy,
           userName: createdBy,
@@ -1876,7 +1915,7 @@ export async function registerRoutes(
         }
       }
       
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: caseItem.id,
         userId: user.id,
         userName: user.name,
@@ -1935,7 +1974,7 @@ export async function registerRoutes(
         }
       }
       
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: caseItem.id,
         userId: user.id,
         userName: user.name,
@@ -1983,7 +2022,7 @@ export async function registerRoutes(
         });
       }
       
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: caseItem.id,
         userId: user.id,
         userName: user.name,
@@ -2051,10 +2090,11 @@ export async function registerRoutes(
           : "تحرير_صحيفة_الدعوى";
       }
 
+      const skipActorName = actorDisplayName(req.actingContext, caseItem.id, user.name);
       const stageHistory: CaseStageTransition[] = [
         ...existingHistory,
-        { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: user.name, notes: "تجاوز تلقائي" },
-        { stage: skipTarget, timestamp: now, userId: user.id, userName: user.name, notes: skipNote },
+        { stage: "استكمال_البيانات", timestamp: now, userId: user.id, userName: skipActorName, notes: "تجاوز تلقائي" },
+        { stage: skipTarget, timestamp: now, userId: user.id, userName: skipActorName, notes: skipNote },
       ];
 
       // Step 1: update the case (the only critical operation)
@@ -2077,7 +2117,7 @@ export async function registerRoutes(
 
       // Step 2: best-effort activity log — must not fail the request
       try {
-        await storage.logCaseActivity({
+        await logCaseActivityActing(req, {
           caseId: caseItem.id,
           userId: user.id,
           userName: user.name,
@@ -2594,7 +2634,7 @@ export async function registerRoutes(
             stage: req.body.currentStage,
             timestamp: new Date().toISOString(),
             userId: user.id,
-            userName: user.name || user.id,
+            userName: actorDisplayName(req.actingContext, String(req.params.id), user.name || user.id),
             notes: req.body.stageChangeNotes || "",
           },
         ];
@@ -2615,7 +2655,7 @@ export async function registerRoutes(
           req.body.struckOffDate = null;
           req.body.struckOffReopenDeadline = null;
           try {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -2635,9 +2675,10 @@ export async function registerRoutes(
       if (shouldCreateCollectionTask) {
         try {
           const allUsers = await storage.getAllUsers();
-          // Collection (تحصيل) is litigation-class work → route to the
-          // litigation admin_support specialist; "" (unassigned) if none.
-          const assignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
+          // Collection (تحصيل) → the per-type assignee from the admin_support
+          // task-routing mapping; "" (unassigned pool) if unset or inactive.
+          const assignments = await storage.getAdminSupportTaskAssignments();
+          const assignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
           const collectionTask = await storage.createFieldTask(
             {
               title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
@@ -2661,7 +2702,7 @@ export async function registerRoutes(
       if (user && existing) {
         try {
           if (isDeptTransfer) {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -2678,7 +2719,7 @@ export async function registerRoutes(
               }),
             });
           } else if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -2697,7 +2738,7 @@ export async function registerRoutes(
               existing.isSettlementCase
             ) {
               if (req.body.currentStage === "مقفلة") {
-                await storage.logCaseActivity({
+                await logCaseActivityActing(req, {
                   caseId: String(req.params.id),
                   userId: user.id,
                   userName: user.name || user.id,
@@ -2710,7 +2751,7 @@ export async function registerRoutes(
               ) {
                 const prevClassification = existing.caseClassification || "منظورة_بالمحكمة";
                 const newClassification = req.body.caseClassification || prevClassification;
-                await storage.logCaseActivity({
+                await logCaseActivityActing(req, {
                   caseId: String(req.params.id),
                   userId: user.id,
                   userName: user.name || user.id,
@@ -2728,7 +2769,7 @@ export async function registerRoutes(
               }
             }
           } else {
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: String(req.params.id),
               userId: user.id,
               userName: user.name || user.id,
@@ -4203,6 +4244,166 @@ export async function registerRoutes(
     }
   });
 
+  // "تم" acknowledge for the CONSULTATION data-completion reminder — mirrors the
+  // case route above (stamps data_completion_last_ack_at=now so the feed
+  // suppresses the data_completion_consultation task for 2 days, then
+  // re-surfaces if the consultation is still at استكمال_المرفقات_والبيانات).
+  app.post("/api/consultations/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+      if (!canModifyConsultation(user, consultation, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const updated = await storage.updateConsultation(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging consultation data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
+  // "تم" acknowledge for the CONTRACT data-completion reminder — mirrors the
+  // case route above (stamps data_completion_last_ack_at=now so the feed
+  // suppresses the data_completion_contract task for 2 days, then re-surfaces
+  // if the contract is still at استكمال_البيانات_والمرفقات).
+  app.post("/api/contracts/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (!canModifyContract(user, contract, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const updated = await storage.updateContract(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging contract data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
+  // "تم" acknowledge for the MEMO data-completion reminder. Unlike the other
+  // three work-types (stage-gated), the memo task is gated on the memo's
+  // awaiting_completion latch (set by the "بانتظار استكمال البيانات" button);
+  // this stamps data_completion_last_ack_at=now to suppress the reminder for 2
+  // days. The task fully clears when the memo's resume-from-completion flips
+  // awaiting_completion off. Same actor set as the other memo state changes.
+  app.post("/api/memos/:id/ack-data-completion", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support"]);
+      if (!allowed) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      const updated = await storage.updateMemo(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error acknowledging memo data completion:", error);
+      res.status(500).json({ error: "حدث خطأ في تأكيد التواصل" });
+    }
+  });
+
+  // Complete an EXECUTION (تنفيذ) task by recording رقم طلب التنفيذ. The number is
+  // written ONLY to the case activity log (the sole record — no case column; a
+  // future execution-requests page extracts from the log) and the field_task is
+  // marked complete. Gated like the field-task PATCH: the assignee, OR anyone who
+  // can modify the parent case (admin_support / branch_manager / dept_head(own) /
+  // the case's lawyer). Delegation actorDisplayName stamping applies if acting-as.
+  app.post("/api/field-tasks/:id/execution-request", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (!task.caseId) return res.status(400).json({ error: "المهمة غير مرتبطة بقضية" });
+      const parentCase = await storage.getCaseById(task.caseId);
+      const canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+      if (task.assignedTo !== user.id && !canModifyParent) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      const executionRequestNumber = String(req.body?.executionRequestNumber ?? "").trim();
+      if (!executionRequestNumber) {
+        return res.status(400).json({ error: "رقم طلب التنفيذ مطلوب" });
+      }
+      const actorName = actorDisplayName(req.actingContext, task.caseId, user.name || user.id);
+      await logCaseActivityActing(req, {
+        caseId: task.caseId,
+        userId: user.id,
+        userName: user.name || user.id,
+        actionType: "execution_request_filed",
+        title: `تم رفع طلب تنفيذ رقم ${executionRequestNumber} بواسطة ${actorName}`,
+        details: `رقم طلب التنفيذ: ${executionRequestNumber}`,
+      });
+      const updated = await storage.updateFieldTask(String(req.params.id), {
+        status: FieldTaskStatus.COMPLETED,
+        completionNotes: `رقم طلب التنفيذ: ${executionRequestNumber}`,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error filing execution request:", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل طلب التنفيذ" });
+    }
+  });
+
+  // Complete an AGENCY_ISSUANCE (إصدار وكالة) GROUP task (sub-step 3) with a simple
+  // confirm. One "تم إصدار الوكالة" satisfies EVERY case in the group (same موكّل →
+  // one الوكالة covers all his cases): for each grouped field_task it records a
+  // case-activity-log event (traceability, mirrors how execution logs its number),
+  // marks the field_task complete, and CLEARS that case's agencyIssuanceRequested
+  // latch so a future pre-hearing "لا يوجد" can re-fire. A group of 1 is the normal
+  // single case. Each field_task is gated like the field-task PATCH: the assignee,
+  // OR anyone who can modify its parent case — every member is gated before any
+  // write. Delegation actorDisplayName stamping applies if acting-as.
+  app.post("/api/field-tasks/agency-issuance-group", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const body = req.body ?? {};
+      const fieldTaskIds: string[] = Array.isArray(body.fieldTaskIds)
+        ? Array.from(new Set((body.fieldTaskIds as unknown[]).map((x) => String(x)).filter(Boolean)))
+        : [];
+      if (fieldTaskIds.length === 0) {
+        return res.status(400).json({ error: "لم يتم تحديد أي مهمة" });
+      }
+      // Load + gate ALL members first (the group is built from the caller's own
+      // routed tasks) — a failure on any means an invalid request, never a partial.
+      const members: { task: FieldTask; caseId: string }[] = [];
+      for (const tid of fieldTaskIds) {
+        const task = await storage.getFieldTaskById(tid);
+        if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+        if (!task.caseId) return res.status(400).json({ error: "المهمة غير مرتبطة بقضية" });
+        const parentCase = await storage.getCaseById(task.caseId);
+        const canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+        if (task.assignedTo !== user.id && !canModifyParent) {
+          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+        }
+        members.push({ task, caseId: task.caseId });
+      }
+      // One confirm satisfies all: log + complete + clear the latch per member.
+      for (const { task, caseId } of members) {
+        const actorName = actorDisplayName(req.actingContext, caseId, user.name || user.id);
+        await logCaseActivityActing(req, {
+          caseId,
+          userId: user.id,
+          userName: user.name || user.id,
+          actionType: "agency_issued",
+          title: `تم إصدار وكالة بواسطة ${actorName}`,
+          details: `تم إصدار الوكالة للقضية`,
+        });
+        await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.COMPLETED,
+          completionNotes: `تم إصدار الوكالة`,
+        });
+        // Clear the latch so a future pre-hearing "لا يوجد" can request a new issuance.
+        await storage.updateCase(caseId, { agencyIssuanceRequested: false });
+      }
+      res.json({ success: true, count: members.length });
+    } catch (error) {
+      console.error("Error completing agency issuance (group):", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل إصدار الوكالة" });
+    }
+  });
+
   app.post("/api/cases/:id/return-to-committee", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -4238,7 +4439,7 @@ export async function registerRoutes(
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة القضية للجنة" });
 
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.returnCaseToCommittee(lawCase.id, {
         notes,
         performedBy: reqUser.id,
@@ -4293,7 +4494,7 @@ export async function registerRoutes(
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
 
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.pauseCase(lawCase.id, {
         reason,
         performedBy: reqUser.id,
@@ -4339,7 +4540,7 @@ export async function registerRoutes(
       }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.unpauseCase(lawCase.id, {
         notes,
         performedBy: reqUser.id,
@@ -5486,6 +5687,47 @@ export async function registerRoutes(
     }
   });
 
+  // Contract send (إرسال العقد) completion — the admin_support person confirms
+  // "تم الإرسال" on the جاهزة_للإرسال sender task. Auto-advances the contract to
+  // مغلقة (the terminal stage — sending IS the end) via updateContractAndLog, and
+  // records "تم إرسال العقد بواسطة <name>" to the activity log (delegation
+  // actorDisplayName stamping; contracts have no caseId so all_cases delegators
+  // stamp). Gated to admin_support / branch_manager — mirrors the READY→CLOSED
+  // stage-transition rule (contract-send is mapping-routed, no per-instance
+  // assignee). Guards on status active + currentStage جاهزة_للإرسال.
+  app.post("/api/contracts/:id/mark-sent", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!["admin_support", "branch_manager"].includes(reqUser.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإرسال العقد" });
+      }
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.currentStage !== ContractStage.READY) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة جاهزة للإرسال" });
+      }
+      const actorName = actorDisplayName(req.actingContext, null, reqUser.name || reqUser.id);
+      const updated = await storage.updateContractAndLog(contract.id, {
+        status: "closed",
+        currentStage: ContractStage.CLOSED,
+        closedAt: new Date().toISOString(),
+      }, {
+        activityType: ContractActivityType.SENT,
+        description: `تم إرسال العقد بواسطة ${actorName}`,
+        metadata: { fromStage: contract.currentStage },
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إرسال العقد" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error marking contract sent:", error);
+      res.status(500).json({ error: "حدث خطأ في إرسال العقد" });
+    }
+  });
+
   // Pause / unpause / await-completion / resume / skip-completion —
   // same gate across all four (branch_manager / admin_support /
   // department_head own dept / assigned lawyer) and same payload shape
@@ -6130,7 +6372,7 @@ export async function registerRoutes(
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
 
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const updated = await storage.awaitCaseCompletion(lawCase.id, {
         reason,
         performedBy: reqUser.id,
@@ -6194,7 +6436,7 @@ export async function registerRoutes(
       }
       const notes = typeof req.body?.notes === "string" ? req.body.notes : undefined;
       const performer = await storage.getUser(reqUser.id);
-      const performerName = performer?.name || reqUser.id;
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
       const result = await storage.resumeCaseFromCompletion(lawCase.id, {
         notes,
         performedBy: reqUser.id,
@@ -6949,7 +7191,7 @@ export async function registerRoutes(
 
       if (user && validatedData.caseId) {
         try {
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: validatedData.caseId,
             userId: user.id,
             userName: user.name || user.id,
@@ -7114,7 +7356,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (hearing.hearingDate) {
@@ -7209,7 +7451,7 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (reqUser && effectiveCaseId) {
         try {
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: effectiveCaseId,
             userId: reqUser.id,
             userName: reqUser.name || reqUser.id,
@@ -7257,7 +7499,7 @@ export async function registerRoutes(
           });
           if (reqUser) {
             try {
-              await storage.logCaseActivity({
+              await logCaseActivityActing(req, {
                 caseId: effectiveCaseId,
                 userId: reqUser.id,
                 userName: reqUser.name || reqUser.id,
@@ -7375,9 +7617,10 @@ export async function registerRoutes(
               caseUpdate.currentStage = "محكوم_حكم_نهائي";
               await storage.updateCase(effectiveCaseId, caseUpdate);
 
-              // Auto-create collection task → litigation specialist ("" if none)
+              // Auto-create collection task → per-type assignee ("" if unset/inactive)
               const allUsers = await storage.getAllUsers();
-              const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
+              const assignments = await storage.getAdminSupportTaskAssignments();
+              const collectionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
               const collectionTask = await storage.createFieldTask({
                 title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
                 description: `صدر حكم نهائي ${judgmentType} - يرجى إعداد خطاب تحصيل`,
@@ -7389,6 +7632,25 @@ export async function registerRoutes(
               }, reqUser.id);
               await notifyFieldTaskCreated(collectionTask, reqUser); // D4
               createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
+
+              // Execution fires ONLY for a final FOR-US judgment (لصالحنا), NOT
+              // جزئي — ALONGSIDE the collection task above. Same live routing via
+              // the execution mapping key (assignee → own task; unset → the
+              // branch_manager's unassigned pool). Collection is left unchanged.
+              if (judgmentType === "لصالحنا") {
+                const executionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.EXECUTION, assignments, allUsers);
+                const executionTask = await storage.createFieldTask({
+                  title: `رفع طلب تنفيذ — قضية رقم ${existingCase.caseNumber}`,
+                  description: `صدر حكم نهائي لصالحنا - يرجى رفع طلب تنفيذ في محكمة التنفيذ`,
+                  taskType: "متابعة_محكمة",
+                  caseId: effectiveCaseId,
+                  assignedTo: executionAssignee,
+                  priority: "عاجل",
+                  dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+                }, reqUser.id);
+                await notifyFieldTaskCreated(executionTask, reqUser); // D4
+                createdTasks.push({ type: "execution_task", id: executionTask.id, description: "مهمة رفع طلب تنفيذ" });
+              }
 
               // Transition to collection
               const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
@@ -7472,7 +7734,7 @@ export async function registerRoutes(
               const activeCount = await getActiveMemoCount(effectiveCaseId);
               await storage.updateCase(effectiveCaseId, { activeMemoCount: activeCount });
 
-              await storage.logCaseActivity({
+              await logCaseActivityActing(req, {
                 caseId: effectiveCaseId,
                 userId: reqUser.id,
                 userName: reqUser.name || reqUser.id,
@@ -7486,19 +7748,6 @@ export async function registerRoutes(
               });
             }
           }
-
-          // Always create client contact task for judgments
-          const contactTask = await storage.createFieldTask({
-            title: `إبلاغ العميل بنتيجة الحكم — قضية رقم ${existingCase.caseNumber}`,
-            description: `صدر حكم ${judgmentType || ""} (${isFinal ? "نهائي" : "ابتدائي"}) - يرجى إبلاغ العميل بالتفاصيل`,
-            taskType: "زيارة_عميل",
-            caseId: effectiveCaseId,
-            assignedTo: lawyerAssignee,
-            priority: "عاجل",
-            dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          }, reqUser.id);
-          await notifyFieldTaskCreated(contactTask, reqUser); // D4
-          createdTasks.push({ type: "contact_client", id: contactTask.id, description: "مهمة إبلاغ العميل" });
         }
 
         // ==================== PATH C: STRUCK OFF (شطب) ====================
@@ -7511,7 +7760,7 @@ export async function registerRoutes(
           caseUpdate.struckOffReopenDeadline = reopenDeadline;
           await storage.updateCase(effectiveCaseId, caseUpdate);
 
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: effectiveCaseId,
             userId: reqUser.id,
             userName: reqUser.name || reqUser.id,
@@ -7545,9 +7794,10 @@ export async function registerRoutes(
 
         // ==================== CONCILIATION: SETTLEMENT REACHED (تم_الصلح) ====================
         else if (data.result === HearingResult.SETTLEMENT_REACHED || (data.result === HearingResult.SETTLEMENT && data.conciliationResult === "تم_الصلح")) {
-          // Auto-create collection task → litigation specialist ("" if none)
+          // Auto-create collection task → per-type assignee ("" if unset/inactive)
           const allUsers = await storage.getAllUsers();
-          const collectionAssignee = selectSpecialistAssignee(allUsers, TaskSpecialty.LITIGATION);
+          const assignments = await storage.getAdminSupportTaskAssignments();
+          const collectionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
           const collectionTask = await storage.createFieldTask({
             title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
             description: `تم الصلح - يرجى إعداد خطاب تحصيل`,
@@ -7579,7 +7829,7 @@ export async function registerRoutes(
             caseUpdate.status = "مغلق";
             caseUpdate.closedAt = new Date().toISOString();
             await storage.updateCase(effectiveCaseId, caseUpdate);
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
               userId: reqUser.id,
               userName: reqUser.name || reqUser.id,
@@ -7597,7 +7847,7 @@ export async function registerRoutes(
             caseUpdate.isSettlementCase = false;
             caseUpdate.caseClassification = "قيد_الدراسة";
             await storage.updateCase(effectiveCaseId, caseUpdate);
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
               userId: reqUser.id,
               userName: reqUser.name || reqUser.id,
@@ -7621,7 +7871,7 @@ export async function registerRoutes(
               caseUpdate.status = "مغلق";
               caseUpdate.closedAt = new Date().toISOString();
               await storage.updateCase(effectiveCaseId, caseUpdate);
-              await storage.logCaseActivity({
+              await logCaseActivityActing(req, {
                 caseId: effectiveCaseId,
                 userId: reqUser.id,
                 userName: reqUser.name || reqUser.id,
@@ -7651,9 +7901,9 @@ export async function registerRoutes(
             await storage.pauseCase(effectiveCaseId, {
               reason: SETTLEMENT_LINK_MISSING_PAUSE_REASON,
               performedBy: reqUser.id,
-              performerName: reqUser.name || reqUser.id,
+              performerName: actorDisplayName(req.actingContext, effectiveCaseId, reqUser.name || reqUser.id),
             });
-            await storage.logCaseActivity({
+            await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
               userId: reqUser.id,
               userName: reqUser.name || reqUser.id,
@@ -7692,7 +7942,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.result) {
@@ -7730,7 +7980,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {
@@ -7744,26 +7994,88 @@ export async function registerRoutes(
     }
   });
 
-  // "تم" acknowledge for the agency-verification reminder — stamps
-  // agency_verification_ack_at=now so the unified-tasks feed stops surfacing
-  // that hearing's agency_verification task. Same actors as the other hearing
-  // actions (attending lawyer / admin_support / branch_manager via
-  // canActOnHearing).
-  app.post("/api/hearings/:id/ack-agency-verification", requireAuth, async (req: AuthRequest, res) => {
+  // Agency-verification GROUP answer (sub-step 3) — the responsible lawyer answers
+  // the weekend-aware "two days before hearing" verify task with يوجد / لا يوجد for
+  // a WHOLE group at once. Same موكّل (exact client name) + same lawyer + same
+  // pre-hearing window collapse into ONE task; a group of 1 is the normal single
+  // case. The one answer applies to EVERY hearing in the group: either answer ends
+  // each hearing's verify task (stamps agency_verification_ack_at=now + records the
+  // answer). "لا يوجد" additionally generates, ONCE PER CASE, the admin_support
+  // "إصدار وكالة" issuance task (idempotent on the case flag). Same actors as the
+  // other hearing actions (attending lawyer / admin_support / branch_manager via
+  // canActOnHearing) — every hearing in the group is gated before any write.
+  app.post("/api/hearings/agency-verify-group", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const hearingId = String(req.params.id);
-      const hearing = await storage.getHearingById(hearingId);
-      if (!hearing) {
-        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      const body = req.body ?? {};
+      const answer = typeof body.answer === "string" ? body.answer : "";
+      if (answer !== "يوجد" && answer !== "لا يوجد") {
+        return res.status(400).json({ error: "قيمة الإجابة غير صحيحة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      const hearingIds: string[] = Array.isArray(body.hearingIds)
+        ? Array.from(new Set((body.hearingIds as unknown[]).map((x) => String(x)).filter(Boolean)))
+        : [];
+      if (hearingIds.length === 0) {
+        return res.status(400).json({ error: "لم يتم تحديد أي جلسة" });
       }
-      const updated = await storage.updateHearing(hearingId, { agencyVerificationAckAt: new Date().toISOString() });
-      res.json(updated);
+      // Load + gate ALL hearings first: the group is only ever built from the
+      // caller's own owned hearings, so a failure on any one means an invalid
+      // request (404/403) — never a partial write.
+      const loadedHearings: Hearing[] = [];
+      for (const hid of hearingIds) {
+        const hearing = await storage.getHearingById(hid);
+        if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
+        if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+          return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+        }
+        loadedHearings.push(hearing);
+      }
+      // Apply the answer to every hearing in the group (latch + recorded answer).
+      const nowIso = new Date().toISOString();
+      for (const hearing of loadedHearings) {
+        await storage.updateHearing(hearing.id, {
+          agencyVerificationAckAt: nowIso,
+          agencyVerificationAnswer: answer,
+        });
+      }
+      // "لا يوجد" → generate the admin_support issuance task ONCE PER CASE in the
+      // group (a case can appear via >1 hearing → dedupe by caseId). Idempotent on
+      // the FALSE→TRUE case-flag transition; create-first / latch-after so a
+      // generation failure leaves the flag false to retry (logged, never a silent
+      // stuck state, and never fails the answer already saved above). All cases in a
+      // group share the same mapping, so the assignee is resolved once.
+      if (answer === "لا يوجد") {
+        const caseIds = Array.from(new Set(loadedHearings.map((h) => h.caseId).filter((c): c is string => !!c)));
+        if (caseIds.length > 0) {
+          const allUsers = await storage.getAllUsers();
+          const assignments = await storage.getAdminSupportTaskAssignments();
+          const issuanceAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.AGENCY_ISSUANCE, assignments, allUsers);
+          const hearingByCase = new Map(loadedHearings.map((h) => [h.caseId, h]));
+          for (const caseId of caseIds) {
+            try {
+              const parentCase = await storage.getCaseById(caseId);
+              if (!parentCase || parentCase.agencyIssuanceRequested) continue;
+              const hearing = hearingByCase.get(caseId);
+              const issuanceTask = await storage.createFieldTask({
+                title: `إصدار وكالة — قضية رقم ${parentCase.caseNumber}`,
+                description: `لا توجد وكالة سارية على القضية قبل الجلسة - يرجى إصدار وكالة`,
+                taskType: "متابعة_محكمة",
+                caseId,
+                assignedTo: issuanceAssignee,
+                priority: "عاجل",
+                dueDate: hearing?.hearingDate || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+              }, req.user!.id);
+              await notifyFieldTaskCreated(issuanceTask, req.user!);
+              await storage.updateCase(caseId, { agencyIssuanceRequested: true });
+            } catch (genErr) {
+              console.error("Error generating agency issuance task for case", caseId, genErr);
+            }
+          }
+        }
+      }
+      res.json({ success: true, count: loadedHearings.length });
     } catch (error) {
-      console.error("Error acknowledging agency verification:", error);
-      res.status(500).json({ error: "حدث خطأ في تأكيد التحقق من الوكالة" });
+      console.error("Error answering agency verification (group):", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل إجابة التحقق من الوكالة" });
     }
   });
 
@@ -7774,7 +8086,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing)) {
+      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {
@@ -7836,6 +8148,23 @@ export async function registerRoutes(
     }
   });
 
+  // Sub-step 9 — مهامي "منجزة" archive: closed (مكتمل + ملغي) GENERAL (عام)
+  // tasks, scoped in storage to the viewer's feed visibility. Lazy — the FE only
+  // calls this when the archive section is expanded, so it never bloats the 30s
+  // my-tasks poll. Path has 2 segments after field-tasks (archive is a literal),
+  // and is registered BEFORE /api/field-tasks/:id so :id never captures it.
+  app.get("/api/field-tasks/archive", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const archived = await storage.getArchivedGeneralTasks({
+        id: user.id, role: user.role, departmentId: user.departmentId,
+      });
+      res.json(archived);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب المهام المنجزة" });
+    }
+  });
+
   // ITEM 1 — case-scoped field tasks: ALL field tasks on a case, gated by CASE
   // ACCESS (canViewCase, delegation-aware via req.actingContext — 4c-1). Whoever
   // can VIEW the case sees the case's complete task picture (the assigned lawyer
@@ -7894,6 +8223,46 @@ export async function registerRoutes(
 
   app.post("/api/field-tasks", requireAuth, async (req: AuthRequest, res) => {
     try {
+      // PATH-2 (sub-step 5, FINAL rules) — dept-routed general (عام) task. A
+      // non-empty routedDepartmentId marks "assign to a whole DEPARTMENT"
+      // instead of a person; person-direct creation never sends it, so that path
+      // (below) stays byte-identical. ANY role may dept-route (no role gate).
+      const rawRoutedDept = typeof req.body?.routedDepartmentId === "string"
+        ? req.body.routedDepartmentId.trim() : "";
+      if (rawRoutedDept) {
+        // Must be a real department. This also enforces "no dept-assign to
+        // admin_support" — admin_support is not a department row, so its id (or
+        // any bogus id) is rejected here.
+        const dept = await storage.getDepartmentById(rawRoutedDept);
+        if (!dept) {
+          return res.status(400).json({ error: "القسم غير موجود" });
+        }
+        // Resolve the dept head. Authoritative source = the users query, NOT
+        // departments.headId. Rules: exactly 1 → assign to that head; >1 → block
+        // (data anomaly; never guess); 0 (head-less) → DO NOT block — create the
+        // task routed + unassigned (assignedTo="") so it WAITS in بانتظار_التوزيع
+        // until a head is appointed (then the dept-scoped feed surfaces it).
+        const heads = await storage.getDepartmentHeads(rawRoutedDept);
+        if (heads.length > 1) {
+          return res.status(400).json({ error: "القسم له أكثر من رئيس قسم — يتعذّر تحديد المستلم" });
+        }
+        const head = heads.length === 1 ? heads[0] : null;
+        // The shared insert schema requires a non-empty assignedTo; pass a
+        // placeholder (the creator) to validate the rest of the body, then set
+        // the REAL assignee below (head.id, or "" when head-less).
+        const deptTaskData = insertFieldTaskSchema.parse({ ...req.body, assignedTo: head ? head.id : req.user!.id });
+        if (deptTaskData.taskType !== FieldTaskType.GENERAL) {
+          return res.status(400).json({ error: "الإسناد إلى قسم متاح للمهام العامة فقط" });
+        }
+        const deptTask = await storage.createFieldTask({
+          ...deptTaskData,
+          assignedTo: head ? head.id : "",
+          routedDepartmentId: rawRoutedDept,
+          status: FieldTaskStatus.AWAITING_DISTRIBUTION,
+        }, req.user!.id);
+        return res.status(201).json(deptTask);
+      }
+
       const validatedData = insertFieldTaskSchema.parse(req.body);
 
       // Validate assignedTo user is active
@@ -7943,7 +8312,22 @@ export async function registerRoutes(
         const parentConsultation = await storage.getConsultationById(existingTask.consultationId);
         canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
       }
-      if (existingTask.assignedTo !== user.id && !canModifyParent) {
+      // Flag 1 — a manager (branch_manager / admin_support) may ASSIGN an
+      // UNASSIGNED ("" assignee) task even when it has no parent case/
+      // consultation (the parentless unassigned pool surfaced in مهامي, e.g.
+      // ft_7). Narrow: only when the task is currently unassigned AND this PATCH
+      // sets a non-empty assignee. Delegation-aware via actingIdentitiesFor
+      // (mirrors the cases-transfer manager check), so an all_cases delegate
+      // standing in for a manager qualifies too.
+      const managerIdentities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, existingTask.caseId ?? null)
+        : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
+      const actsAsManager = managerIdentities.some((i) => i.role === "branch_manager" || i.role === "admin_support");
+      const isUnassignedAssign =
+        existingTask.assignedTo === "" &&
+        typeof req.body.assignedTo === "string" && req.body.assignedTo.length > 0 &&
+        actsAsManager;
+      if (existingTask.assignedTo !== user.id && !canModifyParent && !isUnassignedAssign) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       if (req.body.assignedTo) {
@@ -7953,9 +8337,78 @@ export async function registerRoutes(
         }
       }
 
-      const updated = await storage.updateFieldTask(String(req.params.id), req.body);
+      // Sub-step 4 + 7 — general (عام) complete-with-result, PATH-AWARE. A
+      // finished general task does NOT close directly; where it goes depends on
+      // how it was routed:
+      //   PATH-2 (routedDepartmentId set) — the member's result goes UP to the
+      //     dept_head of the routed department for approval (بانتظار_الاعتماد,
+      //     assignedTo = head, workerId = worker). If the worker IS that head
+      //     (distributed to himself in sub-step 6), his own approval is skipped
+      //     and the result goes straight to the requester like path-1.
+      //   PATH-1 (routedDepartmentId null) — unchanged sub-step-4 behavior: back
+      //     to the ORIGINAL requester for review (بانتظار_الاطلاع, assignedTo →
+      //     originalRequesterId, workerId = worker). EXCEPTION: a self-assigned
+      //     task (worker IS requester) has nothing to review → closes (مكتمل).
+      // Guarded on taskType === عام, so non-general field/auto/collection tasks
+      // keep their exact current complete→مكتمل behavior.
+      let updatePayload: Partial<FieldTask> = req.body;
+      const isGeneralComplete =
+        existingTask.taskType === FieldTaskType.GENERAL &&
+        req.body.status === FieldTaskStatus.COMPLETED &&
+        existingTask.status !== FieldTaskStatus.COMPLETED;
+      if (isGeneralComplete) {
+        const worker = user.id;
+        // Robust to a missing return address: fall back to assignedBy (the
+        // creator), exactly like the /review endpoint's legacy fallback, so the
+        // self-assign skip compares worker === (originalRequesterId ?? assignedBy)
+        // — never a raw null (a null requester must NEVER make a non-self task
+        // close without review). Also HEAL the row by persisting the resolved
+        // requester so a legacy/edge null can't recur on this task.
+        const requester = existingTask.originalRequesterId || existingTask.assignedBy;
+        const heal = existingTask.originalRequesterId ? {} : { originalRequesterId: requester };
+        // Sub-step 7 — resolve the path-2 approver. Same authoritative source as
+        // creation/distribute (the users query, never departments.headId). The
+        // approval branch is taken ONLY for exactly one head who is not the
+        // worker; a head-less (0) or multi-head (>1, a data anomaly the creation
+        // gate normally blocks) department must NOT strand the task → fall
+        // through to the path-1 requester routing so it can't get stuck.
+        let approvalHeadId: string | null = null;
+        if (existingTask.routedDepartmentId) {
+          const heads = await storage.getDepartmentHeads(existingTask.routedDepartmentId);
+          const workerIsHead = heads.some((h) => h.id === worker);
+          if (!workerIsHead) {
+            if (heads.length === 1) {
+              approvalHeadId = heads[0].id;
+            } else {
+              console.error(`[field-tasks PATCH] dept-routed complete: routed department ${existingTask.routedDepartmentId} has ${heads.length} heads — routing task ${existingTask.id} to the requester instead of approval`);
+            }
+          }
+          // workerIsHead → skip his own approval: fall through to requester.
+        }
+        updatePayload = approvalHeadId
+          ? { ...req.body, ...heal, status: FieldTaskStatus.AWAITING_APPROVAL, assignedTo: approvalHeadId, workerId: worker }
+          : worker === requester
+          ? { ...req.body, ...heal, workerId: worker } // self-assigned → close normally
+          : { ...req.body, ...heal, status: FieldTaskStatus.AWAITING_REVIEW, assignedTo: requester, workerId: worker };
+      }
+
+      const updated = await storage.updateFieldTask(String(req.params.id), updatePayload);
       if (!updated) {
         return res.status(404).json({ error: "المهمة غير موجودة" });
+      }
+
+      // Sub-step 4.6 — thread event: the worker submitted a result (إنجاز). Fires
+      // for BOTH the return-to-review path and the self-assign→مكتمل path (any
+      // general complete-with-result). Best-effort: never fail the completion.
+      if (isGeneralComplete) {
+        try {
+          await createGeneralTaskEventActing(req, updated.caseId, {
+            fieldTaskId: updated.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.RESULT_SUBMITTED, body: updated.completionNotes || "",
+          });
+        } catch (e) {
+          console.error("[field-tasks PATCH] general-task event write failed:", e);
+        }
       }
 
       // D2 (action-hub write-back foundation) — completing a field task leaves
@@ -7969,7 +8422,7 @@ export async function registerRoutes(
       // are deferred to the action-hub UI increment — see report.
       if (existingTask.status !== "مكتمل" && updated.status === "مكتمل" && updated.caseId) {
         try {
-          await storage.logCaseActivity({
+          await logCaseActivityActing(req, {
             caseId: updated.caseId,
             userId: user.id,
             userName: user.name || user.id,
@@ -7984,6 +8437,335 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث المهمة" });
+    }
+  });
+
+  // Sub-step 4 — PATH-1 requester review of a returned general (عام) task.
+  // A worker's completed result lands in بانتظار_الاطلاع assigned to the ORIGINAL
+  // requester (see the PATCH general-complete branch above). Only that requester
+  // — or a delegate acting on their behalf — may act. Two decisions:
+  //   • تم_الاطلاع (close) → مكتمل (terminal; completedAt stamped in storage).
+  //   • ملاحظة (send back) → قيد_الانتظار back to the worker (workerId), reviewNote
+  //     = the note (required). Mirrors the consultation/memo review endpoints.
+  app.post("/api/field-tasks/:id/review", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const bodyCheck = generalTaskReviewSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const decision = String(req.body?.decision || "");
+      const reviewNote = String(req.body?.reviewNote || "");
+
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (task.taskType !== FieldTaskType.GENERAL) {
+        return res.status(400).json({ error: "هذا الإجراء خاص بالمهام العامة فقط" });
+      }
+      if (task.status !== FieldTaskStatus.AWAITING_REVIEW) {
+        return res.status(400).json({ error: "المهمة ليست بانتظار الاطلاع" });
+      }
+      // Only the ORIGINAL requester (or a delegate standing in for them) may
+      // review. originalRequesterId is the write-once return address; a legacy
+      // general task created before it existed falls back to assignedBy.
+      const requester = task.originalRequesterId || task.assignedBy;
+      const actingIds = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, task.caseId ?? null).map((i) => i.userId)
+        : [user.id];
+      if (!actingIds.includes(requester)) {
+        return res.status(403).json({ error: "لا تملك صلاحية مراجعة هذه المهمة" });
+      }
+
+      if (decision === "تم_الاطلاع") {
+        // Close — completedAt is stamped in storage.updateFieldTask on the
+        // transition into مكتمل.
+        const updated = await storage.updateFieldTask(task.id, { status: FieldTaskStatus.COMPLETED });
+        // Mirror the PATCH→مكتمل case-activity write-back: a case-linked general
+        // task leaves "اكتملت مهمة ميدانية" evidence on its case when the requester
+        // closes it. Best-effort (caseId-guarded) — a logging failure must not
+        // fail the close. caseId-less general tasks just close silently.
+        if (updated?.caseId) {
+          try {
+            await logCaseActivityActing(req, {
+              caseId: updated.caseId,
+              userId: user.id,
+              userName: user.name || user.id,
+              actionType: "field_task_completed",
+              title: `اكتملت مهمة ميدانية: ${updated.title}`,
+            });
+          } catch (e) {
+            console.error("[field-tasks review] case activity write-back failed:", e);
+          }
+        }
+        // Sub-step 4.6 — thread event: requester closed (تم الاطلاع), no text.
+        try {
+          await createGeneralTaskEventActing(req, task.caseId, {
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.REVIEWED_CLOSED, body: null,
+          });
+        } catch (e) {
+          console.error("[field-tasks review] general-task event write failed:", e);
+        }
+        return res.json(updated);
+      }
+      if (decision === "ملاحظة") {
+        if (!reviewNote.trim()) {
+          return res.status(400).json({ error: "الملاحظة مطلوبة عند الإعادة" });
+        }
+        // Send back to the worker who produced the result (workerId), not to the
+        // requester; the note rides along in reviewNote.
+        const updated = await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.PENDING,
+          assignedTo: task.workerId || task.assignedTo,
+          reviewNote,
+        });
+        // Sub-step 4.6 — thread event: requester sent it back with a note (ملاحظة).
+        try {
+          await createGeneralTaskEventActing(req, task.caseId, {
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.RETURNED_WITH_NOTE, body: reviewNote,
+          });
+        } catch (e) {
+          console.error("[field-tasks review] general-task event write failed:", e);
+        }
+        return res.json(updated);
+      }
+      return res.status(400).json({ error: "قرار المراجعة غير صحيح" });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في مراجعة المهمة" });
+    }
+  });
+
+  // Sub-step 6 — dept_head DISTRIBUTES a dept-routed general (عام) task that is
+  // sitting in بانتظار_التوزيع to a member of the routed department (or himself).
+  // The task then moves to that member as a normal do-the-work GENERAL_TASK in
+  // قيد_الانتظار, with routedDepartmentId intact (so the result later routes back
+  // through the head for approval — sub-step 7). workerId stays null until the
+  // member completes. Access: a dept_head of the routed department, a delegate
+  // acting for such a head, or a branch_manager.
+  app.post("/api/field-tasks/:id/distribute", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const bodyCheck = generalTaskDistributeSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const assignTo = String(req.body?.assignedTo || "").trim();
+      if (!assignTo) {
+        return res.status(400).json({ error: "اختر المسند إليه" });
+      }
+
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (task.taskType !== FieldTaskType.GENERAL) {
+        return res.status(400).json({ error: "هذا الإجراء خاص بالمهام العامة فقط" });
+      }
+      if (!task.routedDepartmentId) {
+        return res.status(400).json({ error: "هذه المهمة ليست موجَّهة إلى قسم" });
+      }
+      if (task.status !== FieldTaskStatus.AWAITING_DISTRIBUTION) {
+        return res.status(400).json({ error: "المهمة ليست بانتظار الإسناد" });
+      }
+
+      // Access gate — delegation-aware. A branch_manager (firm-wide), or a
+      // dept_head of the ROUTED department (the delegator's own dept travels with
+      // the inherited dept_head role via effectiveDeptHeadDepts). With no acting
+      // context the helpers resolve to exactly the actor's own role/dept.
+      const ctx = req.actingContext;
+      const scopeCaseId = task.caseId ?? null;
+      const isManager = ctx
+        ? hasEffectiveRole(ctx, scopeCaseId, "branch_manager")
+        : user.role === "branch_manager";
+      const isRoutedHead = ctx
+        ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
+        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+      if (!isManager && !isRoutedHead) {
+        return res.status(403).json({ error: "لا تملك صلاحية إسناد هذه المهمة" });
+      }
+
+      // The chosen assignee must be an ACTIVE user who is either a member of the
+      // routed department OR the actor himself (the "distribute to myself" edge —
+      // a head whose own departmentId is the routed dept already qualifies via
+      // the first clause; the id clause also covers a manager picking himself).
+      const assignee = await storage.getUser(assignTo);
+      if (!assignee || !assignee.isActive) {
+        return res.status(400).json({ error: "الموظف المكلف غير نشط أو غير موجود" });
+      }
+      if (assignee.departmentId !== task.routedDepartmentId && assignee.id !== user.id) {
+        return res.status(400).json({ error: "يجب اختيار عضو من القسم الموجَّهة إليه المهمة" });
+      }
+
+      // Hand the task to the member: assignedTo = chosen member, status =
+      // قيد_الانتظار. routedDepartmentId + workerId(null) untouched (partial set).
+      const updated = await storage.updateFieldTask(task.id, {
+        assignedTo: assignTo,
+        status: FieldTaskStatus.PENDING,
+      });
+
+      // Thread event: DISTRIBUTED — actor = the distributing head; body notes the
+      // member it went to (best-effort; a logging failure must not fail the op).
+      try {
+        await createGeneralTaskEventActing(req, task.caseId, {
+          fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+          eventType: GeneralTaskEventType.DISTRIBUTED,
+          body: `إلى: ${assignee.name || assignee.id}`,
+        });
+      } catch (e) {
+        console.error("[field-tasks distribute] general-task event write failed:", e);
+      }
+      return res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في إسناد المهمة" });
+    }
+  });
+
+  // Sub-step 8 — dept_head APPROVES or RETURNS a member's result on a
+  // dept-routed general (عام) task sitting in بانتظار_الاعتماد (put there by the
+  // sub-step-7 complete routing). Mirrors /review and /distribute. Two decisions:
+  //   • اعتماد (approve, DEFAULT, no text) → بانتظار_الاطلاع assigned to the
+  //     ORIGINAL requester; workerId unchanged. The existing requester-review
+  //     (GENERAL_TASK_REVIEW) flow takes over. Writes an APPROVED (اعتماد) event.
+  //   • ملاحظة (send back, note REQUIRED) → قيد_الانتظار back to the member who
+  //     produced it (workerId), reviewNote = the note. The member fixes and
+  //     re-completes, which sub-step 7 routes back to بانتظار_الاعتماد for
+  //     approval AGAIN (the loop is automatic). Writes a RETURNED_WITH_NOTE
+  //     (ملاحظة) event — same type as the requester's send-back; the actor name
+  //     distinguishes who returned it.
+  // Access gate: a dept_head of the task's routedDepartmentId (delegation-aware),
+  // or a branch_manager — identical to /distribute.
+  app.post("/api/field-tasks/:id/approve", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const bodyCheck = generalTaskApproveSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const decision = String(req.body?.decision || "");
+      const reviewNote = String(req.body?.reviewNote || "");
+
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+      if (task.taskType !== FieldTaskType.GENERAL) {
+        return res.status(400).json({ error: "هذا الإجراء خاص بالمهام العامة فقط" });
+      }
+      if (!task.routedDepartmentId) {
+        return res.status(400).json({ error: "هذه المهمة ليست موجَّهة إلى قسم" });
+      }
+      if (task.status !== FieldTaskStatus.AWAITING_APPROVAL) {
+        return res.status(400).json({ error: "المهمة ليست بانتظار الاعتماد" });
+      }
+
+      // Access gate — delegation-aware, identical to /distribute: a branch_manager
+      // (firm-wide) or a dept_head of the ROUTED department (own dept travels
+      // with the inherited head role via effectiveDeptHeadDepts). No acting
+      // context → the actor's own role/dept.
+      const ctx = req.actingContext;
+      const scopeCaseId = task.caseId ?? null;
+      const isManager = ctx
+        ? hasEffectiveRole(ctx, scopeCaseId, "branch_manager")
+        : user.role === "branch_manager";
+      const isRoutedHead = ctx
+        ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
+        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+      if (!isManager && !isRoutedHead) {
+        return res.status(403).json({ error: "لا تملك صلاحية اعتماد هذه المهمة" });
+      }
+
+      if (decision === "اعتماد") {
+        // Approve → to the ORIGINAL requester for their review. Fall back to
+        // assignedBy for a legacy null requester (same idiom as /review + the
+        // PATCH complete branch) so assignedTo can never land on null. workerId
+        // is intentionally NOT touched — it still points at the member.
+        const requester = task.originalRequesterId || task.assignedBy;
+        const updated = await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.AWAITING_REVIEW,
+          assignedTo: requester,
+        });
+        try {
+          await createGeneralTaskEventActing(req, task.caseId, {
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.APPROVED, body: null,
+          });
+        } catch (e) {
+          console.error("[field-tasks approve] general-task event write failed:", e);
+        }
+        return res.json(updated);
+      }
+      if (decision === "ملاحظة") {
+        if (!reviewNote.trim()) {
+          return res.status(400).json({ error: "الملاحظة مطلوبة عند الإرجاع" });
+        }
+        // Send back to the member who produced the result (workerId), mirroring
+        // the requester's /review send-back exactly.
+        const updated = await storage.updateFieldTask(task.id, {
+          status: FieldTaskStatus.PENDING,
+          assignedTo: task.workerId || task.assignedTo,
+          reviewNote,
+        });
+        try {
+          await createGeneralTaskEventActing(req, task.caseId, {
+            fieldTaskId: task.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.RETURNED_WITH_NOTE, body: reviewNote,
+          });
+        } catch (e) {
+          console.error("[field-tasks approve] general-task event write failed:", e);
+        }
+        return res.json(updated);
+      }
+      return res.status(400).json({ error: "قرار الاعتماد غير صحيح" });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في اعتماد المهمة" });
+    }
+  });
+
+  // Sub-step 4.6b — general (عام) task activity thread (read). Ordered ascending
+  // (oldest→newest) by storage.getGeneralTaskEvents. Anyone INVOLVED may read:
+  // the assignee, the original requester, the worker who produced the current
+  // result, the creator (assignedBy), a manager (canAssignFieldTasks), or anyone
+  // who can modify the linked case/consultation. Delegation-aware via
+  // actingIdentitiesFor (a delegate standing in for an involved user qualifies),
+  // mirroring the GET /api/memos/:id/activities viewer gate.
+  // EXTENSION POINT (path-2): also allow the routed dept_head
+  // (task.routedDepartmentId) once dept routing exists (sub-step 6+).
+  app.get("/api/field-tasks/:id/events", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const task = await storage.getFieldTaskById(String(req.params.id));
+      if (!task) return res.status(404).json({ error: "المهمة غير موجودة" });
+
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, task.caseId ?? null)
+        : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
+      const ids = new Set(identities.map((i) => i.userId));
+      const involved =
+        ids.has(task.assignedTo) ||
+        (!!task.originalRequesterId && ids.has(task.originalRequesterId)) ||
+        (!!task.workerId && ids.has(task.workerId)) ||
+        ids.has(task.assignedBy);
+      // Mirror the PATCH manager check (direct role compare — ActingIdentity.role
+      // is a plain string): branch_manager / admin_support are canAssignFieldTasks.
+      const isManager = identities.some((i) => i.role === "branch_manager" || i.role === "admin_support");
+
+      let canModifyParent = false;
+      if (task.caseId) {
+        const parentCase = await storage.getCaseById(task.caseId);
+        canModifyParent = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+      } else if (task.consultationId) {
+        const parentConsultation = await storage.getConsultationById(task.consultationId);
+        canModifyParent = !!parentConsultation && canModifyConsultation(user, parentConsultation, req.actingContext);
+      }
+
+      if (!involved && !isManager && !canModifyParent) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض سجل هذه المهمة" });
+      }
+
+      const events = await storage.getGeneralTaskEvents(task.id);
+      // Denormalized actorName → the FE needs no user lookup.
+      res.json(events.map((e) => ({
+        id: e.id, actorName: e.actorName, eventType: e.eventType, body: e.body, createdAt: e.createdAt,
+      })));
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب سجل المهمة" });
     }
   });
 
@@ -8884,6 +9666,53 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Admin_support task-routing assignments (Phase 1) ====================
+  // Manager-only firm-wide config: which admin_support user owns each assignable
+  // task type (collection / consultation_closing / session_report_export). Reads
+  // and writes the mapping table ONLY — does NOT affect task routing yet (a later
+  // sub-step wires routing to this table). Gated with canManageUsers server-side,
+  // so a non-manager hitting these directly gets 403 (not just a hidden nav item).
+  app.get("/api/admin-support-task-assignments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!canManageUsers(req.user!.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية للوصول إلى إسناد مهام الدعم الإداري" });
+      }
+      const rows = await storage.getAdminSupportTaskAssignments();
+      res.json(rows);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put("/api/admin-support-task-assignments/:taskType", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      if (!canManageUsers(req.user!.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتعديل إسناد مهام الدعم الإداري" });
+      }
+      const taskType = String(req.params.taskType);
+      const assignableTypes = Object.values(AssignableAdminSupportTaskKind) as string[];
+      if (!assignableTypes.includes(taskType)) {
+        return res.status(400).json({ error: "نوع المهمة غير صالح" });
+      }
+      const parsed = setAdminSupportTaskAssignmentSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "بيانات الإسناد غير صالحة" });
+      }
+      const assigneeUserId = parsed.data.assigneeUserId ?? null;
+      // A provided assignee must be an ACTIVE admin_support user; null clears it.
+      if (assigneeUserId) {
+        const target = await storage.getUser(assigneeUserId);
+        if (!target || target.role !== "admin_support" || !target.isActive) {
+          return res.status(400).json({ error: "يجب اختيار موظف دعم إداري نشط" });
+        }
+      }
+      const row = await storage.setAdminSupportTaskAssignment(taskType, assigneeUserId);
+      res.json(row);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ==================== Sidebar Counts ====================
 
   app.get("/api/sidebar-counts", requireAuth, async (req: AuthRequest, res) => {
@@ -9154,7 +9983,7 @@ export async function registerRoutes(
         userId: user.id,
         userName,
       });
-      await storage.logCaseActivity({
+      await logCaseActivityActing(req, {
         caseId: String(req.params.id),
         userId: user.id,
         userName,
@@ -9242,7 +10071,7 @@ export async function registerRoutes(
       const deadline = await storage.createLegalDeadline(validated);
       if (validated.caseId) {
         const user = req.user!;
-        await storage.logCaseActivity({
+        await logCaseActivityActing(req, {
           caseId: validated.caseId,
           userId: user.id,
           userName: user.name,
@@ -9308,9 +10137,20 @@ export async function registerRoutes(
 
   // ==================== Delegations ====================
 
+  // Item 4 — the /delegations page is now open to EVERY authenticated user (the
+  // sidebar link is no longer manager-only), so this list is role-scoped
+  // server-side: managers/approvers (branch_manager / department_head /
+  // admin_support) see all delegations; everyone else sees ONLY the ones they
+  // are a party to (delegator or delegate). Prevents leaking other people's
+  // delegations to a regular user who can now reach the page.
   app.get("/api/delegations", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const delegations = await storage.getAllDelegations();
+      const user = req.user!;
+      const all = await storage.getAllDelegations();
+      const canSeeAll = ["branch_manager", "department_head", "admin_support"].includes(user.role);
+      const delegations = canSeeAll
+        ? all
+        : all.filter((d) => d.fromUserId === user.id || d.toUserId === user.id);
       res.json(delegations);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب التفويضات" });
@@ -9339,6 +10179,53 @@ export async function registerRoutes(
       res.json({ delegators });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب التفويضات النشطة" });
+    }
+  });
+
+  // المستخدمون transparency badges — every CURRENTLY-VALID delegation
+  // (status نشط + approved + today within start–end) as lean {fromUserId,
+  // toUserId} pairs, readable by EVERY authenticated user so the users page can
+  // show "who is currently acting for whom". Deliberately public and minimal:
+  // no reason/details/dates exposed; the FE maps the two ids to names from the
+  // already-loaded users list (no N+1). Same validity predicate as the act-as
+  // resolver (getActingContext): نشط + approvedBy set + in-window. startDate/
+  // endDate are varchar "YYYY-MM-DD" → direct lexical comparison is correct.
+  // Registered BEFORE /:id (a literal) so the :id capture never swallows it.
+  app.get("/api/delegations/active", requireAuth, async (_req: AuthRequest, res) => {
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const all = await storage.getAllDelegations();
+      const active = all
+        .filter((d) =>
+          d.status === "نشط" &&
+          d.approvedBy != null &&
+          d.startDate <= today &&
+          d.endDate >= today,
+        )
+        .map((d) => ({ fromUserId: d.fromUserId, toUserId: d.toUserId }));
+      res.json(active);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التفويضات النشطة" });
+    }
+  });
+
+  // Item 2 — single delegation (for the approval modal's details block). Gate
+  // mirrors the list scope: a party (delegator/delegate) or a manager/approver
+  // may read it. Registered AFTER /acting-as (a literal) so the :id capture
+  // never swallows that path.
+  app.get("/api/delegations/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const delegation = await storage.getDelegation(String(req.params.id));
+      if (!delegation) return res.status(404).json({ error: "تفويض غير موجود" });
+      const canSeeAll = ["branch_manager", "department_head", "admin_support"].includes(user.role);
+      const isParty = delegation.fromUserId === user.id || delegation.toUserId === user.id;
+      if (!canSeeAll && !isParty) {
+        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذا التفويض" });
+      }
+      res.json(delegation);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب التفويض" });
     }
   });
 
@@ -9468,6 +10355,59 @@ export async function registerRoutes(
       res.json(delegation);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في اعتماد التفويض" });
+    }
+  });
+
+  // Item 2 — REJECT a pending delegation. Same gate + guardrails as /approve
+  // (branch_manager / department_head / admin_support, never a party). Requires
+  // a rejection reason. Sets status "مرفوض" + stores the reason, and notifies
+  // BOTH parties (delegator + delegate), mirroring the approval notifications.
+  app.post("/api/delegations/:id/reject", requireAuth, requireRole("branch_manager", "department_head", "admin_support"), async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (!reason) {
+        return res.status(400).json({ error: "سبب الرفض مطلوب" });
+      }
+      const existingDelegation = await storage.getDelegation(String(req.params.id));
+      if (!existingDelegation) return res.status(404).json({ message: "تفويض غير موجود" });
+      // Same self-cycle guardrail as /approve — nobody may reject a delegation
+      // they are personally a party to (real human id).
+      if (existingDelegation.fromUserId === user.id || existingDelegation.toUserId === user.id) {
+        return res.status(403).json({ error: "لا يمكنك رفض تفويض أنت طرف فيه" });
+      }
+      const delegation = await storage.updateDelegation(String(req.params.id), {
+        status: "مرفوض",
+        rejectionReason: reason,
+      });
+      if (!delegation) return res.status(404).json({ message: "تفويض غير موجود" });
+      const toUser = await storage.getUser(delegation.toUserId);
+      const fromUser = await storage.getUser(delegation.fromUserId);
+      if (toUser && fromUser) {
+        await storage.createNotification({
+          type: "delegation_rejected",
+          title: "تم رفض التفويض",
+          message: `تم رفض تفويض قضايا ${fromUser.name} إليك. السبب: ${reason}`,
+          priority: "high",
+          status: "pending",
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: toUser.id,
+        });
+        await storage.createNotification({
+          type: "delegation_rejected",
+          title: "تم رفض التفويض",
+          message: `تم رفض طلب تفويض قضاياك إلى ${toUser.name}. السبب: ${reason}`,
+          priority: "high",
+          status: "pending",
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: fromUser.id,
+        });
+      }
+      res.json(delegation);
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في رفض التفويض" });
     }
   });
 

@@ -1,6 +1,6 @@
 import {
   type User, type LawCase, type Client, type Consultation, type Hearing,
-  type FieldTask, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
+  type FieldTask, type GeneralTaskEvent, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
   type SupportTicket,
   type CaseActivity, type InsertCaseActivity,
   type CaseNote, type InsertCaseNote,
@@ -8,7 +8,9 @@ import {
   type LegalDeadline, type InsertLegalDeadline,
   type DelegationRecord, type InsertDelegation,
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
-  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, taskSpecialtyClass,
+  type AdminSupportTaskAssignment,
+  type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, FieldTaskStatus, taskSpecialtyClass,
+  AssignableAdminSupportTaskKind, resolveAdminSupportAssignee,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
   type ConsultationDeliveryExtension, type ConsultationActivity,
@@ -21,16 +23,18 @@ import {
   ContractStage, ContractStatus, ContractActivityType,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
+  adminSupportTaskAssignments,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationDeliveryExtensions, consultationActivityLog,
   contracts, contractAttachments, contractActivityLog,
-  memoActivityLog,
+  memoActivityLog, generalTaskEvents,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
 import { db } from "./db";
 import type { ActingContext } from "./acting-context";
 import { eq, and, or, gt, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
@@ -99,11 +103,15 @@ export interface IStorage {
 
   // Field Tasks
   getAllFieldTasks(): Promise<FieldTask[]>;
+  getArchivedGeneralTasks(user: { id: string; role: string; departmentId: string | null }): Promise<FieldTask[]>;
   getFieldTasksByCase(caseId: string): Promise<FieldTask[]>;
   getFieldTaskById(id: string): Promise<FieldTask | undefined>;
   createFieldTask(data: Partial<FieldTask>, assignedBy: string): Promise<FieldTask>;
   updateFieldTask(id: string, data: Partial<FieldTask>): Promise<FieldTask | undefined>;
   deleteFieldTask(id: string): Promise<boolean>;
+  // General (عام) task activity thread (sub-step 4.6)
+  createGeneralTaskEvent(data: { fieldTaskId: string; actorId: string; actorName: string; eventType: string; body: string | null }): Promise<void>;
+  getGeneralTaskEvents(fieldTaskId: string): Promise<GeneralTaskEvent[]>;
 
   // Contact Logs
   getAllContactLogs(): Promise<ContactLog[]>;
@@ -124,6 +132,10 @@ export interface IStorage {
 
   // Departments
   getAllDepartments(): Promise<DepartmentInfo[]>;
+  // Active users with role=department_head in the given department. Authoritative
+  // dept-head source for PATH-2 dept-routing (departments.headId is only
+  // partially seeded and can disagree). Returns 0/1/>1 for the caller to handle.
+  getDepartmentHeads(departmentId: string): Promise<User[]>;
   getDepartmentById(id: string): Promise<DepartmentInfo | undefined>;
   updateDepartment(id: string, data: Partial<DepartmentInfo>): Promise<DepartmentInfo | undefined>;
 
@@ -186,6 +198,12 @@ export interface IStorage {
   createSavedFilter(userId: string, data: InsertSavedFilter): Promise<SavedFilter>;
   updateSavedFilter(id: string, data: UpdateSavedFilter): Promise<SavedFilter | undefined>;
   deleteSavedFilter(id: string): Promise<boolean>;
+
+  // Admin_support fine-grained task routing (Phase 1). The central task_type →
+  // assignee mapping. get returns every row (one per assigned type); set upserts
+  // one row (assigneeUserId null clears it → the type becomes unassigned).
+  getAdminSupportTaskAssignments(): Promise<AdminSupportTaskAssignment[]>;
+  setAdminSupportTaskAssignment(taskType: string, assigneeUserId: string | null): Promise<AdminSupportTaskAssignment>;
 
   // Sidebar "new since last visit" counts. Counts items per section
   // visible to the user that were created/assigned after their
@@ -545,6 +563,7 @@ function mapDbCase(dbCase: any): LawCase {
     pausedAt: toISOStringOrNull(dbCase.pausedAt),
     awaitingCompletion: dbCase.awaitingCompletion ?? false,
     savedStage: dbCase.savedStage ?? null,
+    agencyIssuanceRequested: dbCase.agencyIssuanceRequested ?? false,
   };
 }
 
@@ -625,6 +644,7 @@ function mapDbConsultation(dbCon: any): Consultation {
     pausedAt: toISOStringOrNull(dbCon.pausedAt),
     awaitingCompletion: dbCon.awaitingCompletion ?? false,
     savedStage: dbCon.savedStage ?? null,
+    dataCompletionLastAckAt: toISOStringOrNull(dbCon.dataCompletionLastAckAt),
     // Committee-referral fields. All nullable so legacy rows
     // (pre-add-consultation-committee-fields migration) surface as null.
     internalReviewerId: dbCon.internalReviewerId ?? null,
@@ -679,6 +699,7 @@ function mapDbContract(row: any): Contract {
     pausedAt: toISOStringOrNull(row.pausedAt),
     awaitingCompletion: row.awaitingCompletion ?? false,
     savedStage: row.savedStage ?? null,
+    dataCompletionLastAckAt: toISOStringOrNull(row.dataCompletionLastAckAt),
     createdBy: row.createdBy,
     createdAt: toISOString(row.createdAt),
     updatedAt: toISOString(row.updatedAt),
@@ -750,6 +771,7 @@ function mapDbHearing(dbHearing: any): Hearing {
     reportCompleted: dbHearing.reportCompleted ?? false,
     sessionReportExported: dbHearing.sessionReportExported ?? false,
     agencyVerificationAckAt: toISOStringOrNull(dbHearing.agencyVerificationAckAt),
+    agencyVerificationAnswer: dbHearing.agencyVerificationAnswer ?? null,
     adminTasksCreated: dbHearing.adminTasksCreated ?? false,
     opponentMemos: dbHearing.opponentMemos || "",
     hearingMinutes: dbHearing.hearingMinutes || "",
@@ -788,6 +810,12 @@ function mapDbFieldTask(dbTask: any): FieldTask {
     taskType: dbTask.taskType,
     caseId: dbTask.caseId,
     consultationId: dbTask.consultationId,
+    contractId: dbTask.contractId ?? null,
+    clientId: dbTask.clientId ?? null,
+    reviewNote: dbTask.reviewNote || "",
+    originalRequesterId: dbTask.originalRequesterId ?? null,
+    routedDepartmentId: dbTask.routedDepartmentId ?? null,
+    workerId: dbTask.workerId ?? null,
     assignedTo: dbTask.assignedTo,
     assignedBy: dbTask.assignedBy,
     status: dbTask.status,
@@ -891,6 +919,7 @@ function mapDbMemo(dbMemo: any): Memo {
     pausedAt: toISOStringOrNull(dbMemo.pausedAt),
     awaitingCompletion: dbMemo.awaitingCompletion ?? false,
     savedStage: dbMemo.savedStage ?? null,
+    dataCompletionLastAckAt: toISOStringOrNull(dbMemo.dataCompletionLastAckAt),
     // Phase-9 — review-workflow stage. Legacy rows pre-backfill surface
     // as null; the FE treats null as "no stage yet" (legacy status flow).
     currentStage: dbMemo.currentStage ?? null,
@@ -932,6 +961,21 @@ export class DatabaseStorage implements IStorage {
 
   async getActiveUsers(): Promise<User[]> {
     const result = await db.select().from(users).where(eq(users.isActive, true));
+    return result.map(mapDbUser);
+  }
+
+  async getDepartmentHeads(departmentId: string): Promise<User[]> {
+    // Authoritative source for PATH-2 dept-routing: users with the
+    // department_head role in this department who are active. departments.headId
+    // is only partially seeded (e.g. set for dept "1" but null for dept "2"
+    // whose real head exists only via this users query) → never trust it here.
+    const result = await db.select().from(users).where(
+      and(
+        eq(users.role, "department_head"),
+        eq(users.departmentId, departmentId),
+        eq(users.isActive, true),
+      ),
+    );
     return result.map(mapDbUser);
   }
 
@@ -1336,7 +1380,7 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getConsultationById(id);
     if (!existing) return undefined;
 
-    const { createdAt, updatedAt, closedAt, followUpStartedAt, expectedDeliveryDate, ...updateFields } = data;
+    const { createdAt, updatedAt, closedAt, followUpStartedAt, expectedDeliveryDate, dataCompletionLastAckAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     // Date-mode timestamp columns: the interface types these as ISO strings,
     // but Drizzle expects Date. Convert here (mirrors closedAt) so callers
@@ -1349,6 +1393,9 @@ export class DatabaseStorage implements IStorage {
     }
     if (expectedDeliveryDate !== undefined) {
       updateData.expectedDeliveryDate = expectedDeliveryDate ? new Date(expectedDeliveryDate) : null;
+    }
+    if (dataCompletionLastAckAt !== undefined) {
+      updateData.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
     }
     await db.update(consultations).set(updateData).where(eq(consultations.id, id));
 
@@ -1684,6 +1731,37 @@ export class DatabaseStorage implements IStorage {
     return result.map(mapDbFieldTask);
   }
 
+  // Sub-step 9 — the مهامي "منجزة" archive: CLOSED (مكتمل + ملغي) GENERAL (عام)
+  // tasks only, scoped to what the viewer may see (mirrors the live-feed field-
+  // task visibility). Fetched lazily (only when the user expands the archive
+  // section), so it never rides on the 30s my-tasks poll.
+  //   • branch_manager → firm-wide (all closed general tasks);
+  //   • department_head → involved (assignee/worker/creator/requester) OR routed
+  //     to their department OR on a case in their department (the routed-dept +
+  //     parent-case clauses match the live feed's dept_head scope, so a task
+  //     that flowed through the head — but where he is not the final assignee —
+  //     still appears);
+  //   • everyone else (incl. admin_support) → involved only (their own closed
+  //     general tasks as requester, worker, creator, or final assignee).
+  async getArchivedGeneralTasks(user: { id: string; role: string; departmentId: string | null }): Promise<FieldTask[]> {
+    const all = await this.getAllFieldTasks();
+    const closed = all.filter((t) =>
+      t.taskType === FieldTaskType.GENERAL &&
+      (t.status === FieldTaskStatus.COMPLETED || t.status === FieldTaskStatus.CANCELLED),
+    );
+    if (user.role === "branch_manager") return closed;
+    const uid = user.id;
+    const involved = (t: FieldTask) =>
+      t.assignedTo === uid || t.workerId === uid || t.assignedBy === uid || t.originalRequesterId === uid;
+    if (user.role === "department_head" && user.departmentId) {
+      const dept = user.departmentId;
+      const cases = await this.getAllCases();
+      const deptCaseIds = new Set(cases.filter((c) => c.departmentId === dept).map((c) => c.id));
+      return closed.filter((t) => involved(t) || t.routedDepartmentId === dept || (!!t.caseId && deptCaseIds.has(t.caseId)));
+    }
+    return closed.filter(involved);
+  }
+
   async getFieldTaskById(id: string): Promise<FieldTask | undefined> {
     const result = await db.select().from(fieldTasks).where(eq(fieldTasks.id, id));
     return result[0] ? mapDbFieldTask(result[0]) : undefined;
@@ -1700,9 +1778,22 @@ export class DatabaseStorage implements IStorage {
       taskType: data.taskType || "أخرى",
       caseId: data.caseId || null,
       consultationId: data.consultationId || null,
+      contractId: data.contractId || null,
+      clientId: data.clientId || null,
+      reviewNote: "",
+      // originalRequesterId = the creator (= assignedBy at creation) for general
+      // (عام) tasks only; the write-once return address. Other (auto/field) task
+      // types leave it null. routedDepartmentId/workerId are set later by the
+      // dept-route / complete transitions, never at plain creation.
+      originalRequesterId: data.taskType === FieldTaskType.GENERAL ? assignedBy : (data.originalRequesterId ?? null),
+      routedDepartmentId: data.routedDepartmentId ?? null,
+      workerId: data.workerId ?? null,
       assignedTo: data.assignedTo || "",
       assignedBy,
-      status: "قيد_الانتظار",
+      // Default = قيد_الانتظار (the person-direct path passes no status, so it is
+      // byte-identical). The PATH-2 dept-route passes بانتظار_التوزيع to land the
+      // task with the dept_head for distribution.
+      status: data.status ?? "قيد_الانتظار",
       priority: data.priority || "متوسط",
       dueDate: data.dueDate || "",
       completedAt: null,
@@ -1715,6 +1806,36 @@ export class DatabaseStorage implements IStorage {
     
     await db.insert(fieldTasks).values(newTask);
     return mapDbFieldTask(newTask);
+  }
+
+  async createGeneralTaskEvent(data: { fieldTaskId: string; actorId: string; actorName: string; eventType: string; body: string | null }): Promise<void> {
+    await db.insert(generalTaskEvents).values({
+      id: randomUUID(),
+      fieldTaskId: data.fieldTaskId,
+      actorId: data.actorId,
+      actorName: data.actorName,
+      eventType: data.eventType,
+      body: data.body,
+      createdAt: new Date(),
+    });
+  }
+
+  async getGeneralTaskEvents(fieldTaskId: string): Promise<GeneralTaskEvent[]> {
+    // Ascending (oldest→newest) — read as a conversation. 200-row cap mirrors
+    // getMemoActivities/getCaseActivities.
+    const rows = await db.select().from(generalTaskEvents)
+      .where(eq(generalTaskEvents.fieldTaskId, fieldTaskId))
+      .orderBy(asc(generalTaskEvents.createdAt))
+      .limit(200);
+    return rows.map((row) => ({
+      id: row.id,
+      fieldTaskId: row.fieldTaskId,
+      actorId: row.actorId ?? null,
+      actorName: row.actorName ?? null,
+      eventType: row.eventType,
+      body: row.body ?? null,
+      createdAt: toISOString(row.createdAt),
+    }));
   }
 
   async updateFieldTask(id: string, data: Partial<FieldTask>): Promise<FieldTask | undefined> {
@@ -1988,12 +2109,15 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getMemoById(id);
     if (!existing) return undefined;
 
-    const { createdAt, updatedAt, startedAt, completedAt, submittedAt, reviewedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, startedAt, completedAt, submittedAt, reviewedAt, dataCompletionLastAckAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     if (startedAt) updateData.startedAt = new Date(startedAt);
     if (completedAt) updateData.completedAt = new Date(completedAt);
     if (submittedAt) updateData.submittedAt = new Date(submittedAt);
     if (reviewedAt) updateData.reviewedAt = new Date(reviewedAt);
+    if (dataCompletionLastAckAt !== undefined) {
+      updateData.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
+    }
 
     await db.update(memos).set(updateData).where(eq(memos.id, id));
     return this.getMemoById(id);
@@ -2591,6 +2715,25 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
+  // ==================== Admin_support task assignments (Phase 1) ====================
+  async getAdminSupportTaskAssignments(): Promise<AdminSupportTaskAssignment[]> {
+    return await db.select().from(adminSupportTaskAssignments);
+  }
+
+  // Upsert one task_type → assignee row (PK = task_type, so at most one row per
+  // type). assigneeUserId null clears the assignment (type becomes unassigned).
+  // updatedAt is date-mode; pass a Date, never a string.
+  async setAdminSupportTaskAssignment(taskType: string, assigneeUserId: string | null): Promise<AdminSupportTaskAssignment> {
+    const [row] = await db.insert(adminSupportTaskAssignments)
+      .values({ taskType, assigneeUserId, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: adminSupportTaskAssignments.taskType,
+        set: { assigneeUserId, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
+
   // ==================== Sidebar Section Views ====================
   // Counts items "new since last visit" for each of the four
   // badge-bearing sections (cases / consultations / hearings / memos),
@@ -2848,6 +2991,52 @@ export class DatabaseStorage implements IStorage {
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
     const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
 
+    // Admin_support per-type routing: resolve the owner of the assignable
+    // kinds ONCE (identity-independent). Each goes to its mapped
+    // assignee IFF that user is still an active admin_support, else "" (unassigned
+    // → the branch_manager's pool). Only loaded when the viewer could actually
+    // receive/manage them (an assignee is admin_support; the pool is the
+    // branch_manager) — a lawyer/dept_head never sees these, so no extra reads for
+    // them. collection is resolved LIVE here too (Option C): its stored field_task
+    // assigned_to is ignored for feed ownership, so mapping changes apply
+    // immediately — true parity with consultation_closing / session_report_export.
+    let consultationClosingOwner = "";
+    let sessionReportExportOwner = "";
+    let collectionOwner = "";
+    let executionOwner = "";
+    let agencyIssuanceOwner = "";
+    let contractSendOwner = "";
+    let dataCompletionCaseOwner = "";
+    let dataCompletionConsultationOwner = "";
+    let dataCompletionContractOwner = "";
+    let dataCompletionMemoOwner = "";
+    if (isAdminSupport || firmWideScoped) {
+      const taskAssignments = await this.getAdminSupportTaskAssignments();
+      const routingUsers = await this.getAllUsers();
+      consultationClosingOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.CONSULTATION_CLOSING, taskAssignments, routingUsers);
+      sessionReportExportOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.SESSION_REPORT_EXPORT, taskAssignments, routingUsers);
+      collectionOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.COLLECTION, taskAssignments, routingUsers);
+      executionOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.EXECUTION, taskAssignments, routingUsers);
+      agencyIssuanceOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.AGENCY_ISSUANCE, taskAssignments, routingUsers);
+      contractSendOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.CONTRACT_SEND, taskAssignments, routingUsers);
+      // Data-completion is per work-type — case / consultation / contract fire
+      // at their data-completion STAGE; memo fires on its awaiting-completion latch.
+      dataCompletionCaseOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE, taskAssignments, routingUsers);
+      dataCompletionConsultationOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION_CONSULTATION, taskAssignments, routingUsers);
+      dataCompletionContractOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION_CONTRACT, taskAssignments, routingUsers);
+      dataCompletionMemoOwner = resolveAdminSupportAssignee(
+        AssignableAdminSupportTaskKind.DATA_COMPLETION_MEMO, taskAssignments, routingUsers);
+    }
+
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
     // Conservative "lawyer must act" stage set (see report: exact set is a
     // refinement point). Excludes review/committee/platform/admin-owned stages.
@@ -2878,6 +3067,17 @@ export class DatabaseStorage implements IStorage {
 
     // ---- 2. case_unassigned — unassigned case in dept (dept_head assigns) ----
     if (teamScoped) {
+      // Resolve each department's head so an unassigned case files UNDER that
+      // head (ownerScope via scopeOf): for a dept_head viewer the head is
+      // himself → "self" (byte-identical to before); for the firm-wide manager
+      // it's the case-dept's head → "team". A department with NO active head
+      // emits NO task — it stays dormant and reappears on that head's own
+      // getMyTasks run once a head is assigned (single-head enforced in product).
+      const heads = await db.select({ id: users.id, departmentId: users.departmentId })
+        .from(users)
+        .where(and(eq(users.role, "department_head"), eq(users.isActive, true)));
+      const deptHeadByDept = new Map<string, string>();
+      for (const h of heads) if (h.departmentId) deptHeadByDept.set(h.departmentId, h.id);
       const unassignedWhere = firmWideScoped
         ? and(
             sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
@@ -2888,32 +3088,46 @@ export class DatabaseStorage implements IStorage {
             sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
             sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
           );
-      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber, departmentId: lawCases.departmentId })
         .from(lawCases).where(unassignedWhere);
       for (const r of rows) {
+        const deptHeadId = r.departmentId ? deptHeadByDept.get(r.departmentId) : undefined;
+        if (!deptHeadId) continue; // no active head → dormant; surfaces when a head is assigned
         tasks.push({
           id: `case_unassigned:${r.id}`, kind: MyTaskKind.CASE_UNASSIGNED,
           title: `قضية غير مُسندة بحاجة لإسناد — ${r.caseNumber}`,
           entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "assign",
+          ownerId: deptHeadId, ownerScope: scopeOf(deptHeadId), dueDate: null, isOverdue: false, actionHint: "assign",
         });
       }
     }
 
     // ---- 3-5 + agency. Hearings (attend / unrecorded-overdue / report) ----
-    {
+    // GUARDED (mirrors the data_completion / execution / agency blocks): a failure
+    // here degrades to "no hearing tasks this run" and never throws out of
+    // getMyTasks to empty the whole feed.
+    try {
       const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND ${hearings.reportCompleted} = false))`;
       const where = firmWideScoped
         ? hActionable
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), hActionable)
         : and(eq(hearings.attendingLawyerId, uid), hActionable);
+      // clients LEFT-joined for the agency-verification grouping key (the موكّل's
+      // exact name = individualName for individuals, companyName otherwise).
       const rows = await db.select({
         id: hearings.id, caseId: hearings.caseId, date: hearings.hearingDate, status: hearings.status,
         result: hearings.result, reportCompleted: hearings.reportCompleted,
         attendingLawyerId: hearings.attendingLawyerId, caseNumber: lawCases.caseNumber,
         agencyVerificationAckAt: hearings.agencyVerificationAckAt,
-      }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id)).where(where);
+        clientIndividualName: clients.individualName, clientCompanyName: clients.companyName,
+      }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
+        .leftJoin(clients, eq(lawCases.clientId, clients.id)).where(where);
+      // Agency-verification candidates are collected here and GROUPED after the
+      // loop (same client + same lawyer + same pre-hearing window → ONE task);
+      // every other hearing task stays per-hearing exactly as before.
+      const verifyCandidates: { hearingId: string; caseId: string; caseNumber: string;
+        date: string; ownerId: string; clientKey: string }[] = [];
       for (const r of rows) {
         const ownerId = r.attendingLawyerId || "";
         const ownerScope = scopeOf(ownerId);
@@ -2927,25 +3141,72 @@ export class DatabaseStorage implements IStorage {
               title: `جلسة انقضت دون تسجيل نتيجتها — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
               caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: true, actionHint: "record" });
           } else {
-            tasks.push({ id: `hearing_attend:${r.id}`, kind: MyTaskKind.HEARING_ATTEND,
-              title: `حضور جلسة — قضية ${r.caseNumber} بتاريخ ${r.date}`, entityType: "hearing", entityId: r.id,
-              caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
+            // Hearing-day actions (attend / record the result) surface ONLY from
+            // the hearing's OWN day onward — never before. On the day → this attend
+            // task; after the day still unrecorded → the hearing_unrecorded
+            // (overdue) branch above keeps it showing until the result is recorded.
+            // A FUTURE hearing (date > today) shows NOTHING here (the bug fix).
+            if (r.date === today) {
+              tasks.push({ id: `hearing_attend:${r.id}`, kind: MyTaskKind.HEARING_ATTEND,
+                title: `حضور جلسة — قضية ${r.caseNumber} بتاريخ ${r.date}`, entityType: "hearing", entityId: r.id,
+                caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "attend" });
+            }
             // Agency verification — surfaces once we reach the weekend-aware
             // "2 days before" lead (Fri/Sat skipped; Sunday hearing → Thursday),
-            // and only until acknowledged ("تم") for this hearing.
+            // and only until acknowledged ("تم") for this hearing. Collected now,
+            // grouped below. INTENTIONALLY 2 days BEFORE the hearing — must NOT be
+            // gated on today; this is the one pre-hearing item, left untouched.
             if (agencyVerificationLeadDate(r.date) <= today && !r.agencyVerificationAckAt) {
-              tasks.push({ id: `agency_verification:${r.id}`, kind: MyTaskKind.AGENCY_VERIFICATION,
-                title: `التحقق من الوكالة قبل الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
-                caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "verify" });
+              verifyCandidates.push({ hearingId: r.id, caseId: r.caseId, caseNumber: r.caseNumber,
+                date: r.date, ownerId, clientKey: (r.clientIndividualName || r.clientCompanyName || "").trim() });
             }
           }
         }
       }
+      // GROUP the agency-verification candidates by EXACT client name + attending
+      // lawyer. A client with several hearings in the same pre-hearing window under
+      // one lawyer becomes ONE task listing all case numbers (one answer applies to
+      // all via the group route). Empty client name is never grouped (keyed by the
+      // hearing id → each stands alone). A group of 1 is byte-equivalent to the old
+      // per-hearing task. The lawyer id (no spaces) is the LAST token → splitting
+      // on the final space recovers (name, lawyer) uniquely → no key collision.
+      const verifyGroups = new Map<string, typeof verifyCandidates>();
+      for (const c of verifyCandidates) {
+        const key = c.clientKey ? `${c.clientKey} ${c.ownerId}` : ` solo ${c.hearingId}`;
+        const g = verifyGroups.get(key);
+        if (g) g.push(c); else verifyGroups.set(key, [c]);
+      }
+      for (const g of Array.from(verifyGroups.values())) {
+        const memberIds = g.map((m) => m.hearingId);
+        const nums = g.map((m) => m.caseNumber);
+        const ownerId = g[0].ownerId;
+        const earliest = g.reduce((a, m) => (m.date < a ? m.date : a), g[0].date);
+        tasks.push({
+          id: `agency_verification:${[...memberIds].sort().join("_")}`, kind: MyTaskKind.AGENCY_VERIFICATION,
+          title: nums.length > 1
+            ? `التحقق من الوكالة قبل الجلسة — قضايا ${nums.join("، ")}`
+            : `التحقق من الوكالة قبل الجلسة — قضية ${nums[0]}`,
+          entityType: "hearing", entityId: g[0].hearingId, caseId: g[0].caseId,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: earliest, isOverdue: false,
+          actionHint: "verify", groupMemberIds: memberIds,
+        });
+      }
+    } catch (e) {
+      console.error("[getMyTasks] hearings block failed — skipping:", e);
     }
 
     // ---- 6. memo_pending — assigned memo not yet filed ----
     {
-      const mActionable = sql`COALESCE(${memos.currentStage}, '') <> 'مرفوعة' AND ${memos.status} <> 'ملغاة'`;
+      // Stage-of-turn filter (mirrors case_work's LAWYER_WORK_STAGES): while a memo
+      // sits at مراجعة_داخلية or لجنة_مراجعة it is the INTERNAL REVIEWER's / COMMITTEE
+      // HEAD's turn — it must NOT surface as an action-less "memo_pending" task to
+      // the assignee/author. It already surfaces to the correct person as an
+      // ACTIONABLE review_pending task in block 7 (internalReviewerId at internal
+      // review; cases_review_head at committee). Every other non-filed stage
+      // (استلام / تحرير / الأخذ_بالملاحظات / جاهزة_للرفع) is genuinely the assignee's
+      // turn and still surfaces. COALESCE keeps null-stage legacy memos surfacing
+      // exactly as before (NULL NOT IN (…) would otherwise drop them).
+      const mActionable = sql`COALESCE(${memos.currentStage}, '') NOT IN ('مرفوعة', 'مراجعة_داخلية', 'لجنة_مراجعة') AND ${memos.status} <> 'ملغاة'`;
       const where = firmWideScoped
         ? and(mActionable, sql`${memos.assignedTo} <> ''`)
         : deptHeadScoped
@@ -2986,11 +3247,12 @@ export class DatabaseStorage implements IStorage {
 
       // Consultations now carry a designated reviewer at internal review too
       // (mirrors cases) — surface to that reviewer.
-      const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType })
+      const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType,
+          consultationNumber: consultations.consultationNumber })
         .from(consultations).where(and(eq(consultations.internalReviewerId, uid),
           eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية")));
       for (const r of consultReviewRows) tasks.push({ id: `review_pending:consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-        title: `مراجعة داخلية بانتظارك — استشارة (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+        title: `مراجعة داخلية بانتظارك — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
         ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
 
       // Committee: cases_review_head chairs cases + memos; consultations_review_head chairs consultations + contracts.
@@ -3007,10 +3269,11 @@ export class DatabaseStorage implements IStorage {
           ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
       }
       if (isConsultationsReviewHead) {
-        const conc = await db.select({ id: consultations.id, type: consultations.consultationType })
+        const conc = await db.select({ id: consultations.id, type: consultations.consultationType,
+          consultationNumber: consultations.consultationNumber })
           .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة")));
         for (const r of conc) tasks.push({ id: `review_pending:committee_consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-          title: `قرار لجنة المراجعة — استشارة (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+          title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
           ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
         const ctc = await db.select({ id: contracts.id, title: contracts.title })
           .from(contracts).where(eq(contracts.currentStage, "لجنة_مراجعة"));
@@ -3024,12 +3287,25 @@ export class DatabaseStorage implements IStorage {
     {
       const ftActionable = sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`;
       const cols = { id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title,
-        assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate };
+        assignedTo: fieldTasks.assignedTo, dueDate: fieldTasks.dueDate, taskType: fieldTasks.taskType,
+        status: fieldTasks.status, routedDepartmentId: fieldTasks.routedDepartmentId };
       const rows = firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(ftActionable)
         : deptHeadScoped
-        ? await db.select(cols).from(fieldTasks).innerJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
-            .where(and(eq(lawCases.departmentId, userDept!), ftActionable))
+        // LEFT join (was INNER) + an OR covering three head-visible sources:
+        //  (1) assignedTo=uid — the head's own tasks (incl. PATH-2 tasks routed
+        //      to them whose caseId is null/elsewhere);
+        //  (2) lawCases.departmentId=userDept — team supervisory view (unchanged);
+        //  (3) routedDepartmentId=userDept — tasks routed to THIS department,
+        //      including HEAD-LESS ones (assignedTo="") created before a head
+        //      existed: the moment this head is appointed they surface here for
+        //      distribution, with no migration or re-assignment needed.
+        ? await db.select(cols).from(fieldTasks).leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+            .where(and(ftActionable, or(
+              eq(fieldTasks.assignedTo, uid),
+              eq(lawCases.departmentId, userDept!),
+              eq(fieldTasks.routedDepartmentId, userDept!),
+            )))
         : await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, uid), ftActionable));
       // The firm-wide query already includes the unassigned "" tasks; only the
       // non-firm-wide managers (admin_support) need the separate pool query.
@@ -3037,14 +3313,90 @@ export class DatabaseStorage implements IStorage {
         ? await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, ""), ftActionable))
         : [];
       for (const r of [...rows, ...unassigned]) {
+        // Collection (تحصيل) is emitted by the dedicated LIVE-resolve block below
+        // (Option C parity): its owner comes from the mapping, not the stored
+        // assigned_to, so it must NOT be emitted here (where ownerId would read the
+        // stale stored value). Skip it; every other field task is byte-unchanged.
+        // Agency-issuance (إصدار وكالة) is the same case: its owner is resolved LIVE
+        // by the dedicated block below (via agencyIssuanceOwner, not the stored
+        // assigned_to), so it must NOT be emitted here too or it would double-surface.
+        if (r.title.startsWith("إعداد خطاب تحصيل") || r.title.startsWith("إصدار وكالة")) continue;
         const isCollection = r.title.startsWith("إعداد خطاب تحصيل");
+        // Manually-created general tasks (taskType "عام") get their own kind so
+        // the feed labels/routes them distinctly from auto/field tasks. Auto
+        // field + collection tasks are never type "عام", so they are unaffected.
+        const isGeneral = !isCollection && r.taskType === FieldTaskType.GENERAL;
         const ownerId = r.assignedTo || "";
+        // General (عام) task kind + action depend on the lifecycle status so the
+        // right actor sees the right step: distribute / approve (dept_head),
+        // review (original requester), or do-the-work (assignee). Each transition
+        // flips assignedTo to whoever must act next, so ownerId stays the viewer.
+        // Collection/field tasks are unaffected (these consts are read only when
+        // isGeneral). Conditional exprs (not reassignment) keep the union types.
+        const generalKind =
+          r.status === FieldTaskStatus.AWAITING_DISTRIBUTION ? MyTaskKind.GENERAL_TASK_DISTRIBUTE
+          : r.status === FieldTaskStatus.AWAITING_APPROVAL ? MyTaskKind.GENERAL_TASK_APPROVE
+          : r.status === FieldTaskStatus.AWAITING_REVIEW ? MyTaskKind.GENERAL_TASK_REVIEW
+          : MyTaskKind.GENERAL_TASK;
+        const generalHint =
+          r.status === FieldTaskStatus.AWAITING_DISTRIBUTION ? "assign"
+          : r.status === FieldTaskStatus.AWAITING_APPROVAL ? "approve"
+          : r.status === FieldTaskStatus.AWAITING_REVIEW ? "review"
+          : (ownerId ? "complete" : "assign");
         tasks.push({
-          id: `${isCollection ? "collection" : "field_task"}:${r.id}`,
-          kind: isCollection ? MyTaskKind.COLLECTION : MyTaskKind.FIELD_TASK,
+          id: `${isCollection ? "collection" : isGeneral ? "general_task" : "field_task"}:${r.id}`,
+          kind: isCollection ? MyTaskKind.COLLECTION : isGeneral ? generalKind : MyTaskKind.FIELD_TASK,
           title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
           ownerId, ownerScope: scopeOf(ownerId),
-          dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today, actionHint: "complete",
+          // Unassigned pool ("" assignee, surfaced to managers): the action is to
+          // ASSIGN it (إسناد), not complete it — an unassigned task can't be
+          // "completed". An assigned task keeps the complete (إكمال) action.
+          // The بانتظار_* general states are waiting on a human (review/distribute/
+          // approve), not late → never overdue regardless of dueDate.
+          dueDate: r.dueDate || null,
+          isOverdue: r.status !== FieldTaskStatus.AWAITING_REVIEW
+            && r.status !== FieldTaskStatus.AWAITING_DISTRIBUTION
+            && r.status !== FieldTaskStatus.AWAITING_APPROVAL
+            && !!r.dueDate && r.dueDate < today,
+          actionHint: isGeneral ? generalHint : (ownerId ? "complete" : "assign"),
+          // Carried for the dept_head distribute modal (sub-step 6) — the routed
+          // department's members are listed from this, independent of the
+          // field-tasks context scope. Only meaningful for GENERAL_TASK_DISTRIBUTE.
+          routedDepartmentId: r.routedDepartmentId ?? null,
+        });
+      }
+    }
+
+    // ---- 8b. Requester's view of a HEAD-LESS routed general task ----
+    // A general task routed to a department that has no head sits in
+    // بانتظار_التوزيع with assignedTo="" until a head is appointed. The owner
+    // ("" ) queries above surface it to the branch_manager (firm-wide) and to
+    // admin_support (the "" pool), and the dept-scoped query will surface it to
+    // a head once one exists — but the REQUESTER who created it must also keep
+    // sight of it. Emit it to them as an informational row (no action). Managers
+    // already see it via the firm-wide / "" -pool queries, so skip them here to
+    // avoid a duplicate row.
+    if (!isManager) {
+      const myRouted = await db.select({
+        id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title, dueDate: fieldTasks.dueDate,
+        routedDepartmentId: fieldTasks.routedDepartmentId,
+      }).from(fieldTasks).where(and(
+        eq(fieldTasks.originalRequesterId, uid),
+        eq(fieldTasks.assignedTo, ""),
+        eq(fieldTasks.taskType, FieldTaskType.GENERAL),
+        eq(fieldTasks.status, FieldTaskStatus.AWAITING_DISTRIBUTION),
+        sql`${fieldTasks.routedDepartmentId} IS NOT NULL`,
+      ));
+      for (const r of myRouted) {
+        tasks.push({
+          id: `general_awaiting_dist:${r.id}`,
+          kind: MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION,
+          title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+          ownerId: uid, ownerScope: "self",
+          dueDate: r.dueDate || null, isOverdue: false, actionHint: "review",
+          // Carried so the informational row can show "القسم: <dept>" — which
+          // department the task is waiting on for distribution (sub-step 9).
+          routedDepartmentId: r.routedDepartmentId ?? null,
         });
       }
     }
@@ -3093,58 +3445,299 @@ export class DatabaseStorage implements IStorage {
             eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today))
         : and(eq(users.departmentId, userDept!), sql`${delegationsTable.approvedBy} IS NULL`,
             eq(delegationsTable.status, "نشط"), gte(delegationsTable.endDate, today));
-      const rows = await db.select({ id: delegationsTable.id, fromUserId: delegationsTable.fromUserId, endDate: delegationsTable.endDate })
+      // Enriched card (item 1): show WHO delegates to WHOM. The delegator name
+      // comes from the existing users join (fromUserId); the delegate name needs
+      // a second aliased users join on toUserId. pendingWhere still scopes on the
+      // delegator's dept via the primary `users` join.
+      const toUsers = alias(users, "deleg_to_users");
+      const rows = await db.select({
+        id: delegationsTable.id, fromUserId: delegationsTable.fromUserId, endDate: delegationsTable.endDate,
+        fromName: users.name, toName: toUsers.name,
+      })
         .from(delegationsTable).innerJoin(users, eq(delegationsTable.fromUserId, users.id))
+        .innerJoin(toUsers, eq(delegationsTable.toUserId, toUsers.id))
         .where(pendingWhere);
       for (const r of rows) {
         tasks.push({ id: `delegation_approval:${r.id}`, kind: MyTaskKind.DELEGATION_APPROVAL,
-          title: "طلب تفويض بانتظار اعتمادك", entityType: "delegation", entityId: r.id, caseId: null,
+          title: `طلب تفويض: ${r.fromName || r.fromUserId} ← ${r.toName || ""}`, entityType: "delegation", entityId: r.id, caseId: null,
           ownerId: uid, ownerScope: "self", dueDate: r.endDate, isOverdue: false, actionHint: "approve" });
       }
     }
 
-    // ---- 13. Consultation closing (admin_support) — firm-wide (admin_support is not dept-scoped) ----
-    if (isAdminSupport) {
-      const rows = await db.select({ id: consultations.id, type: consultations.consultationType })
+    // ---- 13. Consultation closing — Phase-1 per-type routing ----
+    // Goes to the mapped assignee (shown as their own task) and to the
+    // branch_manager (team view; an unset/inactive assignee → ownerId "" → the
+    // manager's unassigned pool). Emitted ONLY for the assignee or the
+    // branch_manager — no more broadcast to every admin_support. (scopeOf returns
+    // "self" for any non-team viewer, so a non-owner admin_support must be
+    // excluded here, not merely scoped.)
+    if (consultationClosingOwner === uid || firmWideScoped) {
+      const rows = await db.select({ id: consultations.id, type: consultations.consultationType,
+          consultationNumber: consultations.consultationNumber })
         .from(consultations).where(and(eq(consultations.status, "active"),
           inArray(consultations.currentStage, ["جاهزة_للإرسال", "منجزة"])));
       for (const r of rows) {
+        const ownerId = consultationClosingOwner;
         tasks.push({ id: `consultation_closing:${r.id}`, kind: MyTaskKind.CONSULTATION_CLOSING,
-          title: `استشارة جاهزة للإغلاق (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "close" });
+          title: `استشارة ${r.consultationNumber} جاهزة للإغلاق (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "close" });
       }
     }
 
-    // ---- 14. Data-completion (admin_support) — cases at the data-completion stage ----
+    // ---- 14. Data-completion (CASE work-type) — per-type LIVE routing ----
     // Surfaces while a case sits at استكمال_البيانات, suppressed for 2 days after
     // each "تم" acknowledge (data_completion_last_ack_at), then re-surfaces if
     // the case is STILL at that stage (the client may still owe data). The
-    // 2-day window is computed in SQL against NOW().
-    if (isAdminSupport) {
-      const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-        .from(lawCases).where(and(
-          eq(lawCases.currentStage, "استكمال_البيانات"),
-          sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
-        ));
-      for (const r of rows) {
-        tasks.push({ id: `data_completion:${r.id}`, kind: MyTaskKind.DATA_COMPLETION,
-          title: `استكمال البيانات والتواصل مع العميل — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "complete" });
+    // 2-day window is computed in SQL against NOW(). Routed via the mapping
+    // (dataCompletionCaseOwner) exactly like collection/consultation_closing/
+    // session_report_export: emitted ONLY for the mapped assignee (own task) or
+    // the branch_manager (team; unset/inactive → "" → the manager's unassigned
+    // pool, where "إسناد" sets the type mapping going forward). The consultation
+    // / contract / memo work-types get their own blocks in sub-steps 2/3.
+    // Each data-completion block is isolated in try/catch: a failure here (e.g. a
+    // missing column mid-migration) must degrade to "no tasks for THIS block",
+    // never throw out of getMyTasks and empty the entire feed.
+    if (dataCompletionCaseOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+          .from(lawCases).where(and(
+            eq(lawCases.currentStage, "استكمال_البيانات"),
+            sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionCaseOwner;
+          tasks.push({ id: `data_completion_case:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CASE,
+            title: `استكمال المرفقات والبيانات — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_case block failed — skipping:", e);
       }
     }
 
-    // ---- 15. Session-report PDF export (admin_support) — after the lawyer ----
-    // wrote the hearing report (reportCompleted) and it hasn't been exported yet.
-    // Litigation class (hearing). Clears when sessionReportExported flips true.
-    if (isAdminSupport) {
+    // ---- 14b. Data-completion (CONSULTATION work-type) — mirrors the case
+    // block: surfaces while an active consultation sits at its data-completion
+    // stage (استكمال_المرفقات_والبيانات), 2-day ack-suppression, routed via the
+    // data_completion_consultation mapping (assignee → own task; unset → the
+    // branch_manager's unassigned pool). status="active" filter added (sibling
+    // consultation queries all scope to active; a closed one shouldn't remind).
+    if (dataCompletionConsultationOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: consultations.id, consultationNumber: consultations.consultationNumber })
+          .from(consultations).where(and(
+            eq(consultations.status, "active"),
+            eq(consultations.currentStage, "استكمال_المرفقات_والبيانات"),
+            sql`(${consultations.dataCompletionLastAckAt} IS NULL OR ${consultations.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionConsultationOwner;
+          tasks.push({ id: `data_completion_consultation:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONSULTATION,
+            title: `استكمال المرفقات والبيانات — استشارة ${r.consultationNumber}`, entityType: "consultation", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_consultation block failed — skipping:", e);
+      }
+    }
+
+    // ---- 14c. Data-completion (CONTRACT work-type) — mirrors the case block:
+    // active contract at its data-completion stage (استكمال_البيانات_والمرفقات),
+    // 2-day ack-suppression, routed via the data_completion_contract mapping.
+    if (dataCompletionContractOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: contracts.id, contractNumber: contracts.contractNumber })
+          .from(contracts).where(and(
+            eq(contracts.status, "active"),
+            eq(contracts.currentStage, "استكمال_البيانات_والمرفقات"),
+            sql`(${contracts.dataCompletionLastAckAt} IS NULL OR ${contracts.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionContractOwner;
+          tasks.push({ id: `data_completion_contract:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CONTRACT,
+            title: `استكمال المرفقات والبيانات — عقد ${r.contractNumber}`, entityType: "contract", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_contract block failed — skipping:", e);
+      }
+    }
+
+    // ---- 14d. Data-completion (MEMO work-type) — button-triggered, NOT stage.
+    // Memos have no data-completion stage; the "بانتظار استكمال البيانات" button
+    // sets awaiting_completion=true, which is the gate here. 2-day ack-suppression
+    // (data_completion_last_ack_at) mirrors the other three; the task fully clears
+    // when the memo's resume-from-completion flips awaiting_completion off. Routed
+    // via the data_completion_memo mapping (assignee → own task; unset → the
+    // branch_manager's unassigned pool). Guarded like the sibling blocks.
+    if (dataCompletionMemoOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
+          .from(memos).where(and(
+            eq(memos.awaitingCompletion, true),
+            sql`(${memos.dataCompletionLastAckAt} IS NULL OR ${memos.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+          ));
+        for (const r of rows) {
+          const ownerId = dataCompletionMemoOwner;
+          tasks.push({ id: `data_completion_memo:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_MEMO,
+            title: `استكمال المرفقات والبيانات — مذكرة: ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId ?? null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] data_completion_memo block failed — skipping:", e);
+      }
+    }
+
+    // ---- 15. Session-report PDF export — Phase-1 per-type routing ----
+    // Surfaces after the lawyer wrote the hearing report (reportCompleted) and it
+    // hasn't been exported yet. Routed to the mapped assignee (own task) + the
+    // branch_manager (team / unassigned "" pool when unset/inactive); emitted ONLY
+    // for the assignee or the branch_manager — no broadcast. Litigation class
+    // (hearing). Clears when sessionReportExported flips true.
+    if (sessionReportExportOwner === uid || firmWideScoped) {
       const rows = await db.select({ id: hearings.id, caseId: hearings.caseId, caseNumber: lawCases.caseNumber })
         .from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
         .where(and(eq(hearings.reportCompleted, true),
           sql`COALESCE(${hearings.sessionReportExported}, false) = false`));
       for (const r of rows) {
+        const ownerId = sessionReportExportOwner;
         tasks.push({ id: `session_report_export:${r.id}`, kind: MyTaskKind.SESSION_REPORT_EXPORT,
           title: `تصدير تقرير الجلسة (PDF) — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
-          caseId: r.caseId, ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "export" });
+          caseId: r.caseId, ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "export" });
+      }
+    }
+
+    // ---- 16. Collection (تحصيل) — Phase-1 per-type LIVE routing (Option C) ----
+    // Collection tasks are stored field_tasks, but their OWNER is resolved LIVE
+    // from the mapping (collectionOwner) — the stored assigned_to is IGNORED for
+    // feed ownership — so changing/clearing the assignment applies immediately,
+    // exactly like consultation_closing / session_report_export. Fetched
+    // viewer-independently (all open collection tasks), then gated by the resolved
+    // owner: emitted ONLY for the assignee (own task) or the branch_manager (team;
+    // unset/inactive → "" → the unassigned pool). The creation notification is a
+    // separate channel and is untouched. actionHint mirrors the old field-task
+    // block (assigned → complete, unassigned → assign).
+    if (collectionOwner === uid || firmWideScoped) {
+      const rows = await db.select({ id: fieldTasks.id, caseId: fieldTasks.caseId,
+        title: fieldTasks.title, dueDate: fieldTasks.dueDate })
+        .from(fieldTasks).where(and(
+          sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
+          sql`${fieldTasks.title} LIKE ${"إعداد خطاب تحصيل%"}`,
+        ));
+      for (const r of rows) {
+        const ownerId = collectionOwner;
+        tasks.push({ id: `collection:${r.id}`, kind: MyTaskKind.COLLECTION,
+          title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+          ownerId, ownerScope: scopeOf(ownerId),
+          dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
+          actionHint: ownerId ? "complete" : "assign" });
+      }
+    }
+
+    // ---- 17. Execution (تنفيذ) — per-type LIVE routing, mirrors collection.
+    // Stored field_tasks titled "رفع طلب تنفيذ …", created ONLY on a final
+    // for-us judgment (alongside collection; NOT on a صلح). Owner resolved LIVE
+    // via executionOwner (assignee → own task; unset → branch_manager pool).
+    // Guarded so a failure here can't empty the whole feed.
+    if (executionOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: fieldTasks.id, caseId: fieldTasks.caseId,
+          title: fieldTasks.title, dueDate: fieldTasks.dueDate })
+          .from(fieldTasks).where(and(
+            sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
+            sql`${fieldTasks.title} LIKE ${"رفع طلب تنفيذ%"}`,
+          ));
+        for (const r of rows) {
+          const ownerId = executionOwner;
+          tasks.push({ id: `execution:${r.id}`, kind: MyTaskKind.EXECUTION,
+            title: r.title, entityType: "field_task", entityId: r.id, caseId: r.caseId ?? null,
+            ownerId, ownerScope: scopeOf(ownerId),
+            dueDate: r.dueDate || null, isOverdue: !!r.dueDate && r.dueDate < today,
+            actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] execution block failed — skipping:", e);
+      }
+    }
+
+    // ---- 18. Agency issuance (إصدار وكالة) — per-type LIVE routing, mirrors
+    // execution/collection. Stored field_tasks titled "إصدار وكالة …", created
+    // when the responsible lawyer answers "لا يوجد وكالة" on the pre-hearing verify
+    // task (routes agency-verify). Owner resolved LIVE via agencyIssuanceOwner
+    // (assignee → own task; unset → branch_manager pool). Guarded so a failure
+    // here can't empty the whole feed.
+    if (agencyIssuanceOwner === uid || firmWideScoped) {
+      try {
+        // lawCases + clients joined so the issuance tasks can be GROUPED by the
+        // موكّل's exact name (mirrors the verify grouping) — one client = one
+        // issuance task covering all his cases.
+        const rows = await db.select({ id: fieldTasks.id, caseId: fieldTasks.caseId,
+          dueDate: fieldTasks.dueDate, caseNumber: lawCases.caseNumber,
+          clientIndividualName: clients.individualName, clientCompanyName: clients.companyName })
+          .from(fieldTasks)
+          .leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+          .leftJoin(clients, eq(lawCases.clientId, clients.id))
+          .where(and(
+            sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
+            sql`${fieldTasks.title} LIKE ${"إصدار وكالة%"}`,
+          ));
+        const ownerId = agencyIssuanceOwner;
+        // GROUP issuance field_tasks by EXACT client name (the block's owner is
+        // fixed, so the key is name only). Empty client name never groups (keyed by
+        // field_task id → stands alone). A group of 1 == the old single task; one
+        // "تم إصدار الوكالة" then satisfies every case in the group (group route).
+        const issuanceGroups = new Map<string, typeof rows>();
+        for (const r of rows) {
+          const clientKey = (r.clientIndividualName || r.clientCompanyName || "").trim();
+          const key = clientKey ? `c ${clientKey}` : `solo ${r.id}`;
+          const g = issuanceGroups.get(key);
+          if (g) g.push(r); else issuanceGroups.set(key, [r]);
+        }
+        for (const g of Array.from(issuanceGroups.values())) {
+          const memberIds = g.map((m) => m.id);
+          const nums = g.map((m) => m.caseNumber).filter((n): n is string => !!n);
+          const earliest = g.reduce<string | null>((a, m) => {
+            if (!m.dueDate) return a;
+            return a && a < m.dueDate ? a : m.dueDate;
+          }, null);
+          tasks.push({
+            id: `agency_issuance:${[...memberIds].sort().join("_")}`, kind: MyTaskKind.AGENCY_ISSUANCE,
+            title: nums.length > 1
+              ? `إصدار وكالة — قضايا رقم ${nums.join("، ")}`
+              : `إصدار وكالة — قضية رقم ${nums[0] ?? ""}`,
+            entityType: "field_task", entityId: g[0].id, caseId: g[0].caseId ?? null,
+            ownerId, ownerScope: scopeOf(ownerId),
+            dueDate: earliest, isOverdue: !!earliest && earliest < today,
+            actionHint: ownerId ? "complete" : "assign",
+            groupMemberIds: memberIds,
+          });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] agency issuance block failed — skipping:", e);
+      }
+    }
+
+    // ---- 19. Contract send (إرسال العقد) — per-type LIVE routing, mirrors
+    // consultation_closing. Surfaces contracts sitting at the جاهزة_للإرسال stage
+    // (committee-approved, awaiting send) to contractSendOwner (assignee → own
+    // task; unset → the branch_manager pool). Completing it ("تم الإرسال") advances
+    // the contract to مغلقة so it stops surfacing — no tracking flag needed.
+    // Guarded so a failure here can't empty the whole feed.
+    if (contractSendOwner === uid || firmWideScoped) {
+      try {
+        const rows = await db.select({ id: contracts.id, title: contracts.title })
+          .from(contracts).where(and(
+            eq(contracts.status, "active"),
+            eq(contracts.currentStage, "جاهزة_للإرسال"),
+          ));
+        for (const r of rows) {
+          const ownerId = contractSendOwner;
+          tasks.push({ id: `contract_send:${r.id}`, kind: MyTaskKind.CONTRACT_SEND,
+            title: `إرسال العقد — ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false,
+            actionHint: ownerId ? "complete" : "assign" });
+        }
+      } catch (e) {
+        console.error("[getMyTasks] contract send block failed — skipping:", e);
       }
     }
 
@@ -4318,9 +4911,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined> {
-    const { createdAt, updatedAt, closedAt, ...rest } = data;
+    const { createdAt, updatedAt, closedAt, dataCompletionLastAckAt, ...rest } = data;
     const update: any = { ...rest, updatedAt: new Date() };
     if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
+    if (dataCompletionLastAckAt !== undefined) {
+      update.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
+    }
     await db.update(contracts).set(update).where(eq(contracts.id, id));
     return this.getContractById(id);
   }

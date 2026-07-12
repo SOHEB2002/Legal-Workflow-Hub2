@@ -202,6 +202,10 @@ export default function DashboardPage() {
     const today = new Date();
     return fieldTasks.filter(t => {
       if (t.status === "مكتمل" || t.status === "ملغي") return false;
+      // The بانتظار_* general-task states are waiting on a human (review /
+      // distribute / approve), not late — a passed dueDate must not mark them
+      // overdue. (pendingFieldTasks already counts only قيد_الانتظار/قيد_التنفيذ.)
+      if (t.status === "بانتظار_الاطلاع" || t.status === "بانتظار_التوزيع" || t.status === "بانتظار_الاعتماد") return false;
       if (t.dueDate && new Date(t.dueDate) < today) return true;
       return false;
     });
