@@ -1704,8 +1704,18 @@ export async function registerRoutes(
         newCase.priority = smartPriority;
       }
 
+      // A case that STARTS at مداولة_الصلح is a settlement attempt: no memos are
+      // written at that stage, so NEITHER auto-memo below may fire for it. The
+      // memo isn't lost — it is created when the settlement FAILS and litigation
+      // resumes (the مداولة_الصلح → أغلق_طلب_الصلح transition in PATCH
+      // /api/cases/:id), which is the moment the جوابية is actually needed.
+      // Read off newCase, which the settlement block above has already updated.
+      const startsInSettlement = newCase.currentStage === "مداولة_الصلح" || !!newCase.isSettlementCase;
+
       // Auto-create memo for existing cases where client is defendant
-      const isDefendant = classification === CaseClassification.IN_COURT && req.body.clientRole === "مدعى_عليه";
+      const isDefendant = classification === CaseClassification.IN_COURT
+        && req.body.clientRole === "مدعى_عليه"
+        && !startsInSettlement;
       let autoHearingId: string | null = null;
       if (isDefendant) {
         const deadlineStr = validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -1795,7 +1805,11 @@ export async function registerRoutes(
         }
       }
 
-      if (req.body.memoRequired && !isDefendant) {
+      // !startsInSettlement is REQUIRED here, not just belt-and-braces: isDefendant
+      // is now false for a settlement-start case, so without this guard a
+      // defendant case created at مداولة_الصلح with "مطلوب مذكرة" ticked would fall
+      // through to THIS block and get the very memo we just suppressed above.
+      if (req.body.memoRequired && !isDefendant && !startsInSettlement) {
         try {
           const memoDeadline = req.body.responseDeadline || validatedData.responseDeadline || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
           const memoTitle = `مذكرة — قضية رقم ${newCase.caseNumber}`;
@@ -2251,10 +2265,11 @@ export async function registerRoutes(
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
 
-      // Flag set inside the stage-transition block below; acted on after
+      // Flags set inside the stage-transition block below; acted on after
       // storage.updateCase succeeds. Declared at the outer scope so the
-      // post-update side-effect can see it.
+      // post-update side-effects can see them.
       let shouldCreateCollectionTask = false;
+      let shouldCreateSettlementFailedMemo = false;
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -2650,6 +2665,23 @@ export async function registerRoutes(
         shouldCreateCollectionTask =
           existing.currentStage === "مداولة_الصلح" && req.body.currentStage === "تحصيل";
 
+        // Settlement FAILED → litigation resumes (مداولة_الصلح → أغلق_طلب_الصلح):
+        // create the defendant جوابية memo that POST /api/cases deliberately did
+        // NOT create while the case sat in settlement. This is the moment the
+        // memo is actually needed, and it is the ONLY exit from مداولة_الصلح that
+        // gets one — تحصيل (settlement reached) and مقفلة (closed) must not.
+        // Classification/clientRole are read off `existing`, i.e. the case AS IT
+        // ENTERS the transition: the "استكمال إجراءاتها" path re-classifies the
+        // case to قيد_الدراسة in this SAME body, so reading the post-update value
+        // would miss exactly the cohort we suppressed at creation.
+        // The task itself is created AFTER updateCase succeeds (collection-task
+        // idiom) so a failed transition leaves no orphan memo.
+        shouldCreateSettlementFailedMemo =
+          existing.currentStage === "مداولة_الصلح" &&
+          req.body.currentStage === "أغلق_طلب_الصلح" &&
+          existing.caseClassification === CaseClassification.IN_COURT &&
+          existing.clientRole === "مدعى_عليه";
+
         // Struck-off reopen: clear struckOff fields when reopening
         if (existing.currentStage === "مشطوبة" && (req.body.currentStage === "منظورة" || req.body.currentStage === "منظورة_استئناف")) {
           req.body.struckOffDate = null;
@@ -2696,6 +2728,46 @@ export async function registerRoutes(
           await notifyFieldTaskCreated(collectionTask, user); // D4
         } catch (e) {
           console.error("Failed to auto-create collection task on conciliation settlement:", e);
+        }
+      }
+
+      // Side effect for مداولة_الصلح → أغلق_طلب_الصلح on a defendant case: the
+      // جوابية memo, in the SAME shape POST /api/cases would have created
+      // (autoGenerateReason "قضية_مدعى_عليه"), now that litigation has resumed.
+      if (shouldCreateSettlementFailedMemo) {
+        try {
+          // DUPLICATE GUARD — create only when the case has NO memo at all (any
+          // status). Two things this protects:
+          //  1. a case that did NOT start in settlement already got its memo at
+          //     creation, and can still pass through مداولة_الصلح → أغلق_طلب_الصلح;
+          //  2. a memo that someone deliberately cancelled via "لا يحتاج مذكرة"
+          //     (status ملغاة) must NOT be resurrected here.
+          // The suppressed cohort is precisely the one with zero memos.
+          const caseMemos = await storage.getMemosByCase(updated.id);
+          if (caseMemos.length === 0) {
+            const deadlineStr = updated.responseDeadline
+              || new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+            const memo = await storage.createMemo({
+              caseId: updated.id,
+              hearingId: null,
+              memoType: MemoType.RESPONSE,
+              title: `مذكرة جوابية - ${updated.caseNumber}`,
+              description: `مذكرة جوابية تلقائية لقضية مدعى عليه بعد تعذّر الصلح - ${updated.caseNumber}`,
+              priority: updated.priority || "متوسط",
+              // Unassigned sentinel is "" — memos.assigned_to is NOT NULL.
+              assignedTo: updated.primaryLawyerId || updated.responsibleLawyerId || "",
+              createdBy: "system",
+              deadline: deadlineStr,
+              isAutoGenerated: true,
+              autoGenerateReason: "قضية_مدعى_عليه",
+              status: MemoStatus.NOT_STARTED,
+            });
+            const activeCount = await getActiveMemoCount(updated.id);
+            await storage.updateCase(updated.id, { activeMemoCount: activeCount });
+            console.log("[settlement-failed] auto-created defendant memo", { caseId: updated.id, memoId: memo.id });
+          }
+        } catch (e) {
+          console.error("Failed to auto-create defendant memo on settlement failure:", e);
         }
       }
 

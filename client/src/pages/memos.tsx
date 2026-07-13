@@ -577,6 +577,30 @@ export default function MemosPage() {
     return false;
   };
 
+  // Cancel ("لا يحتاج مذكرة") permission gate. Mirrors the SERVER's canActOnMemo
+  // for POST /api/memos/:id/cancel (routes.ts:328-349 + the cancel route's admin
+  // roles) EXACTLY — visibility must equal authorization in both directions:
+  //   • allowed: branch_manager, admin_support, cases_review_head, the memo
+  //     ASSIGNEE, and the department_head of the PARENT CASE's department.
+  //   • NOT allowed: the case's primaryLawyer / responsibleLawyer when they are
+  //     not the memo assignee — the server 403s them.
+  // The old gate (canUserChangeStatus, still used by the legacy null-stage status
+  // buttons below) got this wrong on BOTH sides: it omitted department_head +
+  // admin_support (so a dept head never saw the button the server would have let
+  // them use — the reported القسم العام bug), and it included the case lawyers
+  // (so it showed a button that 403s). Memos carry no departmentId, so the
+  // dept_head check resolves it through the parent case, exactly like canPauseMemo.
+  const canCancelMemo = (memo: Memo): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support" || user.role === "cases_review_head") return true;
+    if (!!memo.assignedTo && memo.assignedTo === user.id) return true;
+    if (user.role === "department_head") {
+      const parent = cases.find(c => c.id === memo.caseId);
+      return !!parent && parent.departmentId === user.departmentId;
+    }
+    return false;
+  };
+
   // Phase-8 — pause permission gate. Mirrors the server check on
   // /api/memos/:id/pause and /unpause: branch_manager / admin_support /
   // dept_head (own dept, resolved via parent case) / assigned lawyer.
@@ -1300,7 +1324,7 @@ export default function MemosPage() {
                                   إسناد لمحامي
                                 </DropdownMenuItem>
                               )}
-                              {!["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && canUserChangeStatus(memo) && (
+                              {!["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && canCancelMemo(memo) && (
                                 <DropdownMenuItem
                                   data-testid={`button-no-memo-needed-${memo.id}`}
                                   onClick={() => openCancelMemoDialog(memo)}
@@ -1897,7 +1921,7 @@ export default function MemosPage() {
                       (terminal) — you can't cancel a filed memo. */}
                   {!["معتمدة", "مرفوعة", "ملغاة"].includes(detailMemo.status)
                     && detailMemo.currentStage !== MemoStage.FILED
-                    && canUserChangeStatus(detailMemo) && (
+                    && canCancelMemo(detailMemo) && (
                     <Button
                       data-testid="button-no-memo-needed-detail"
                       variant="outline"
