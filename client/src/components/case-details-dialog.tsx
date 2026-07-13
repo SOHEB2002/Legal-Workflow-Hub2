@@ -168,9 +168,43 @@ export function CaseDetailsDialog({
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
-  // Alias so the moved JSX below stays byte-for-byte identical to the version
-  // that lived in cases.tsx (where the case was resolved into `selectedCase`).
-  const selectedCase = caseItem;
+  // ---- Real stage history ----
+  // BUGFIX. The LIST endpoint GET /api/cases STRIPS stageHistory (routes.ts:1622,
+  // a payload optimisation), and cases-context's migrateCase then FABRICATES a
+  // single entry ("تهجير البيانات") for the missing field (cases-context.tsx:48-50).
+  // So any host that hands us a case off the list — which is what the cases page
+  // does — was rendering ONE synthetic row in "سجل المراحل" instead of the real
+  // history, and the actions tab's return-from-review blocks could never match.
+  // The DETAIL endpoint GET /api/cases/:id keeps the full history, so we fetch it
+  // when the dialog opens and graft ONLY that field onto the live case below.
+  // Re-runs on updatedAt (every mutation bumps it) so the history stays current
+  // after a stage transition. On failure we simply fall back to whatever the host
+  // gave us — no worse than before.
+  const [fetchedHistory, setFetchedHistory] = useState<{ id: string; stageHistory: LawCase["stageHistory"] } | null>(null);
+  useEffect(() => {
+    if (!open || !caseItem?.id) return;
+    const id = caseItem.id;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/cases/${id}`);
+        const full: LawCase = await res.json();
+        if (!cancelled) setFetchedHistory({ id, stageHistory: full.stageHistory });
+      } catch {
+        if (!cancelled) setFetchedHistory(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, caseItem?.id, caseItem?.updatedAt]);
+
+  // The case we render: the LIVE row the host passed (so context mutations —
+  // inline edits, stage transitions — keep re-rendering it exactly as before),
+  // with the real stageHistory grafted on when we have it.
+  // Named `selectedCase` so the moved JSX below stays byte-for-byte identical to
+  // the version that lived in cases.tsx.
+  const selectedCase: LawCase | null = caseItem && fetchedHistory && fetchedHistory.id === caseItem.id
+    ? { ...caseItem, stageHistory: fetchedHistory.stageHistory }
+    : caseItem;
 
   const lawyers = users.filter((u) => u.canBeAssignedCases);
   const getLawyerName = (id: string | null): string => {
