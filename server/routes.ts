@@ -4533,6 +4533,89 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/cases/:id/skip-committee
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز لجنة المراجعة". Moves the case
+  // from إحالة_للجنة_المراجعة straight to جاهزة_للرفع with NO committee decision,
+  // recording who did it and why in case_activity_log (reason is MANDATORY).
+  //
+  // Deliberately bypasses validateStageTransition — the same precedent the
+  // committee-decision paths already set (they compute the target stage and call
+  // storage directly). No transition-table entry is added, so this override
+  // cannot be reached through the generic stage-advance route.
+  //
+  // AUTHORIZED ROLES (owner decision, 2026-07): branch_manager + department_head
+  // (of the case's own department) + the assigned lawyer. This is INTENTIONALLY
+  // BROADER than the committee-DECISION role set (cases_review_head +
+  // branch_manager, routes.ts ALLOWED_CASE_TRANSITIONS) — and broader still than
+  // the contracts committee, which deliberately excludes department_head
+  // ("heads don't override committee decisions"). Skipping the committee is an
+  // OWNER-approved override, not a committee decision, so it answers to a
+  // different, wider authority. Do NOT "harmonise" this set with the committee
+  // chairs — the divergence is the point.
+  //
+  // FOUR-EYES DOES NOT APPLY HERE, by design. The committee-decision endpoints
+  // guard against a DELEGATE standing in for the review head approving work they
+  // themselves authored. Here the assigned lawyer — i.e. the author — is an
+  // EXPLICITLY authorized actor, so a "can't act on your own work" check would
+  // contradict the approved permission model. The mandatory reason + the audit
+  // row are the control, not four-eyes.
+  app.post("/api/cases/:id/skip-committee", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز اللجنة مطلوب" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      if (lawCase.currentStage !== "إحالة_للجنة_المراجعة") {
+        return res.status(400).json({ error: "القضية ليست في مرحلة لجنة المراجعة" });
+      }
+      if (lawCase.pausedAt || lawCase.awaitingCompletion) {
+        return res.status(400).json({ error: "القضية في حالة لا تسمح بتجاوز اللجنة" });
+      }
+      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+        return res.status(400).json({ error: "لا يمكن تجاوز اللجنة في قضية مغلقة أو مؤرشفة" });
+      }
+
+      // Delegation-aware: evaluate the rule against every acting identity (self +
+      // any delegator this user currently stands in for, scoped to this case).
+      // With no delegation this resolves to exactly the actor → byte-identical to
+      // a plain self-check.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, lawCase.id).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || (u.role === "department_head" && !!u.departmentId && u.departmentId === lawCase.departmentId)
+        || isAssignedLawyer({ id: u.id }, lawCase));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز لجنة المراجعة" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+      const updated = await storage.skipCaseCommittee(lawCase.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز لجنة المراجعة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // POST /api/cases/:id/pause
   // Body: { reason }. Sets pause_* columns; status (workflow stage) is
   // intentionally left alone — pause is detected via paused_at IS NOT

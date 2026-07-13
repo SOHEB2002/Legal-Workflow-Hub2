@@ -38,7 +38,7 @@ export function CaseStagePanel({
   onClosed?: () => void;
   onChanged?: () => void;
 }) {
-  const { moveToNextStage, moveToPreviousStage, skipDataCompletion, updateCase, approveCase, rejectCase } = useCases();
+  const { moveToNextStage, moveToPreviousStage, skipDataCompletion, updateCase, approveCase, rejectCase, refreshCases } = useCases();
   const { user, users } = useAuth();
   const { getDepartmentName } = useDepartments();
   const { toast } = useToast();
@@ -237,6 +237,40 @@ export function CaseStagePanel({
         onClosed?.();
         onChanged?.();
       }}
+      // Reasoned override — "تجاوز لجنة المراجعة". The callback is passed ONLY
+      // when the user satisfies the SERVER's rule for POST /api/cases/:id/
+      // skip-committee (branch_manager | department_head of the case's own dept |
+      // assigned lawyer = primary | responsible | assignedLawyers) — the same
+      // conditional-callback idiom onSkipDataCompletion uses below. Undefined for
+      // everyone else, so the button does not render at all and can never 403.
+      // NOTE this set is intentionally WIDER than the committee-decision actors
+      // (cases_review_head / branch_manager); see the endpoint's comment.
+      onSkipCommittee={
+        user && (
+          user.role === "branch_manager" ||
+          (user.role === "department_head" && caseItem.departmentId === user.departmentId) ||
+          caseItem.primaryLawyerId === user.id ||
+          caseItem.responsibleLawyerId === user.id ||
+          (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(user.id))
+        ) ? async (reason: string) => {
+          setStageTransitioning(true);
+          try {
+            await apiRequest("POST", `/api/cases/${caseItem.id}/skip-committee`, { reason });
+            await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+            await refreshCases();
+            toast({ title: "تم تجاوز لجنة المراجعة — القضية جاهزة للرفع" });
+            onChanged?.();
+          } catch (err) {
+            toast({
+              title: "تعذّر تجاوز لجنة المراجعة",
+              description: extractApiError(err),
+              variant: "destructive",
+            });
+          } finally {
+            setStageTransitioning(false);
+          }
+        } : undefined
+      }
       onSkipDataCompletion={
         user && (
           user.role === "branch_manager" ||
