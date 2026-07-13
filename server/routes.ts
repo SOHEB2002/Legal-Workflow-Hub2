@@ -453,8 +453,16 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
 
   // ==================== LABOR PATH (settlement before drafting) ====================
   { from: "دراسة", to: "توجيه_العميل_بالتسوية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "توجيه_العميل_بالتسوية", to: "بانتظار_رفع_العميل_للتسوية", allowedRoles: ["department_head", "assigned_lawyer"] },
-  { from: "بانتظار_رفع_العميل_للتسوية", to: "مداولة_الصلح", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  // Settlement-edge actor model (labor-only stages — neither appears in any other
+  // department's path). Both edges now carry the SAME set the settlement-OUTCOME
+  // edges already use (مداولة_الصلح → أغلق/تحصيل/مقفلة below): assigned_lawyer +
+  // admin_support + department_head (+ branch_manager, global on every defined
+  // edge). Previously the two were mirror-image inconsistent — the lawyer could
+  // enter the settlement track and decide its outcome but NOT move it across the
+  // middle step (the FE enabled the button for him → guaranteed 403), while
+  // admin_support could do the middle step but not the one before it.
+  { from: "توجيه_العميل_بالتسوية", to: "بانتظار_رفع_العميل_للتسوية", allowedRoles: ["assigned_lawyer", "admin_support", "department_head"] },
+  { from: "بانتظار_رفع_العميل_للتسوية", to: "مداولة_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   // ==================== ADMIN PATH (prescription date + grievance) ====================

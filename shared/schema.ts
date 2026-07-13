@@ -1385,6 +1385,17 @@ export const UnderStudyLaborStages: CaseStageValue[] = [
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
+  // جاهزة_للرفع was MISSING here (General/Commercial both carry it in this exact
+  // slot). Its absence broke labor three ways: (1) the FE derives next-stage from
+  // this array, so الأخذ_بالملاحظات aimed at قيد_التدقيق_في_ناجز — a transition the
+  // server does not allow (its only exit is → جاهزة_للرفع) → every advance 400'd
+  // and the case was STUCK; (2) after committee approval the case sits at
+  // جاهزة_للرفع, which — being absent here — made the path resolver fall back to
+  // the COMMERCIAL array, routing a labor case into تراضي instead of ناجز; and
+  // (3) resume-from-completion rejected a labor case saved at جاهزة_للرفع as an
+  // INVALID_SAVED_STAGE. Both server rules already existed (الأخذ_بالملاحظات →
+  // جاهزة_للرفع → قيد_التدقيق_في_ناجز), so restoring the stage here is the whole fix.
+  "جاهزة_للرفع",
   "قيد_التدقيق_في_ناجز",
   "منظورة",
 ];
@@ -1402,6 +1413,11 @@ export const UnderStudyAdminStages: CaseStageValue[] = [
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
+  // Same missing-stage bug as the labor path above: without جاهزة_للرفع the FE
+  // aimed الأخذ_بالملاحظات → قيد_التدقيق_في_معين, which the server does not allow
+  // (only → جاهزة_للرفع), so an admin case returned with committee notes was
+  // STUCK. The server rules جاهزة_للرفع → قيد_التدقيق_في_معين already existed.
+  "جاهزة_للرفع",
   "قيد_التدقيق_في_معين",
   "منظورة",
 ];
