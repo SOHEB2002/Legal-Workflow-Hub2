@@ -361,6 +361,13 @@ export interface IStorage {
     id: string,
     input: { notes: string; performedBy: string; performerName: string },
   ): Promise<LawCase | undefined>;
+  // Reasoned override: skip the review committee (إحالة_للجنة_المراجعة →
+  // جاهزة_للرفع) with a MANDATORY reason. Same one-transaction shape as
+  // returnCaseToCommittee: stage update + stage-history entry + activity-log row.
+  skipCaseCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined>;
   returnMemoToCommittee(
     id: string,
     input: { notes: string; performedBy: string },
@@ -4582,6 +4589,61 @@ export class DatabaseStorage implements IStorage {
         actionType: "returned_to_committee",
         title: "إعادة للجنة المراجعة",
         details: truncated || null,
+        previousValue: fromStage,
+        newValue: targetStage,
+        createdAt: now,
+      });
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  // Reasoned override — "تجاوز لجنة المراجعة". Moves the case straight from the
+  // committee stage to جاهزة_للرفع WITHOUT a committee decision, recording WHO
+  // did it and WHY. Mirrors returnCaseToCommittee exactly: one transaction,
+  // stage + stageHistory + a case_activity_log row.
+  //
+  // reviewDecision is deliberately left UNTOUCHED (null on a case that never had
+  // a committee decision): a skipped case HAS no committee decision, and the only
+  // consumer of reviewDecision is a display banner that renders for
+  // "rejected"/"partial" (case-progress-bar.tsx) — so null simply means no banner.
+  // The reason lives in the activity log ONLY (no new column, no migration).
+  async skipCaseCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const targetStage = "جاهزة_للرفع";
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: `تجاوز لجنة المراجعة — ${input.reason}`,
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: targetStage,
+        stageHistory,
+        updatedAt: now,
+      }).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "committee_skipped",
+        title: "تجاوز لجنة المراجعة",
+        details: input.reason.slice(0, 120),
         previousValue: fromStage,
         newValue: targetStage,
         createdAt: now,

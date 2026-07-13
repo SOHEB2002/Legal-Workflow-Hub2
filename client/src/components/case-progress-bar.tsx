@@ -29,6 +29,15 @@ interface CaseProgressBarProps {
   // add-notes → الأخذ بالملاحظات. Gated by canReviewCases(userRole) below.
   onReviewCommitteeApprove?: () => void;
   onReviewCommitteeAddNotes?: (notes: string) => void;
+  // Reasoned override — "تجاوز لجنة المراجعة" (skip the committee, straight to
+  // جاهزة_للرفع, with a MANDATORY reason). Supplied by the parent ONLY when the
+  // current user is authorized by the SAME rule the server enforces
+  // (branch_manager | department_head of the case's dept | assigned lawyer), so
+  // the button's visibility EQUALS the server's authorization — no button that
+  // 403s. Its actor set is deliberately different from the committee-decision
+  // one above, so this action is gated on the callback's presence, NOT on
+  // canReviewCases.
+  onSkipCommittee?: (reason: string) => void;
   onPlatformReviewAddNotes?: (notes: string) => void;
   onPlatformReviewResubmit?: () => void;
   hasPlatformNotes?: boolean;
@@ -70,6 +79,7 @@ export function CaseProgressBar({
   onReturnToCommittee,
   onReviewCommitteeApprove,
   onReviewCommitteeAddNotes,
+  onSkipCommittee,
   onPlatformReviewAddNotes,
   onPlatformReviewResubmit,
   hasPlatformNotes = false,
@@ -109,6 +119,7 @@ export function CaseProgressBar({
   const [platformNotes, setPlatformNotes] = useState("");
   const [returnToCommitteeNotes, setReturnToCommitteeNotes] = useState("");
   const [committeeReviewNotes, setCommitteeReviewNotes] = useState("");
+  const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قيد_الدراسة";
   let stagesOrder = getStagesForClassification(
@@ -340,6 +351,15 @@ export function CaseProgressBar({
     if (!onReturnToCommittee || !returnToCommitteeNotes.trim()) return;
     onReturnToCommittee(returnToCommitteeNotes.trim());
     setReturnToCommitteeNotes("");
+  };
+
+  // The reason is MANDATORY (the server 400s without it), so the confirm button
+  // stays disabled until something is typed — the same rule the memo-cancel
+  // ("لا يحتاج مذكرة") dialog applies.
+  const handleSkipCommittee = () => {
+    if (!onSkipCommittee || !skipCommitteeReason.trim()) return;
+    onSkipCommittee(skipCommitteeReason.trim());
+    setSkipCommitteeReason("");
   };
 
   const handleReviewCommitteeAddNotes = () => {
@@ -774,6 +794,59 @@ export function CaseProgressBar({
               </AlertDialogContent>
             </AlertDialog>
           )}
+        </div>
+      )}
+
+      {/* Reasoned override — "تجاوز لجنة المراجعة". A SEPARATE block from the
+          committee decisions above: its authorized actors (branch_manager /
+          own-dept head / assigned lawyer) are NOT the committee chairs, so it
+          must not hang off showReviewCommitteeActions (which gates on
+          canReviewCases). The parent supplies onSkipCommittee ONLY when the user
+          passes the server's rule → visibility == authorization. Styled as a
+          destructive-outline SECONDARY action so it reads as an override and
+          cannot be confused with the green "لا يوجد ملاحظات" approve button. */}
+      {isAtReviewCommittee && onSkipCommittee && (
+        <div className="flex items-center justify-center" data-testid="row-skip-committee">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                className="border-destructive/60 text-destructive hover:bg-destructive/10"
+                data-testid="button-skip-committee"
+              >
+                <AlertTriangle className="w-4 h-4 ml-1" />
+                تجاوز لجنة المراجعة
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تجاوز مرحلة لجنة المراجعة</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم نقل القضية مباشرةً إلى <strong>جاهزة للرفع</strong> دون قرار من لجنة
+                  المراجعة. يُسجَّل هذا الإجراء في سجل النشاط مع اسمك والسبب. السبب إلزامي.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <Textarea
+                placeholder="سبب تجاوز لجنة المراجعة (إلزامي)..."
+                value={skipCommitteeReason}
+                onChange={(e) => setSkipCommitteeReason(e.target.value)}
+                className="mt-2"
+                data-testid="input-skip-committee-reason"
+              />
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel onClick={() => setSkipCommitteeReason("")}>إلغاء</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleSkipCommittee}
+                  disabled={!skipCommitteeReason.trim()}
+                  data-testid="button-confirm-skip-committee"
+                >
+                  تأكيد التجاوز
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
 
