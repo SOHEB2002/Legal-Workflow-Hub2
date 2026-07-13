@@ -13,7 +13,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send, Eye,
+  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send, Eye, Briefcase,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -28,6 +28,7 @@ import { extractApiError } from "@/lib/utils";
 import { OnBehalfBadge } from "@/components/acting-for-banner";
 import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { CaseStagePanel } from "@/components/case-stage-panel";
+import { CaseDetailsDialog } from "@/components/case-details-dialog";
 import { MemoAdvancePanel } from "@/components/memo-advance-panel";
 import { MemoStagesBar } from "@/components/memo-stages-bar";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
@@ -505,7 +506,12 @@ function GeneralTaskThread({ taskId }: { taskId: string }) {
   );
 }
 
-function TaskRow({ task, onAction, onDetails }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void; onDetails: (t: MyTaskItem) => void }) {
+function TaskRow({ task, onAction, onDetails, onOpenCase }: {
+  task: MyTaskItem;
+  onAction: (t: MyTaskItem) => void;
+  onDetails: (t: MyTaskItem) => void;
+  onOpenCase: (t: MyTaskItem) => void;
+}) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
   const { getTaskById } = useFieldTasks();
@@ -561,12 +567,46 @@ function TaskRow({ task, onAction, onDetails }: { task: MyTaskItem; onAction: (t
           {task.dueDate && (<><span>•</span><DualDateDisplay date={task.dueDate} /></>)}
           {task.isOverdue && <Badge variant="destructive" className="text-[10px]">متأخرة</Badge>}
         </div>
+        {/* Matter identity — WHICH case/client this task is about. The titles carry
+            only the case NUMBER, which users could not map to a matter without
+            searching the cases page. Server-stamped optional fields (feed
+            enrichment): each piece renders only when present, so tasks with no
+            case/client link (contracts, delegations, free-standing general tasks)
+            keep the exact row they have today. */}
+        {(task.clientName || task.opponentName) && (
+          <div className="mt-0.5 flex items-center gap-2 flex-wrap text-xs text-muted-foreground" data-testid={`task-matter-${task.id}`}>
+            {task.clientName && <span>العميل: <BidiText>{task.clientName}</BidiText></span>}
+            {task.clientName && task.opponentName && <span>•</span>}
+            {task.opponentName && <span>ضد: <BidiText>{task.opponentName}</BidiText></span>}
+          </div>
+        )}
         {generalDetails && (
           <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2" data-testid={`task-details-${task.id}`}>
             <BidiText>{generalDetails}</BidiText>
           </p>
         )}
       </div>
+      {/* "تفاصيل القضية" — opens the FULL case-details dialog as a modal OVER this
+          page (the shared <CaseDetailsDialog>), so the user never leaves مهامي.
+          Replaces the earlier navigation link to /cases?openCase=<id>.
+          Rendered only for case-linked tasks (task.caseId); a memo-only task has
+          no case to show, so it gets no button, as before.
+          Icon is Briefcase, NOT Eye: Eye is already this row's general-task
+          "تفاصيل المهمة" button, and a general task can carry a caseId — both
+          buttons can appear on ONE row, so they must be tellable apart. Ghost +
+          secondary, left of the primary action, which stays the dominant control. */}
+      {task.caseId && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onOpenCase(task)}
+          title="تفاصيل القضية"
+          aria-label="تفاصيل القضية"
+          data-testid={`task-open-case-${task.id}`}
+        >
+          <Briefcase className="h-4 w-4" />
+        </Button>
+      )}
       {/* General (عام) tasks: a "تفاصيل" eye button → full requester + description +
           linked entity (the card can't fit a long description or the entity link). */}
       {GENERAL_KINDS.has(task.kind) && (
@@ -672,8 +712,9 @@ export default function MyTasksPage() {
   // workerId live on the full field task, not the feed item; the field-tasks
   // context already has it loaded app-wide (the requester is assignedTo/assignedBy).
   const { getTaskById } = useFieldTasks();
-  // Entity lists for resolving a general task's linked entity in the تفاصيل view.
-  const { cases } = useCases();
+  // Entity lists for resolving a general task's linked entity in the تفاصيل view;
+  // getCaseById also backs the case-details modal opened from a task row.
+  const { cases, getCaseById } = useCases();
   const { consultations } = useConsultations();
   const { contracts } = useContracts();
   const { getClientName } = useClients();
@@ -693,6 +734,9 @@ export default function MyTasksPage() {
   const [resultHearing, setResultHearing] = useState<Hearing | null>(null);
   // Case stage panel (the shared component) target
   const [stageCase, setStageCase] = useState<LawCase | null>(null);
+  // Full case-details modal (the shared <CaseDetailsDialog>) target — the whole
+  // case view, opened OVER this page so the user never leaves مهامي.
+  const [detailsCase, setDetailsCase] = useState<LawCase | null>(null);
   // Memo advance panel (the shared component) target
   const [advanceMemo, setAdvanceMemo] = useState<Memo | null>(null);
   // General (عام) task details ("تفاصيل") target — requester + full description +
@@ -755,6 +799,24 @@ export default function MyTasksPage() {
     if (createForm.deptId) return u.departmentId === createForm.deptId;
     return true;
   });
+
+  // Open the full case-details modal for a case-linked task. The case object comes
+  // from the cases context (already loaded app-wide; GET /api/cases is unscoped),
+  // with a by-id fetch as the cold-context fallback. Either way the dialog itself
+  // hydrates the real stageHistory from GET /api/cases/:id — the list response
+  // strips it — so "سجل المراحل" shows the true history here.
+  async function openCaseDetails(task: MyTaskItem) {
+    const caseId = task.caseId;
+    if (!caseId) return;
+    const known = getCaseById(caseId);
+    if (known) { setDetailsCase(known); return; }
+    try {
+      const res = await apiRequest("GET", `/api/cases/${caseId}`);
+      setDetailsCase(await res.json());
+    } catch (err) {
+      toast({ title: "تعذّر فتح القضية", description: extractApiError(err), variant: "destructive" });
+    }
+  }
 
   // ----- actions -----
   function openAction(task: MyTaskItem) {
@@ -995,7 +1057,7 @@ export default function MyTasksPage() {
           titleClass="text-xs font-semibold text-muted-foreground" testId={`team-member-${id}`} />
         {open && (items.length === 0
           ? <p className="ps-6 text-xs text-muted-foreground">لا يوجد</p>
-          : <div className="space-y-2">{items.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>)}
+          : <div className="space-y-2">{items.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>)}
       </div>
     );
   };
@@ -1073,7 +1135,7 @@ export default function MyTasksPage() {
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Flame className="h-4 w-4" /> المستعجلة — جلسات وإسناد قضايا
               </h2>
-              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
+              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>
             </section>
           )}
 
@@ -1082,7 +1144,7 @@ export default function MyTasksPage() {
             {rest.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">لا توجد مهام أخرى.</p>
             ) : (
-              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
+              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>
             )}
           </section>
 
@@ -1101,7 +1163,7 @@ export default function MyTasksPage() {
               {unassignedPool.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="text-xs font-semibold text-muted-foreground">مهام غير مُسندة</h3>
-                  <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>
+                  <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>
                 </div>
               )}
             </section>
@@ -1162,7 +1224,7 @@ export default function MyTasksPage() {
                   <div className="space-y-2 rounded-md border p-3">
                     <GroupHeader open={open} onToggle={() => toggle(key)} title="مهام غير مُسندة" count={unassignedPool.length}
                       titleClass="text-sm font-bold" testId="team-pool-unassigned" />
-                    {open && <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} />)}</div>}
+                    {open && <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>}
                   </div>
                 );
               })()}
@@ -1470,6 +1532,21 @@ export default function MyTasksPage() {
         hearing={resultHearing}
         onClose={() => setResultHearing(null)}
         onSuccess={refreshAfterAction}
+      />
+
+      {/* ===== Full case details (the SAME dialog the cases page renders) =====
+          Opened as a modal OVER مهامي from a task row's Briefcase button — no
+          navigation. `actions` is deliberately OMITTED: the assign / review /
+          reject / approve / transfer / reminder / early-close rows and the
+          "تعديل البيانات" button belong to case MANAGEMENT on the cases page, and
+          this hub owns no such dialogs — so those rows do not render at all here
+          (they are not shown as dead buttons). Everything read-only renders, and
+          the stage panel still drives the workflow, exactly as the "مسار القضية"
+          dialog below already does. */}
+      <CaseDetailsDialog
+        caseItem={detailsCase}
+        open={!!detailsCase}
+        onOpenChange={(o) => { if (!o) setDetailsCase(null); }}
       />
 
       {/* ===== Case stage panel (shared with the cases page) ===== */}
