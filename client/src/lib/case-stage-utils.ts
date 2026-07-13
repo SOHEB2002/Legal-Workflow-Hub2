@@ -12,6 +12,14 @@ const DRAFTING_LOOP_STAGES = new Set([
   "تحرير_صيغة_التظلم",
 ]);
 
+// Canonical "is this case paused?" check — paused_at IS NOT NULL is the indicator
+// (status/stage are deliberately NOT touched on pause; see schema.ts Phase-8 note).
+// Shared, unchanged, by the cases page (table + row actions) and the case-details
+// dialog's paused banner, which now live in different files.
+export function isCasePaused(c: { pausedAt?: string | null }): boolean {
+  return !!c.pausedAt;
+}
+
 export function caseHasReturnedFromReview(c: {
   currentStage: string;
   stageHistory?: any[] | null;
