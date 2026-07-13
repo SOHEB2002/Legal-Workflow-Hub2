@@ -13,8 +13,9 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send, Eye,
+  ChevronDown, ChevronLeft, ListChecks, Search, X, Clock, Archive, Send, Eye, ExternalLink,
 } from "lucide-react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
@@ -508,6 +509,7 @@ function GeneralTaskThread({ taskId }: { taskId: string }) {
 function TaskRow({ task, onAction, onDetails }: { task: MyTaskItem; onAction: (t: MyTaskItem) => void; onDetails: (t: MyTaskItem) => void }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
+  const [, setLocation] = useLocation();
   const { getTaskById } = useFieldTasks();
   const { departments } = useDepartments();
   const { users } = useAuth();
@@ -580,6 +582,28 @@ function TaskRow({ task, onAction, onDetails }: { task: MyTaskItem; onAction: (t
           </p>
         )}
       </div>
+      {/* "فتح القضية" — jump straight to the matter instead of copying the case
+          number into the cases page's search. Uses the EXISTING cross-module
+          deep-link (/cases?openCase=<id>, read by cases.tsx on mount and resolved
+          into the detail dialog once the case list loads) — the same mechanism the
+          consultations page's "اذهب للقضية" link already uses; no new route.
+          Rendered only for case-linked tasks (task.caseId). A memo-only task (no
+          caseId) has no deep-link target yet — memos.tsx has no openMemo param —
+          so it simply gets no button. Deliberately a ghost ICON button, distinct
+          from the outlined primary action next to it, so "open the case" can't be
+          mistaken for "complete the task". */}
+      {task.caseId && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setLocation(`/cases?openCase=${task.caseId}`)}
+          title="فتح القضية"
+          aria-label="فتح القضية"
+          data-testid={`task-open-case-${task.id}`}
+        >
+          <ExternalLink className="h-4 w-4" />
+        </Button>
+      )}
       {/* General (عام) tasks: a "تفاصيل" eye button → full requester + description +
           linked entity (the card can't fit a long description or the entity link). */}
       {GENERAL_KINDS.has(task.kind) && (
