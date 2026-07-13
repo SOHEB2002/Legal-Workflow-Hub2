@@ -561,6 +561,19 @@ function TaskRow({ task, onAction, onDetails }: { task: MyTaskItem; onAction: (t
           {task.dueDate && (<><span>•</span><DualDateDisplay date={task.dueDate} /></>)}
           {task.isOverdue && <Badge variant="destructive" className="text-[10px]">متأخرة</Badge>}
         </div>
+        {/* Matter identity — WHICH case/client this task is about. The titles carry
+            only the case NUMBER, which users could not map to a matter without
+            searching the cases page. Server-stamped optional fields (feed
+            enrichment): each piece renders only when present, so tasks with no
+            case/client link (contracts, delegations, free-standing general tasks)
+            keep the exact row they have today. */}
+        {(task.clientName || task.opponentName) && (
+          <div className="mt-0.5 flex items-center gap-2 flex-wrap text-xs text-muted-foreground" data-testid={`task-matter-${task.id}`}>
+            {task.clientName && <span>العميل: <BidiText>{task.clientName}</BidiText></span>}
+            {task.clientName && task.opponentName && <span>•</span>}
+            {task.opponentName && <span>ضد: <BidiText>{task.opponentName}</BidiText></span>}
+          </div>
+        )}
         {generalDetails && (
           <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2" data-testid={`task-details-${task.id}`}>
             <BidiText>{generalDetails}</BidiText>

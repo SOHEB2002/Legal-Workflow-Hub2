@@ -589,6 +589,21 @@ function mapDbClient(dbClient: any): Client {
   };
 }
 
+// The display name of a client, from a row that LEFT-joined the clients table
+// (so every column may be null when there is no linked client). Mirrors the
+// frontend's getClientName rule (clients-context: فرد → individualName, else
+// companyName) so a client reads the same name in the tasks feed as everywhere
+// else, with the other column as a fallback for rows whose type and filled name
+// disagree. Returns "" when nothing is joined; callers map that to undefined.
+function clientDisplayName(row: {
+  clientType: string | null;
+  clientIndividualName: string | null;
+  clientCompanyName: string | null;
+}): string {
+  const preferred = row.clientType === "فرد" ? row.clientIndividualName : row.clientCompanyName;
+  return (preferred || row.clientIndividualName || row.clientCompanyName || "").trim();
+}
+
 // Map DB consultation to interface Consultation.
 //
 // Every key in the Consultation interface MUST be present in the returned
@@ -3424,9 +3439,20 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 11. Contact follow-ups (owner = createdBy) ----
+    // clients LEFT-joined (the hearings-block idiom) so the row is identifiable:
+    // the title is a fixed "متابعة تواصل مع عميل" with no name in it, and a contact
+    // log is linked to a CLIENT directly (case_id is optional) — so the name is
+    // resolved here from the log's own clientId rather than by the case-keyed
+    // enrichment pass in getMyTasks, which would miss the case-less ones.
     {
-      const rows = await db.select({ id: contactLogs.id, caseId: contactLogs.caseId, nextFollowUpDate: contactLogs.nextFollowUpDate })
-        .from(contactLogs).where(and(
+      const rows = await db.select({
+        id: contactLogs.id, caseId: contactLogs.caseId, nextFollowUpDate: contactLogs.nextFollowUpDate,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      })
+        .from(contactLogs)
+        .leftJoin(clients, eq(contactLogs.clientId, clients.id))
+        .where(and(
           eq(contactLogs.createdBy, uid),
           sql`COALESCE(${contactLogs.followUpRequired}, false) = true AND COALESCE(${contactLogs.followUpCompleted}, false) = false`,
         ));
@@ -3434,7 +3460,8 @@ export class DatabaseStorage implements IStorage {
         const due = r.nextFollowUpDate || null;
         tasks.push({ id: `contact_followup:${r.id}`, kind: MyTaskKind.CONTACT_FOLLOWUP,
           title: "متابعة تواصل مع عميل", entityType: "contact_log", entityId: r.id, caseId: r.caseId ?? null,
-          ownerId: uid, ownerScope: "self", dueDate: due, isOverdue: !!due && due < today, actionHint: "follow_up" });
+          ownerId: uid, ownerScope: "self", dueDate: due, isOverdue: !!due && due < today, actionHint: "follow_up",
+          clientName: clientDisplayName(r) || undefined });
       }
     }
 
@@ -3782,11 +3809,56 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // Stamp the specialty class (ترافع/استشارات) on every item.
-    return Array.from(byId.values()).map((t) => ({
-      ...t,
-      specialtyClass: taskSpecialtyClass(t.entityType, t.caseId),
-    }));
+    // Stamp the specialty class (ترافع/استشارات) + the matter identity on every item.
+    // Identity enrichment is done HERE, once per request over the MERGED set, rather
+    // than inside each of the ~10 emission blocks: the blocks have different join
+    // shapes (several never touch law_cases at all) and every case-linked item
+    // already carries caseId, so one batched lookup keyed by the distinct caseIds
+    // covers them all uniformly — one extra query, never a per-row one.
+    const merged = Array.from(byId.values());
+    const caseIdentities = await this.getCaseIdentitiesForFeed(
+      Array.from(new Set(merged.map((t) => t.caseId).filter((id): id is string => !!id))),
+    );
+    return merged.map((t) => {
+      const identity = t.caseId ? caseIdentities.get(t.caseId) : undefined;
+      return {
+        ...t,
+        specialtyClass: taskSpecialtyClass(t.entityType, t.caseId),
+        caseNumber: t.caseNumber ?? identity?.caseNumber,
+        // ?? (not ||) so a name an emission block already resolved from its own
+        // link wins — the contact-follow-up client is the LOG's client, which is
+        // not necessarily the client of the case the log happens to reference.
+        clientName: t.clientName ?? identity?.clientName,
+        opponentName: t.opponentName ?? identity?.opponentName,
+      };
+    });
+  }
+
+  // The display identity ("which matter is this?") of a set of cases, for the
+  // tasks feed. ONE query — the lawCases + clients leftJoin idiom the hearings
+  // block already uses — keyed by the caseIds the feed items carry. Empty/absent
+  // columns collapse to undefined so the FE renders only what exists.
+  private async getCaseIdentitiesForFeed(
+    caseIds: string[],
+  ): Promise<Map<string, { caseNumber: string; clientName?: string; opponentName?: string }>> {
+    const byCaseId = new Map<string, { caseNumber: string; clientName?: string; opponentName?: string }>();
+    if (caseIds.length === 0) return byCaseId; // inArray([]) is not a valid predicate
+    const rows = await db.select({
+      id: lawCases.id, caseNumber: lawCases.caseNumber, opponentName: lawCases.opponentName,
+      clientType: clients.clientType, clientIndividualName: clients.individualName,
+      clientCompanyName: clients.companyName,
+    })
+      .from(lawCases)
+      .leftJoin(clients, eq(lawCases.clientId, clients.id))
+      .where(inArray(lawCases.id, caseIds));
+    for (const r of rows) {
+      byCaseId.set(r.id, {
+        caseNumber: r.caseNumber,
+        clientName: clientDisplayName(r) || undefined,
+        opponentName: r.opponentName?.trim() || undefined,
+      });
+    }
+    return byCaseId;
   }
 
   async markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void> {

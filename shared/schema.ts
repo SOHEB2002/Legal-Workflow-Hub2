@@ -5177,6 +5177,18 @@ export interface MyTaskItem {
   // head-less task that just got a head stays assignedTo="" → outside that
   // context's scope). Undefined for every other feed kind.
   routedDepartmentId?: string | null;
+  // ---- Matter identity (DISPLAY ONLY) ----
+  // "Which case is this?" — the feed's titles carry only the case NUMBER, which
+  // users can't map to a matter without searching the cases page. These three are
+  // stamped by a single batched enrichment pass in getMyTasks (one query keyed by
+  // the distinct caseIds already on the items), NOT stored on any entity and NOT
+  // part of any title. Present on every task that carries a caseId; clientName is
+  // additionally resolved for contact follow-ups from the contact log's own
+  // clientId. All optional — absent for tasks with no case/client link (contracts,
+  // delegations, free-standing general tasks) and when the column is empty.
+  caseNumber?: string;
+  clientName?: string;
+  opponentName?: string;
   // GROUPED agency tasks only (agency_verification / agency_issuance): the
   // underlying entity ids a single completion must act on — hearing ids for
   // verify, field_task ids for issuance. Same-client (exact name) + same-lawyer
