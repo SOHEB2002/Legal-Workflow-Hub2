@@ -4577,6 +4577,22 @@ export async function registerRoutes(
       if (lawCase.currentStage !== "إحالة_للجنة_المراجعة") {
         return res.status(400).json({ error: "القضية ليست في مرحلة لجنة المراجعة" });
       }
+      // UNDER-STUDY ONLY. The review committee belongs to the قيد_الدراسة workflow
+      // (drafted → internal review → committee → جاهزة_للرفع). A منظورة_بالمحكمة case
+      // is already filed: what goes to committee for it is the MEMO (its own entity,
+      // with its own lifecycle), never the case. An in-court case sitting at the
+      // committee stage is therefore a state the product does not recognise — the
+      // only known occurrence was corrupt seed data (T-1010/T-1011, seeded by a raw
+      // INSERT that bypassed the state machine) — so refuse to act on it rather than
+      // write a stage that isn't on that case's path.
+      //
+      // THIS GUARD IS WHAT MAKES THE FIXED TARGET CORRECT: because only قيد_الدراسة
+      // cases can reach storage.skipCaseCommittee, its hard-coded جاهزة_للرفع target
+      // is unconditionally right (that IS the under-study post-committee stage). No
+      // classification-aware target logic is needed downstream.
+      if (lawCase.caseClassification !== CaseClassification.UNDER_STUDY) {
+        return res.status(400).json({ error: "لا يمكن تجاوز اللجنة لقضية منظورة بالمحكمة" });
+      }
       if (lawCase.pausedAt || lawCase.awaitingCompletion) {
         return res.status(400).json({ error: "القضية في حالة لا تسمح بتجاوز اللجنة" });
       }
