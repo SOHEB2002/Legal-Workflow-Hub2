@@ -8,6 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { caseHasReturnedFromReview } from "@/lib/case-stage-utils";
+import { CaseClassification } from "@shared/schema";
 import type { LawCase, CaseClassificationValue } from "@shared/schema";
 
 // SHARED case stage panel. Wraps the existing <CaseProgressBar> (the proven
@@ -245,8 +246,17 @@ export function CaseStagePanel({
       // everyone else, so the button does not render at all and can never 403.
       // NOTE this set is intentionally WIDER than the committee-decision actors
       // (cases_review_head / branch_manager); see the endpoint's comment.
+      //
+      // UNDER-STUDY ONLY, mirroring the server's guard: the review committee belongs
+      // to the قيد_الدراسة workflow. An in-court (منظورة_بالمحكمة) case is already
+      // filed — its memo goes to committee, not the case — so it must never show the
+      // skip button. Keeps visibility === authorization (an in-court case parked at
+      // the committee stage, which only corrupt seed data produced, would otherwise
+      // render a button the server now 400s).
       onSkipCommittee={
-        user && (
+        user
+        && caseItem.caseClassification === CaseClassification.UNDER_STUDY
+        && (
           user.role === "branch_manager" ||
           (user.role === "department_head" && caseItem.departmentId === user.departmentId) ||
           caseItem.primaryLawyerId === user.id ||

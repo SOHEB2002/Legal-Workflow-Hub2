@@ -4617,6 +4617,10 @@ export class DatabaseStorage implements IStorage {
       if (!existing) return undefined;
       const now = new Date();
       const fromStage = existing.currentStage;
+      // Fixed target, and it is unconditionally correct BECAUSE the endpoint guards
+      // on caseClassification === قيد_الدراسة: جاهزة_للرفع is the under-study
+      // post-committee stage. An in-court case (whose committee exit would be
+      // منظورة) can never reach here, so no classification-aware target is needed.
       const targetStage = "جاهزة_للرفع";
       const existingHistory = Array.isArray(existing.stageHistory)
         ? existing.stageHistory
