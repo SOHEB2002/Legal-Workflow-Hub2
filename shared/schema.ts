@@ -2916,6 +2916,11 @@ export const MemoActivityType = {
   COMMITTEE_DECISION:     "committee_decision",
   TAKE_NOTES_OUTCOME:     "take_notes_outcome",
   RETURNED_TO_COMMITTEE:  "returned_to_committee",
+  // Reasoned override — the memo was moved from لجنة_مراجعة straight to
+  // جاهزة_للرفع WITHOUT a committee decision. Mirrors the cases-side
+  // case_activity_log actionType "committee_skipped". Type-only addition:
+  // activity_type is a free-text column, so no migration.
+  COMMITTEE_SKIPPED:      "committee_skipped",
   PAUSED:                 "paused",
   UNPAUSED:               "unpaused",
   AWAIT_COMPLETION:       "await_completion",
@@ -2935,6 +2940,7 @@ export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
   committee_decision:     "قرار اللجنة",
   take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
   returned_to_committee:  "إعادة للجنة المراجعة",
+  committee_skipped:      "تجاوز لجنة المراجعة",
   paused:                 "تعليق",
   unpaused:               "إلغاء التعليق",
   await_completion:       "بانتظار استكمال المرفقات والبيانات",

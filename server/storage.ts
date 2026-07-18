@@ -372,6 +372,15 @@ export interface IStorage {
     id: string,
     input: { notes: string; performedBy: string },
   ): Promise<Memo | undefined>;
+  // Reasoned override: skip the memo review committee (لجنة_مراجعة →
+  // جاهزة_للرفع) with a MANDATORY reason. Same one-transaction shape as
+  // returnMemoToCommittee: stage update + memo_activity_log row. performerName
+  // is the ACTING display name (may carry "نيابةً عن …"), which memo_activity_log
+  // has no column for — it is stamped into the description + metadata instead.
+  skipMemoCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Memo | undefined>;
   returnConsultationToCommittee(
     id: string,
     input: { notes: string; performedBy: string },
@@ -2578,6 +2587,53 @@ export class DatabaseStorage implements IStorage {
           ? `إعادة للجنة المراجعة — ${truncated}`
           : "إعادة للجنة المراجعة",
         metadata: { notes: input.notes },
+        performedBy: input.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  // Reasoned override — "تجاوز لجنة المراجعة". Moves the memo straight from
+  // لجنة_مراجعة to جاهزة_للرفع WITHOUT a committee decision, recording WHO did
+  // it and WHY. Mirrors returnMemoToCommittee exactly: one transaction, stage
+  // update + a memo_activity_log row.
+  //
+  // NO memo_committee_decisions row is inserted, by design: a SKIPPED memo has
+  // no committee decision, and that table is the committee's decision record —
+  // writing a synthetic row there would make an override look like a ruling.
+  // The reason lives in the ACTIVITY LOG ONLY (no new column, no migration).
+  //
+  // memo_activity_log (unlike case_activity_log) has no userName column — the
+  // timeline resolves performedBy client-side — so the acting display name is
+  // stamped into the description and metadata, which is what makes a delegated
+  // skip read "… (نيابةً عن …)".
+  async skipMemoCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const truncated = input.reason.slice(0, 120);
+      await tx.update(memos).set({
+        currentStage: MemoStage.READY,
+        updatedAt: now,
+      }).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.COMMITTEE_SKIPPED,
+        description: `تجاوز لجنة المراجعة بواسطة ${input.performerName} — ${truncated}`,
+        metadata: {
+          reason: input.reason,
+          performerName: input.performerName,
+          fromStage,
+          toStage: MemoStage.READY,
+        },
         performedBy: input.performedBy,
         performedAt: now,
       });
