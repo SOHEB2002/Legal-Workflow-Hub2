@@ -102,6 +102,7 @@ import {
 import type {
   Memo, MemoTypeValue, MemoStatusValue, MemoStageValue,
   InternalReviewDecisionValue, CommitteeDecisionValue, NoteOutcomeValue,
+  LawCase,
 } from "@shared/schema";
 import { MemoStagesBar } from "@/components/memo-stages-bar";
 import { MemoAdvancePanel } from "@/components/memo-advance-panel";
@@ -259,6 +260,39 @@ function canDoMemoCommitteeDecision(
   if (!memoIsActionable(memo)) return false;
   if (memo.currentStage !== MemoStage.COMMITTEE) return false;
   return userRole === "cases_review_head" || userRole === "branch_manager";
+}
+
+// Reasoned override — "تجاوز لجنة المراجعة". Gate for the button that calls
+// POST /api/memos/:id/skip-committee. Mirrors the SERVER's rule EXACTLY so
+// visibility === authorization (no button that 403s):
+//   stage === لجنة_مراجعة, memo actionable (not paused / awaiting), not ملغاة,
+//   AND branch_manager | department_head of the PARENT CASE's dept | the memo
+//   assignee | a lawyer on the parent case.
+// NOTE this actor set is intentionally WIDER than canDoMemoCommitteeDecision
+// (cases_review_head / branch_manager) — a skip is an owner-approved override,
+// not a committee ruling. See the endpoint's comment before "harmonising" them.
+// No memo-type/classification guard exists (or is needed): memos have ONE stage
+// array, so جاهزة_للرفع is unconditionally the post-committee stage.
+function canSkipMemoCommittee(
+  memo: Memo,
+  userRole: string,
+  userId: string,
+  memoCase: LawCase | null,
+  userDeptId: string | null,
+): boolean {
+  if (!memoIsActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.COMMITTEE) return false;
+  if (memo.status === "ملغاة") return false;
+  if (userRole === "branch_manager") return true;
+  if (userRole === "department_head") {
+    return !!memoCase && !!userDeptId && memoCase.departmentId === userDeptId;
+  }
+  if (!!memo.assignedTo && memo.assignedTo === userId) return true;
+  return !!memoCase && (
+    memoCase.primaryLawyerId === userId
+    || memoCase.responsibleLawyerId === userId
+    || (Array.isArray(memoCase.assignedLawyers) && memoCase.assignedLawyers.includes(userId))
+  );
 }
 
 function canDoMemoTakeNotesOutcome(
@@ -759,6 +793,13 @@ export default function MemosPage() {
   const [committeeMemo, setCommitteeMemo] = useState<Memo | null>(null);
   const [committeeNotes, setCommitteeNotes] = useState("");
 
+  // Reasoned override — "تجاوز لجنة المراجعة" (skip straight to جاهزة_للرفع).
+  // Its own dialog, deliberately NOT folded into the committee-decision dialog:
+  // different actors, different meaning, and the reason is MANDATORY here.
+  const [showSkipCommitteeDialog, setShowSkipCommitteeDialog] = useState(false);
+  const [skipCommitteeMemo, setSkipCommitteeMemo] = useState<Memo | null>(null);
+  const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
+
   const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
   const [takeNotesMemo, setTakeNotesMemo] = useState<Memo | null>(null);
   const [takeNotesNotes, setTakeNotesNotes] = useState("");
@@ -784,6 +825,16 @@ export default function MemosPage() {
     setShowCommitteeDialog(false);
     setCommitteeMemo(null);
     setCommitteeNotes("");
+  };
+  const openSkipCommitteeDialog = (m: Memo) => {
+    setSkipCommitteeMemo(m);
+    setSkipCommitteeReason("");
+    setShowSkipCommitteeDialog(true);
+  };
+  const closeSkipCommitteeDialog = () => {
+    setShowSkipCommitteeDialog(false);
+    setSkipCommitteeMemo(null);
+    setSkipCommitteeReason("");
   };
   const openTakeNotesDialog = (m: Memo) => {
     setTakeNotesMemo(m);
@@ -838,6 +889,26 @@ export default function MemosPage() {
     }
   };
 
+  // Reasoned override — skip the review committee. The reason is MANDATORY (the
+  // server 400s without it), so the confirm button stays disabled until one is
+  // typed, matching the memo-cancel ("لا يحتاج مذكرة") dialog.
+  const handleSkipCommittee = async () => {
+    if (!skipCommitteeMemo) return;
+    const reason = skipCommitteeReason.trim();
+    if (!reason) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${skipCommitteeMemo.id}/skip-committee`, { reason });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تجاوز لجنة المراجعة — المذكرة جاهزة للرفع" });
+      closeSkipCommitteeDialog();
+    } catch (err) {
+      toast({ title: "فشل تجاوز لجنة المراجعة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
   // Memo lawyer-side advance (linear advances + DRAFTING→INTERNAL_REVIEW
   // send-to-review) now lives in the shared <MemoAdvancePanel> (used by this
   // page and the مهامي hub). The internal-review / committee / take-notes
@@ -886,7 +957,10 @@ export default function MemosPage() {
 
   // Resolve a memo's parent case so the role-gate helpers can scope
   // department_head correctly.
-  const getMemoCase = (memo: Memo): { departmentId?: string | null } | null => {
+  // Returns the FULL parent case (was narrowed to { departmentId }): the
+  // skip-committee gate also needs its lawyer fields. Existing callers read only
+  // departmentId, so widening is behaviour-neutral.
+  const getMemoCase = (memo: Memo): LawCase | null => {
     return cases.find(c => c.id === memo.caseId) ?? null;
   };
 
@@ -1856,6 +1930,31 @@ export default function MemosPage() {
                       قرار اللجنة
                     </Button>
                   )}
+                  {/* Reasoned override — "تجاوز لجنة المراجعة". A SECONDARY,
+                      destructive-outline action so it can never be confused
+                      with the purple "قرار اللجنة" button above: its actors are
+                      NOT the committee chairs (branch_manager / parent-case
+                      dept head / assigned lawyer), and it skips the committee
+                      rather than recording its decision. The gate is the
+                      server's rule verbatim → visibility == authorization. */}
+                  {user && canSkipMemoCommittee(
+                    detailMemo,
+                    user.role,
+                    user.id,
+                    getMemoCase(detailMemo),
+                    user.departmentId,
+                  ) && (
+                    <Button
+                      variant="outline"
+                      data-testid={`button-skip-committee-${detailMemo.id}`}
+                      onClick={() => openSkipCommitteeDialog(detailMemo)}
+                      disabled={submitting}
+                      className="border-destructive/60 text-destructive hover:bg-destructive/10"
+                    >
+                      <AlertTriangle className="w-4 h-4 ml-2" />
+                      تجاوز لجنة المراجعة
+                    </Button>
+                  )}
                   {user && canDoMemoTakeNotesOutcome(
                     detailMemo,
                     user.role,
@@ -2300,6 +2399,56 @@ export default function MemosPage() {
               className="bg-green-600 hover:bg-green-700 text-white"
             >
               اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reasoned override — skip-committee dialog. Moves the memo straight to
+          جاهزة_للرفع with NO committee decision; the reason is MANDATORY and is
+          recorded (with the acting name) in the memo activity log. */}
+      <Dialog
+        open={showSkipCommitteeDialog}
+        onOpenChange={(open) => { if (!open) closeSkipCommitteeDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              تجاوز مرحلة لجنة المراجعة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم نقل المذكرة مباشرةً إلى <strong>جاهزة للرفع</strong> دون قرار من لجنة
+              المراجعة. يُسجَّل هذا الإجراء في سجل نشاط المذكرة مع اسمك والسبب. السبب إلزامي.
+            </p>
+            <div>
+              <Label>سبب التجاوز <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-memo-skip-committee-reason"
+                value={skipCommitteeReason}
+                onChange={(e) => setSkipCommitteeReason(e.target.value)}
+                placeholder="سبب تجاوز لجنة المراجعة (إلزامي)..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeSkipCommitteeDialog}
+              data-testid="button-cancel-memo-skip-committee"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-confirm-memo-skip-committee"
+              onClick={handleSkipCommittee}
+              disabled={reviewActionInProgress || !skipCommitteeReason.trim()}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              تأكيد التجاوز
             </Button>
           </DialogFooter>
         </DialogContent>

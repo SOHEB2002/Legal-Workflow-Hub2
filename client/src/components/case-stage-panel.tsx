@@ -121,9 +121,25 @@ export function CaseStagePanel({
             }
             onChanged?.();
           } else {
-            toast({ title: "لا يمكن نقل القضية", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
+            // success === false is NEVER a permission denial. moveToNextStage only
+            // returns false on CLIENT-SIDE pre-checks that run before any request is
+            // sent: the case isn't loaded, or its current stage isn't in the stage
+            // array resolved for its classification/department (currentIndex === -1
+            // — transitions-engine validateCaseForward + cases-context), or it is
+            // already on the last stage of its path. A real permission denial comes
+            // back from the SERVER as a 403, which updateCase rethrows → the catch
+            // below, where extractApiError surfaces the server's own message.
+            // This branch used to claim "ليس لديك صلاحية", which sent us hunting a
+            // permissions bug for an off-array stage-resolution failure.
+            toast({
+              title: "تعذّر تحديد المرحلة التالية",
+              description: "المرحلة الحالية لا تنتمي لمسار هذه القضية (حسب تصنيفها وقسمها)، أو أن القضية في آخر مرحلة بمسارها. هذه ليست مشكلة صلاحيات — راجع تصنيف القضية ومرحلتها الحالية.",
+              variant: "destructive",
+            });
           }
         } catch (err) {
+          // Server rejection (403 permission / 400 invalid transition / …) — show
+          // the server's OWN message rather than guessing at the cause.
           toast({ title: "فشل نقل القضية", description: extractApiError(err), variant: "destructive" });
         } finally {
           setStageTransitioning(false);
@@ -138,7 +154,15 @@ export function CaseStagePanel({
             toast({ title: "تم إرجاع القضية للمرحلة السابقة" });
             onChanged?.();
           } else {
-            toast({ title: "لا يمكن إرجاع القضية", description: "ليس لديك صلاحية لهذا الإرجاع", variant: "destructive" });
+            // Same rule as the advance branch above: moveToPreviousStage returns
+            // false ONLY on client-side pre-checks (case not loaded; stage not in
+            // the resolved path; already at the first stage). A permission denial
+            // arrives as a server 403 → the catch below.
+            toast({
+              title: "تعذّر تحديد المرحلة السابقة",
+              description: "لا توجد مرحلة سابقة في مسار هذه القضية، أو أن المرحلة الحالية لا تنتمي لهذا المسار. هذه ليست مشكلة صلاحيات.",
+              variant: "destructive",
+            });
           }
         } catch (err) {
           toast({ title: "فشل إرجاع القضية", description: extractApiError(err), variant: "destructive" });

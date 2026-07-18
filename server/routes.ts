@@ -7174,6 +7174,108 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/memos/:id/skip-committee
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز لجنة المراجعة". Moves the memo
+  // from لجنة_مراجعة straight to جاهزة_للرفع with NO committee decision,
+  // recording who did it and why in memo_activity_log (reason is MANDATORY).
+  // Entity 2 of 4 — mirrors POST /api/cases/:id/skip-committee verbatim.
+  //
+  // Deliberately bypasses validateStageTransition — the same precedent the
+  // committee-decision path above already sets (compute the target stage and
+  // call storage directly). No transition-table entry is added, so this override
+  // cannot be reached through POST /api/memos/:id/advance-stage.
+  //
+  // ORIGIN is the committee stage ONLY (never مراجعة_داخلية), so the four-eyes
+  // internal-review lock (the designated-peer-reviewer guard on
+  // /internal-review) is untouched.
+  //
+  // TARGET is unconditionally MemoStage.READY: memos — unlike cases — have ONE
+  // stage array (MemoStagesOrder/MemoStagesAll, schema.ts). memoType does NOT
+  // branch the path, and there is no memo analogue of caseClassification, so the
+  // in-court hazard that forced the cases-side قيد_الدراسة guard (commit 193649a)
+  // has no counterpart here. READY is the memo's only post-committee stage
+  // (committee APPROVED → READY above), and the currentStage === COMMITTEE guard
+  // below also excludes legacy null-stage memos. No extra guard is needed.
+  //
+  // AUTHORIZED ROLES (owner decision, 2026-07): branch_manager + department_head
+  // (of the memo's PARENT CASE's department — memos carry no departmentId) + the
+  // assigned lawyer (memo assignee OR a lawyer on the parent case). This is
+  // INTENTIONALLY BROADER than the committee-DECISION role set for memos
+  // (cases_review_head + branch_manager, above). Skipping the committee is an
+  // owner-approved override, not a committee decision, so it answers to a
+  // different, wider authority. Do NOT "harmonise" this set with the committee
+  // chairs — the divergence is the point.
+  //
+  // FOUR-EYES DOES NOT APPLY HERE, by design. The committee-decision endpoint's
+  // four-eyes check stops a DELEGATE approving a memo they authored; here the
+  // assigned lawyer — i.e. the author — is an EXPLICITLY authorized actor, so
+  // such a check would contradict the approved permission model. The mandatory
+  // reason + the audit row are the control instead.
+  app.post("/api/memos/:id/skip-committee", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز اللجنة مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بتجاوز اللجنة" });
+      }
+      if (memo.currentStage !== MemoStage.COMMITTEE) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة لجنة المراجعة" });
+      }
+      // A cancelled memo can still sit at the committee stage: /cancel sets
+      // status only and leaves current_stage alone. Mirrors the /cancel guard.
+      if (memo.status === "ملغاة") {
+        return res.status(400).json({ error: "لا يمكن تجاوز اللجنة في مذكرة ملغاة" });
+      }
+
+      // Delegation-aware: evaluate the rule against every acting identity (self +
+      // any delegator this user currently stands in for, scoped to the memo's
+      // PARENT case — specific_cases delegations reach a memo via its case).
+      // With no delegation this resolves to exactly the actor → byte-identical to
+      // a plain self-check.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, memo.caseId ?? null).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      // department_head is scoped through the parent case (canActOnMemo idiom);
+      // the parent case also carries the lawyer fields isAssignedLawyer reads.
+      const parentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || (u.role === "department_head" && !!u.departmentId && !!parentCase && parentCase.departmentId === u.departmentId)
+        || isAssignedLawyer({ id: u.id }, memo)
+        || (!!parentCase && isAssignedLawyer({ id: u.id }, parentCase)));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز لجنة المراجعة" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, memo.caseId ?? null, performer?.name || reqUser.id);
+      const updated = await storage.skipMemoCommittee(memo.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز لجنة المراجعة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // POST /api/memos/:id/cancel
   // Body: { reason }. Cancels the memo (sets status='ملغاة') with a
   // required reason. Mirrors the pause/await dialog pattern: reason is
