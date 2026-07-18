@@ -385,6 +385,16 @@ export interface IStorage {
     id: string,
     input: { notes: string; performedBy: string },
   ): Promise<Consultation | undefined>;
+  // Reasoned override: skip the review committee (لجنة_مراجعة → جاهزة_للإرسال)
+  // with a MANDATORY reason. WRITTEN consultations only — the caller enforces
+  // that (phone/procedural have no committee stage AND no READY stage). Same
+  // one-transaction shape as returnConsultationToCommittee. performerName is the
+  // ACTING display name (may carry "نيابةً عن …"); consultation_activity_log has
+  // no column for it, so it is stamped into the description + metadata.
+  skipConsultationCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Consultation | undefined>;
 
   // ==================== Contracts module ====================
   // Mirror of the consultation surface (createConsultation /
@@ -4287,6 +4297,59 @@ export class DatabaseStorage implements IStorage {
           ? `إعادة للجنة المراجعة — ${truncated}`
           : "إعادة للجنة المراجعة",
         metadata: { notes: input.notes },
+        performedBy: input.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
+  // Reasoned override — "تجاوز لجنة المراجعة". Moves the consultation straight
+  // from لجنة_مراجعة to جاهزة_للإرسال WITHOUT a committee decision, recording
+  // WHO did it and WHY. Mirrors returnConsultationToCommittee exactly: one
+  // transaction, stage update + a consultation_activity_log row.
+  //
+  // The WRITTEN-type guard lives in the ROUTE, not here — this method hard-codes
+  // ConsultationStage.READY, which exists ONLY on the written stage array
+  // (ConsultationStagesOrderPhone/Procedural end RECEIVED → … → COMPLETED →
+  // CLOSED_FINAL and contain no READY). Calling this for a phone/procedural row
+  // would strand it off its own path, which is exactly the cases-side in-court
+  // bug fixed in 193649a. Do not call it without the route's type check.
+  //
+  // NO consultation_committee_decisions row is inserted, by design: a SKIPPED
+  // consultation has no committee decision, and that table is the committee's
+  // decision record — a synthetic row there would make an override look like a
+  // ruling. The reason lives in the ACTIVITY LOG ONLY (no column, no migration).
+  //
+  // consultation_activity_log has no userName column (the timeline resolves
+  // performedBy client-side), so the acting display name is stamped into the
+  // description + metadata — what makes a delegated skip read "(نيابةً عن …)".
+  async skipConsultationCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const truncated = input.reason.slice(0, 120);
+      await tx.update(consultations).set({
+        currentStage: ConsultationStage.READY,
+        updatedAt: now,
+      }).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.COMMITTEE_SKIPPED,
+        description: `تجاوز لجنة المراجعة بواسطة ${input.performerName} — ${truncated}`,
+        metadata: {
+          reason: input.reason,
+          performerName: input.performerName,
+          fromStage,
+          toStage: ConsultationStage.READY,
+        },
         performedBy: input.performedBy,
         performedAt: now,
       });
