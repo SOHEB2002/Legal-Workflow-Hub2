@@ -42,7 +42,13 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        // Dev only: Vite injects inline preamble/HMR scripts that strict
+        // script-src 'self' blocks (white screen / "can't detect preamble").
+        // Production (NODE_ENV=production via `npm start`) stays strict.
+        scriptSrc:
+          process.env.NODE_ENV !== "production"
+            ? ["'self'", "'unsafe-inline'"]
+            : ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
         imgSrc: ["'self'", "data:", "blob:", "https:"],

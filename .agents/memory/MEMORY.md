@@ -1,0 +1,1 @@
+- [Recurring boot failures](boot-failures.md) — gitignored logo asset & dev-only CSP fix are both repeatedly lost after rollbacks/deploys; how to recover each.
