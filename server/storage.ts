@@ -445,6 +445,17 @@ export interface IStorage {
     id: string,
     input: { notes: string; performedBy: string },
   ): Promise<Contract | undefined>;
+  // Reasoned override: skip the review committee (لجنة_مراجعة → جاهزة_للإرسال)
+  // with a MANDATORY reason. Contracts have a single stage flow (no phone/
+  // procedural analogue) so — unlike skipConsultationCommittee — there is NO
+  // type guard. Same one-transaction shape as returnContractToCommittee.
+  // performerName is the ACTING display name (may carry "نيابةً عن …");
+  // contract_activity_log has no column for it, so it is stamped into the
+  // description + metadata.
+  skipContractCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Contract | undefined>;
   createContractActivity(input: {
     contractId: string;
     activityType: string;
@@ -5450,6 +5461,44 @@ export class DatabaseStorage implements IStorage {
         activityType: ContractActivityType.RETURNED_TO_COMMITTEE,
         description: `إعادة إلى لجنة المراجعة — ${input.notes}`,
         metadata: { notes: input.notes },
+        performedBy: input.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  // Reasoned override: skip the review committee straight to جاهزة_للإرسال with a
+  // MANDATORY reason. Byte-for-byte the shape of skipConsultationCommittee minus
+  // the WRITTEN-only concern (contracts have one stage flow). Records the actor
+  // name + reason + from/to stages in contract_activity_log (no schema change —
+  // activity_type is free text).
+  async skipContractCommittee(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const truncated = input.reason.slice(0, 120);
+      await tx.update(contracts).set({
+        currentStage: ContractStage.READY,
+        updatedAt: now,
+      }).where(eq(contracts.id, id));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.COMMITTEE_SKIPPED,
+        description: `تجاوز لجنة المراجعة بواسطة ${input.performerName} — ${truncated}`,
+        metadata: {
+          reason: input.reason,
+          performerName: input.performerName,
+          fromStage,
+          toStage: ContractStage.READY,
+        },
         performedBy: input.performedBy,
         performedAt: now,
       });

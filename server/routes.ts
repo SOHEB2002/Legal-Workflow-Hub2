@@ -5833,6 +5833,99 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/contracts/:id/skip-committee
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز لجنة المراجعة". Moves the
+  // contract from لجنة_مراجعة straight to جاهزة_للإرسال with NO committee
+  // decision, recording who did it and why in contract_activity_log (reason is
+  // MANDATORY). Entity 4 of 4 — mirrors cases (76eea3c/193649a), memos (acd9c93)
+  // and consultations (8917b72). Post-committee target VERIFIED against the
+  // committee-decision APPROVED path above (ContractStage.READY).
+  //
+  // Deliberately bypasses validateStageTransition — the same precedent the
+  // committee-decision path above already sets. No transition-table entry is
+  // added, so this override cannot be reached through /advance-stage.
+  //
+  // ORIGIN is the committee stage ONLY (never مراجعة_داخلية), so the four-eyes
+  // internal-review lock is untouched.
+  //
+  // NO TYPE GUARD — unlike consultations (WRITTEN-only). Contracts have a single
+  // stage flow (ContractStagesOrder: RECEIVED → … → COMMITTEE → READY → CLOSED);
+  // جاهزة_للإرسال is on that one path, so a currentStage === COMMITTEE check is a
+  // sufficient guard. This matches memos (one unconditional stage array).
+  //
+  // AUTHORIZED ROLES (owner decision, 2026-07): branch_manager + department_head
+  // (of the contract's OWN department — contracts carry departmentId directly) +
+  // the assigned lawyer. This is INTENTIONALLY BROADER than the committee-DECISION
+  // role set (consultations_review_head + branch_manager, above). Skipping the
+  // committee is an owner-approved override, not a committee decision, so it
+  // answers to a different, wider authority. Do NOT "harmonise" this set with the
+  // committee chair — the divergence is the point.
+  //
+  // FOUR-EYES DOES NOT APPLY HERE, by design: the assigned lawyer (the author) is
+  // an EXPLICITLY authorized actor, so an author-exclusion would contradict the
+  // approved permission model. The mandatory reason + the audit row are the control.
+  app.post("/api/contracts/:id/skip-committee", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // Type-check-only gate; the handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز اللجنة مطلوب" });
+
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      // Stricter than committee-decision (which checks status only): a paused or
+      // awaiting-completion contract must not be advanced. Matches the
+      // cases/memo/consultation skip endpoints, which all guard this pair.
+      if (contract.pausedAt || contract.awaitingCompletion) {
+        return res.status(400).json({ error: "العقد في حالة لا تسمح بتجاوز اللجنة" });
+      }
+      if (contract.currentStage !== ContractStage.COMMITTEE) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة لجنة المراجعة" });
+      }
+
+      // Delegation-aware: evaluate the rule against every acting identity (self +
+      // any delegator this user currently stands in for). Scope is null —
+      // contracts carry no caseId, so only all_cases delegations apply (same as
+      // the committee-decision endpoint above). With no delegation this resolves
+      // to exactly the actor → byte-identical to a plain self-check.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, null).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId)
+        || isAssignedLawyer({ id: u.id }, contract));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز لجنة المراجعة" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, null, performer?.name || reqUser.id);
+      const updated = await storage.skipContractCommittee(contract.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز لجنة المراجعة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   app.post("/api/contracts/:id/take-notes-outcome", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;

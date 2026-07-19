@@ -37,6 +37,8 @@ interface ContractsContextType {
   returnStage: (id: string, targetStage: ContractStageValue) => Promise<void>;
   submitInternalReview: (id: string, decision: InternalReviewDecisionValue, notes?: string) => Promise<void>;
   submitCommitteeDecision: (id: string, decision: CommitteeDecisionValue, notes?: string) => Promise<void>;
+  // Reasoned override — skip the review committee straight to جاهزة_للإرسال. reason MANDATORY.
+  skipCommittee: (id: string, reason: string) => Promise<void>;
   recordTakeNotesOutcome: (id: string, outcome: NoteOutcomeValue, notes?: string) => Promise<void>;
   earlyCloseContract: (id: string, reason: string) => Promise<void>;
   pauseContract: (id: string, reason: string) => Promise<void>;
@@ -145,6 +147,14 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
     apply(contract);
   };
 
+  // Reasoned override — "تجاوز لجنة المراجعة". Server returns the raw contract
+  // (like early-close/pause), not a { contract } envelope.
+  const skipCommittee = async (id: string, reason: string): Promise<void> => {
+    const res = await apiRequest("POST", `/api/contracts/${id}/skip-committee`, { reason });
+    const updated = (await res.json()) as Contract;
+    apply(updated);
+  };
+
   const recordTakeNotesOutcome = async (id: string, outcome: NoteOutcomeValue, notes = ""): Promise<void> => {
     const res = await apiRequest("POST", `/api/contracts/${id}/take-notes-outcome`, { outcome, notes });
     const { contract } = (await res.json()) as { contract: Contract };
@@ -200,6 +210,7 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
         returnStage,
         submitInternalReview,
         submitCommitteeDecision,
+        skipCommittee,
         recordTakeNotesOutcome,
         earlyCloseContract,
         pauseContract,
