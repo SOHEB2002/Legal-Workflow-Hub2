@@ -21,6 +21,7 @@ export function startScheduler() {
     await recalculateCasePriorities();
     await checkStruckOffExpiry();
     await checkSettlementLinkMissingTimeout();
+    await checkNajizReviewReminders();
   });
 
   cron.schedule("0 7 * * 0", async () => {
@@ -635,6 +636,83 @@ async function autoArchiveClosedCases() {
     }
   } catch (error) {
     console.error("Error auto-archiving cases:", error);
+  }
+}
+
+// Recurring Najiz-review reminder: while a case sits in "قيد_التدقيق_في_ناجز",
+// remind the responsible lawyer to verify the request status. The first reminder
+// fires 3 days after the case entered the stage, then recurs every 3 days. Once
+// the lawyer confirms the request was accepted — i.e. advances the case out of
+// this stage (to "منظورة") — any still-open reminders are auto-cancelled so they
+// stop recurring.
+async function checkNajizReviewReminders() {
+  try {
+    const allCases = await storage.getAllCases();
+    const allTasks = await storage.getAllFieldTasks();
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const TITLE_KEY = "التأكد من حالة الطلب في ناجز";
+
+    // Group existing najiz reminders by case (title-matched — there is no
+    // dedicated taskType for them) for O(1) lookup.
+    const remindersByCase = new Map<string, typeof allTasks>();
+    for (const t of allTasks) {
+      if (t.caseId && t.title.includes(TITLE_KEY)) {
+        const arr = remindersByCase.get(t.caseId) ?? [];
+        arr.push(t);
+        remindersByCase.set(t.caseId, arr);
+      }
+    }
+
+    for (const caseItem of allCases) {
+      const reminders = remindersByCase.get(caseItem.id) ?? [];
+
+      if (caseItem.currentStage === "قيد_التدقيق_في_ناجز") {
+        const assignee = caseItem.responsibleLawyerId || caseItem.primaryLawyerId || "";
+        if (!assignee) continue; // no responsible lawyer to remind
+
+        // When did the case enter this stage? Use the LAST matching stageHistory
+        // entry (a case can re-enter via أغلق_طلب_الصلح → قيد_التدقيق_في_ناجز);
+        // fall back to updatedAt only if history is missing.
+        const history = Array.isArray(caseItem.stageHistory) ? caseItem.stageHistory : [];
+        const entry = [...history].reverse().find((h) => h.stage === caseItem.currentStage);
+        const enteredMs = entry ? new Date(entry.timestamp).getTime() : new Date(caseItem.updatedAt).getTime();
+
+        const lastReminderMs = reminders.length
+          ? Math.max(...reminders.map((t) => new Date(t.createdAt).getTime()))
+          : 0;
+
+        // First reminder ≥3 days after entering; then every ≥3 days.
+        const dueForReminder =
+          now - enteredMs >= 3 * DAY &&
+          (lastReminderMs === 0 || now - lastReminderMs >= 3 * DAY);
+
+        if (dueForReminder) {
+          await storage.createFieldTask(
+            {
+              title: `التأكد من حالة الطلب في ناجز — قضية رقم ${caseItem.caseNumber}`,
+              description: `يرجى التأكد من حالة القيد/الطلب في منصة ناجز. يتكرّر هذا التذكير كل 3 أيام حتى يتم تحديث حالة القضية.`,
+              taskType: "متابعة_محكمة",
+              caseId: caseItem.id,
+              assignedTo: assignee,
+              priority: "عالي",
+              dueDate: new Date(now + 3 * DAY).toISOString().split("T")[0],
+            },
+            "system",
+          );
+        }
+      } else if (reminders.length) {
+        // Case left najiz review (request accepted → advanced to منظورة, or closed):
+        // cancel any still-open reminders so they stop recurring.
+        for (const t of reminders) {
+          if (t.status === "قيد_الانتظار" || t.status === "قيد_التنفيذ") {
+            await storage.updateFieldTask(t.id, { status: "ملغي" });
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error checking najiz review reminders:", error);
   }
 }
 
