@@ -185,7 +185,16 @@ export function CaseProgressBar({
   }
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
-  const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled;
+  // Settlement-success terminal (تحصيل) is reached from مداولة_الصلح via the
+  // "تم الصلح" action. It lives OFF the قيد_الدراسة stage arrays, so rawIndex
+  // is -1 and the bar would otherwise collapse onto استلام (currentIndex=0).
+  // Detect it and render the prep run up to مداولة_الصلح as done, with a
+  // terminal "تم الصلح — تحصيل" badge. Applies to every department (labor,
+  // commercial, general) since مداولة_الصلح exists in all of their arrays.
+  const settlementReachedTerminal =
+    rawIndex < 0 && normalizedStage === "تحصيل" && stagesOrder.indexOf("مداولة_الصلح") >= 0;
+  const settlementDoneIndex = settlementReachedTerminal ? stagesOrder.indexOf("مداولة_الصلح") : -1;
+  const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled && !settlementReachedTerminal;
   const canGoPrev = currentIndex > 0 && canMoveToPreviousStage(userRole) && !disabled;
 
   const isAtReception = normalizedStage === "استلام";
@@ -193,6 +202,12 @@ export function CaseProgressBar({
   const canSkip = isAtReception && nextStageIsDataCompletion && !!onSkipDataCompletion && !disabled;
 
   const getStageStatus = (stageIndex: number) => {
+    if (settlementReachedTerminal) {
+      // Everything up to and including مداولة_الصلح is done; the litigation
+      // stages after it never ran (settlement succeeded), so leave them
+      // upcoming/grey and let the terminal badge carry the outcome.
+      return stageIndex <= settlementDoneIndex ? "completed" : "upcoming";
+    }
     if (stageIndex < currentIndex) return "completed";
     if (stageIndex === currentIndex) return "current";
     return "upcoming";
@@ -485,7 +500,7 @@ export function CaseProgressBar({
               {index < stagesOrder.length - 1 && (
                 <div
                   className={`h-1 flex-1 mx-1 rounded ${
-                    index < currentIndex
+                    (settlementReachedTerminal ? index < settlementDoneIndex : index < currentIndex)
                       ? "bg-green-500"
                       : "bg-muted"
                   }`}
@@ -495,6 +510,17 @@ export function CaseProgressBar({
           );
         })}
       </div>
+
+      {settlementReachedTerminal && (
+        <div className="flex justify-center pb-1">
+          <span
+            className="rounded-md border border-green-600 bg-green-500/10 px-3 py-1 text-sm font-bold text-green-700 dark:text-green-300"
+            data-testid="badge-settlement-terminal"
+          >
+            تم الصلح — تحصيل
+          </span>
+        </div>
+      )}
 
       {disabled && (
         <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground py-1">

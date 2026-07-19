@@ -1897,7 +1897,11 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
       if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "تجاري") {
+      // Gate by DEPARTMENT (not the free-text caseType): the settlement panel
+      // follows the case's department so a labor-dept case mistyped "تجاري"
+      // can't open the commercial تراضي flow (and vice-versa).
+      const taradiDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || taradiDept?.name !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
@@ -1958,7 +1962,11 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
       if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
+      // Gate by DEPARTMENT (not the free-text caseType): the MOHR settlement
+      // panel follows the case's department (عمالي), matching how the whole
+      // stage track is routed. See schema getStagesForClassification.
+      const mohrDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || mohrDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
@@ -2017,7 +2025,9 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
       if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
+      // Gate by DEPARTMENT (not the free-text caseType) — mirrors /mohr.
+      const settlementDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || settlementDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       
@@ -2278,6 +2288,7 @@ export async function registerRoutes(
       // post-update side-effects can see them.
       let shouldCreateCollectionTask = false;
       let shouldCreateSettlementFailedMemo = false;
+      let shouldCreateNajizAuditTask = false;
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -2673,6 +2684,15 @@ export async function registerRoutes(
         shouldCreateCollectionTask =
           existing.currentStage === "مداولة_الصلح" && req.body.currentStage === "تحصيل";
 
+        // Entering قيد_التدقيق_في_ناجز: schedule a 3-day follow-up task for the
+        // responsible lawyer to verify the request status in Najiz. (najizNumber
+        // is already validated on this transition above.) The task itself is
+        // created AFTER updateCase succeeds so a failed transition leaves no
+        // orphan task.
+        shouldCreateNajizAuditTask =
+          existing.currentStage !== "قيد_التدقيق_في_ناجز" &&
+          req.body.currentStage === "قيد_التدقيق_في_ناجز";
+
         // Settlement FAILED → litigation resumes (مداولة_الصلح → أغلق_طلب_الصلح):
         // create the defendant جوابية memo that POST /api/cases deliberately did
         // NOT create while the case sat in settlement. This is the moment the
@@ -2736,6 +2756,33 @@ export async function registerRoutes(
           await notifyFieldTaskCreated(collectionTask, user); // D4
         } catch (e) {
           console.error("Failed to auto-create collection task on conciliation settlement:", e);
+        }
+      }
+
+      // Side effect for entering قيد_التدقيق_في_ناجز: a follow-up task for the
+      // RESPONSIBLE lawyer (not admin support) to verify the request status in
+      // Najiz, due in 3 days. Note: field tasks are visible immediately; the
+      // 3-day window is expressed via dueDate (there is no hide-until-date
+      // mechanism today).
+      if (shouldCreateNajizAuditTask) {
+        try {
+          const najizTask = await storage.createFieldTask(
+            {
+              title: `التأكد من حالة الطلب في ناجز — قضية رقم ${updated.caseNumber}`,
+              description: `يرجى التأكد من حالة القيد/الطلب في منصة ناجز بعد مرور 3 أيام من الرفع.`,
+              taskType: "متابعة_محكمة",
+              caseId: updated.id,
+              assignedTo: updated.responsibleLawyerId || updated.primaryLawyerId || "",
+              priority: "عالي",
+              dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+                .toISOString()
+                .split("T")[0],
+            },
+            user.id,
+          );
+          await notifyFieldTaskCreated(najizTask, user);
+        } catch (e) {
+          console.error("Failed to auto-create najiz-audit task on قيد_التدقيق_في_ناجز entry:", e);
         }
       }
 
