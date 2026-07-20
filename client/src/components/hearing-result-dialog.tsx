@@ -96,7 +96,14 @@ export function HearingResultDialog({
         caseId: effectiveCaseId || undefined,
       };
       if (resultForm.result === HearingResult.JUDGMENT) {
-        data.judgmentSide = resultForm.judgmentSide;
+        // The dropdown is a single 3-valued outcome (لصالحنا | ضدنا | جزئي), so it
+        // must go to judgmentType — the CURRENT field, which enumerates all three
+        // (schema.ts:3422). judgmentSide is the LEGACY 2-valued field (:3426) and
+        // rejects جزئي, which is what made every partial judgment 400. The server
+        // coalesces `data.judgmentType || data.judgmentSide` at routes.ts:7929
+        // (persist → the judgment_side column) and :8099 (all downstream routing),
+        // so لصالحنا/ضدنا behave identically to before.
+        data.judgmentType = resultForm.judgmentSide;
         data.judgmentFinal = resultForm.judgmentFinal;
         data.objectionFeasible = resultForm.objectionFeasible;
         data.objectionDeadline = resultForm.objectionDeadline || undefined;
