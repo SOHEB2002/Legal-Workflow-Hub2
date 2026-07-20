@@ -2359,6 +2359,34 @@ export async function registerRoutes(
           if (!taradi) return res.status(400).json({ error: "يجب إدخال رقم الطلب في تراضي" });
           req.body.caseNumber = String(taradi).trim();
         }
+        // LABOR settlement: entering مداولة_الصلح requires the amicable-settlement
+        // case number (mohrNumber). Mirrors the تراضي gate above — same shape, same
+        // mandatory 400 — so the FE gate at case-progress-bar.tsx and this server
+        // rule agree exactly (visibility == enforceability).
+        //
+        // Gated by DEPARTMENT, not the free-text caseType (same idiom as /mohr at
+        // :1969 and /direct-settlement at :2030): مداولة_الصلح is shared by labor,
+        // commercial, general and the in-court settlement path, and ONLY labor
+        // carries a MOHR number — commercial/general captured theirs on تراضي-entry.
+        // Without this department check the rule would 400 every non-labor case
+        // entering settlement.
+        //
+        // NOTE: unlike the تراضي branch above, this deliberately does NOT write
+        // req.body.caseNumber. The displayed number is now DERIVED per-stage in
+        // storage.ts (deriveCurrentCaseNumber), so the stored caseNumber is left
+        // untouched and the number switches back correctly if the case leaves and
+        // re-enters settlement.
+        if (targetStage === "مداولة_الصلح") {
+          const settlementDept = existing.departmentId
+            ? await storage.getDepartmentById(existing.departmentId)
+            : null;
+          if (settlementDept?.name === "عمالي") {
+            const mohr = req.body.mohrNumber || existing.mohrNumber;
+            if (!mohr || !String(mohr).trim()) {
+              return res.status(400).json({ error: "يجب إدخال رقم الدعوى في التسوية الودية" });
+            }
+          }
+        }
         if (targetStage === "قيد_التدقيق_في_ناجز") {
           const najiz = req.body.najizNumber || existing.najizNumber;
           if (!najiz) return res.status(400).json({ error: "يجب إدخال رقم القيد في ناجز" });
@@ -2408,20 +2436,31 @@ export async function registerRoutes(
             req.body.clientRole = "مدعي";
           }
         }
-        // Labor settlement: the moment a mohrNumber is supplied (or already
-        // exists) and the case is leaving the settlement-prep stages, sync
-        // caseNumber := mohrNumber.
-        if (
-          (targetStage === "بانتظار_رفع_العميل_للتسوية" ||
-            targetStage === "مداولة_الصلح" ||
-            targetStage === "أغلق_طلب_الصلح") &&
-          existing.currentStage !== targetStage
-        ) {
-          const mohr = req.body.mohrNumber || existing.mohrNumber;
-          if (mohr && String(mohr).trim()) {
-            req.body.caseNumber = String(mohr).trim();
-          }
-        }
+        // Labor settlement: the caseNumber := mohrNumber sync that used to live
+        // here is REMOVED — it was the cause of a 500 on every labor advance into
+        // مداولة_الصلح once 7a1b77d started supplying a mohrNumber.
+        //
+        // It wrote `req.body.caseNumber = mohrNumber`, and updateCase spreads that
+        // straight into the UPDATE. But the destination is NARROWER and CONSTRAINED
+        // than the source:
+        //     case_number  varchar(50)  NOT NULL UNIQUE
+        //     mohr_number  varchar(100)
+        // so the write threw 23505 (unique_violation) when the settlement number
+        // collided with any other case's number, or 22001 (string_data_right_
+        // truncation) past 50 chars. Either propagated out of updateCase — which has
+        // no try/catch — to the PATCH catch-all, surfacing as
+        // 500 "حدث خطأ في تحديث القضية".
+        //
+        // It was LATENT before 7a1b77d only because nothing ever sent a mohrNumber
+        // on this transition (there was no prompt), so `if (mohr && ...)` was false.
+        // Adding the prompt made it fire on every labor settlement advance.
+        //
+        // The sync is now REDUNDANT as well as harmful: deriveCurrentCaseNumber
+        // (storage.ts) already returns mohrNumber as the displayed number while the
+        // case sits at مداولة_الصلح. Dropping the write also keeps the stored
+        // case_number pristine, which is what lets the displayed number switch BACK
+        // when the case leaves settlement. No stored data is modified or destroyed —
+        // this only stops future overwrites.
 
         // Accepting out of a najiz/moeen review stage INTO COURT (منظورة): the
         // lawyer must enter the court-issued case number, which then replaces

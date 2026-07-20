@@ -519,11 +519,78 @@ function mapDbUser(dbUser: any): User {
   };
 }
 
+// Stage-based "current number" (product-owner design, 2026-07, revised).
+//
+// A case carries several reference numbers at once — each in its OWN column,
+// none merged (no migration). The displayed "current number" is chosen on read
+// in this PRIORITY order:
+//
+//   1) najizNumber present            → najizNumber   (court number wins outright)
+//   2) else reached settlement AND a
+//      settlement number present      → mohrNumber || taradiNumber
+//   3) else                           → the stored caseNumber (base)
+//
+// PERSISTENCE (the revision): the settlement number must show from مداولة_الصلح
+// onward through EVERY later pre-court stage (تحرير_صحيفة_الدعوى, مراجعة_داخلية,
+// إحالة_للجنة_المراجعة, الأخذ_بالملاحظات, جاهزة_للرفع …) until a najizNumber
+// exists — not only while the case literally sits at the settlement stage. The
+// switch to the court number is triggered by najizNumber EXISTING, not by any
+// specific stage.
+//
+// WHY "reached settlement" cannot be existence-only: mohrNumber / taradiNumber
+// are NOT set only by the settlement prompt. Both also have registration write
+// paths — PATCH /api/cases/:id/mohr (routes.ts:1978, status مقيدة_في_الموارد) and
+// /taradi (:1913), plus inline edit in case-details-dialog. A labor case can be
+// registered in MOHR (mohrNumber set) during دراسة/توجيه, BEFORE مداولة_الصلح.
+// So "number exists" ≠ "settlement reached", and pure existence would wrongly
+// show the settlement number during توجيه_العميل_بالتسوية / بانتظار_رفع_العميل_
+// للتسوية, which the owner confirmed must show base.
+//
+// WHY a stage-NAME set cannot gate it either: the post-settlement stages
+// (تحرير_صحيفة_الدعوى, مراجعة_داخلية, جاهزة_للرفع …) are the SAME values that sit
+// BEFORE settlement in the commercial/general arrays. Membership can't tell a
+// labor case PAST settlement from a commercial case still heading INTO it.
+//
+// SIGNAL USED: stageHistory. It records the case's actual PATH, so
+// `history.some(stage === مداولة_الصلح)` means "this case genuinely entered
+// settlement", disambiguating the shared stage values by the case's own journey,
+// per department, with no DB lookup. The explicit SETTLEMENT_STAGES check covers
+// the case that is AT a settlement stage right now (esp. commercial's
+// قيد_التدقيق_في_تراضي, which precedes مداولة_الصلح, so history wouldn't contain
+// it yet).
+//
+// Department is still inferred from WHICH NUMBER EXISTS — mohrNumber is written
+// only by the labor flow (its endpoints reject non-عمالي cases), so
+// `mohrNumber || taradiNumber` resolves labor → MOHR, commercial/general →
+// تراضي; mohr FIRST so an L1-bug row carrying a stray taradiNumber still shows
+// its MOHR number.
+//
+// NULL-SAFE: both non-base branches guard on a trimmed non-empty value and fall
+// back to caseNumber (NOT NULL) — never blank. In-court cases created WITH a
+// court number are unaffected: createCase stores courtCaseNumber AS caseNumber,
+// so base already yields the court number (and najizNumber is empty for them).
+const SETTLEMENT_STAGES = new Set(["قيد_التدقيق_في_تراضي", "مداولة_الصلح"]);
+
+function reachedSettlement(dbCase: any): boolean {
+  if (SETTLEMENT_STAGES.has(dbCase.currentStage)) return true;
+  const history = Array.isArray(dbCase.stageHistory) ? dbCase.stageHistory : [];
+  return history.some((h: any) => h && h.stage === "مداولة_الصلح");
+}
+
+function deriveCurrentCaseNumber(dbCase: any): string {
+  const base = dbCase.caseNumber;
+  const najiz = (dbCase.najizNumber || "").trim();
+  if (najiz) return najiz;
+  const settlement = (dbCase.mohrNumber || dbCase.taradiNumber || "").trim();
+  if (settlement && reachedSettlement(dbCase)) return settlement;
+  return base;
+}
+
 // Map DB case to interface LawCase
 function mapDbCase(dbCase: any): LawCase {
   return {
     id: dbCase.id,
-    caseNumber: dbCase.courtCaseNumber || dbCase.caseNumber,
+    caseNumber: deriveCurrentCaseNumber(dbCase),
     clientId: dbCase.clientId || "",
     caseType: dbCase.caseType,
     caseTypeOther: dbCase.caseTypeOther || "",
