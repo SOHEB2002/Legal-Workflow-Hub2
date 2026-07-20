@@ -270,7 +270,15 @@ export function HearingResultDialog({
                 <Checkbox id="judgmentFinal" checked={resultForm.judgmentFinal} onCheckedChange={(checked) => setResultForm({ ...resultForm, judgmentFinal: !!checked })} data-testid="checkbox-judgment-final" />
                 <Label htmlFor="judgmentFinal" className="text-sm cursor-pointer">حكم نهائي (غير قابل للاعتراض)</Label>
               </div>
-              {!resultForm.judgmentFinal && resultForm.judgmentSide === "ضدنا" && (
+              {/* Objection sub-form. Shown for ضدنا AND جزئي: a partial judgment is
+                  partially against us, so it can warrant an objection too. This gate
+                  mirrors the SERVER's objection-memo branch verbatim (routes.ts:8203,
+                  `judgmentType === "ضدنا" || judgmentType === "جزئي"`), which already
+                  accepted جزئي — the form was the only thing blocking it, so a partial
+                  judgment could never set objectionFeasible/objectionDeadline and the
+                  server branch could never fire. */}
+              {!resultForm.judgmentFinal
+                && (resultForm.judgmentSide === "ضدنا" || resultForm.judgmentSide === "جزئي") && (
                 <>
                   <div className="flex items-center gap-2">
                     <Checkbox id="objectionFeasible" checked={resultForm.objectionFeasible} onCheckedChange={(checked) => setResultForm({ ...resultForm, objectionFeasible: !!checked })} data-testid="checkbox-objection" />
