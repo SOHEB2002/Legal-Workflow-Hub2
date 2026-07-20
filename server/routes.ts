@@ -1897,7 +1897,11 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
       if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "تجاري") {
+      // Gate by DEPARTMENT (not the free-text caseType): the settlement panel
+      // follows the case's department so a labor-dept case mistyped "تجاري"
+      // can't open the commercial تراضي flow (and vice-versa).
+      const taradiDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || taradiDept?.name !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
@@ -1958,7 +1962,11 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
       if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
+      // Gate by DEPARTMENT (not the free-text caseType): the MOHR settlement
+      // panel follows the case's department (عمالي), matching how the whole
+      // stage track is routed. See schema getStagesForClassification.
+      const mohrDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || mohrDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
@@ -2017,7 +2025,9 @@ export async function registerRoutes(
       if (!caseItem) return res.status(404).json({ error: "القضية غير موجودة" });
       const user = req.user!;
       if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || caseItem.caseType !== "عمالي") {
+      // Gate by DEPARTMENT (not the free-text caseType) — mirrors /mohr.
+      const settlementDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || settlementDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
       
@@ -3669,6 +3679,120 @@ export async function registerRoutes(
       res.json({ decision: result.decision, consultation: result.consultation });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/consultations/:id/skip-committee
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز لجنة المراجعة". Moves the
+  // consultation from لجنة_مراجعة straight to جاهزة_للإرسال with NO committee
+  // decision, recording who did it and why in consultation_activity_log (reason
+  // is MANDATORY). Entity 3 of 4 — mirrors the cases (76eea3c/193649a) and memo
+  // (acd9c93) skips.
+  //
+  // Deliberately bypasses validateStageTransition — the same precedent the
+  // committee-decision path above already sets (compute the target stage and
+  // call storage directly). No transition-table entry is added, so this override
+  // cannot be reached through POST /api/consultations/:id/advance-stage.
+  //
+  // ORIGIN is the committee stage ONLY (never مراجعة_داخلية), so the four-eyes
+  // internal-review lock is untouched.
+  //
+  // WRITTEN-ONLY — this guard is REQUIRED here, unlike memos (which have one
+  // unconditional stage array). It is the direct analogue of the cases-side
+  // قيد_الدراسة guard (193649a):
+  //   * only ALLOWED_CONSULTATION_TRANSITIONS (written) contains a COMMITTEE
+  //     rule; ALLOWED_CONSULTATION_TRANSITIONS_PHONE/_PROCEDURAL have none, so
+  //     those types cannot REACH the committee stage through /advance-stage; and
+  //   * the target, ConsultationStage.READY (جاهزة_للإرسال), does not exist on
+  //     ConsultationStagesOrderPhone/Procedural at all (they run RECEIVED →
+  //     PENDING_COMPLETION → STUDY|IN_PROGRESS → COMPLETED → CLOSED_FINAL).
+  // So the currentStage check ALONE is not a safe guard: any phone/procedural
+  // row that is somehow parked at لجنة_مراجعة — raw seed/SQL that bypassed the
+  // state machine (the cases T-1010 precedent), or a type change made before the
+  // remap at ~3228 existed — would be moved to a stage that is OFF ITS OWN PATH
+  // and stranded. resolveConsultationType is used (not a raw === compare) so
+  // legacy free-text types resolve to WRITTEN exactly as the workflow engine
+  // resolves them — the guard can never disagree with the transition table.
+  //
+  // AUTHORIZED ROLES (owner decision, 2026-07): branch_manager + department_head
+  // (of the consultation's OWN department — consultations carry departmentId
+  // directly, unlike memos) + the assigned lawyer. This is INTENTIONALLY BROADER
+  // than the committee-DECISION role set (consultations_review_head +
+  // branch_manager, above). Skipping the committee is an owner-approved
+  // override, not a committee decision, so it answers to a different, wider
+  // authority. Do NOT "harmonise" this set with the committee chairs — the
+  // divergence is the point.
+  //
+  // FOUR-EYES DOES NOT APPLY HERE, by design. The committee-decision endpoint's
+  // four-eyes check stops a DELEGATE approving work they authored; here the
+  // assigned lawyer — i.e. the author — is an EXPLICITLY authorized actor, so
+  // such a check would contradict the approved permission model. The mandatory
+  // reason + the audit row are the control instead.
+  app.post("/api/consultations/:id/skip-committee", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز اللجنة مطلوب" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      // Stricter than committee-decision (which checks status only): a paused or
+      // awaiting-completion consultation must not be advanced. Matches the
+      // cases/memo skip endpoints, which both guard this pair.
+      if (consultation.pausedAt || consultation.awaitingCompletion) {
+        return res.status(400).json({ error: "الاستشارة في حالة لا تسمح بتجاوز اللجنة" });
+      }
+      if (consultation.currentStage !== ConsultationStage.COMMITTEE) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة لجنة المراجعة" });
+      }
+      // WRITTEN-only — see the block comment above. Defense-in-depth: the stage
+      // check above should already exclude these types, but a stranded row must
+      // not be movable to a stage its own workflow does not contain.
+      if (resolveConsultationType(consultation.consultationType) !== ConsultationType.WRITTEN) {
+        return res.status(400).json({ error: "تجاوز اللجنة متاح للاستشارات المكتوبة فقط" });
+      }
+
+      // Delegation-aware: evaluate the rule against every acting identity (self +
+      // any delegator this user currently stands in for). Scope is null —
+      // consultations carry no caseId, so only all_cases delegations apply
+      // (same as the committee-decision endpoint above). With no delegation this
+      // resolves to exactly the actor → byte-identical to a plain self-check.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, null).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || (u.role === "department_head" && !!u.departmentId && consultation.departmentId === u.departmentId)
+        || isAssignedLawyer({ id: u.id }, consultation));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز لجنة المراجعة" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, null, performer?.name || reqUser.id);
+      const updated = await storage.skipConsultationCommittee(consultation.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز لجنة المراجعة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
 
@@ -5716,6 +5840,99 @@ export async function registerRoutes(
       res.json({ contract: updated });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/contracts/:id/skip-committee
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز لجنة المراجعة". Moves the
+  // contract from لجنة_مراجعة straight to جاهزة_للإرسال with NO committee
+  // decision, recording who did it and why in contract_activity_log (reason is
+  // MANDATORY). Entity 4 of 4 — mirrors cases (76eea3c/193649a), memos (acd9c93)
+  // and consultations (8917b72). Post-committee target VERIFIED against the
+  // committee-decision APPROVED path above (ContractStage.READY).
+  //
+  // Deliberately bypasses validateStageTransition — the same precedent the
+  // committee-decision path above already sets. No transition-table entry is
+  // added, so this override cannot be reached through /advance-stage.
+  //
+  // ORIGIN is the committee stage ONLY (never مراجعة_داخلية), so the four-eyes
+  // internal-review lock is untouched.
+  //
+  // NO TYPE GUARD — unlike consultations (WRITTEN-only). Contracts have a single
+  // stage flow (ContractStagesOrder: RECEIVED → … → COMMITTEE → READY → CLOSED);
+  // جاهزة_للإرسال is on that one path, so a currentStage === COMMITTEE check is a
+  // sufficient guard. This matches memos (one unconditional stage array).
+  //
+  // AUTHORIZED ROLES (owner decision, 2026-07): branch_manager + department_head
+  // (of the contract's OWN department — contracts carry departmentId directly) +
+  // the assigned lawyer. This is INTENTIONALLY BROADER than the committee-DECISION
+  // role set (consultations_review_head + branch_manager, above). Skipping the
+  // committee is an owner-approved override, not a committee decision, so it
+  // answers to a different, wider authority. Do NOT "harmonise" this set with the
+  // committee chair — the divergence is the point.
+  //
+  // FOUR-EYES DOES NOT APPLY HERE, by design: the assigned lawyer (the author) is
+  // an EXPLICITLY authorized actor, so an author-exclusion would contradict the
+  // approved permission model. The mandatory reason + the audit row are the control.
+  app.post("/api/contracts/:id/skip-committee", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // Type-check-only gate; the handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز اللجنة مطلوب" });
+
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      // Stricter than committee-decision (which checks status only): a paused or
+      // awaiting-completion contract must not be advanced. Matches the
+      // cases/memo/consultation skip endpoints, which all guard this pair.
+      if (contract.pausedAt || contract.awaitingCompletion) {
+        return res.status(400).json({ error: "العقد في حالة لا تسمح بتجاوز اللجنة" });
+      }
+      if (contract.currentStage !== ContractStage.COMMITTEE) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة لجنة المراجعة" });
+      }
+
+      // Delegation-aware: evaluate the rule against every acting identity (self +
+      // any delegator this user currently stands in for). Scope is null —
+      // contracts carry no caseId, so only all_cases delegations apply (same as
+      // the committee-decision endpoint above). With no delegation this resolves
+      // to exactly the actor → byte-identical to a plain self-check.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, null).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId)
+        || isAssignedLawyer({ id: u.id }, contract));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز لجنة المراجعة" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, null, performer?.name || reqUser.id);
+      const updated = await storage.skipContractCommittee(contract.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز لجنة المراجعة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
 

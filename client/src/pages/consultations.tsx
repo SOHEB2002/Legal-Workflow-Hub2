@@ -281,6 +281,35 @@ function canDoCommitteeDecision(
   return userRole === "consultations_review_head" || userRole === "branch_manager";
 }
 
+// Reasoned override — "تجاوز لجنة المراجعة". Gate for the button that calls
+// POST /api/consultations/:id/skip-committee. Mirrors the SERVER's rule EXACTLY
+// so visibility === authorization (no button that 403s):
+//   status active, not paused / awaiting-completion, stage === لجنة_مراجعة,
+//   type resolves to WRITTEN, AND branch_manager | department_head of the
+//   consultation's own dept | the assigned lawyer.
+// The WRITTEN check is REQUIRED (not belt-and-braces cosmetics): جاهزة_للإرسال
+// does not exist on the phone/procedural stage arrays, so offering the skip on a
+// stranded non-written row would move it off its own path — the cases-side
+// in-court bug (193649a). resolveConsultationType matches how the server
+// resolves the workflow, so legacy free-text types behave identically here.
+// NOTE the actor set is intentionally WIDER than canDoCommitteeDecision
+// (consultations_review_head / branch_manager) — a skip is an owner-approved
+// override, not a committee ruling. See the endpoint comment before merging them.
+function canSkipCommittee(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.status !== "active") return false;
+  if (consultation.pausedAt || consultation.awaitingCompletion) return false;
+  if (consultation.currentStage !== ConsultationStage.COMMITTEE) return false;
+  if (resolveConsultationType(consultation.consultationType) !== ConsultationType.WRITTEN) return false;
+  if (userRole === "branch_manager") return true;
+  if (userRole === "department_head") return consultation.departmentId === userDeptId;
+  return !!consultation.assignedTo && consultation.assignedTo === userId;
+}
+
 // Mirrors the role gate on POST /api/consultations/:id/take-notes-outcome.
 // Recording the outcome is the assigned lawyer's job; dept_head and
 // branch_manager can also record on their behalf. Dept-scope check
@@ -546,6 +575,7 @@ function getActivityIcon(activityType: string) {
     case ConsultationActivityType.STAGE_RETURNED:     return ChevronRight;
     case ConsultationActivityType.INTERNAL_REVIEW:    return ClipboardCheck;
     case ConsultationActivityType.COMMITTEE_DECISION: return CheckCircle;
+    case ConsultationActivityType.COMMITTEE_SKIPPED:  return AlertTriangle;
     case ConsultationActivityType.TAKE_NOTES_OUTCOME: return ListChecks;
     case ConsultationActivityType.DELIVERY_EXTENDED:  return AlertTriangle;
     case ConsultationActivityType.CONVERTED_TO_CASE:  return FileSymlink;
@@ -777,6 +807,13 @@ export default function ConsultationsPage() {
   const [showCommitteeDialog, setShowCommitteeDialog] = useState(false);
   const [committeeConsultation, setCommitteeConsultation] = useState<Consultation | null>(null);
   const [committeeNotes, setCommitteeNotes] = useState("");
+
+  // Reasoned override — "تجاوز لجنة المراجعة" (skip straight to جاهزة_للإرسال).
+  // Its own dialog, deliberately NOT folded into the committee-decision dialog:
+  // different actors, different meaning, and the reason is MANDATORY here.
+  const [showSkipCommitteeDialog, setShowSkipCommitteeDialog] = useState(false);
+  const [skipCommitteeConsultation, setSkipCommitteeConsultation] = useState<Consultation | null>(null);
+  const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
 
   const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
   const [takeNotesConsultation, setTakeNotesConsultation] = useState<Consultation | null>(null);
@@ -1068,6 +1105,37 @@ export default function ConsultationsPage() {
       closeCommitteeDialog();
     } catch (err) {
       toast({ title: "فشل تسجيل قرار اللجنة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const openSkipCommitteeDialog = (c: Consultation) => {
+    setSkipCommitteeConsultation(c);
+    setSkipCommitteeReason("");
+    setShowSkipCommitteeDialog(true);
+  };
+
+  const closeSkipCommitteeDialog = () => {
+    setShowSkipCommitteeDialog(false);
+    setSkipCommitteeConsultation(null);
+    setSkipCommitteeReason("");
+  };
+
+  // The reason is MANDATORY (the server 400s without it), so the confirm button
+  // stays disabled until something is typed.
+  const handleSkipCommittee = async () => {
+    if (!skipCommitteeConsultation) return;
+    const reason = skipCommitteeReason.trim();
+    if (!reason) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${skipCommitteeConsultation.id}/skip-committee`, { reason });
+      await refreshConsultations();
+      toast({ title: "تم تجاوز لجنة المراجعة — الاستشارة جاهزة للإرسال" });
+      closeSkipCommitteeDialog();
+    } catch (err) {
+      toast({ title: "فشل تجاوز لجنة المراجعة", description: extractApiError(err), variant: "destructive" });
     } finally {
       setActionInProgress(false);
     }
@@ -2545,6 +2613,25 @@ export default function ConsultationsPage() {
                         قرار اللجنة
                       </Button>
                     )}
+                    {/* Reasoned override — "تجاوز لجنة المراجعة". A SEPARATE,
+                        destructive-styled action so it cannot be confused with
+                        "قرار اللجنة" above: its actors are NOT the committee
+                        chairs (branch_manager / own-dept head / assigned
+                        lawyer), it is WRITTEN-only, and it skips the committee
+                        rather than recording its decision. The gate restates the
+                        server's rule verbatim → visibility == authorization. */}
+                    {canSkipCommittee(selectedConsultation, user.role, user.id, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-skip-committee-${selectedConsultation.id}`}
+                        onClick={() => openSkipCommitteeDialog(selectedConsultation)}
+                        className="border-destructive/60 text-destructive hover:bg-destructive/10"
+                      >
+                        <AlertTriangle className="w-4 h-4 ml-1" />
+                        تجاوز لجنة المراجعة
+                      </Button>
+                    )}
                     {canDoTakeNotesOutcome(selectedConsultation, user.role, user.id, user.departmentId) && (
                       <Button
                         size="sm"
@@ -3328,6 +3415,57 @@ export default function ConsultationsPage() {
               className="bg-green-600 hover:bg-green-700 text-white"
             >
               اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reasoned override — skip-committee dialog. Moves the consultation
+          straight to جاهزة_للإرسال with NO committee decision; the reason is
+          MANDATORY and is recorded (with the acting name) in the activity
+          timeline, which auto-refreshes on updatedAt. */}
+      <Dialog
+        open={showSkipCommitteeDialog}
+        onOpenChange={(open) => { if (!open) closeSkipCommitteeDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              تجاوز مرحلة لجنة المراجعة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم نقل الاستشارة مباشرةً إلى <strong>جاهزة للإرسال</strong> دون قرار من لجنة
+              المراجعة. يُسجَّل هذا الإجراء في سجل نشاط الاستشارة مع اسمك والسبب. السبب إلزامي.
+            </p>
+            <div>
+              <Label>سبب التجاوز <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-skip-committee-reason"
+                value={skipCommitteeReason}
+                onChange={(e) => setSkipCommitteeReason(e.target.value)}
+                placeholder="سبب تجاوز لجنة المراجعة (إلزامي)..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeSkipCommitteeDialog}
+              data-testid="button-cancel-skip-committee"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-confirm-skip-committee"
+              onClick={handleSkipCommittee}
+              disabled={actionInProgress || !skipCommitteeReason.trim()}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              تأكيد التجاوز
             </Button>
           </DialogFooter>
         </DialogContent>

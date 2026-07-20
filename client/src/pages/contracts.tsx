@@ -139,6 +139,31 @@ function canDoCommitteeDecision(c: Contract, userRole: string): boolean {
   return userRole === "consultations_review_head" || userRole === "branch_manager";
 }
 
+// Reasoned override — "تجاوز لجنة المراجعة". Gate for the button that calls
+// POST /api/contracts/:id/skip-committee. Mirrors the SERVER's rule EXACTLY so
+// visibility === authorization (no button that 403s):
+//   status active, not paused / awaiting-completion, stage === لجنة_مراجعة,
+//   AND branch_manager | department_head of the contract's own dept | the
+//   assigned lawyer.
+// Contracts have a SINGLE stage flow (no phone/procedural analogue), so — unlike
+// consultations — there is NO type guard; the currentStage check is sufficient.
+// The actor set is intentionally WIDER than canDoCommitteeDecision
+// (consultations_review_head / branch_manager) — a skip is an owner-approved
+// override, not a committee ruling. Entity 4 of 4; mirrors cases/memos/consultations.
+function canSkipCommittee(
+  c: Contract,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (c.status !== "active") return false;
+  if (c.pausedAt || c.awaitingCompletion) return false;
+  if (c.currentStage !== ContractStage.COMMITTEE) return false;
+  if (userRole === "branch_manager") return true;
+  if (userRole === "department_head") return c.departmentId === userDeptId;
+  return !!c.assignedTo && c.assignedTo === userId;
+}
+
 function canDoTakeNotes(c: Contract, user: { id: string; role: string; departmentId: string | null } | null): boolean {
   if (!user) return false;
   if (c.status !== "active") return false;
@@ -214,7 +239,7 @@ export default function ContractsPage() {
   const {
     contracts, addContract, updateContract, deleteContract,
     assignContract, advanceStage, returnStage,
-    submitInternalReview, submitCommitteeDecision, recordTakeNotesOutcome,
+    submitInternalReview, submitCommitteeDecision, skipCommittee, recordTakeNotesOutcome,
     earlyCloseContract, pauseContract, unpauseContract,
     awaitCompletion, resumeFromCompletion, skipCompletion,
     refreshContracts,
@@ -800,6 +825,11 @@ export default function ContractsPage() {
   const [showCommittee, setShowCommittee] = useState(false);
   const [committeeTarget, setCommitteeTarget] = useState<Contract | null>(null);
   const [committeeNotes, setCommitteeNotes] = useState("");
+
+  // Reasoned override — "تجاوز لجنة المراجعة" (skip straight to جاهزة_للإرسال).
+  const [showSkipCommittee, setShowSkipCommittee] = useState(false);
+  const [skipCommitteeTarget, setSkipCommitteeTarget] = useState<Contract | null>(null);
+  const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
 
   const [showTakeNotes, setShowTakeNotes] = useState(false);
   const [takeNotesTarget, setTakeNotesTarget] = useState<Contract | null>(null);
@@ -1428,6 +1458,21 @@ export default function ContractsPage() {
                     onClick={() => { setCommitteeTarget(selected); setCommitteeNotes(""); setShowCommittee(true); }}>
                     <CheckCircle className="w-4 h-4 ml-1" />
                     قرار اللجنة
+                  </Button>
+                )}
+                {/* Reasoned override — "تجاوز لجنة المراجعة". A SEPARATE,
+                    destructive-styled action so it cannot be confused with
+                    "قرار اللجنة": its actors are the wider skip set (branch_manager
+                    / own-dept head / assigned lawyer), and it skips the committee
+                    rather than recording its decision. The gate restates the
+                    server's rule verbatim → visibility == authorization. */}
+                {user && canSkipCommittee(selected, user.role, user.id, user.departmentId) && (
+                  <Button size="sm" variant="outline"
+                    data-testid={`dialog-button-skip-committee-${selected.id}`}
+                    onClick={() => { setSkipCommitteeTarget(selected); setSkipCommitteeReason(""); setShowSkipCommittee(true); }}
+                    className="border-destructive/60 text-destructive hover:bg-destructive/10">
+                    <AlertTriangle className="w-4 h-4 ml-1" />
+                    تجاوز لجنة المراجعة
                   </Button>
                 )}
                 {canDoTakeNotes(selected, user) && (
@@ -2172,6 +2217,54 @@ export default function ContractsPage() {
               }}
               disabled={busy}
             >اعتماد</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============ Skip-committee dialog (reasoned override) ============
+          Moves the contract straight to جاهزة_للإرسال with NO committee decision;
+          the reason is MANDATORY and is recorded (with the acting name) in the
+          contract activity log, which auto-refreshes on updatedAt. */}
+      <Dialog open={showSkipCommittee} onOpenChange={(open) => { if (!open) setShowSkipCommittee(false); }}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              تجاوز مرحلة لجنة المراجعة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم نقل العقد مباشرةً إلى <strong>جاهزة للإرسال</strong> دون قرار من لجنة
+              المراجعة. يُسجَّل هذا الإجراء في سجل نشاط العقد مع اسمك والسبب. السبب إلزامي.
+            </p>
+            <div>
+              <Label>سبب التجاوز <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-skip-committee-reason"
+                value={skipCommitteeReason}
+                onChange={(e) => setSkipCommitteeReason(e.target.value)}
+                placeholder="سبب تجاوز لجنة المراجعة (إلزامي)..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowSkipCommittee(false)} data-testid="button-cancel-skip-committee">
+              إلغاء
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid="button-confirm-skip-committee"
+              onClick={async () => {
+                if (!skipCommitteeTarget || !skipCommitteeReason.trim()) return;
+                await wrap(() => skipCommittee(skipCommitteeTarget.id, skipCommitteeReason.trim()), "تم تجاوز لجنة المراجعة — العقد جاهز للإرسال");
+                setShowSkipCommittee(false);
+              }}
+              disabled={busy || !skipCommitteeReason.trim()}
+            >
+              تأكيد التجاوز
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

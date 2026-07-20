@@ -24,6 +24,7 @@ Stack: TypeScript + React + Tailwind + Shadcn/UI (frontend), Node/Express (backe
 ## Workflow & division of labor
 - The user (Soheb) is non-technical, Arabic-speaking. He relays prompts from a planning Claude session; reports go back to that session for review.
 - **MOBILE-SESSION REPORTING:** When the user is working via Remote Control from mobile, the final report is the ONLY thing relayed to the planning session — intermediate steps can't be copied. So final reports must be self-contained: include commit hashes + per-commit summary (files touched, +/- line counts), all gate results (tsc, noUnusedLocals, custom checks), every judgment call made with its rationale, anything that STOPPED or deviated from plan, and exact verification commands the planning session could request if it wants to drill in (e.g. `git show <hash> --stat`). Write it as if the reader saw nothing of the session.
+- **Cowork execution assistant (since 2026-07):** a Cowork assistant is now the execution/testing/coordination hand — it runs Claude Code, the Replit Shell, and browser testing against the preview. The **planning assistant (Claude chat) makes design decisions**; the **product owner (Soheb) makes final calls**. Cowork does **NOT** make design decisions, deploy to production, or delete data without explicit approval.
 - Branch: **`feature/consultations-audit`** (long-running audit branch). Never commit to main from here.
 - **Operating mode — "investigate-and-apply-if-routine" (since Phase 2):**
   - For batches on the PROVEN pipeline (cast cleanup, type-only, mechanical): investigate → if all findings are within the proven pattern (vestigial drops, precise narrowings, tsc stays 0, zero behavior change, zero schema change) → APPLY, COMMIT, PUSH directly, then report.
@@ -54,6 +55,54 @@ Stack: TypeScript + React + Tailwind + Shadcn/UI (frontend), Node/Express (backe
 
 ## Resolved bug (history — see Phase-3 3E)
 - **memo `assigned_to` NOT NULL silent failure — FIXED (commit fa45c6f):** dept-transfer used to write `assignedTo: null` to the NOT NULL column; Postgres threw, the try/catch swallowed it, memos silently stayed with the old lawyer. Now writes `""` (the unassigned sentinel); the primaryLawyerId-change cascade re-points memos when the new dept assigns a lawyer. (Note: *consultations*.assigned_to IS nullable — source of the original mis-read.)
+
+## CURRENT WORK — post-audit repair/feature track (as of 2026-07-19)
+> The consultations-audit (Phases 0-8) is 100% COMPLETE and deployed — everything below the "Current state" heading is HISTORY. This section is the live one. Read it first.
+
+### Deployment status
+**DEPLOYED to production** (on `origin/main`, live on oun-law.com):
+- `0ead67c` fix(my-tasks): unassigned dept cases routed to the department head (dormant when the dept has no head).
+- `916f8f9` fix(hearings): removed the redundant `إبلاغ العميل بنتيجة الحكم` field task on judgment — client contact is already covered by the session-report `تم التواصل مع العميل؟` checkbox.
+  - Data note: the **11 pending in-court memos** wrongly created by the settlement bug were also **DELETED from production** (via the app's own DELETE path, on dev + prod). Only empty auto-generated memos were removed; any memo with real content was preserved.
+- (Both landed on main via merge `3d56210`.)
+
+**ON BRANCH ONLY — `feature/consultations-audit`, NOT yet deployed** — 11 commits, oldest→newest:
+1. `fa454d4` my-tasks: client name + opponent shown on task rows (server-enriched) so users identify the matter without searching.
+2. `b5a1320` my-tasks: **(superseded)** `فتح القضية` nav quick-link — replaced by the modal in #4.
+3. `57c0f86` refactor: extracted `CaseDetailsDialog` out of cases.tsx into a reusable component with **optional** action callbacks (zero behavior change on the cases page).
+4. `cf3d4e4` my-tasks: a Briefcase icon opens the FULL case-details modal over the tasks page (no navigation). The modal shows the REAL stage history — this also fixed a pre-existing bug where the cases page's `سجل المراحل` displayed a fabricated `تهجير البيانات` row.
+5. `c6a2779` memos: the cancel (`لا يحتاج مذكرة`) button is now visible to `department_head` + `admin_support` (the frontend gate was missing them, diverging from the server); AND no auto-memo is created for cases starting in settlement (`مداولة_الصلح`) — the defendant memo is instead created when settlement fails (`مداولة_الصلح → أغلق_طلب_الصلح`).
+6. `8c5a855` labor+admin: added `جاهزة_للرفع` to the labor and admin under-study stage arrays. This **one-line-per-array** change fixed **three** bugs: (L2) labor case stuck at `الأخذ_بالملاحظات` (server had no transition), (L1) an approved labor case wrongly routed to the commercial **Taradi** platform instead of **ناجز**, and a resume-from-completion failure. Also added `assigned_lawyer` to the `بانتظار_رفع_العميل_للتسوية → مداولة_الصلح` server edge (+ `admin_support` to `توجيه → بانتظار`) so the labor lawyer isn't locked out (C2). **Labor is keyed on the department NAME being EXACTLY `عمالي`** (verified id=3 in prod).
+7-11. The **`تجاوز لجنة المراجعة`** (skip review-committee) **reasoned-override** feature, rolled out per entity:
+   - cases: `76eea3c` + `193649a` (under-study guard) + `1523521` (truthful non-permission error message)
+   - memos: `acd9c93`
+   - consultations: `8917b72` (written-consultations-only guard)
+   - **CONTRACTS is the LAST entity and is still PENDING — not started.**
+
+### Skip-committee feature — design decisions (product-owner approved, do NOT "correct" them)
+- **Authorized roles:** `branch_manager` + `department_head` (of the entity's / parent case's department) + `assigned_lawyer`. This is **intentionally broader** than the committee-decision authorizers on the entities shipped so far. **Do not narrow it.** (Contracts are known to diverge from the other three on committee-decision permissions — the recorded divergence is that contracts exclude `admin_support` (see F12); whether contracts also exclude `department_head` is an **UNVERIFIED assumption**, to be checked in the code when contracts is built.)
+- **Skip ORIGIN:** only from WITHIN the committee stage — this preserves the four-eyes internal-review lock. Four-eyes is deliberately **not** applied to the skip itself (the author is an authorized actor by design).
+- **Reason is MANDATORY**, stored in the entity's activity log only. **No schema change, no migration.**
+- **Post-committee targets differ per entity.** **Verified & shipped:** cases + memos → `جاهزة_للرفع`; consultations → `جاهزة_للإرسال`. **Contracts: UNVERIFIED** — `جاهزة_للإرسال` is the *expected* target by analogy with consultations, but it has NOT been confirmed against the code.
+- **⚠ CONTRACTS specifics are ALL UNVERIFIED PLANNING ASSUMPTIONS, not findings.** The contracts investigation has not been run. When contracts is built, **read the code first** and verify: (1) the actual contract committee stage value, (2) the actual post-committee target, (3) whether a type guard is needed at all (the consultations WRITTEN-only analogue), (4) the real transition/permission behavior. Do not implement from the analogy above.
+- **Guards:** cases need a `قيد_الدراسة`-only guard (in-court cases must never be skippable); consultations need a WRITTEN-only guard (phone/procedural have no committee); memos need no *type* guard but DO guard against `ملغاة` (cancelled) memos; contracts guard TBD when built.
+- **Known display gap:** memos have **no activity-timeline UI** — the skip row is written correctly but is not displayed. Building a memo timeline is net-new capability we chose NOT to build.
+  - **Consultations timeline = VERIFIED:** `ConsultationActivityTimeline` (consultations.tsx:617, rendered at :2942) — relied on during the consultations skip work.
+  - **Contracts timeline = UNVERIFIED:** assumed to exist from planning, never confirmed against the code. Check it when the contract skip is built — if there's no timeline, contracts inherits the memo display gap.
+
+### Deliberate NON-decisions (settled — do not re-open)
+- **In-court case committee modeling:** the code lets `منظورة_بالمحكمة` cases pass through internal-review/committee stages **on the CASE** (`InCourtDefendantMemoStages` / `InCourtPlaintiffMemoStages` contain committee stages). The product owner says this is conceptually wrong (the **MEMO** should go to committee, not the in-court case). **We decided NOT to touch it** — no clear production path reaches it, and editing those arrays risks breaking real in-court cases.
+  - Corrupt **SEED** rows (T-1008 / T-1009 / T-1010 / T-1011: in-court cases parked on under-study/committee stages via raw INSERT, `memo_required` defaulting false) reproduce this impossible state **in the PREVIEW only**. These are **test-data corruption, NOT code bugs** — flag them, don't chase them.
+- **`approveCase` (cases-context.tsx)** still hard-codes `جاهزة_للرفع` for all classifications (the in-court terminal rule → `منظورة` exists server-side but the FE never uses it). Left as-is: it only matters if the in-court committee path is legitimate, which is the modeling question above.
+
+### Pending / on the horizon
+- **Deploy the 11 branch-only commits** to production (as one batch; owner tests on the preview first).
+- **CONTRACTS skip-committee** — last entity of the feature.
+- Three owner-requested items **not yet started**:
+  - (a) **`رقم الدعوى في التسوية الودية`**: when a labor case moves to `مداولة_الصلح`, prompt for a case number (same pattern as the Taradi/Najiz number); it becomes the case's current number, and changes to the court number once filed.
+  - (b) **`بانتظار_رفع_العميل_للتسوية` auto-close**: after 2 weeks with no client response, auto-close the case for non-responsiveness — mirror the existing 15-day auto-close on `لم_يصلنا_رابط_الصلح`.
+  - (c) **Diagnosis (investigation, not yet a fix):** how an in-court "defendant in settlement" case is handled and linked to the court case, and whether Taradi/the court handles this.
+- **Larger deferred:** notifications-system overhaul; memo activity-timeline UI; drizzle-kit / `db:push` resolution; the misleading-error-message class (D4) exists elsewhere too (e.g. consultations.tsx:1446, left alone).
 
 ## Current state (update this section as work progresses)
 - **Phase 0 + 1 (frontend):** complete, deployed. Frontend casts → 0: cases 107→7 (7 intentional/tracked), consultations→0, hearings→0, notifications→0 (root-fixed via `NotificationResponse` widening in schema.ts). Batch 3 cleared all 17 TS errors → **tsc-0 baseline (regression check: must stay 0)**.

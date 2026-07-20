@@ -2553,6 +2553,12 @@ export const ConsultationActivityType = {
   COMMITTEE_DECISION:     "committee_decision",
   TAKE_NOTES_OUTCOME:     "take_notes_outcome",
   RETURNED_TO_COMMITTEE:  "returned_to_committee",
+  // Reasoned override — the consultation was moved from لجنة_مراجعة straight to
+  // جاهزة_للإرسال WITHOUT a committee decision. WRITTEN-only (phone/procedural
+  // workflows have no committee stage). Mirrors the cases-side actionType and
+  // MemoActivityType.COMMITTEE_SKIPPED. Type-only: activity_type is free text,
+  // so no migration.
+  COMMITTEE_SKIPPED:      "committee_skipped",
   DELIVERY_EXTENDED:      "delivery_extended",
   CONVERTED_TO_CASE:      "converted_to_case",
   EARLY_CLOSED:           "early_closed",
@@ -2578,6 +2584,7 @@ export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValu
   committee_decision:       "قرار اللجنة",
   take_notes_outcome:       "نتيجة الأخذ بالملاحظات",
   returned_to_committee:    "إعادة للجنة المراجعة",
+  committee_skipped:        "تجاوز لجنة المراجعة",
   delivery_extended:        "تمديد تاريخ التسليم",
   converted_to_case:        "تحويل إلى قضية",
   early_closed:             "إغلاق مبكر",
@@ -2793,6 +2800,12 @@ export const ContractActivityType = {
   COMMITTEE_DECISION:       "committee_decision",
   TAKE_NOTES_OUTCOME:       "take_notes_outcome",
   RETURNED_TO_COMMITTEE:    "returned_to_committee",
+  // Reasoned override — the contract was moved from لجنة_مراجعة straight to
+  // جاهزة_للإرسال WITHOUT a committee decision (entity 4 of 4). Mirrors
+  // ConsultationActivityType.COMMITTEE_SKIPPED + MemoActivityType.COMMITTEE_SKIPPED.
+  // Contracts have a single stage flow (no phone/procedural analogue) → no type
+  // guard. Type-only: activity_type is free text → no migration.
+  COMMITTEE_SKIPPED:        "committee_skipped",
   EARLY_CLOSED:             "early_closed",
   GENERAL_NOTE:             "general_note",
   PAUSED:                   "paused",
@@ -2826,6 +2839,7 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   committee_decision:     "قرار اللجنة",
   take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
   returned_to_committee:  "إعادة للجنة المراجعة",
+  committee_skipped:      "تجاوز لجنة المراجعة",
   early_closed:           "إغلاق مبكر",
   general_note:           "ملاحظة عامة",
   paused:                 "تعليق",

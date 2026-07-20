@@ -11,7 +11,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
 import { loginSchema, type LoginInput } from "@shared/schema";
-import logoImage from "@assets/WhatsApp_Image_2026-02-13_at_2.24.30_PM_1770981889395.jpeg";
+import logoImage from "@/assets/company-logo.jpeg";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();

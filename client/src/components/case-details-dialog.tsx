@@ -768,7 +768,7 @@ export function CaseDetailsDialog({
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "تجاري" && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "تجاري" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل منصة تراضي</h4>
                       <div className="space-y-3">
@@ -808,7 +808,7 @@ export function CaseDetailsDialog({
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "عمالي" && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "عمالي" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل وزارة الموارد البشرية</h4>
                       <div className="space-y-3">
