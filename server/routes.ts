@@ -2375,6 +2375,34 @@ export async function registerRoutes(
           if (!taradi) return res.status(400).json({ error: "يجب إدخال رقم الطلب في تراضي" });
           req.body.caseNumber = String(taradi).trim();
         }
+        // LABOR settlement: entering مداولة_الصلح requires the amicable-settlement
+        // case number (mohrNumber). Mirrors the تراضي gate above — same shape, same
+        // mandatory 400 — so the FE gate at case-progress-bar.tsx and this server
+        // rule agree exactly (visibility == enforceability).
+        //
+        // Gated by DEPARTMENT, not the free-text caseType (same idiom as /mohr at
+        // :1969 and /direct-settlement at :2030): مداولة_الصلح is shared by labor,
+        // commercial, general and the in-court settlement path, and ONLY labor
+        // carries a MOHR number — commercial/general captured theirs on تراضي-entry.
+        // Without this department check the rule would 400 every non-labor case
+        // entering settlement.
+        //
+        // NOTE: unlike the تراضي branch above, this deliberately does NOT write
+        // req.body.caseNumber. The displayed number is now DERIVED per-stage in
+        // storage.ts (deriveCurrentCaseNumber), so the stored caseNumber is left
+        // untouched and the number switches back correctly if the case leaves and
+        // re-enters settlement.
+        if (targetStage === "مداولة_الصلح") {
+          const settlementDept = existing.departmentId
+            ? await storage.getDepartmentById(existing.departmentId)
+            : null;
+          if (settlementDept?.name === "عمالي") {
+            const mohr = req.body.mohrNumber || existing.mohrNumber;
+            if (!mohr || !String(mohr).trim()) {
+              return res.status(400).json({ error: "يجب إدخال رقم الدعوى في التسوية الودية" });
+            }
+          }
+        }
         if (targetStage === "قيد_التدقيق_في_ناجز") {
           const najiz = req.body.najizNumber || existing.najizNumber;
           if (!najiz) return res.status(400).json({ error: "يجب إدخال رقم القيد في ناجز" });

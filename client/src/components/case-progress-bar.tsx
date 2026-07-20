@@ -222,9 +222,19 @@ export function CaseProgressBar({
   // platform number, regardless of which source stage we're moving from
   // (جاهزة_للرفع for the first review, أغلق_طلب_الصلح for the post-settlement
   // najiz/moeen review, etc.).
-  const platformFieldInfo: { field: "taradiNumber" | "najizNumber" | "moeenNumber" | "courtCaseNumber"; label: string; placeholder: string } | null =
+  const platformFieldInfo: { field: "taradiNumber" | "najizNumber" | "moeenNumber" | "courtCaseNumber" | "mohrNumber"; label: string; placeholder: string } | null =
     nextStage === "قيد_التدقيق_في_تراضي"
       ? { field: "taradiNumber", label: "رقم الطلب في تراضي", placeholder: "أدخل رقم الطلب في منصة تراضي" }
+      // LABOR settlement (عمالي): entering مداولة_الصلح requires the amicable-
+      // settlement case number, which becomes the case's displayed number while
+      // it sits at that stage (deriveCurrentCaseNumber in storage.ts). Mirrors the
+      // تراضي capture above exactly — same mechanism, same mandatory gate.
+      // Gated on the RESOLVED department name, not the free-text caseType: مداولة_الصلح
+      // is shared by labor / commercial / general / in-court settlement, and only
+      // labor captures a MOHR number here. Commercial captures taradiNumber on
+      // تراضي-entry (above) — deliberately NOT duplicated.
+      : departmentName === "عمالي" && nextStage === "مداولة_الصلح"
+      ? { field: "mohrNumber", label: "رقم الدعوى في التسوية الودية", placeholder: "أدخل رقم الدعوى في التسوية الودية" }
       : nextStage === "قيد_التدقيق_في_ناجز"
       ? { field: "najizNumber", label: "رقم القيد في ناجز", placeholder: "أدخل رقم القيد في ناجز" }
       : nextStage === "قيد_التدقيق_في_معين"

@@ -519,11 +519,56 @@ function mapDbUser(dbUser: any): User {
   };
 }
 
+// Stage-based "current number" (product-owner design, 2026-07).
+//
+// A case carries several reference numbers at once — each in its OWN column,
+// none of them merged (no migration). Which one the firm considers "the case
+// number" depends on WHERE THE CASE IS RIGHT NOW, and it must switch BOTH WAYS:
+// a case moving court → settlement → court shows the matching number at each
+// step. That is why this is DERIVED on read and never stored.
+//
+//   court stages  (قيد_التدقيق_في_ناجز | منظورة)  → najizNumber
+//   تراضي settlement (قيد_التدقيق_في_تراضي)        → taradiNumber   (commercial/general)
+//   صلح deliberation (مداولة_الصلح)                 → mohrNumber || taradiNumber
+//   anything else                                   → the stored caseNumber
+//
+// مداولة_الصلح is shared by labor, commercial, general AND the in-court
+// settlement path, and mapDbCase is synchronous — it maps one row and cannot
+// look up the department NAME (that needs a DB round-trip). So the department is
+// inferred from WHICH NUMBER EXISTS: mohrNumber is written only by the labor
+// flow (its endpoints hard-reject non-عمالي cases, routes.ts:1969/2030), so
+// `mohrNumber || taradiNumber` resolves labor → MOHR and commercial/general →
+// تراضي without a lookup. mohr is tried FIRST so a labor case that wrongly
+// carries a taradiNumber (the L1 bug, fixed in 8c5a855, may have left such rows)
+// still shows its correct MOHR number.
+//
+// NULL-SAFE: every branch falls back to the stored caseNumber, which is NOT NULL,
+// so the displayed number is never blank or undefined. This matters for the labor
+// stages BEFORE مداولة_الصلح (توجيه_العميل_بالتسوية / بانتظار_رفع_العميل_للتسوية):
+// no mohrNumber has been captured yet — the prompt fires on entry to
+// مداولة_الصلح — so they intentionally show the base number (owner-confirmed).
+//
+// Replaces the previous `courtCaseNumber || caseNumber` precedence, which was
+// presence-based (once a court number existed it won forever, at every stage) and
+// so could not switch back. In-court cases created WITH a court number are
+// unaffected: createCase stores courtCaseNumber AS caseNumber (see createCase),
+// so the base fallback already yields the court number for them.
+const COURT_NUMBER_STAGES = new Set(["قيد_التدقيق_في_ناجز", "منظورة"]);
+
+function deriveCurrentCaseNumber(dbCase: any): string {
+  const base = dbCase.caseNumber;
+  const stage = dbCase.currentStage;
+  if (COURT_NUMBER_STAGES.has(stage)) return dbCase.najizNumber || base;
+  if (stage === "قيد_التدقيق_في_تراضي") return dbCase.taradiNumber || base;
+  if (stage === "مداولة_الصلح") return dbCase.mohrNumber || dbCase.taradiNumber || base;
+  return base;
+}
+
 // Map DB case to interface LawCase
 function mapDbCase(dbCase: any): LawCase {
   return {
     id: dbCase.id,
-    caseNumber: dbCase.courtCaseNumber || dbCase.caseNumber,
+    caseNumber: deriveCurrentCaseNumber(dbCase),
     clientId: dbCase.clientId || "",
     caseType: dbCase.caseType,
     caseTypeOther: dbCase.caseTypeOther || "",
