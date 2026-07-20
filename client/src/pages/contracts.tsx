@@ -133,10 +133,11 @@ function canDoInternalReview(c: Contract, user: { id: string; role: string; depa
   return c.internalReviewerId === user.id;
 }
 
-function canDoCommitteeDecision(c: Contract, userRole: string): boolean {
+function canDoCommitteeDecision(c: Contract, userRole: string, isLaborEntity: boolean): boolean {
   if (c.status !== "active") return false;
   if (c.currentStage !== ContractStage.COMMITTEE) return false;
-  return userRole === "consultations_review_head" || userRole === "branch_manager";
+  return userRole === "branch_manager" ||
+    userRole === (isLaborEntity ? "labor_review_head" : "consultations_review_head");
 }
 
 // Reasoned override — "تجاوز لجنة المراجعة". Gate for the button that calls
@@ -1453,7 +1454,7 @@ export default function ContractsPage() {
                     مراجعة داخلية
                   </Button>
                 )}
-                {user && canDoCommitteeDecision(selected, user.role) && (
+                {user && canDoCommitteeDecision(selected, user.role, getDepartmentName(selected.departmentId) === "عمالي") && (
                   <Button size="sm" variant="outline"
                     onClick={() => { setCommitteeTarget(selected); setCommitteeNotes(""); setShowCommittee(true); }}>
                     <CheckCircle className="w-4 h-4 ml-1" />
