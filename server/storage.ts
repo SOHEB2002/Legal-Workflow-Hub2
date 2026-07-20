@@ -519,48 +519,70 @@ function mapDbUser(dbUser: any): User {
   };
 }
 
-// Stage-based "current number" (product-owner design, 2026-07).
+// Stage-based "current number" (product-owner design, 2026-07, revised).
 //
 // A case carries several reference numbers at once — each in its OWN column,
-// none of them merged (no migration). Which one the firm considers "the case
-// number" depends on WHERE THE CASE IS RIGHT NOW, and it must switch BOTH WAYS:
-// a case moving court → settlement → court shows the matching number at each
-// step. That is why this is DERIVED on read and never stored.
+// none merged (no migration). The displayed "current number" is chosen on read
+// in this PRIORITY order:
 //
-//   court stages  (قيد_التدقيق_في_ناجز | منظورة)  → najizNumber
-//   تراضي settlement (قيد_التدقيق_في_تراضي)        → taradiNumber   (commercial/general)
-//   صلح deliberation (مداولة_الصلح)                 → mohrNumber || taradiNumber
-//   anything else                                   → the stored caseNumber
+//   1) najizNumber present            → najizNumber   (court number wins outright)
+//   2) else reached settlement AND a
+//      settlement number present      → mohrNumber || taradiNumber
+//   3) else                           → the stored caseNumber (base)
 //
-// مداولة_الصلح is shared by labor, commercial, general AND the in-court
-// settlement path, and mapDbCase is synchronous — it maps one row and cannot
-// look up the department NAME (that needs a DB round-trip). So the department is
-// inferred from WHICH NUMBER EXISTS: mohrNumber is written only by the labor
-// flow (its endpoints hard-reject non-عمالي cases, routes.ts:1969/2030), so
-// `mohrNumber || taradiNumber` resolves labor → MOHR and commercial/general →
-// تراضي without a lookup. mohr is tried FIRST so a labor case that wrongly
-// carries a taradiNumber (the L1 bug, fixed in 8c5a855, may have left such rows)
-// still shows its correct MOHR number.
+// PERSISTENCE (the revision): the settlement number must show from مداولة_الصلح
+// onward through EVERY later pre-court stage (تحرير_صحيفة_الدعوى, مراجعة_داخلية,
+// إحالة_للجنة_المراجعة, الأخذ_بالملاحظات, جاهزة_للرفع …) until a najizNumber
+// exists — not only while the case literally sits at the settlement stage. The
+// switch to the court number is triggered by najizNumber EXISTING, not by any
+// specific stage.
 //
-// NULL-SAFE: every branch falls back to the stored caseNumber, which is NOT NULL,
-// so the displayed number is never blank or undefined. This matters for the labor
-// stages BEFORE مداولة_الصلح (توجيه_العميل_بالتسوية / بانتظار_رفع_العميل_للتسوية):
-// no mohrNumber has been captured yet — the prompt fires on entry to
-// مداولة_الصلح — so they intentionally show the base number (owner-confirmed).
+// WHY "reached settlement" cannot be existence-only: mohrNumber / taradiNumber
+// are NOT set only by the settlement prompt. Both also have registration write
+// paths — PATCH /api/cases/:id/mohr (routes.ts:1978, status مقيدة_في_الموارد) and
+// /taradi (:1913), plus inline edit in case-details-dialog. A labor case can be
+// registered in MOHR (mohrNumber set) during دراسة/توجيه, BEFORE مداولة_الصلح.
+// So "number exists" ≠ "settlement reached", and pure existence would wrongly
+// show the settlement number during توجيه_العميل_بالتسوية / بانتظار_رفع_العميل_
+// للتسوية, which the owner confirmed must show base.
 //
-// Replaces the previous `courtCaseNumber || caseNumber` precedence, which was
-// presence-based (once a court number existed it won forever, at every stage) and
-// so could not switch back. In-court cases created WITH a court number are
-// unaffected: createCase stores courtCaseNumber AS caseNumber (see createCase),
-// so the base fallback already yields the court number for them.
-const COURT_NUMBER_STAGES = new Set(["قيد_التدقيق_في_ناجز", "منظورة"]);
+// WHY a stage-NAME set cannot gate it either: the post-settlement stages
+// (تحرير_صحيفة_الدعوى, مراجعة_داخلية, جاهزة_للرفع …) are the SAME values that sit
+// BEFORE settlement in the commercial/general arrays. Membership can't tell a
+// labor case PAST settlement from a commercial case still heading INTO it.
+//
+// SIGNAL USED: stageHistory. It records the case's actual PATH, so
+// `history.some(stage === مداولة_الصلح)` means "this case genuinely entered
+// settlement", disambiguating the shared stage values by the case's own journey,
+// per department, with no DB lookup. The explicit SETTLEMENT_STAGES check covers
+// the case that is AT a settlement stage right now (esp. commercial's
+// قيد_التدقيق_في_تراضي, which precedes مداولة_الصلح, so history wouldn't contain
+// it yet).
+//
+// Department is still inferred from WHICH NUMBER EXISTS — mohrNumber is written
+// only by the labor flow (its endpoints reject non-عمالي cases), so
+// `mohrNumber || taradiNumber` resolves labor → MOHR, commercial/general →
+// تراضي; mohr FIRST so an L1-bug row carrying a stray taradiNumber still shows
+// its MOHR number.
+//
+// NULL-SAFE: both non-base branches guard on a trimmed non-empty value and fall
+// back to caseNumber (NOT NULL) — never blank. In-court cases created WITH a
+// court number are unaffected: createCase stores courtCaseNumber AS caseNumber,
+// so base already yields the court number (and najizNumber is empty for them).
+const SETTLEMENT_STAGES = new Set(["قيد_التدقيق_في_تراضي", "مداولة_الصلح"]);
+
+function reachedSettlement(dbCase: any): boolean {
+  if (SETTLEMENT_STAGES.has(dbCase.currentStage)) return true;
+  const history = Array.isArray(dbCase.stageHistory) ? dbCase.stageHistory : [];
+  return history.some((h: any) => h && h.stage === "مداولة_الصلح");
+}
 
 function deriveCurrentCaseNumber(dbCase: any): string {
   const base = dbCase.caseNumber;
-  const stage = dbCase.currentStage;
-  if (COURT_NUMBER_STAGES.has(stage)) return dbCase.najizNumber || base;
-  if (stage === "قيد_التدقيق_في_تراضي") return dbCase.taradiNumber || base;
-  if (stage === "مداولة_الصلح") return dbCase.mohrNumber || dbCase.taradiNumber || base;
+  const najiz = (dbCase.najizNumber || "").trim();
+  if (najiz) return najiz;
+  const settlement = (dbCase.mohrNumber || dbCase.taradiNumber || "").trim();
+  if (settlement && reachedSettlement(dbCase)) return settlement;
   return base;
 }
 
