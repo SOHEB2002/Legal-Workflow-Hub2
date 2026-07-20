@@ -3165,6 +3165,59 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // ---- 1b. settlement direction (D1) — labor case at توجيه_العميل_بالتسوية ----
+    // The labor settlement stages were entirely TASK-SILENT: a case entered
+    // settlement and sat there until someone stumbled onto it. (Two transitions
+    // do fire NOTIFICATIONS — routes.ts:2040 fans out to every admin_support,
+    // :1986 pings the dept head — but nothing persistent ever reached a worklist.)
+    //
+    // This is a STAGE-PRESENCE task, exactly like case_work above: it is computed
+    // from currentStage, never stored, so advancing the case out of the stage
+    // (→ بانتظار_رفع_العميل_للتسوية) makes it disappear on the next feed read. No
+    // completion flag, no column, nothing to clean up.
+    //
+    // LABOR-ONLY BY CONSTRUCTION: توجيه_العميل_بالتسوية exists in exactly two
+    // arrays — CaseStagesOrder (the master enumeration of every stage) and
+    // UnderStudyLaborStages (schema.ts:1380). It is in no other department path,
+    // so keying on the stage needs no department guard to stay labor-only.
+    //
+    // CANNOT DUPLICATE case_work: that block keys on LAWYER_WORK_STAGES, which does
+    // not contain this stage, and a case has exactly one currentStage — so the two
+    // blocks are mutually exclusive and safely share the `case_work:` id prefix.
+    //
+    // Kind REUSES CASE_WORK deliberately (no new MyTaskKind): the FE's
+    // isCaseStageKind (my-tasks.tsx:72-75) routes case_work to the shared
+    // CaseStagePanel — which IS the stage-advance UI that satisfies this task. A
+    // new kind would land on the generic action modal instead and would need
+    // KIND_META + action-mode wiring for no behavioural gain. Title and
+    // actionHint are specialised here because the work is client CONTACT, not
+    // drafting. Client/opponent enrichment is applied post-hoc to every task
+    // carrying a caseId (see the tail of this method), so it comes for free.
+    {
+      const SETTLEMENT_DIRECTION_STAGE = "توجيه_العميل_بالتسوية";
+      const where = firmWideScoped
+        ? and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
+            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
+            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+        : and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
+            or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const rows = await db.select({
+        id: lawCases.id, caseNumber: lawCases.caseNumber,
+        primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+      }).from(lawCases).where(where);
+      for (const r of rows) {
+        const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
+        tasks.push({
+          id: `case_work:${r.id}`, kind: MyTaskKind.CASE_WORK,
+          title: `توجيه العميل بالتسوية — قضية ${r.caseNumber}`,
+          entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+        });
+      }
+    }
+
     // ---- 2. case_unassigned — unassigned case in dept (dept_head assigns) ----
     if (teamScoped) {
       // Resolve each department's head so an unassigned case files UNDER that
