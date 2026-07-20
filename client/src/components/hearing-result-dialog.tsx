@@ -96,7 +96,14 @@ export function HearingResultDialog({
         caseId: effectiveCaseId || undefined,
       };
       if (resultForm.result === HearingResult.JUDGMENT) {
-        data.judgmentSide = resultForm.judgmentSide;
+        // The dropdown is a single 3-valued outcome (لصالحنا | ضدنا | جزئي), so it
+        // must go to judgmentType — the CURRENT field, which enumerates all three
+        // (schema.ts:3422). judgmentSide is the LEGACY 2-valued field (:3426) and
+        // rejects جزئي, which is what made every partial judgment 400. The server
+        // coalesces `data.judgmentType || data.judgmentSide` at routes.ts:7929
+        // (persist → the judgment_side column) and :8099 (all downstream routing),
+        // so لصالحنا/ضدنا behave identically to before.
+        data.judgmentType = resultForm.judgmentSide;
         data.judgmentFinal = resultForm.judgmentFinal;
         data.objectionFeasible = resultForm.objectionFeasible;
         data.objectionDeadline = resultForm.objectionDeadline || undefined;
@@ -263,7 +270,15 @@ export function HearingResultDialog({
                 <Checkbox id="judgmentFinal" checked={resultForm.judgmentFinal} onCheckedChange={(checked) => setResultForm({ ...resultForm, judgmentFinal: !!checked })} data-testid="checkbox-judgment-final" />
                 <Label htmlFor="judgmentFinal" className="text-sm cursor-pointer">حكم نهائي (غير قابل للاعتراض)</Label>
               </div>
-              {!resultForm.judgmentFinal && resultForm.judgmentSide === "ضدنا" && (
+              {/* Objection sub-form. Shown for ضدنا AND جزئي: a partial judgment is
+                  partially against us, so it can warrant an objection too. This gate
+                  mirrors the SERVER's objection-memo branch verbatim (routes.ts:8203,
+                  `judgmentType === "ضدنا" || judgmentType === "جزئي"`), which already
+                  accepted جزئي — the form was the only thing blocking it, so a partial
+                  judgment could never set objectionFeasible/objectionDeadline and the
+                  server branch could never fire. */}
+              {!resultForm.judgmentFinal
+                && (resultForm.judgmentSide === "ضدنا" || resultForm.judgmentSide === "جزئي") && (
                 <>
                   <div className="flex items-center gap-2">
                     <Checkbox id="objectionFeasible" checked={resultForm.objectionFeasible} onCheckedChange={(checked) => setResultForm({ ...resultForm, objectionFeasible: !!checked })} data-testid="checkbox-objection" />

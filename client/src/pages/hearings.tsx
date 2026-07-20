@@ -1544,7 +1544,22 @@ export default function HearingsPage() {
                       {detailHearing.judgmentSide && (
                         <div>
                           <p className="text-xs text-muted-foreground">الحكم لصالح</p>
-                          <Badge variant={detailHearing.judgmentSide === "لصالحنا" ? "default" : "destructive"}>
+                          {/* Three-way outcome, so three styles: جزئي is a PARTIAL
+                              result, not a loss — rendering it destructive-red made it
+                              read as a total defeat. Orange mirrors the app's existing
+                              "partial" idiom (case-progress-bar.tsx:451 اعتماد جزئي). */}
+                          <Badge
+                            variant={
+                              detailHearing.judgmentSide === "لصالحنا" ? "default"
+                              : detailHearing.judgmentSide === "جزئي" ? "outline"
+                              : "destructive"
+                            }
+                            className={
+                              detailHearing.judgmentSide === "جزئي"
+                                ? "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800"
+                                : undefined
+                            }
+                          >
                             {detailHearing.judgmentSide}
                           </Badge>
                         </div>
