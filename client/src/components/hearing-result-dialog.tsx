@@ -76,9 +76,13 @@ export function HearingResultDialog({
       return;
     }
     const linkedCaseForSubmit = effectiveCaseId ? getCaseById(effectiveCaseId) : null;
+    // PART A — a DEFENDANT settlement case has no choice to make: the server
+    // always closes it (the opponent is the one who files in court). Excluding
+    // defendants here keeps submit from blocking on a radio we no longer render.
     const isSettlementOnlyFailed =
       resultForm.result === HearingResult.SETTLEMENT_FAILED &&
-      !!linkedCaseForSubmit?.isSettlementCase;
+      !!linkedCaseForSubmit?.isSettlementCase &&
+      linkedCaseForSubmit?.clientRole !== "مدعى_عليه";
     if (isSettlementOnlyFailed && !resultForm.afterFailedSettlementChoice) {
       toast({ title: "اختر إجراء الصلح: إغلاق نهائي أو استكمال الإجراءات", variant: "destructive" });
       return;
@@ -326,8 +330,23 @@ export function HearingResultDialog({
           {(() => {
             const effId = hearing?.caseId || resultForm.caseId;
             const linked = effId ? getCaseById(effId) : null;
-            const showFailedSettlementChoice = resultForm.result === HearingResult.SETTLEMENT_FAILED && !!linked?.isSettlementCase;
-            if (!showFailedSettlementChoice) return null;
+            const isFailedSettlementCase = resultForm.result === HearingResult.SETTLEMENT_FAILED && !!linked?.isSettlementCase;
+            if (!isFailedSettlementCase) return null;
+            // PART A — DEFENDANT: no choice. The case closes; the opponent is the
+            // one who files in court. Mirrors the server branch exactly, so the
+            // panel never offers an action the server won't take.
+            if (linked?.clientRole === "مدعى_عليه") {
+              return (
+                <Card className="p-4 space-y-2 border-orange-300" data-testid="card-failed-settlement-defendant">
+                  <p className="text-sm font-medium text-orange-700 flex items-center gap-1">
+                    <AlertTriangle className="w-4 h-4" /> قضية مدعى عليه — لم يتم الصلح
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    ستُغلق القضية تلقائياً مع الاحتفاظ برقم التسوية وسجل المراحل. إذا رفع الخصم الدعوى في المحكمة يمكن إعادة فتحها لاحقاً بإدخال رقم الدعوى.
+                  </p>
+                </Card>
+              );
+            }
             return (
               <Card className="p-4 space-y-3 border-orange-300">
                 <p className="text-sm font-medium text-orange-700 flex items-center gap-1">
