@@ -76,9 +76,13 @@ export function HearingResultDialog({
       return;
     }
     const linkedCaseForSubmit = effectiveCaseId ? getCaseById(effectiveCaseId) : null;
+    // Defendants are excluded: no choice card is rendered for them (the server
+    // closes the case automatically), so requiring one would block submit on a
+    // radio that does not exist.
     const isSettlementOnlyFailed =
       resultForm.result === HearingResult.SETTLEMENT_FAILED &&
-      !!linkedCaseForSubmit?.isSettlementCase;
+      !!linkedCaseForSubmit?.isSettlementCase &&
+      linkedCaseForSubmit?.clientRole !== "مدعى_عليه";
     if (isSettlementOnlyFailed && !resultForm.afterFailedSettlementChoice) {
       toast({ title: "اختر إجراء الصلح: إغلاق نهائي أو استكمال الإجراءات", variant: "destructive" });
       return;
@@ -328,13 +332,24 @@ export function HearingResultDialog({
             const linked = effId ? getCaseById(effId) : null;
             const showFailedSettlementChoice = resultForm.result === HearingResult.SETTLEMENT_FAILED && !!linked?.isSettlementCase;
             if (!showFailedSettlementChoice) return null;
-            // BOTH choices are offered to BOTH roles — the user still decides
-            // between closing permanently and continuing. Only the MEANING of
-            // "استكمال إجراءاتها" differs by role (see the server branch): a
-            // plaintiff proceeds to draft and file, while for a defendant the
-            // opponent is the one who files, so the case closes awaiting their
-            // filing and can be reopened later with a court case number.
-            const isDefendantCase = linked?.clientRole === "مدعى_عليه";
+            // DEFENDANT — no choice to offer. The opponent is the party who files in
+            // court, so there is nothing to "continue" into: the server closes the
+            // case automatically. Mirrors the isDefendantSettlement branch in the
+            // hearing-result handler exactly, so the UI never shows an option the
+            // server would not honour. The note is informational only (not a choice)
+            // so saving the result is not silently surprising.
+            if (linked?.clientRole === "مدعى_عليه") {
+              return (
+                <Card className="p-4 border-orange-300" data-testid="card-failed-settlement-defendant">
+                  <p className="text-sm font-medium text-orange-700 flex items-center gap-1">
+                    <AlertTriangle className="w-4 h-4" /> قضية مدعى عليه — لم يتم الصلح
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    ستُغلق القضية تلقائياً مع الاحتفاظ برقم التسوية وسجل المراحل. إذا رفع الخصم الدعوى في المحكمة يمكن إعادة فتحها لاحقاً بإدخال رقم الدعوى.
+                  </p>
+                </Card>
+              );
+            }
             return (
               <Card className="p-4 space-y-3 border-orange-300">
                 <p className="text-sm font-medium text-orange-700 flex items-center gap-1">
@@ -352,11 +367,7 @@ export function HearingResultDialog({
                     <input type="radio" name="afterFailedSettlementChoice" value="continue" checked={resultForm.afterFailedSettlementChoice === "continue"} onChange={() => setResultForm({ ...resultForm, afterFailedSettlementChoice: "continue" })} data-testid="radio-failed-settlement-continue" className="mt-1" />
                     <span className="text-sm">
                       <strong>استكمال إجراءاتها</strong>
-                      <span className="block text-xs text-muted-foreground">
-                        {isDefendantCase
-                          ? "قضية مدعى عليه: تُغلق بانتظار رفع الخصم للدعوى في المحكمة، مع الاحتفاظ برقم التسوية، ويمكن إعادة فتحها لاحقاً بإدخال رقم الدعوى."
-                          : "تُحوَّل إلى مسار التقاضي العادي وتنتقل إلى مرحلة \"أغلق طلب الصلح\"."}
-                      </span>
+                      <span className="block text-xs text-muted-foreground">تُحوَّل إلى مسار التقاضي العادي وتنتقل إلى مرحلة "أغلق طلب الصلح".</span>
                     </span>
                   </label>
                 </div>
