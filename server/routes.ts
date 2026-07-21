@@ -8424,54 +8424,7 @@ export async function registerRoutes(
           // Non-settlement cases ignore the param and follow the normal
           // path back to أغلق_طلب_الصلح.
           const choice = String(data.afterFailedSettlementChoice || "").toLowerCase();
-
-          // PART A — DEFENDANT settlement failure ALWAYS closes the case.
-          //
-          // When our client is the مدعى عليه, a failed settlement does NOT mean we
-          // litigate: the OPPONENT is the one who files in court, and they may file
-          // late or never. Continuing onto the litigation path pointed the case at
-          // تحرير_صحيفة_الدعوى — "draft the statement of claim" — i.e. instructing us
-          // to file a claim we are not the ones bringing. That was the reported bug.
-          //
-          // The close is not the end of the story: PART B (separate step) adds a
-          // reopen action that reopens this case into the in-court DEFENDANT path
-          // once the opponent actually files and we have a court case number.
-          // closureReason is what makes that case findable and is REQUIRED here —
-          // PART B's reopen guard keys on it. (The two pre-existing close branches
-          // below deliberately do NOT set it; changing them is out of PART A scope.)
-          //
-          // SCOPED TO isSettlementCase ON PURPOSE. An IN_COURT defendant case that
-          // is NOT a settlement-only case can also pass through مداولة_الصلح, and for
-          // that cohort the existing design is correct and must not change: it moves
-          // to أغلق_طلب_الصلح and PATCH /api/cases/:id auto-creates the جوابية memo
-          // (shouldCreateSettlementFailedMemo). Closing those would break that path
-          // and orphan the memo logic. The reported bug is the settlement-only
-          // cohort — the only one that reaches the UnderStudy arrays, where
-          // تحرير_صحيفة_الدعوى actually sits.
-          //
-          // The choice radio is not consulted: the FE hides it for defendants, and
-          // ignoring it here keeps a stale/hand-crafted "continue" from reopening
-          // the bug.
-          const isDefendantSettlement =
-            !!existingCase.isSettlementCase && existingCase.clientRole === "مدعى_عليه";
-
-          if (isDefendantSettlement) {
-            caseUpdate.currentStage = "مقفلة";
-            caseUpdate.status = "مغلق";
-            caseUpdate.closedAt = new Date().toISOString();
-            caseUpdate.closureReason = ClosureReason.SETTLEMENT_FAILED;
-            // NOTE: taradiNumber / mohrNumber / taradiStatus / mohrStatus /
-            // clientRole / stageHistory are all left untouched — the settlement
-            // record must survive for history and for the PART B reopen.
-            await storage.updateCase(effectiveCaseId, caseUpdate);
-            await logCaseActivityActing(req, {
-              caseId: effectiveCaseId,
-              userId: reqUser.id,
-              userName: reqUser.name || reqUser.id,
-              actionType: "settlement_failed_closed",
-              title: "لم يتم الصلح — أُغلقت القضية (مدعى عليه) بانتظار رفع الخصم للدعوى في المحكمة",
-            });
-          } else if (existingCase.isSettlementCase && choice === "close") {
+          if (existingCase.isSettlementCase && choice === "close") {
             caseUpdate.currentStage = "مقفلة";
             caseUpdate.status = "مغلق";
             caseUpdate.closedAt = new Date().toISOString();
@@ -8484,31 +8437,69 @@ export async function registerRoutes(
               title: "لم يتم الصلح — تم إغلاق القضية نهائياً",
             });
           } else if (existingCase.isSettlementCase && choice === "continue") {
-            // Move the case off InCourtSettlementStages onto the regular
-            // UnderStudy path so the progress bar resolves correctly. The
-            // current stage أغلق_طلب_الصلح exists in the UnderStudy general
-            // / commercial / labor arrays, and the resolver will pick the
-            // right one from the case's department.
-            const prevClassification = existingCase.caseClassification || "منظورة_بالمحكمة";
-            caseUpdate.currentStage = "أغلق_طلب_الصلح";
-            caseUpdate.isSettlementCase = false;
-            caseUpdate.caseClassification = "قيد_الدراسة";
-            await storage.updateCase(effectiveCaseId, caseUpdate);
-            await logCaseActivityActing(req, {
-              caseId: effectiveCaseId,
-              userId: reqUser.id,
-              userName: reqUser.name || reqUser.id,
-              actionType: "settlement_failed_continued",
-              title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
-              previousValue: prevClassification,
-              newValue: "قيد_الدراسة",
-              details: JSON.stringify({
-                stageFrom: "مداولة_الصلح",
-                stageTo: "أغلق_طلب_الصلح",
-                classificationFrom: prevClassification,
-                classificationTo: "قيد_الدراسة",
-              }),
-            });
+            // "استكمال إجراءاتها" — what "continuing" MEANS depends on which side
+            // our client is on. This branch is where the post-settlement target is
+            // decided, so this is where the clientRole check belongs.
+            if (existingCase.clientRole === "مدعى_عليه") {
+              // DEFENDANT. Continuing does NOT mean we litigate: the OPPONENT is the
+              // one who files in court, and they may file late or never. The old
+              // unconditional flip below dropped the case onto the UnderStudy path,
+              // whose next stage is تحرير_صحيفة_الدعوى ("draft the statement of
+              // claim") for labor — instructing us to file a claim we are not the
+              // ones bringing. That was the reported bug.
+              //
+              // Instead the case CLOSES, awaiting the opponent's filing. PART B
+              // (separate step) adds the reopen action that takes a court case
+              // number and reopens it onto the in-court DEFENDANT path.
+              //
+              // closureReason is the discriminator PART B's reopen guard keys on,
+              // and it is exactly what separates this from "إغلاق القضية نهائياً"
+              // above — that branch deliberately sets NO closureReason, so a case
+              // the user closed permanently stays permanently closed and will not
+              // offer a reopen. Do not "harmonise" the two.
+              //
+              // taradiNumber / mohrNumber / taradiStatus / mohrStatus / clientRole /
+              // stageHistory are all left untouched — the settlement record must
+              // survive for history and for the reopen.
+              caseUpdate.currentStage = "مقفلة";
+              caseUpdate.status = "مغلق";
+              caseUpdate.closedAt = new Date().toISOString();
+              caseUpdate.closureReason = ClosureReason.SETTLEMENT_FAILED;
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+              await logCaseActivityActing(req, {
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "settlement_failed_closed",
+                title: "لم يتم الصلح — أُغلقت القضية (مدعى عليه) بانتظار رفع الخصم للدعوى في المحكمة",
+              });
+            } else {
+              // PLAINTIFF — unchanged. Move the case off InCourtSettlementStages
+              // onto the regular UnderStudy path so the progress bar resolves
+              // correctly. The current stage أغلق_طلب_الصلح exists in the UnderStudy
+              // general / commercial / labor arrays, and the resolver will pick the
+              // right one from the case's department.
+              const prevClassification = existingCase.caseClassification || "منظورة_بالمحكمة";
+              caseUpdate.currentStage = "أغلق_طلب_الصلح";
+              caseUpdate.isSettlementCase = false;
+              caseUpdate.caseClassification = "قيد_الدراسة";
+              await storage.updateCase(effectiveCaseId, caseUpdate);
+              await logCaseActivityActing(req, {
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "settlement_failed_continued",
+                title: "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي",
+                previousValue: prevClassification,
+                newValue: "قيد_الدراسة",
+                details: JSON.stringify({
+                  stageFrom: "مداولة_الصلح",
+                  stageTo: "أغلق_طلب_الصلح",
+                  classificationFrom: prevClassification,
+                  classificationTo: "قيد_الدراسة",
+                }),
+              });
+            }
           } else {
             if (existingCase.isSettlementCase) {
               console.warn("[hearing-result] settlement-only case at لم_يتم_الصلح missing afterFailedSettlementChoice; defaulting to close", {
