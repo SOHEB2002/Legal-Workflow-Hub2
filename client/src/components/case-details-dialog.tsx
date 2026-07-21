@@ -144,6 +144,32 @@ export interface CaseDetailsActions {
 // source-consultation back-link — is INTERNAL state here (it was only ever read by
 // this dialog). The read data comes from the app-wide contexts (cases / clients /
 // departments / auth / hearings / memos), so no prop threading is needed for it.
+// C4 — gate for the MOHR (التسوية الودية) action buttons. Mirrors the SERVER rule
+// on PATCH /api/cases/:id/mohr and POST /api/cases/:id/direct-settlement EXACTLY
+// (routes.ts canActOnMohrSettlement) so visibility === authorization: no button
+// that 403s, no actor who can act but sees nothing.
+//   branch_manager | department_head OF THE CASE'S OWN DEPARTMENT | assigned lawyer
+// Same idiom as canSkipCommittee (consultations.tsx) and the onSkipCommittee
+// conditional callback (case-stage-panel.tsx).
+//
+// The panel's labor + قيد_الدراسة conditions are applied by the caller and are NOT
+// repeated here. Only the three ACTION buttons use this — the read-only status
+// badge stays visible to anyone who can open the case, since admin_support still
+// moves the case across the settlement stages (routes.ts ALLOWED_CASE_TRANSITIONS)
+// and needs to see where the settlement stands even though it can no longer record
+// the status itself. See the divergence note on the server helper.
+function canActOnMohrSettlement(
+  lawCase: LawCase,
+  user: { id: string; role: string; departmentId?: string | null } | null,
+): boolean {
+  if (!user) return false;
+  if (user.role === "branch_manager") return true;
+  if (user.role === "department_head") return !!user.departmentId && lawCase.departmentId === user.departmentId;
+  return lawCase.primaryLawyerId === user.id
+    || lawCase.responsibleLawyerId === user.id
+    || (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(user.id));
+}
+
 export function CaseDetailsDialog({
   caseItem,
   open,
@@ -159,7 +185,7 @@ export function CaseDetailsDialog({
   onHearingPrompt?: (prompt: { caseId: string; hearingType: "تراضي" | "محكمة"; title: string; description: string }) => void;
   onClosed?: () => void;
 }) {
-  const { updateCase, moveToNextStage, addComment, fetchComments, getCommentsByCaseId } = useCases();
+  const { updateCase, moveToNextStage, addComment, fetchComments, getCommentsByCaseId, refreshCases } = useCases();
   const { getClientName } = useClients();
   const { getDepartmentName } = useDepartments();
   const { user, users } = useAuth();
@@ -822,14 +848,17 @@ export function CaseDetailsDialog({
                           </Badge>
                           {selectedCase.mohrNumber && <span className="text-sm text-muted-foreground">رقم: {selectedCase.mohrNumber}</span>}
                         </div>
-                        {!selectedCase.mohrStatus && (
+                        {canActOnMohrSettlement(selectedCase, user) && !selectedCase.mohrStatus && (
                           registrationDialogType === "mohr" ? (
                             <div className="flex items-center gap-2 mt-1">
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في الموارد البشرية (اختياري)" className="h-8 text-sm" data-testid="input-mohr-registration" autoFocus />
                               <Button size="sm" data-testid="button-confirm-mohr" onClick={async () => {
                                 try {
                                   const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "مقيدة_في_الموارد", mohrNumber: registrationNumberInput });
-                                  if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await updateCase(selectedCase.id, { mohrStatus: "مقيدة_في_الموارد", ...(registrationNumberInput ? { mohrNumber: registrationNumberInput } : {}) }); }
+                                  // The endpoint already persisted mohrStatus + mohrNumber; just
+                                  // resync. (The old follow-up updateCase re-sent mohrStatus through
+                                  // PATCH /api/cases/:id, which now 400s — see the C3 block there.)
+                                  if (res.ok) { toast({ title: "تم التقييد في وزارة الموارد البشرية" }); setRegistrationDialogType(""); setRegistrationNumberInput(""); await refreshCases(); }
                                 } catch (e) {
                                   // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                   // would otherwise surface as an unhandled promise rejection in console.
@@ -848,14 +877,14 @@ export function CaseDetailsDialog({
                           </Button>
                           )
                         )}
-                        {selectedCase.mohrStatus === "مقيدة_في_الموارد" && (
+                        {canActOnMohrSettlement(selectedCase, user) && selectedCase.mohrStatus === "مقيدة_في_الموارد" && (
                           <Button
                             size="sm"
                             data-testid="button-direct-settlement"
                             onClick={async () => {
                               try {
                                 const res = await apiRequest("POST", `/api/cases/${selectedCase.id}/direct-settlement`, {});
-                                if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await updateCase(selectedCase.id, { mohrStatus: "توجيه_تسوية_ودية", amicableSettlementDirected: true }); }
+                                if (res.ok) { toast({ title: "تم توجيه العميل للتسوية الودية - سيتم إشعار الدعم الإداري" }); await refreshCases(); }
                               } catch (e) {
                                 // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                 // would otherwise surface as an unhandled promise rejection in console.
@@ -866,7 +895,7 @@ export function CaseDetailsDialog({
                             توجيه العميل لرفعها في التسوية الودية
                           </Button>
                         )}
-                        {selectedCase.mohrStatus === "توجيه_تسوية_ودية" && (
+                        {canActOnMohrSettlement(selectedCase, user) && selectedCase.mohrStatus === "توجيه_تسوية_ودية" && (
                           <Button
                             size="sm"
                             variant="destructive"
@@ -874,7 +903,7 @@ export function CaseDetailsDialog({
                             onClick={async () => {
                               try {
                                 const res = await apiRequest("PATCH", `/api/cases/${selectedCase.id}/mohr`, { status: "انتهت_التسوية" });
-                                if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await updateCase(selectedCase.id, { mohrStatus: "انتهت_التسوية" }); }
+                                if (res.ok) { toast({ title: "تم تسجيل انتهاء التسوية - سيتم إشعار القسم لاستكمال الدراسة والرفع" }); await refreshCases(); }
                               } catch (e) {
                                 // Preserve current silent-failure behavior — apiRequest's throw on non-2xx
                                 // would otherwise surface as an unhandled promise rejection in console.

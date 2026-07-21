@@ -291,6 +291,42 @@ function canEditCaseData(user: CaseActorIdentity, caseData?: any, ctx?: ActingCo
   return caseActorIdentities(user, caseData, ctx).some((u) => ["branch_manager", "admin_support"].includes(u.role));
 }
 
+// C3 — MOHR (labor amicable-settlement) ACTION gate.
+//
+// The MOHR endpoints previously used canModifyCase, which is the broad
+// "may this actor touch this case at all" gate: its flat adminRoles list
+// (:262) passes branch_manager, admin_support, cases_review_head,
+// consultations_review_head and viewer UNCONDITIONALLY — with no department
+// scoping — plus the case's internalReviewerId. A consultations_review_head
+// could therefore drive a labor case's entire MOHR settlement, and so could an
+// internal reviewer with no settlement role whatsoever.
+//
+// Narrowed here to the settlement actors (owner decision, 2026-07):
+//   branch_manager | department_head OF THE CASE'S OWN DEPARTMENT | assigned lawyer
+// Same shape as POST /api/cases/:id/skip-committee (see its identity block) —
+// this is the established per-case actor-set idiom in this file.
+//
+// ⚠ DIVERGES FROM THE SETTLEMENT STAGE-TRANSITION TABLE, DELIBERATELY.
+// ALLOWED_CASE_TRANSITIONS also grants admin_support the two middle settlement
+// edges (توجيه_العميل_بالتسوية → بانتظار_رفع_العميل_للتسوية at :464 and
+// بانتظار_رفع_العميل_للتسوية → مداولة_الصلح at :465), and POST /direct-settlement
+// notifies EVERY active admin_support to go direct the client. Under this gate
+// admin_support can still MOVE the case across those stages and still receives
+// that notification, but can no longer RECORD the MOHR status itself. That
+// asymmetry is the owner's explicit call; it was flagged before applying. To
+// reverse, add `|| u.role === "admin_support"` to the predicate below and to the
+// FE mirror in case-details-dialog.tsx — nothing else needs to change.
+//
+// DELEGATION-AWARE via caseActorIdentities → actingIdentitiesFor(ctx, case.id),
+// which honours specific_cases scope. With no delegation the identity set is
+// exactly [self], so this is a plain self-check.
+function canActOnMohrSettlement(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) =>
+    u.role === "branch_manager"
+    || (u.role === "department_head" && !!u.departmentId && u.departmentId === caseData.departmentId)
+    || isAssignedLawyer({ id: u.id }, caseData));
+}
+
 // 4c-3 (consultations) — per-identity original logic (mirror of cases). No
 // caseId on consultations, so only self + all_cases delegators apply
 // (specific_cases is case-only). No ctx → [self] → byte-identical.
@@ -1969,6 +2005,11 @@ export async function registerRoutes(
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || mohrDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
+      // C3 — settlement-actor gate. Runs AFTER the labor/classification 400 above
+      // so a non-labor case still reports "wrong kind of case", not "no permission".
+      if (!canActOnMohrSettlement(user, caseItem, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإجراءات التسوية الودية في هذه القضية" });
+      }
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
       const bodyCheck = updateCaseMohrSchema.safeParse(req.body);
       if (!bodyCheck.success) {
@@ -2030,8 +2071,12 @@ export async function registerRoutes(
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || settlementDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
-      
-      await storage.updateCase(caseItem.id, { 
+      // C3 — settlement-actor gate; same rule and ordering as PATCH /mohr above.
+      if (!canActOnMohrSettlement(user, caseItem, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإجراءات التسوية الودية في هذه القضية" });
+      }
+
+      await storage.updateCase(caseItem.id, {
         amicableSettlementDirected: true,
         mohrStatus: "توجيه_تسوية_ودية",
       });
@@ -2194,6 +2239,23 @@ export async function registerRoutes(
       const bodyCheck = updateCaseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      // C3 — close the MOHR back door. mohrStatus is NOT in caseDataFields below,
+      // so it used to skip canEditCaseData and fall through to the generic
+      // canModifyCase check — no department gate, no classification gate, no value
+      // whitelist. That let anyone who could touch ANY case stamp an arbitrary
+      // mohrStatus on it (including a commercial or in-court case) and bypass the
+      // narrowed gate on PATCH /mohr entirely. All mohrStatus writes now go through
+      // the two gated settlement endpoints.
+      //
+      // mohrNumber is deliberately NOT blocked: it is a reference number captured
+      // as part of the مداولة_الصلح stage transition (case-progress-bar.tsx's
+      // platformFieldInfo prompt, validated at the targetStage check further down)
+      // and is peer to taradiNumber / najizNumber, which are editable here too.
+      // Blocking it would break the settlement-number feature.
+      if (Object.prototype.hasOwnProperty.call(req.body, "mohrStatus")) {
+        return res.status(400).json({ error: "تحديث حالة التسوية الودية يتم عبر إجراءات التسوية الودية فقط" });
       }
 
       const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
