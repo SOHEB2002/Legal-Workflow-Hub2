@@ -1098,6 +1098,7 @@ export const UserRole = {
   BRANCH_MANAGER: "branch_manager",           // مدير الفرع
   CASES_REVIEW_HEAD: "cases_review_head",     // رئيس لجنة مراجعة القضايا
   CONSULTATIONS_REVIEW_HEAD: "consultations_review_head", // رئيس لجنة مراجعة الاستشارات
+  LABOR_REVIEW_HEAD: "labor_review_head",     // رئيس لجنة مراجعة القسم العمالي
   DEPARTMENT_HEAD: "department_head",         // رئيس القسم
   ADMIN_SUPPORT: "admin_support",             // الدعم الإداري
   EMPLOYEE: "employee",                       // موظف قسم
@@ -1116,6 +1117,7 @@ export const UserRoleLabels: Record<UserRoleType, string> = {
   branch_manager: "مدير الفرع",
   cases_review_head: "رئيس لجنة مراجعة القضايا",
   consultations_review_head: "رئيس لجنة مراجعة الاستشارات",
+  labor_review_head: "رئيس لجنة مراجعة القسم العمالي",
   department_head: "رئيس القسم",
   admin_support: "الدعم الإداري",
   employee: "موظف",
@@ -3253,6 +3255,7 @@ export const insertUserSchema = z.object({
     "branch_manager",
     "cases_review_head",
     "consultations_review_head",
+    "labor_review_head",
     "department_head",
     "admin_support",
     "employee",
@@ -3277,6 +3280,7 @@ export const updateUserSchema = z.object({
     "branch_manager",
     "cases_review_head",
     "consultations_review_head",
+    "labor_review_head",
     "department_head",
     "admin_support",
     "employee",
@@ -3524,11 +3528,11 @@ export function canAddCasesAndConsultations(role: UserRoleType): boolean {
 }
 
 export function canReviewCases(role: UserRoleType): boolean {
-  return ["branch_manager", "cases_review_head"].includes(role);
+  return ["branch_manager", "cases_review_head", "labor_review_head"].includes(role);
 }
 
 export function canReviewConsultations(role: UserRoleType): boolean {
-  return ["branch_manager", "consultations_review_head"].includes(role);
+  return ["branch_manager", "consultations_review_head", "labor_review_head"].includes(role);
 }
 
 export function canManageUsers(role: UserRoleType): boolean {
@@ -3552,7 +3556,7 @@ export function canAssignFieldTasks(role: UserRoleType): boolean {
 }
 
 export function canSendNotifications(role: UserRoleType): boolean {
-  return ["branch_manager", "department_head", "cases_review_head", "consultations_review_head"].includes(role);
+  return ["branch_manager", "department_head", "cases_review_head", "consultations_review_head", "labor_review_head"].includes(role);
 }
 
 export function canMoveToPreviousStage(role: UserRoleType): boolean {
@@ -3560,7 +3564,7 @@ export function canMoveToPreviousStage(role: UserRoleType): boolean {
 }
 
 export function canSendReminders(role: UserRoleType): boolean {
-  return ["branch_manager", "admin_support", "department_head", "cases_review_head", "consultations_review_head"].includes(role);
+  return ["branch_manager", "admin_support", "department_head", "cases_review_head", "consultations_review_head", "labor_review_head"].includes(role);
 }
 
 export function canViewAllMemos(role: UserRoleType): boolean {
@@ -3572,7 +3576,7 @@ export function canCreateMemos(role: UserRoleType): boolean {
 }
 
 export function canReviewMemos(role: UserRoleType): boolean {
-  return ["branch_manager", "cases_review_head"].includes(role);
+  return ["branch_manager", "cases_review_head", "labor_review_head"].includes(role);
 }
 
 export function canChangeMemoStatus(role: UserRoleType): boolean {
@@ -5070,6 +5074,10 @@ export const RolePermissions: Record<UserRoleType, PermissionType[]> = {
   ],
   consultations_review_head: [
     "view_consultations", "edit_consultations", "approve_reviews", "view_cases",
+    "view_clients", "view_users", "send_notifications", "send_reminders", "view_reports",
+  ],
+  labor_review_head: [
+    "view_cases", "edit_cases", "view_consultations", "edit_consultations", "approve_reviews",
     "view_clients", "view_users", "send_notifications", "send_reminders", "view_reports",
   ],
   department_head: [

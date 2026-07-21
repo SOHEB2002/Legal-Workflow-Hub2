@@ -274,7 +274,9 @@ export function CaseProgressBar({
   // PATCH it issues is the same one the inside buttons issue).
   const isAtReviewCommittee = normalizedStage === "إحالة_للجنة_المراجعة";
   const showReviewCommitteeActions =
-    isAtReviewCommittee && canReviewCases(userRole) && !!onReviewCommitteeApprove;
+    isAtReviewCommittee && canReviewCases(userRole) && !!onReviewCommitteeApprove &&
+    (userRole === "branch_manager" ||
+      userRole === (departmentName === "عمالي" ? "labor_review_head" : "cases_review_head"));
 
   // General-dept audit (2026-06-14) — the accept dialog captures the number for
   // the stage the case is MOVING INTO (array-driven nextStage): a court case

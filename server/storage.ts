@@ -33,7 +33,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import type { ActingContext } from "./acting-context";
-import { eq, and, or, gt, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
+import { eq, and, or, gt, ne, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
@@ -1161,7 +1161,7 @@ export class DatabaseStorage implements IStorage {
     if (["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"].includes(role)) {
       return this.getAllCases();
     }
-    if (role === "department_head" && departmentId) {
+    if ((role === "department_head" || role === "labor_review_head") && departmentId) {
       const result = await db.select().from(lawCases)
         .where(eq(lawCases.departmentId, departmentId))
         .orderBy(desc(lawCases.updatedAt));
@@ -1385,7 +1385,7 @@ export class DatabaseStorage implements IStorage {
     if (["branch_manager", "admin_support", "consultations_review_head", "cases_review_head"].includes(role)) {
       return this.getAllConsultations();
     }
-    if (role === "department_head" && departmentId) {
+    if ((role === "department_head" || role === "labor_review_head") && departmentId) {
       const result = await db.select().from(consultations)
         .where(eq(consultations.departmentId, departmentId));
       return result.map(mapDbConsultation);
@@ -3138,6 +3138,7 @@ export class DatabaseStorage implements IStorage {
     const isManager = user.role === "branch_manager" || user.role === "admin_support";
     const isCasesReviewHead = user.role === "cases_review_head";
     const isConsultationsReviewHead = user.role === "consultations_review_head";
+    const isLaborReviewHead = user.role === "labor_review_head";
     const userDept = user.departmentId && user.departmentId.length > 0 ? user.departmentId : null;
     const deptHeadScoped = isDeptHead && !!userDept;
     // branch_manager = firm-wide supervisory view: the SAME team mechanism as
@@ -3474,31 +3475,72 @@ export class DatabaseStorage implements IStorage {
         title: `مراجعة داخلية بانتظارك — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
         ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
 
-      // Committee: cases_review_head chairs cases + memos; consultations_review_head chairs consultations + contracts.
-      if (isCasesReviewHead) {
-        const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-          .from(lawCases).where(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"));
-        for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-          title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
-        const mc = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
-          .from(memos).where(eq(memos.currentStage, "لجنة_مراجعة"));
-        for (const r of mc) tasks.push({ id: `review_pending:committee_memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-          title: `قرار لجنة المراجعة — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
-      }
-      if (isConsultationsReviewHead) {
-        const conc = await db.select({ id: consultations.id, type: consultations.consultationType,
-          consultationNumber: consultations.consultationNumber })
-          .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة")));
-        for (const r of conc) tasks.push({ id: `review_pending:committee_consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-          title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
-        const ctc = await db.select({ id: contracts.id, title: contracts.title })
-          .from(contracts).where(eq(contracts.currentStage, "لجنة_مراجعة"));
-        for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
-          title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
-          ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+      // Committee routing:
+      //  • cases_review_head          → NON-labor cases + memos
+      //  • consultations_review_head  → NON-labor consultations + contracts
+      //  • labor_review_head          → ALL FOUR types whose department is عمالي
+      // Labor entities go EXCLUSIVELY to the labor head, hence the ne(...) guards
+      // on the two firm-wide heads. When no labor dept exists the guards are
+      // undefined and drizzle's and(...) drops them (firm-wide heads unaffected).
+      if (isCasesReviewHead || isConsultationsReviewHead || isLaborReviewHead) {
+        const laborDeptId = (await this.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+        const caseNotLabor = laborDeptId ? ne(lawCases.departmentId, laborDeptId) : undefined;
+        const consultNotLabor = laborDeptId ? ne(consultations.departmentId, laborDeptId) : undefined;
+        const contractNotLabor = laborDeptId ? ne(contracts.departmentId, laborDeptId) : undefined;
+
+        if (isCasesReviewHead) {
+          const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), caseNotLabor));
+          for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+          // memos carry no departmentId — join the parent case for the exclusion.
+          const mc = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
+            .from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id))
+            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), caseNotLabor));
+          for (const r of mc) tasks.push({ id: `review_pending:committee_memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        }
+        if (isConsultationsReviewHead) {
+          const conc = await db.select({ id: consultations.id, type: consultations.consultationType,
+            consultationNumber: consultations.consultationNumber })
+            .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة"), consultNotLabor));
+          for (const r of conc) tasks.push({ id: `review_pending:committee_consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+          const ctc = await db.select({ id: contracts.id, title: contracts.title })
+            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), contractNotLabor));
+          for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        }
+        // NEW — labor committee head: same four queries, scoped to عمالي only
+        // (guarded on laborDeptId so a missing dept means the labor head sees nothing here).
+        if (isLaborReviewHead && laborDeptId) {
+          const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), eq(lawCases.departmentId, laborDeptId)));
+          for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+          const mc = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
+            .from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id))
+            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), eq(lawCases.departmentId, laborDeptId)));
+          for (const r of mc) tasks.push({ id: `review_pending:committee_memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+          const conc = await db.select({ id: consultations.id, type: consultations.consultationType,
+            consultationNumber: consultations.consultationNumber })
+            .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة"), eq(consultations.departmentId, laborDeptId)));
+          for (const r of conc) tasks.push({ id: `review_pending:committee_consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+          const ctc = await db.select({ id: contracts.id, title: contracts.title })
+            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), eq(contracts.departmentId, laborDeptId)));
+          for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
+            title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
+            ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        }
       }
     }
 

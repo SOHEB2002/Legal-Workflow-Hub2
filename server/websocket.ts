@@ -123,7 +123,7 @@ export function broadcastToAll(event: object) {
 
 /** Broadcast to all admin-role users */
 export function broadcastToAdmins(event: object) {
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head"];
+  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "labor_review_head"];
   if (!wss) return;
   wss.clients.forEach((ws) => {
     const sock = ws as AuthenticatedSocket;
