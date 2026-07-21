@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { DepartmentInfo } from "@shared/schema";
 import { apiRequest } from "./queryClient";
+import { useAuth } from "./auth-context";
 
 interface DepartmentsContextType {
   departments: DepartmentInfo[];
@@ -33,8 +34,18 @@ export function DepartmentsProvider({ children }: { children: React.ReactNode })
   // Start with defaults so the UI is never empty while /api/departments
   // is in flight or if the server has no seeded rows.
   const [departments, setDepartments] = useState<DepartmentInfo[]>(DEFAULT_DEPARTMENTS);
+  const { user } = useAuth();
 
   useEffect(() => {
+    // Auth gate — mirrors every sibling data context (clients/cases/
+    // consultations/…): this provider is mounted ABOVE the login screen
+    // (App.tsx), so an ungated fetch fired on the login page with no token
+    // and logged a 401 in the console. Keying the effect on `user` also
+    // means the list is (re)fetched right after login — previously the
+    // effect had `[]` deps and the provider never remounts on login, so a
+    // session that STARTED at the login page ran entirely on the hardcoded
+    // DEFAULT_DEPARTMENTS fallback and never saw the server rows.
+    if (!user) return;
     let cancelled = false;
     const load = async (attempt = 0) => {
       try {
@@ -48,9 +59,9 @@ export function DepartmentsProvider({ children }: { children: React.ReactNode })
         const filler = DEFAULT_DEPARTMENTS.filter((d) => !serverNames.has(d.name));
         setDepartments([...data, ...filler]);
       } catch (err: any) {
-        // If the user isn't logged in yet (first paint before auth bootstrap),
-        // try once more after a short delay so the dropdown picks up the
-        // real server ids as soon as the session is ready.
+        // Retained for transient failures (network blip, or a token rotation
+        // landing mid-flight): retry once so the dropdown still picks up the
+        // real server ids without waiting for a reload.
         if (attempt === 0 && !cancelled) {
           setTimeout(() => { if (!cancelled) load(1); }, 1500);
         }
@@ -60,7 +71,7 @@ export function DepartmentsProvider({ children }: { children: React.ReactNode })
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user]);
 
   const getDepartmentById = (id: string) => departments.find((d) => d.id === id);
 
