@@ -1485,7 +1485,53 @@ export function CaseDetailsDialog({
                                 </Button>
                               </AlertDialogTrigger>
                               <AlertDialogContent>
-                                {selectedCase.isSettlementCase ? (
+                                {/* DEFENDANT — no choice; mirrors the same branch in
+                                    case-progress-bar.tsx. The opponent files in court,
+                                    so the case closes and waits. closureReason is
+                                    MANDATORY (early-close 400) and is PART B's key. */}
+                                {selectedCase.isSettlementCase && selectedCase.clientRole === "مدعى_عليه" ? (
+                                  <>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>لم يتم الصلح — قضية مدعى عليه</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        نحن مدعى عليهم: الخصم هو من يرفع الدعوى في المحكمة. ستُغلق القضية
+                                        مع الاحتفاظ برقم التسوية وسجل المراحل، ويمكن إعادة فتحها لاحقاً
+                                        عند رفع الخصم للدعوى بإدخال رقم الدعوى.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter className="gap-2">
+                                      <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        data-testid={`button-settlement-failed-defendant-close-${selectedCase.id}`}
+                                        className="bg-red-600 hover:bg-red-700"
+                                        onClick={async () => {
+                                          if (!user) return;
+                                          setStageTransitioning(true);
+                                          try {
+                                            const success = await moveToNextStage(
+                                              selectedCase.id,
+                                              user.id,
+                                              user.name,
+                                              "لم يتم الصلح — إغلاق (مدعى عليه) بانتظار رفع الخصم للدعوى",
+                                              user.role,
+                                              undefined,
+                                              undefined,
+                                              { closureReason: "لم_يتم_الصلح" },
+                                              "مقفلة",
+                                            );
+                                            if (success) {
+                                              toast({ title: "تم إغلاق القضية بانتظار رفع الخصم للدعوى" });
+                                            }
+                                          } finally {
+                                            setStageTransitioning(false);
+                                          }
+                                        }}
+                                      >
+                                        تأكيد الإغلاق
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </>
+                                ) : selectedCase.isSettlementCase ? (
                                   <>
                                     <AlertDialogHeader>
                                       <AlertDialogTitle>لم يتم الصلح — اختر الإجراء</AlertDialogTitle>
