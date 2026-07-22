@@ -713,7 +713,34 @@ export function CaseProgressBar({
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
-              {isSettlementCase ? (
+              {/* DEFENDANT — no choice. When our client is the مدعى عليه the
+                  OPPONENT is the party who files in court, so there is nothing to
+                  "continue" into: the case closes and waits for their filing.
+                  closureReason is MANDATORY here, not decorative — closing out of
+                  مداولة_الصلح is an "early close" and PATCH /api/cases/:id 400s
+                  without it; it is also the discriminator PART B's reopen keys on. */}
+              {isSettlementCase && clientRole === "مدعى_عليه" ? (
+                <>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>لم يتم الصلح — قضية مدعى عليه</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      نحن مدعى عليهم: الخصم هو من يرفع الدعوى في المحكمة. ستُغلق القضية
+                      مع الاحتفاظ برقم التسوية وسجل المراحل، ويمكن إعادة فتحها لاحقاً
+                      عند رفع الخصم للدعوى بإدخال رقم الدعوى.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter className="gap-2">
+                    <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => handleSettlementDecision("مقفلة", { closureReason: "لم_يتم_الصلح" })}
+                      data-testid="button-settlement-failed-defendant-close"
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      تأكيد الإغلاق
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </>
+              ) : isSettlementCase ? (
                 <>
                   <AlertDialogHeader>
                     <AlertDialogTitle>لم يتم الصلح — اختر الإجراء</AlertDialogTitle>
