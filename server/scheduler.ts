@@ -592,8 +592,11 @@ async function generateMonthlyReport() {
     const totalActive = allCases.filter(c => (c.currentStage as string) !== "مقفلة" && !c.isArchived).length;
 
     const judgments = allHearings.filter(h => h.result === "حكم" && h.updatedAt && new Date(h.updatedAt) >= monthAgo);
+    // judgment_side holds three values; counting only two dropped every partial
+    // judgment out of the monthly report entirely. Reported as its own figure.
     const won = judgments.filter(h => h.judgmentSide === "لصالحنا").length;
     const lost = judgments.filter(h => h.judgmentSide === "ضدنا").length;
+    const partial = judgments.filter(h => h.judgmentSide === "جزئي").length;
 
     const allUsers = await storage.getAllUsers();
     const managers = allUsers.filter(u => u.role === "branch_manager" || u.role === "cases_review_head");
@@ -602,7 +605,7 @@ async function generateMonthlyReport() {
       await storage.createNotification({
         type: "monthly_report",
         title: "التقرير الشهري",
-        message: `ملخص الشهر: ${newCases} قضية جديدة، ${closedCases} مغلقة، ${totalActive} نشطة حالياً. الأحكام: ${won} لصالحنا، ${lost} ضدنا.`,
+        message: `ملخص الشهر: ${newCases} قضية جديدة، ${closedCases} مغلقة، ${totalActive} نشطة حالياً. الأحكام: ${won} لصالحنا، ${lost} ضدنا، ${partial} جزئي.`,
         priority: "low",
         status: "pending",
         senderId: "system",

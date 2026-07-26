@@ -21,6 +21,7 @@ import {
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType,
+  CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
   adminSupportTaskAssignments,
@@ -3894,7 +3895,7 @@ export class DatabaseStorage implements IStorage {
         title: fieldTasks.title, dueDate: fieldTasks.dueDate })
         .from(fieldTasks).where(and(
           sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
-          sql`${fieldTasks.title} LIKE ${"إعداد خطاب تحصيل%"}`,
+          sql`${fieldTasks.title} LIKE ${CollectionTaskTitlePrefix + "%"}`,
         ));
       for (const r of rows) {
         const ownerId = collectionOwner;
@@ -3917,7 +3918,7 @@ export class DatabaseStorage implements IStorage {
           title: fieldTasks.title, dueDate: fieldTasks.dueDate })
           .from(fieldTasks).where(and(
             sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
-            sql`${fieldTasks.title} LIKE ${"رفع طلب تنفيذ%"}`,
+            sql`${fieldTasks.title} LIKE ${ExecutionTaskTitlePrefix + "%"}`,
           ));
         for (const r of rows) {
           const ownerId = executionOwner;

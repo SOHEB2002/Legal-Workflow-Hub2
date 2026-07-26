@@ -63,6 +63,8 @@ import {
   ClosureReason,
   ConsultationActivityType,
   getStagesForClassification,
+  CollectionTaskTitlePrefix,
+  ExecutionTaskTitlePrefix,
   getReopenTargetStages,
   stageNumberRequirement,
   reopenCaseSchema,
@@ -1082,6 +1084,126 @@ function validateStageTransition(
 async function getActiveMemoCount(caseId: string): Promise<number> {
   const memos = await storage.getMemosByCase(caseId);
   return memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+}
+
+// Cancel a closing case's still-open children. Extracted VERBATIM from the
+// PATCH /api/cases/:id close block (which now calls this) so EVERY path that
+// closes a case applies identical cleanup. The judgment-close path used to skip
+// this entirely — it writes through storage directly and never passes through
+// PATCH — leaving cancelled cases with live upcoming hearings, open memos and
+// pending field tasks that kept emitting scheduler reminders.
+//
+// Best-effort by design: a cleanup failure must never fail the close itself,
+// which is why the caller's own try/catch shape is preserved inside.
+async function cancelOpenCaseChildrenOnClose(caseId: string): Promise<void> {
+  try {
+    // Cancel upcoming hearings
+    const hearings = await storage.getHearingsByCase(caseId);
+    for (const h of hearings) {
+      if (h.status === "قادمة") {
+        await storage.updateHearing(h.id, { status: "ملغية" });
+      }
+    }
+    // Cancel active memos (not yet approved/submitted)
+    const memos = await storage.getMemosByCase(caseId);
+    for (const m of memos) {
+      if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
+        await storage.updateMemo(m.id, { status: "ملغاة" });
+      }
+    }
+    // Cancel pending/in-progress field tasks
+    const caseFieldTasks = await storage.getFieldTasksByCase(caseId);
+    for (const t of caseFieldTasks) {
+      if (t.status === "قيد_التنفيذ" || t.status === "قيد_الانتظار") {
+        await storage.updateFieldTask(t.id, { status: "ملغي" });
+      }
+    }
+    // Recalculate activeMemoCount after cancelling memos
+    const finalActiveCount = await getActiveMemoCount(caseId);
+    await storage.updateCase(caseId, { activeMemoCount: finalActiveCount });
+  } catch (e) {
+    console.error("Error cleaning up related entities on case close:", e);
+  }
+}
+
+// Is this field task one of the two POST-JUDGMENT tasks whose completion ends
+// the case? Matched on the title prefix, the same discriminator getMyTasks uses
+// (there is no task-kind column) — see the constants' comment in schema.ts.
+function isPostJudgmentTask(title: string | null | undefined): boolean {
+  const t = String(title || "");
+  return t.startsWith(CollectionTaskTitlePrefix) || t.startsWith(ExecutionTaskTitlePrefix);
+}
+
+// Judgment-lifecycle step 1: a case RESTS at محكوم_حكم_نهائي until every
+// post-judgment task is resolved, then closes automatically with
+// closureReason = تم_التحصيل. "مقفلة" means nothing is left to do on the case.
+//
+// Gate rules:
+//   • the case must currently be AT محكوم_حكم_نهائي — never closes a case parked
+//     anywhere else (a collection task also exists on the SETTLEMENT path, whose
+//     stage is تحصيل; that path is deliberately untouched by this);
+//   • there must be at least one post-judgment task (otherwise nothing to gate);
+//   • ALL of them must be مكتمل or ملغي. Cancelled counts as resolved — a task
+//     someone cancelled is not outstanding work, and excluding it would let one
+//     cancelled execution task block the close forever.
+// When لصالحنا produced BOTH a collection and an execution task, both must be
+// resolved — this is what the "every" below enforces.
+//
+// No re-entrancy risk: cancelOpenCaseChildrenOnClose writes through storage, not
+// through the field-tasks route, so cancelling children cannot re-trigger this.
+async function maybeCloseCaseAfterPostJudgmentTasks(
+  req: AuthRequest,
+  caseId: string,
+  actor: { id: string; name?: string },
+): Promise<void> {
+  try {
+    const lawCase = await storage.getCaseById(caseId);
+    if (!lawCase) return;
+    if (lawCase.currentStage !== "محكوم_حكم_نهائي") return;
+
+    const tasks = await storage.getFieldTasksByCase(caseId);
+    const postJudgment = tasks.filter((t) => isPostJudgmentTask(t.title));
+    if (postJudgment.length === 0) return;
+    const allResolved = postJudgment.every((t) => t.status === "مكتمل" || t.status === "ملغي");
+    if (!allResolved) return;
+
+    const now = new Date().toISOString();
+    const stageHistory = Array.isArray(lawCase.stageHistory) ? lawCase.stageHistory : [];
+    await storage.updateCase(caseId, {
+      currentStage: "مقفلة",
+      // Set alongside the stage — the judgment closes used to write only the
+      // stage, leaving status stale, which is what let three route guards
+      // (skip-committee / pause / status-change) act on a closed case.
+      status: "مغلق",
+      closedAt: now,
+      closureReason: ClosureReason.COLLECTION_COMPLETED,
+      stageHistory: [
+        ...stageHistory,
+        {
+          stage: "مقفلة",
+          timestamp: now,
+          userId: "system",
+          userName: "النظام",
+          notes: "إغلاق تلقائي — اكتملت إجراءات ما بعد الحكم النهائي",
+        },
+      ],
+    } as Partial<LawCase>);
+
+    await cancelOpenCaseChildrenOnClose(caseId);
+
+    await logCaseActivityActing(req, {
+      caseId,
+      userId: actor.id,
+      userName: actor.name || actor.id,
+      actionType: "case_closed",
+      title: "إغلاق تلقائي — تم التحصيل",
+      details: `اكتملت جميع مهام ما بعد الحكم (${postJudgment.length})`,
+      previousValue: "محكوم_حكم_نهائي",
+      newValue: "مقفلة",
+    });
+  } catch (e) {
+    console.error("[post-judgment auto-close] failed:", e);
+  }
 }
 
 // D4 — auto-created field tasks must notify so urgent work (collection,
@@ -2836,7 +2958,7 @@ export async function registerRoutes(
           const assignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
           const collectionTask = await storage.createFieldTask(
             {
-              title: `إعداد خطاب تحصيل — قضية رقم ${updated.caseNumber}`,
+              title: `${CollectionTaskTitlePrefix} — قضية رقم ${updated.caseNumber}`,
               description: `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
               taskType: "متابعة_محكمة",
               caseId: updated.id,
@@ -3069,37 +3191,11 @@ export async function registerRoutes(
         }
       }
 
-      // Handle related entities when case is closed/archived
+      // Handle related entities when case is closed/archived. The body moved to
+      // cancelOpenCaseChildrenOnClose (verbatim) so the judgment-close path
+      // applies the identical cleanup instead of leaving orphans behind.
       if (req.body.currentStage === "مقفلة" && existing.currentStage !== "مقفلة") {
-        const caseId = String(req.params.id);
-        try {
-          // Cancel upcoming hearings
-          const hearings = await storage.getHearingsByCase(caseId);
-          for (const h of hearings) {
-            if (h.status === "قادمة") {
-              await storage.updateHearing(h.id, { status: "ملغية" });
-            }
-          }
-          // Cancel active memos (not yet approved/submitted)
-          const memos = await storage.getMemosByCase(caseId);
-          for (const m of memos) {
-            if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
-              await storage.updateMemo(m.id, { status: "ملغاة" });
-            }
-          }
-          // Cancel pending/in-progress field tasks
-          const caseFieldTasks = await storage.getFieldTasksByCase(caseId);
-          for (const t of caseFieldTasks) {
-            if (t.status === "قيد_التنفيذ" || t.status === "قيد_الانتظار") {
-              await storage.updateFieldTask(t.id, { status: "ملغي" });
-            }
-          }
-          // Recalculate activeMemoCount after cancelling memos
-          const finalActiveCount = await getActiveMemoCount(caseId);
-          await storage.updateCase(caseId, { activeMemoCount: finalActiveCount });
-        } catch (e) {
-          console.error("Error cleaning up related entities on case close:", e);
-        }
+        await cancelOpenCaseChildrenOnClose(String(req.params.id));
       }
 
       res.json(updated);
@@ -8356,18 +8452,41 @@ export async function registerRoutes(
           const lawyerAssignee = hearing.attendingLawyerId || existingCase.primaryLawyerId || existingCase.responsibleLawyerId || reqUser.id;
 
           if (isFinal) {
-            // === FINAL JUDGMENTS ===
-            if (judgmentType === "لصالحنا" || judgmentType === "جزئي") {
-              // Cases 1 & 3: final + for us or partial → collection
-              caseUpdate.currentStage = "محكوم_حكم_نهائي";
-              await storage.updateCase(effectiveCaseId, caseUpdate);
+            // === FINAL JUDGMENTS — the case RESTS at محكوم_حكم_نهائي ===
+            // Judgment-lifecycle step 1 (owner decision). Previously this block
+            // wrote محكوم_حكم_نهائي and then IMMEDIATELY overwrote it in a second,
+            // non-atomic updateCase — with تحصيل for لصالحنا/جزئي, or with مقفلة
+            // for ضدنا — so the case never actually rested on the judgment stage
+            // and a failure between the two writes stranded it. Both auto-moves
+            // are REMOVED: the stage is now written ONCE, with its stage-history
+            // entry, and the case stays there.
+            //   • لصالحنا/جزئي → the post-judgment tasks below drive the close
+            //     (see maybeCloseCaseAfterPostJudgmentTasks).
+            //   • ضدنا → no task, no auto-close; closing is the lawyer's action
+            //     once nothing remains (the appeal path is a later step).
+            // تحصيل remains a STAGE for the SETTLEMENT path only (مداولة_الصلح →
+            // تحصيل); judgments no longer route through it.
+            const finalStageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
+            caseUpdate.currentStage = "محكوم_حكم_نهائي";
+            caseUpdate.stageHistory = [
+              ...finalStageHistory,
+              {
+                stage: "محكوم_حكم_نهائي",
+                timestamp: new Date().toISOString(),
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                notes: `حكم نهائي ${judgmentType}`,
+              },
+            ];
+            await storage.updateCase(effectiveCaseId, caseUpdate);
 
+            if (judgmentType === "لصالحنا" || judgmentType === "جزئي") {
               // Auto-create collection task → per-type assignee ("" if unset/inactive)
               const allUsers = await storage.getAllUsers();
               const assignments = await storage.getAdminSupportTaskAssignments();
               const collectionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
               const collectionTask = await storage.createFieldTask({
-                title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
+                title: `${CollectionTaskTitlePrefix} — قضية رقم ${existingCase.caseNumber}`,
                 description: `صدر حكم نهائي ${judgmentType} - يرجى إعداد خطاب تحصيل`,
                 taskType: "متابعة_محكمة",
                 caseId: effectiveCaseId,
@@ -8385,7 +8504,7 @@ export async function registerRoutes(
               if (judgmentType === "لصالحنا") {
                 const executionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.EXECUTION, assignments, allUsers);
                 const executionTask = await storage.createFieldTask({
-                  title: `رفع طلب تنفيذ — قضية رقم ${existingCase.caseNumber}`,
+                  title: `${ExecutionTaskTitlePrefix} — قضية رقم ${existingCase.caseNumber}`,
                   description: `صدر حكم نهائي لصالحنا - يرجى رفع طلب تنفيذ في محكمة التنفيذ`,
                   taskType: "متابعة_محكمة",
                   caseId: effectiveCaseId,
@@ -8396,34 +8515,13 @@ export async function registerRoutes(
                 await notifyFieldTaskCreated(executionTask, reqUser); // D4
                 createdTasks.push({ type: "execution_task", id: executionTask.id, description: "مهمة رفع طلب تنفيذ" });
               }
-
-              // Transition to collection
-              const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
-              await storage.updateCase(effectiveCaseId, {
-                currentStage: "تحصيل",
-                stageHistory: [
-                  ...stageHistory,
-                  { stage: "محكوم_حكم_نهائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: `حكم نهائي ${judgmentType}` },
-                  { stage: "تحصيل", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "انتقال تلقائي بعد حكم نهائي" },
-                ],
-              });
-            } else if (judgmentType === "ضدنا") {
-              // Case 2: final + against us → close
-              caseUpdate.currentStage = "محكوم_حكم_نهائي";
-              await storage.updateCase(effectiveCaseId, caseUpdate);
-
-              const stageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
-              await storage.updateCase(effectiveCaseId, {
-                currentStage: "مقفلة",
-                closureReason: "حكم_نهائي_ضدنا",
-                closedAt: new Date().toISOString(),
-                stageHistory: [
-                  ...stageHistory,
-                  { stage: "محكوم_حكم_نهائي", timestamp: new Date().toISOString(), userId: reqUser.id, userName: reqUser.name || reqUser.id, notes: "حكم نهائي ضدنا" },
-                  { stage: "مقفلة", timestamp: new Date().toISOString(), userId: "system", userName: "النظام", notes: "إغلاق تلقائي — حكم نهائي ضدنا" },
-                ],
-              });
+              // NO stage move here any more. The case rests at محكوم_حكم_نهائي and
+              // is closed by maybeCloseCaseAfterPostJudgmentTasks once these
+              // task(s) are resolved — both of them when لصالحنا created two.
             }
+            // ضدنا intentionally has no branch: no post-judgment task, and NO
+            // auto-close (removed with this batch). closureReason is written only
+            // where a case actually closes.
           } else {
             // === PRIMARY (ابتدائي) JUDGMENTS ===
             // A primary judgment is NOT terminal — it can still be objected
@@ -8544,7 +8642,7 @@ export async function registerRoutes(
           const assignments = await storage.getAdminSupportTaskAssignments();
           const collectionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
           const collectionTask = await storage.createFieldTask({
-            title: `إعداد خطاب تحصيل — قضية رقم ${existingCase.caseNumber}`,
+            title: `${CollectionTaskTitlePrefix} — قضية رقم ${existingCase.caseNumber}`,
             description: `تم الصلح - يرجى إعداد خطاب تحصيل`,
             taskType: "متابعة_محكمة",
             caseId: effectiveCaseId,
@@ -9225,6 +9323,15 @@ export async function registerRoutes(
         } catch (e) {
           console.error("[field-tasks PATCH] case activity write-back failed:", e);
         }
+
+        // Judgment-lifecycle step 1 — the FIRST of the write-backs the comment
+        // above deferred. Completing a post-judgment task (collection letter /
+        // execution request) on a case resting at محكوم_حكم_نهائي closes the case
+        // once EVERY such task is resolved. Self-gating: the helper no-ops unless
+        // the case is on that exact stage and post-judgment tasks exist, so an
+        // ordinary field task — or a collection task on the SETTLEMENT path,
+        // whose stage is تحصيل — never triggers it. Best-effort inside.
+        await maybeCloseCaseAfterPostJudgmentTasks(req, updated.caseId, user);
       }
 
       res.json(updated);
@@ -10629,10 +10736,18 @@ export async function registerRoutes(
         m.deadline && new Date(m.deadline) < now
       ).length;
 
+      // judgment_side holds THREE values (لصالحنا / ضدنا / جزئي) — partial
+      // judgments became recordable and are written here like the others.
+      // Counting only two used to make جزئي vanish: it was neither won nor lost
+      // AND absent from the denominator, so a lawyer whose judgments were all
+      // partial showed totalJudgments = 0 and a 0% win rate. Partial is now its
+      // own reported bucket and is IN the denominator, so the rate is a share of
+      // all judgments rather than of an arbitrary subset.
       const judgmentHearings = lawyerHearings.filter(h => h.result === "حكم");
       const wonCases = judgmentHearings.filter(h => h.judgmentSide === "لصالحنا").length;
       const lostCases = judgmentHearings.filter(h => h.judgmentSide === "ضدنا").length;
-      const totalJudgments = wonCases + lostCases;
+      const partialCases = judgmentHearings.filter(h => h.judgmentSide === "جزئي").length;
+      const totalJudgments = wonCases + lostCases + partialCases;
       const winRate = totalJudgments > 0 ? (wonCases / totalJudgments) * 100 : 0;
 
       const totalCases = activeCases.length + closedCases.length;
@@ -10662,6 +10777,10 @@ export async function registerRoutes(
         overdueMemos,
         wonCases,
         lostCases,
+        // Surfaced so a partial judgment is visible in the payload rather than
+        // silently absorbed into the denominator. Additive: existing consumers
+        // (kpis.tsx reads winRate only) are unaffected.
+        partialCases,
         winRate: Math.round(winRate * 10) / 10,
         overallScore: Math.round(overallScore * 10) / 10,
       };
