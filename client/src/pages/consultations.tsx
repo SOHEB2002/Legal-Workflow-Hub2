@@ -2089,6 +2089,7 @@ export default function ConsultationsPage() {
             <TableHeader>
               <TableRow>
                 {/* Phase-5: all table cells (header + body) center-aligned. */}
+                <TableHead className="text-center w-[48px]">#</TableHead>
                 <TableHead className="text-center">رقم الاستشارة</TableHead>
                 <TableHead className="text-center">العميل</TableHead>
                 <TableHead className="text-center">النوع</TableHead>
@@ -2100,7 +2101,7 @@ export default function ConsultationsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedConsultations.map((consultation) => {
+              {sortedConsultations.map((consultation, idx) => {
                 const priorityGroup = getConsultationPriorityGroup(consultation);
                 const rowClass =
                   priorityGroup === 1
@@ -2112,6 +2113,13 @@ export default function ConsultationsPage() {
                         : "";
                 return (
                 <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`} className={rowClass}>
+                  {/* Display-only sequential number — index inside the rendered
+                      list (sortedConsultations), so every active filter/search
+                      and the priority sort renumber the visible rows from 1.
+                      This table is unpaginated, so it is a plain 1..n count. */}
+                  <TableCell className="text-center text-xs text-muted-foreground" data-testid={`cell-index-${consultation.id}`}>
+                    {idx + 1}
+                  </TableCell>
                   <TableCell className="text-center font-medium">
                     <div className="flex flex-col items-center gap-1">
                       <LtrInline>{consultation.consultationNumber}</LtrInline>
