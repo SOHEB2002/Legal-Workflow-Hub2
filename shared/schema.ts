@@ -1616,6 +1616,13 @@ export const ClosureReason = {
   PRIMARY_NO_APPEAL: "حكم_ابتدائي_بدون_اعتراض",
   STRUCK_OFF_EXPIRED: "شطب_بدون_إعادة_قيد",
   SETTLEMENT_FAILED: "لم_يتم_الصلح",
+  // Judgment-lifecycle step 1: the case closes because every post-judgment
+  // action (collection letter, and execution request when there is one) is
+  // DONE — the successful end of a final judgment, not an early/abnormal close.
+  // Written ONLY by the automatic close in the field-tasks completion handler;
+  // deliberately NOT offered in the manual early-close dialog, which is for
+  // closing a case that still had work left.
+  COLLECTION_COMPLETED: "تم_التحصيل",
   OTHER: "أخرى",
 } as const;
 
@@ -1629,8 +1636,18 @@ export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
   "حكم_ابتدائي_بدون_اعتراض": "حكم ابتدائي بدون اعتراض",
   "شطب_بدون_إعادة_قيد": "شطب بدون إعادة قيد",
   "لم_يتم_الصلح": "لم يتم الصلح",
+  "تم_التحصيل": "تم التحصيل",
   "أخرى": "أخرى",
 };
+
+// Post-judgment field tasks are identified by their TITLE PREFIX — there is no
+// task-kind column on field_tasks, and both the مهامي feed queries
+// (storage.getMyTasks) and the auto-close gate (routes.ts field-tasks PATCH)
+// already keyed on these exact strings independently. Centralised here so the
+// two can never drift: renaming a title in ONE place used to silently drop the
+// task out of the feed. Both are matched as `title LIKE '<prefix>%'`.
+export const CollectionTaskTitlePrefix = "إعداد خطاب تحصيل";
+export const ExecutionTaskTitlePrefix = "رفع طلب تنفيذ";
 
 // ==================== الأولوية ====================
 export const Priority = {
@@ -3506,8 +3523,14 @@ export const hearingResultSchema = z.object({
   judgmentType: z.enum(["لصالحنا", "ضدنا", "جزئي"]).nullable().optional(),
   judgmentFinal: z.boolean().nullable().optional(),
   needsAppeal: z.boolean().nullable().optional(),
-  // Legacy judgment fields (kept for compatibility)
-  judgmentSide: z.enum(["لصالحنا", "ضدنا"]).nullable().optional(),
+  // Legacy judgment field (kept for compatibility). WIDENED to three values:
+  // the request key is behaviourally irrelevant (both server reads coalesce
+  // `judgmentType || judgmentSide`), and the hearings.judgment_side COLUMN this
+  // ends up in has stored "جزئي" since partial judgments became recordable —
+  // so the 2-value enum was a contract this schema itself violated on write.
+  // Now the declared contract matches what the column actually holds, and the
+  // stats that read the column count all three (see routes.ts / scheduler.ts).
+  judgmentSide: z.enum(["لصالحنا", "ضدنا", "جزئي"]).nullable().optional(),
   objectionFeasible: z.boolean().nullable().optional(),
   objectionDeadline: z.string().nullable().optional(),
   // Session/postponement fields
