@@ -112,6 +112,13 @@ export const lawCases = pgTable("law_cases", {
   //   • objection_window_days: NULL = the 30-day default; 10 for القضاء المستعجل.
   judgmentDeedReceivedDate: varchar("judgment_deed_received_date", { length: 50 }),
   objectionWindowDays: integer("objection_window_days"),
+  // رقم طلب التنفيذ — the execution-court request number, captured when the
+  // EXECUTION post-judgment task is completed and editable afterwards like the
+  // other platform numbers. Same shape as its siblings (najiz/taradi/mohr/moeen
+  // /court are all varchar(100)). REFERENCE FIELD ONLY: it is deliberately NOT
+  // part of deriveCurrentCaseNumber's priority chain — the displayed case number
+  // stays court → najiz → settlement → base.
+  executionRequestNumber: varchar("execution_request_number", { length: 100 }),
   appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
   internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
   moeenNumber: varchar("moeen_number", { length: 100 }),
@@ -2470,6 +2477,7 @@ export interface LawCase {
   // null window = the 30-day default. See the columns' comment above.
   judgmentDeedReceivedDate: string | null;
   objectionWindowDays: number | null;
+  executionRequestNumber: string | null;
   appealLawyerId: string | null;
   internalReviewerId: string | null;
   moeenNumber: string | null;
@@ -4647,6 +4655,7 @@ export const updateCaseSchema = z.object({
   // Nullability mirrors the LawCase interface (both nullable).
   judgmentDeedReceivedDate: z.string().nullable().optional(),
   objectionWindowDays: z.number().nullable().optional(),
+  executionRequestNumber: z.string().nullable().optional(),
   courtName: z.string().optional(),
   courtCaseNumber: z.string().optional(),
   judgeName: z.string().optional(),
