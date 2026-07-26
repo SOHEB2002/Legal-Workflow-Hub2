@@ -7981,31 +7981,86 @@ export async function registerRoutes(
                 });
               }
             } else if (hearingType === "محكمة") {
-              const courtFromStages = [
-                "أغلق_طلب_الصلح",
-                "قيد_التدقيق_في_ناجز",
-                "قيد_التدقيق_في_معين",
-                "قيد_التدقيق_في_تراضي",
-              ];
-              if (courtFromStages.includes(currentStage)) {
+              // A COURT hearing means the case HAS entered court, so it is
+              // promoted at that moment rather than left to be discovered later
+              // (owner decision 2026-07-26). WIDENED from four source stages —
+              // أغلق_طلب_الصلح + the three قيد_التدقيق_* — to every pre-court
+              // stage. The narrow list is what produced the wrong-path bug: a
+              // case that failed settlement dropped to أغلق_طلب_الصلح as
+              // قيد_الدراسة, still carried an OLD settlement-era hearing (so this
+              // block never ran for it), and then reached a JUDGMENT while still
+              // classified قيد_الدراسة — after which getStagesForClassification
+              // resolved the UNDER-STUDY array and the progress bar rendered the
+              // labor/general litigation path instead of the in-court one.
+              //
+              // NOT promoted from stages already AT or PAST منظورة. The rule is
+              // "a court hearing means the case is in court" — for those stages
+              // that is ALREADY true, and writing منظورة would REGRESS them:
+              // adding a follow-up hearing to a case at محكوم_حكم_نهائي would
+              // silently erase the judgment. For that group we still repair a
+              // STALE CLASSIFICATION (exactly the cohort the bug above created)
+              // without touching the stage or the history.
+              const STAGES_AT_OR_PAST_COURT = new Set([
+                "منظورة",
+                "منظورة_استئناف",
+                "محكوم_حكم_ابتدائي",
+                "محكوم_حكم_نهائي",
+                "تحصيل",
+                "مشطوبة",
+                "مؤرشفة",
+                "مقفلة",
+              ]);
+              const promoteClassification = caseForStage.caseClassification === "قيد_الدراسة";
+              const classificationFields = promoteClassification
+                ? {
+                    caseClassification: "منظورة_بالمحكمة",
+                    // For قيد_الدراسة the firm is always the plaintiff — persist it
+                    // so the post-promotion UI keeps the role. Same default as the
+                    // PATCH promotion.
+                    ...(!caseForStage.clientRole ? { clientRole: "مدعي" } : {}),
+                  }
+                : {};
+              if (!STAGES_AT_OR_PAST_COURT.has(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
-                const promoteClassification = caseForStage.caseClassification === "قيد_الدراسة";
                 await storage.updateCase(caseForStage.id, {
                   currentStage: "منظورة",
-                  ...(promoteClassification ? {
-                    caseClassification: "منظورة_بالمحكمة",
-                    ...(!caseForStage.clientRole ? { clientRole: "مدعي" } : {}),
-                  } : {}),
+                  ...classificationFields,
                   stageHistory: [
                     ...stageHistory,
                     { stage: "منظورة", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة محكمة" },
                   ],
                 });
+              } else if (promoteClassification) {
+                // Already in/past court but mis-classified — fix the label only.
+                await storage.updateCase(caseForStage.id, classificationFields);
               }
             }
           }
         } catch (e) {
-          console.error("[POST hearings] auto-stage failed", e);
+          // NO LONGER SWALLOWED. This used to be `console.error(...)` and fall
+          // through, so a failed promotion left the hearing created on a case
+          // stuck in the wrong stage/classification — invisible until the wrong
+          // stage path showed up weeks later. The stage write IS the point of
+          // creating a court hearing, so if it fails the whole request fails:
+          // roll the hearing back and surface a 500 rather than persist the
+          // half-done state. A rollback failure is logged loudly and still 500s
+          // (the hearing then exists but the case is unpromoted — the old
+          // behaviour, now at least visible in the logs).
+          console.error(
+            "[POST hearings] auto-stage FAILED — rolling back hearing",
+            { hearingId: newHearing.id, caseId: validatedData.caseId, hearingType: validatedData.hearingType },
+            e,
+          );
+          try {
+            await storage.deleteHearing(newHearing.id);
+          } catch (rollbackErr) {
+            console.error(
+              "[POST hearings] ROLLBACK FAILED — hearing persists on an unpromoted case",
+              { hearingId: newHearing.id, caseId: validatedData.caseId },
+              rollbackErr,
+            );
+          }
+          return res.status(500).json({ error: "تعذّر تحديث مرحلة القضية — لم يتم إنشاء الجلسة، يرجى المحاولة مرة أخرى" });
         }
       }
 
