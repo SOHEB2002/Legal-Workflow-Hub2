@@ -8713,6 +8713,61 @@ export async function registerRoutes(
         }
       }
 
+      // ==================== JUDGMENT MODEL (validated BEFORE any mutation) ====================
+      // THE DEGREE IS DERIVED FROM THE CASE PATH, never asked. The opposite of
+      // ابتدائي is استئنافي — NOT نهائي, which is a separate concept (can the
+      // ruling still be objected to). So:
+      //   case at منظورة          → the ruling is ابتدائي (first instance)
+      //   case at منظورة_استئناف   → the ruling is استئنافي, final by nature
+      // This replaces the "درجة الحكم: ابتدائي أم نهائي" question, which posed a
+      // false opposition and asked the user for something the case already knows.
+      //
+      // The ONLY judgment question besides the outcome is OBJECTIONABILITY, and
+      // only for a first-instance ruling: some first-instance rulings cannot be
+      // objected to at all (القضاء المستعجل). An appeal ruling is never asked.
+      //
+      // FINALITY IS COMPUTED:
+      //   isFinal = isAppealRuling || objectionable === false
+      // and drives the resulting stage:
+      //   منظورة + objectionable      → محكوم_حكم_ابتدائي  (صك / objection / appeal path)
+      //   منظورة + NOT objectionable  → محكوم_حكم_نهائي     (final at once, no window)
+      //   منظورة_استئناف + any ruling → محكوم_حكم_نهائي
+      const judgmentType = data.judgmentType || data.judgmentSide || null;
+      let judgmentIsAppealRuling = false;
+      let judgmentDerivedFinal = false;
+      if (data.result === HearingResult.JUDGMENT) {
+        if (!judgmentType) {
+          return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
+        }
+        // A judgment presupposes the case is in court. Since c5e930e every court
+        // hearing promotes its case to منظورة (or منظورة_استئناف after a primary
+        // judgment), so a judgment-bearing case is always on one of the two; any
+        // other stage means the data is inconsistent and the degree cannot be
+        // derived. Refuse rather than guess — this is the guard that used to be
+        // missing, which let a judgment be recorded from أغلق_طلب_الصلح and
+        // produce the wrong-path bug.
+        if (!settlementProbeCase) {
+          return res.status(400).json({ error: "لا يمكن تسجيل حكم لجلسة غير مرتبطة بقضية" });
+        }
+        if (
+          settlementProbeCase.currentStage !== "منظورة" &&
+          settlementProbeCase.currentStage !== "منظورة_استئناف"
+        ) {
+          return res.status(400).json({
+            error: "لا يمكن تسجيل حكم إلا لقضية منظورة أمام المحكمة أو منظورة استئناف",
+          });
+        }
+        judgmentIsAppealRuling = settlementProbeCase.currentStage === "منظورة_استئناف";
+        if (!judgmentIsAppealRuling) {
+          // Explicit boolean required — an unanswered question is what used to
+          // park a case at محكوم_حكم_ابتدائي with no deadline and no way forward.
+          if (typeof data.objectionFeasible !== "boolean") {
+            return res.status(400).json({ error: "يجب تحديد ما إذا كان الحكم قابلاً للاعتراض" });
+          }
+        }
+        judgmentDerivedFinal = judgmentIsAppealRuling || data.objectionFeasible === false;
+      }
+
       const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
 
       if (!hearing.caseId && effectiveCaseId) {
@@ -8729,9 +8784,13 @@ export async function registerRoutes(
 
       // Judgment hearing data
       if (data.result === HearingResult.JUDGMENT) {
-        updateData.judgmentSide = data.judgmentType || data.judgmentSide || null;
-        updateData.judgmentFinal = data.judgmentFinal ?? null;
-        updateData.objectionFeasible = data.objectionFeasible ?? null;
+        updateData.judgmentSide = judgmentType;
+        // judgment_final now records the DERIVED finality, not a user answer, so
+        // every existing reader (the isFinal branches, the hearings detail badge,
+        // stats) keeps working unchanged while nobody is asked the question.
+        updateData.judgmentFinal = judgmentDerivedFinal;
+        // Meaningless for an appeal ruling — stored null rather than a stray false.
+        updateData.objectionFeasible = judgmentIsAppealRuling ? null : data.objectionFeasible;
         updateData.objectionDeadline = data.objectionDeadline || null;
       }
 
@@ -8767,7 +8826,9 @@ export async function registerRoutes(
       const createdTasks: any[] = [];
       const createdMemos: any[] = [];
       let existingCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
-      const isAppealStage = existingCase?.currentStage === "منظورة_استئناف";
+      // isAppealStage was replaced by judgmentIsAppealRuling, derived up front
+      // (before any mutation) from the same case row so the judgment guard and
+      // the branch below can never disagree about the degree.
 
       if (effectiveCaseId && existingCase) {
         const caseUpdate: any = {
@@ -8899,42 +8960,16 @@ export async function registerRoutes(
 
         // ==================== PATH B: JUDGMENT (حكم) ====================
         else if (data.result === HearingResult.JUDGMENT) {
-          const judgmentType = data.judgmentType || data.judgmentSide || null;
-          // For appeal hearings, judgment is always final
-          const isFinal = isAppealStage ? true : (data.judgmentFinal ?? false);
-          // `needsAppeal` and `lawyerAssignee` were read ONLY by the objection-memo
-          // block that moved to the صك-receipt endpoint (step 2), so both are gone.
-          // needsAppeal was in any case never sent by any client — the dialog
-          // posts judgmentType/judgmentFinal/objectionFeasible only.
-
-          // Validate required fields
-          if (!judgmentType) {
-            return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
-          }
-
-          // MANDATORY, EXPLICIT judgment inputs. Before this, judgmentFinal was
-          // read as `data.judgmentFinal ?? false` and objectionFeasible was never
-          // validated at all — so a judgment saved with both boxes unticked parked
-          // the case at محكوم_حكم_ابتدائي with no objection memo, no deadline and no
-          // forward path: a silent dead end. An unticked checkbox cannot express
-          // "the lawyer answered NO" as distinct from "the lawyer didn't answer",
-          // so both answers are now required to arrive as explicit booleans and
-          // the dialog sends them from tri-state selects.
-          //
-          // Skipped on an appeal hearing: isAppealStage forces isFinal = true, so
-          // there is no degree to choose.
-          if (!isAppealStage && typeof data.judgmentFinal !== "boolean") {
-            return res.status(400).json({ error: "يجب تحديد درجة الحكم (ابتدائي أم نهائي)" });
-          }
-          // Only a PRIMARY judgment that went against us (wholly or partly) raises
-          // the objection question — it decides whether the لائحة اعتراضية is
-          // created at صك receipt. A final judgment, or a primary one in our
-          // favour, has nothing to object to on our side.
-          if (!isFinal && (judgmentType === "ضدنا" || judgmentType === "جزئي")) {
-            if (typeof data.objectionFeasible !== "boolean") {
-              return res.status(400).json({ error: "يجب تحديد ما إذا كان يمكن تقديم اعتراض على الحكم الابتدائي" });
-            }
-          }
+          // Everything about the judgment MODEL — outcome present, case on a
+          // court stage, objectionability answered, degree derived, finality
+          // computed — was validated up front, BEFORE the hearing was mutated.
+          // Here we only branch on the already-derived finality.
+          //   isFinal true  → استئنافي ruling, OR a first-instance ruling that is
+          //                   not objectionable → محكوم_حكم_نهائي.
+          //   isFinal false → objectionable first-instance ruling →
+          //                   محكوم_حكم_ابتدائي, which opens the صك / objection /
+          //                   appeal path.
+          const isFinal = judgmentDerivedFinal;
 
           if (isFinal) {
             // === FINAL JUDGMENTS — the case RESTS at محكوم_حكم_نهائي ===

@@ -45,13 +45,12 @@ export function HearingResultDialog({
     result: "" as string,
     resultDetails: "",
     judgmentSide: "",
-    // TRI-STATE, not checkboxes. A checkbox has no way to say "the lawyer
+    // TRI-STATE, not a checkbox. A checkbox has no way to say "the lawyer
     // answered NO" as distinct from "the lawyer didn't answer", and that
-    // ambiguity is exactly what let a judgment be saved with both boxes blank —
-    // parking the case at محكوم_حكم_ابتدائي with no deadline, no objection memo
-    // and no forward path. Both are now explicit and required (the server
-    // enforces the same rule and 400s).
-    judgmentDegree: "" as "" | "ابتدائي" | "نهائي",
+    // ambiguity is what let a judgment be saved blank — parking the case at
+    // محكوم_حكم_ابتدائي with no deadline, no objection memo and no forward path.
+    // The former "درجة الحكم" select is GONE: the degree is derived from the
+    // case's stage (منظورة → ابتدائي، منظورة_استئناف → استئنافي), never asked.
     objectionAnswer: "" as "" | "نعم" | "لا",
     // objectionDeadline removed with step 2 — the deadline is derived from the
     // صك receipt date, not entered at the session.
@@ -69,27 +68,40 @@ export function HearingResultDialog({
   useEffect(() => {
     setResultForm({
       result: "", resultDetails: "", judgmentSide: "",
-      judgmentDegree: "", objectionAnswer: "", nextHearingDate: "",
+      objectionAnswer: "", nextHearingDate: "",
       nextHearingTime: "", responseRequired: false, opponentResponseRequired: false,
       caseId: "", afterFailedSettlementChoice: "", transferToDepartmentId: "", transferReason: "",
     });
   }, [hearing?.id]);
 
-  // The objection question applies ONLY to a primary judgment that went against
-  // us wholly or partly — it decides whether the لائحة اعتراضية is created at صك
-  // receipt. Mirrors the server rule verbatim.
+  // THE DEGREE IS DERIVED FROM THE CASE PATH, never asked — mirrors the server.
+  //   منظورة        → the ruling is ابتدائي (first instance)
+  //   منظورة_استئناف → the ruling is استئنافي, final by nature
+  // Any other stage means a judgment cannot be recorded at all (the server 400s),
+  // so the form says so rather than letting the request fail after the fact.
+  const judgmentCase = hearing?.caseId
+    ? getCaseById(hearing.caseId)
+    : (resultForm.caseId && resultForm.caseId !== "none" ? getCaseById(resultForm.caseId) : null);
+  const judgmentIsAppealRuling = judgmentCase?.currentStage === "منظورة_استئناف";
+  const judgmentStageValid =
+    judgmentCase?.currentStage === "منظورة" || judgmentIsAppealRuling;
+
+  // The ONLY judgment question besides the outcome: is the FIRST-INSTANCE ruling
+  // objectionable? Some are not at all (القضاء المستعجل), and the answer decides
+  // whether the case goes to محكوم_حكم_ابتدائي (objection/appeal path) or straight
+  // to محكوم_حكم_نهائي. Never asked for an appeal ruling.
   const judgmentNeedsObjectionAnswer =
     resultForm.result === HearingResult.JUDGMENT
-    && resultForm.judgmentDegree === "ابتدائي"
-    && (resultForm.judgmentSide === "ضدنا" || resultForm.judgmentSide === "جزئي");
+    && judgmentStageValid
+    && !judgmentIsAppealRuling;
 
-  // Submit gate for a judgment: outcome + degree always, plus the objection
-  // answer when it applies. Keeps the button in step with the server's 400s
-  // instead of letting the request fail after the fact.
+  // Submit gate for a judgment: a valid court stage + the outcome, plus the
+  // objectionability answer when it applies. Keeps the button in step with the
+  // server's 400s.
   const judgmentInputsComplete =
     resultForm.result !== HearingResult.JUDGMENT
-    || (!!resultForm.judgmentSide
-        && !!resultForm.judgmentDegree
+    || (judgmentStageValid
+        && !!resultForm.judgmentSide
         && (!judgmentNeedsObjectionAnswer || !!resultForm.objectionAnswer));
 
   const handleSubmitResult = async () => {
@@ -132,13 +144,14 @@ export function HearingResultDialog({
         // (persist → the judgment_side column) and :8099 (all downstream routing),
         // so لصالحنا/ضدنا behave identically to before.
         data.judgmentType = resultForm.judgmentSide;
-        // Both sent as explicit booleans — the tri-states above guarantee the
-        // lawyer chose, and the submit button stays disabled until they have.
-        data.judgmentFinal = resultForm.judgmentDegree === "نهائي";
-        // objectionFeasible stays — it is the lawyer's legal ASSESSMENT, made at
-        // the session and read back later by the صك-receipt handler. Sent only
-        // when the question actually applies (primary + ضدنا/جزئي); the server
-        // requires it in exactly that case and ignores it otherwise.
+        // judgmentFinal is NO LONGER SENT — the server DERIVES it
+        // (appeal ruling || not objectionable) and writes the computed value to
+        // the hearing. Asking the user was the modelling error this batch fixes.
+        //
+        // objectionFeasible is the lawyer's legal ASSESSMENT, made at the session
+        // and read back later by the صك-receipt handler. Sent only when the
+        // question applies (first-instance ruling); the server requires it in
+        // exactly that case and stores null for an appeal ruling.
         if (judgmentNeedsObjectionAnswer) {
           data.objectionFeasible = resultForm.objectionAnswer === "نعم";
         }
@@ -304,25 +317,23 @@ export function HearingResultDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label>درجة الحكم <span className="text-red-500">*</span></Label>
-                <Select
-                  value={resultForm.judgmentDegree}
-                  onValueChange={(value) => setResultForm({
-                    ...resultForm,
-                    judgmentDegree: value as "ابتدائي" | "نهائي",
-                    // Leaving ابتدائي retires the objection question — drop a
-                    // stale answer so it can't be sent for a final judgment.
-                    objectionAnswer: value === "ابتدائي" ? resultForm.objectionAnswer : "",
-                  })}
-                >
-                  <SelectTrigger data-testid="select-judgment-degree"><SelectValue placeholder="اختر درجة الحكم" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ابتدائي">حكم ابتدائي (قابل للاعتراض)</SelectItem>
-                    <SelectItem value="نهائي">حكم نهائي (غير قابل للاعتراض)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {/* The degree is DERIVED from the case's stage, never asked — the
+                  old "ابتدائي أم نهائي" select posed a false opposition (the
+                  opposite of ابتدائي is استئنافي; نهائي is a different concept).
+                  Shown read-only so the lawyer can see which degree applies. */}
+              {!judgmentStageValid ? (
+                <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/20 p-3 text-red-700 dark:text-red-400" data-testid="warning-judgment-stage-invalid">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <p className="text-xs">
+                    لا يمكن تسجيل حكم إلا لقضية منظورة أمام المحكمة أو منظورة استئناف.
+                    {judgmentCase ? ` المرحلة الحالية: ${judgmentCase.currentStage}.` : " لم تُحدَّد القضية المرتبطة."}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground" data-testid="text-judgment-degree">
+                  درجة الحكم: <strong>{judgmentIsAppealRuling ? "استئنافي (نهائي بطبيعته)" : "ابتدائي"}</strong> — مُستمدة من مرحلة القضية.
+                </p>
+              )}
               {/* Objection sub-form. Shown for ضدنا AND جزئي: a partial judgment is
                   partially against us, so it can warrant an objection too. This gate
                   mirrors the SERVER's objection-memo branch verbatim (routes.ts:8203,
@@ -333,15 +344,15 @@ export function HearingResultDialog({
               {judgmentNeedsObjectionAnswer && (
                 <>
                   <div>
-                    <Label>هل يمكن تقديم اعتراض؟ <span className="text-red-500">*</span></Label>
+                    <Label>هل الحكم قابل للاعتراض؟ <span className="text-red-500">*</span></Label>
                     <Select
                       value={resultForm.objectionAnswer}
                       onValueChange={(value) => setResultForm({ ...resultForm, objectionAnswer: value as "نعم" | "لا" })}
                     >
                       <SelectTrigger data-testid="select-objection-feasible"><SelectValue placeholder="اختر" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="نعم">نعم — سنقدم اعتراضاً</SelectItem>
-                        <SelectItem value="لا">لا — لن نعترض</SelectItem>
+                        <SelectItem value="نعم">نعم — قابل للاعتراض</SelectItem>
+                        <SelectItem value="لا">لا — غير قابل للاعتراض (مثل القضاء المستعجل)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -352,12 +363,12 @@ export function HearingResultDialog({
                       receiptDate + window and creates the لائحة اعتراضية then. */}
                   {resultForm.objectionAnswer === "نعم" && (
                     <p className="text-xs text-muted-foreground">
-                      ستُحدَّد مهلة الاعتراض عند تسجيل استلام الصك، وتُنشأ اللائحة الاعتراضية حينها.
+                      ستنتقل القضية إلى "محكوم حكم ابتدائي". تُحدَّد مهلة الاعتراض عند تسجيل استلام الصك، وتُنشأ اللائحة الاعتراضية حينها.
                     </p>
                   )}
                   {resultForm.objectionAnswer === "لا" && (
                     <p className="text-xs text-muted-foreground">
-                      لن تُنشأ لائحة اعتراضية. سجّل لاحقاً "لم نستأنف — الحكم نهائي" من إجراءات القضية.
+                      الحكم نهائي فوراً: ستنتقل القضية مباشرةً إلى "محكوم حكم نهائي" — بلا مهلة اعتراض ولا لائحة اعتراضية ولا مسار استئناف.
                     </p>
                   )}
                 </>
