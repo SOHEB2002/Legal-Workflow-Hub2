@@ -4446,6 +4446,12 @@ export function weAreTheAppellant(direction: string | null): boolean {
   return direction === "ضدنا" || direction === "جزئي";
 }
 
+// POST /api/cases/:id/opponent-response — "تم استلام رد الخصم". Tolerant gate;
+// the handler requires needsOurResponse to be an explicit boolean.
+export const opponentResponseSchema = z.object({
+  needsOurResponse: z.boolean().optional(),
+}).passthrough();
+
 // POST /api/cases/:id/appeal-outcome — the two manual routes out of
 // محكوم_حكم_ابتدائي. Tolerant gate; the handler enumerates the valid outcomes.
 export const appealOutcomeSchema = z.object({

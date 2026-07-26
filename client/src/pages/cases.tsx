@@ -391,9 +391,13 @@ export default function CasesPage() {
   // department_head of the case's own dept | assigned lawyer. admin_support is
   // excluded, consistent with the MOHR and reopen actions. Stage-gated to
   // محكوم_حكم_ابتدائي so visibility === authorization on both terms.
-  const canRecordJudgmentDeed = (c: LawCase): boolean => {
+  // The ROLE half of every case-workflow action we've added (صك receipt, appeal
+  // outcome, opponent response): a client-side restatement of the server's
+  // canActOnMohrSettlement — branch_manager | department_head of the case's own
+  // department | assigned lawyer. admin_support is excluded on purpose,
+  // consistently with those endpoints. Each caller adds its own state gate.
+  const canActOnCaseWorkflow = (c: LawCase): boolean => {
     if (!user) return false;
-    if (c.currentStage !== "محكوم_حكم_ابتدائي") return false;
     if (user.role === "branch_manager") return true;
     if (
       user.role === "department_head" &&
@@ -406,6 +410,9 @@ export default function CasesPage() {
     if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
     return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
+
+  const canRecordJudgmentDeed = (c: LawCase): boolean =>
+    c.currentStage === "محكوم_حكم_ابتدائي" && canActOnCaseWorkflow(c);
 
   // isCasePaused now comes from case-stage-utils — the same helper the extracted
   // details dialog uses for its paused banner (identical `!!c.pausedAt` rule).
@@ -506,6 +513,9 @@ export default function CasesPage() {
   const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
   const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
+  const [opponentResponseCase, setOpponentResponseCase] = useState<LawCase | null>(null);
+  const [opponentResponseAnswer, setOpponentResponseAnswer] = useState<"" | "نعم" | "لا">("");
+  const [opponentResponseSubmitting, setOpponentResponseSubmitting] = useState(false);
   const [appealOutcomeCase, setAppealOutcomeCase] = useState<LawCase | null>(null);
   const [appealOutcomeKind, setAppealOutcomeKind] = useState<"opponent_appealed" | "no_appeal">("opponent_appealed");
   const [appealSubmitting, setAppealSubmitting] = useState(false);
@@ -1998,6 +2008,15 @@ export default function CasesPage() {
           onReopen: () => { setReopenCase(selectedCase); setShowReopenDialog(true); },
           // Same gate as the صك action — both live only at محكوم_حكم_ابتدائي and
           // answer to the same role set, so one helper covers both.
+          // Gated on the same role rule the server enforces AND on the indicator
+          // actually being on — the endpoint 400s if no hearing carries the flag.
+          canRecordOpponentResponse:
+            canActOnCaseWorkflow(selectedCase)
+            && getHearingsByCase(selectedCase.id).some(h => h.opponentResponseRequired),
+          onOpponentResponseReceived: () => {
+            setOpponentResponseAnswer("");
+            setOpponentResponseCase(selectedCase);
+          },
           canRecordAppealOutcome: canRecordJudgmentDeed(selectedCase),
           onOpponentAppealed: () => { setAppealOutcomeKind("opponent_appealed"); setAppealOutcomeCase(selectedCase); },
           onNoAppeal: () => { setAppealOutcomeKind("no_appeal"); setAppealOutcomeCase(selectedCase); },
@@ -2268,6 +2287,85 @@ export default function CasesPage() {
               تأكيد الإغلاق
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "تم استلام رد الخصم" — clears the مطلوب رد من الخصم indicator (which the
+          audit found could never clear) and asks whether we must reply. نعم
+          creates the SAME auto مذكرة جوابية the موعد_جديد "مطلوب مذكرة" flow
+          creates, server-side, via one shared implementation. Required tri-state,
+          same discipline as the objectionability question. */}
+      <Dialog
+        open={!!opponentResponseCase}
+        onOpenChange={(open) => { if (!open) { setOpponentResponseCase(null); setOpponentResponseAnswer(""); } }}
+      >
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تسجيل استلام رد الخصم</DialogTitle>
+          </DialogHeader>
+          {opponentResponseCase && (
+            <>
+              <div className="space-y-4">
+                <p className="text-xs text-muted-foreground">
+                  سيتم إزالة مؤشر "مطلوب رد من الخصم" عن هذه القضية.
+                </p>
+                <div>
+                  <Label>هل نحتاج للرد على مذكرة الخصم؟ <span className="text-red-500">*</span></Label>
+                  <Select
+                    value={opponentResponseAnswer}
+                    onValueChange={(v) => setOpponentResponseAnswer(v as "نعم" | "لا")}
+                  >
+                    <SelectTrigger data-testid="select-needs-our-response"><SelectValue placeholder="اختر" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="نعم">نعم — نحتاج للرد</SelectItem>
+                      <SelectItem value="لا">لا — لا نحتاج للرد</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {opponentResponseAnswer === "نعم" && (
+                  <p className="text-xs text-muted-foreground">
+                    ستُنشأ مذكرة جوابية تلقائياً وتُسند للمحامي المسؤول، بنفس آلية "مطلوب مذكرة" عند تحديد موعد جديد.
+                  </p>
+                )}
+                {opponentResponseAnswer === "لا" && (
+                  <p className="text-xs text-muted-foreground">
+                    لن تُنشأ مذكرة — سيُزال المؤشر فقط.
+                  </p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOpponentResponseCase(null)}>إلغاء</Button>
+                <Button
+                  data-testid="button-confirm-opponent-response"
+                  disabled={!opponentResponseAnswer || opponentResponseSubmitting}
+                  onClick={async () => {
+                    setOpponentResponseSubmitting(true);
+                    try {
+                      await apiRequest("POST", `/api/cases/${opponentResponseCase.id}/opponent-response`, {
+                        needsOurResponse: opponentResponseAnswer === "نعم",
+                      });
+                      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                      await queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
+                      await refreshCases();
+                      toast({
+                        title: opponentResponseAnswer === "نعم"
+                          ? "تم تسجيل استلام رد الخصم وإنشاء مذكرة جوابية"
+                          : "تم تسجيل استلام رد الخصم",
+                      });
+                      setOpponentResponseCase(null);
+                      setOpponentResponseAnswer("");
+                    } catch (err) {
+                      toast({ title: "تعذّر تسجيل الاستلام", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setOpponentResponseSubmitting(false);
+                    }
+                  }}
+                >
+                  حفظ
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
