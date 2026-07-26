@@ -102,6 +102,16 @@ export const lawCases = pgTable("law_cases", {
   grievanceResult: varchar("grievance_result", { length: 50 }),
   struckOffDate: varchar("struck_off_date", { length: 50 }),
   struckOffReopenDeadline: varchar("struck_off_reopen_deadline", { length: 50 }),
+  // Judgment-lifecycle step 2 — the صك (written judgment) receipt.
+  // The objection clock starts when the deed is RECEIVED, which happens days
+  // after the session where the judgment was announced, so the deadline cannot
+  // be computed at hearing-result time. Both columns are purely additive and
+  // nullable (ADD COLUMN, applied manually — see the batch report).
+  //   • judgment_deed_received_date: NULL = not yet received. That null IS the
+  //     "بانتظار استلام الصك" indicator — it is derived, never stored as a flag.
+  //   • objection_window_days: NULL = the 30-day default; 10 for القضاء المستعجل.
+  judgmentDeedReceivedDate: varchar("judgment_deed_received_date", { length: 50 }),
+  objectionWindowDays: integer("objection_window_days"),
   appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
   internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
   moeenNumber: varchar("moeen_number", { length: 100 }),
@@ -2458,6 +2468,10 @@ export interface LawCase {
   grievanceResult: string | null;
   struckOffDate: string | null;
   struckOffReopenDeadline: string | null;
+  // Judgment-lifecycle step 2. null receipt date = "بانتظار استلام الصك";
+  // null window = the 30-day default. See the columns' comment above.
+  judgmentDeedReceivedDate: string | null;
+  objectionWindowDays: number | null;
   appealLawyerId: string | null;
   internalReviewerId: string | null;
   moeenNumber: string | null;
@@ -4392,6 +4406,20 @@ export const startConsultationFollowUpSchema = z.object({
 // targetStage is NOT enum-narrowed (2D' rule: stage values stay z.string();
 // membership is validated against the case's own resolved path in the handler).
 // The five number fields mirror their columns — all varchar, all nullable.
+// Judgment-lifecycle step 2. The default objection window in days when the case
+// carries no explicit objectionWindowDays. 10 is the القضاء المستعجل value the
+// user picks in the dialog; nothing else is enumerated because the field is a
+// free integer by design.
+export const DefaultObjectionWindowDays = 30;
+
+// POST /api/cases/:id/judgment-deed — recording (or correcting) the صك receipt.
+// Tolerant gate (Pattern A): type check only; the handler keeps its own Arabic
+// 400s for the missing/invalid date and the out-of-range window.
+export const recordJudgmentDeedSchema = z.object({
+  judgmentDeedReceivedDate: z.string().optional(),
+  objectionWindowDays: z.union([z.number(), z.string()]).nullable().optional(),
+}).passthrough();
+
 export const reopenCaseSchema = z.object({
   targetStage: z.string().optional(),
   notes: z.string().optional(),
@@ -4555,6 +4583,9 @@ export const updateCaseSchema = z.object({
   responsibleLawyerId: z.string().nullable().optional(),
   internalReviewerId: z.string().nullable().optional(),
   appealLawyerId: z.string().nullable().optional(),
+  // Nullability mirrors the LawCase interface (both nullable).
+  judgmentDeedReceivedDate: z.string().nullable().optional(),
+  objectionWindowDays: z.number().nullable().optional(),
   courtName: z.string().optional(),
   courtCaseNumber: z.string().optional(),
   judgeName: z.string().optional(),

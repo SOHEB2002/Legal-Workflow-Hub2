@@ -259,6 +259,19 @@ function getCasePriorityGroup(
   return 4;
 }
 
+// Judgment-lifecycle step 2 — "بانتظار استلام الصك". DERIVED, never stored: a
+// primary judgment has been issued but the written judgment (الصك) hasn't been
+// logged as received, so the objection clock hasn't started. Two terms, both on
+// the case row, so no cross-entity scan is needed (cheaper than the memo-based
+// "مذكرة جارية"). Self-clearing: recording the receipt date makes it false.
+export function isAwaitingJudgmentDeed(c: {
+  currentStage: string;
+  judgmentDeedReceivedDate?: string | null;
+}): boolean {
+  if (c.currentStage !== "محكوم_حكم_ابتدائي") return false;
+  return !String(c.judgmentDeedReceivedDate || "").trim();
+}
+
 // "Active" memo for the group-3 rule: not cancelled, not filed.
 function isActiveMemo(m: { status?: string | null; currentStage?: string | null }): boolean {
   if (m.status === "ملغاة") return false;
@@ -357,6 +370,27 @@ export default function CasesPage() {
   const canReopenCase = (c: LawCase): boolean => {
     if (!user) return false;
     if (c.currentStage !== "مقفلة") return false;
+    if (user.role === "branch_manager") return true;
+    if (
+      user.role === "department_head" &&
+      !!user.departmentId &&
+      !!c.departmentId &&
+      c.departmentId === user.departmentId
+    ) {
+      return true;
+    }
+    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
+    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+  };
+
+  // "تسجيل استلام الصك" permission gate — the SAME rule the server enforces on
+  // POST /api/cases/:id/judgment-deed (canActOnMohrSettlement): branch_manager |
+  // department_head of the case's own dept | assigned lawyer. admin_support is
+  // excluded, consistent with the MOHR and reopen actions. Stage-gated to
+  // محكوم_حكم_ابتدائي so visibility === authorization on both terms.
+  const canRecordJudgmentDeed = (c: LawCase): boolean => {
+    if (!user) return false;
+    if (c.currentStage !== "محكوم_حكم_ابتدائي") return false;
     if (user.role === "branch_manager") return true;
     if (
       user.role === "department_head" &&
@@ -469,6 +503,11 @@ export default function CasesPage() {
   const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
   const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
+  const [showDeedDialog, setShowDeedDialog] = useState(false);
+  const [deedCase, setDeedCase] = useState<LawCase | null>(null);
+  const [deedDate, setDeedDate] = useState("");
+  const [deedWindowDays, setDeedWindowDays] = useState("30");
+  const [deedSubmitting, setDeedSubmitting] = useState(false);
   const [showReopenDialog, setShowReopenDialog] = useState(false);
   const [reopenCase, setReopenCase] = useState<LawCase | null>(null);
   const [reopenTargetStage, setReopenTargetStage] = useState("");
@@ -1289,6 +1328,24 @@ export default function CasesPage() {
                           مذكرة جارية
                         </Badge>
                       )}
+                      {/* Judgment-lifecycle step 2 — DERIVED, exactly like
+                          "مذكرة جارية" above: no stored flag, no clearing code.
+                          Entering the receipt date makes the second term false and
+                          the badge disappears on the next render. Coexists with
+                          "مذكرة جارية" by design (محكوم_حكم_ابتدائي is in
+                          IN_COURT_STAGES_FOR_MEMO_GROUP, so a case with an
+                          objection memo shows both). */}
+                      {isAwaitingJudgmentDeed(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-purple-500 bg-purple-500/10 text-purple-700 dark:text-purple-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-awaiting-deed-${c.id}`}
+                          title="صدر حكم ابتدائي ولم يُسجَّل استلام الصك بعد — مهلة الاعتراض تبدأ من تاريخ الاستلام"
+                        >
+                          <FileText className="w-2.5 h-2.5 ml-1" />
+                          بانتظار استلام الصك
+                        </Badge>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
@@ -1933,6 +1990,15 @@ export default function CasesPage() {
           onEarlyClose: () => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); },
           canReopen: canReopenCase(selectedCase),
           onReopen: () => { setReopenCase(selectedCase); setShowReopenDialog(true); },
+          canRecordJudgmentDeed: canRecordJudgmentDeed(selectedCase),
+          onRecordJudgmentDeed: () => {
+            setDeedCase(selectedCase);
+            // Prefill with whatever the case already carries so a correction
+            // opens on the current values rather than blank.
+            setDeedDate(selectedCase.judgmentDeedReceivedDate || "");
+            setDeedWindowDays(String(selectedCase.objectionWindowDays ?? 30));
+            setShowDeedDialog(true);
+          },
           // Transfer gate, verbatim: assigned lawyer + admin_support +
           // department_head (own dept) + branch_manager. Stage no longer matters —
           // the server lifted that restriction.
@@ -2191,6 +2257,105 @@ export default function CasesPage() {
               تأكيد الإغلاق
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "تسجيل استلام الصك" — judgment-lifecycle step 2. Capturing the receipt
+          date starts the objection clock: the server computes
+          deadline = receiptDate + (window ?? 30) and creates/re-dates the
+          لائحة اعتراضية when the judgment was objectionable. Saving also clears
+          the derived "بانتظار استلام الصك" badge, with no clearing code. */}
+      <Dialog
+        open={showDeedDialog}
+        onOpenChange={(open) => {
+          setShowDeedDialog(open);
+          if (!open) { setDeedCase(null); setDeedDate(""); setDeedWindowDays("30"); }
+        }}
+      >
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تسجيل استلام الصك</DialogTitle>
+          </DialogHeader>
+          {deedCase && (
+            <>
+              <div className="space-y-4">
+                <div>
+                  <Label>تاريخ استلام الصك <span className="text-red-500">*</span></Label>
+                  <HijriDatePicker
+                    value={deedDate}
+                    onChange={(v) => setDeedDate(v)}
+                    data-testid="input-deed-received-date"
+                  />
+                </div>
+                <div>
+                  <Label>مهلة الاعتراض (بالأيام) <span className="text-red-500">*</span></Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={deedWindowDays}
+                    onChange={(e) => setDeedWindowDays(e.target.value)}
+                    data-testid="input-objection-window-days"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    الافتراضي 30 يوماً. للقضاء المستعجل استخدم 10 أيام.
+                  </p>
+                </div>
+                {deedDate && Number(deedWindowDays) > 0 && (
+                  <div className="rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/20 p-3 text-blue-800 dark:text-blue-300">
+                    <p className="text-xs">
+                      مهلة الاعتراض تنتهي في:{" "}
+                      <strong>
+                        <LtrInline>
+                          {(() => {
+                            const d = new Date(deedDate);
+                            if (isNaN(d.getTime())) return "-";
+                            d.setDate(d.getDate() + Number(deedWindowDays));
+                            return d.toISOString().split("T")[0];
+                          })()}
+                        </LtrInline>
+                      </strong>
+                    </p>
+                  </div>
+                )}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowDeedDialog(false)}>إلغاء</Button>
+                <Button
+                  data-testid="button-confirm-deed"
+                  disabled={
+                    !deedDate
+                    || !Number.isInteger(Number(deedWindowDays))
+                    || Number(deedWindowDays) < 1
+                    || Number(deedWindowDays) > 365
+                    || deedSubmitting
+                  }
+                  onClick={async () => {
+                    setDeedSubmitting(true);
+                    try {
+                      await apiRequest("POST", `/api/cases/${deedCase.id}/judgment-deed`, {
+                        judgmentDeedReceivedDate: deedDate,
+                        objectionWindowDays: Number(deedWindowDays),
+                      });
+                      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                      await refreshCases();
+                      toast({ title: "تم تسجيل استلام الصك" });
+                      setShowDeedDialog(false);
+                      setDeedCase(null);
+                      setDeedDate("");
+                      setDeedWindowDays("30");
+                    } catch (err) {
+                      toast({ title: "تعذّر تسجيل استلام الصك", description: extractApiError(err), variant: "destructive" });
+                    } finally {
+                      setDeedSubmitting(false);
+                    }
+                  }}
+                >
+                  حفظ
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
