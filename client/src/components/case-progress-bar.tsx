@@ -101,6 +101,12 @@ interface CaseProgressBarProps {
   // stage, so the bar can't infer it from currentStage). Optional: with no
   // history the terminal renderer falls back to marking the whole path done.
   stageHistory?: CaseStageTransition[];
+  // The outcome of the ruling the case is sitting on (لصالحنا | ضدنا | جزئي), for
+  // the judgment terminal badges — "محكوم حكم ابتدائي" alone never said WHICH WAY
+  // it went. Resolved by the caller from the case's judgment hearing via the
+  // shared findLatestJudgmentHearing + judgmentDirectionOf; null when no judgment
+  // hearing exists (the badge then falls back to the plain stage label).
+  judgmentDirection?: string | null;
   reviewNotes?: string;
   reviewDecision?: string;
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
@@ -140,6 +146,7 @@ export function CaseProgressBar({
   memoRequired,
   isSettlementCase,
   stageHistory,
+  judgmentDirection,
   reviewNotes,
   reviewDecision,
   eligibleInternalReviewers = [],
@@ -270,10 +277,27 @@ export function CaseProgressBar({
       terminalState = { reachedIndex: conciliationIndex, text: "تم الصلح — تحصيل", tone: "success" };
     } else {
       const badge = TERMINAL_BADGES[normalizedStage];
+      let text = badge?.text ?? getStageLabel(normalizedStage);
+      let tone = badge?.tone ?? "neutral";
+      // JUDGMENT OUTCOME. "محكوم حكم ابتدائي" alone never said WHICH WAY the
+      // ruling went, which is the first thing a lawyer needs. Append it and tone
+      // the badge to the outcome so a loss can't read as a win:
+      //   لصالحنا → green · جزئي → amber (a PARTIAL result, not a defeat —
+      //   the app's existing اعتماد جزئي / hearings-detail idiom) · ضدنا → red.
+      // Falls back to the plain stage label when no judgment hearing is found.
+      if (
+        (normalizedStage === "محكوم_حكم_ابتدائي" || normalizedStage === "محكوم_حكم_نهائي")
+        && judgmentDirection
+      ) {
+        text = `${text} — ${judgmentDirection}`;
+        tone = judgmentDirection === "لصالحنا" ? "success"
+          : judgmentDirection === "جزئي" ? "warning"
+          : "danger";
+      }
       terminalState = {
         reachedIndex: furthestReachedIndex >= 0 ? furthestReachedIndex : stagesOrder.length - 1,
-        text: badge?.text ?? getStageLabel(normalizedStage),
-        tone: badge?.tone ?? "neutral",
+        text,
+        tone,
       };
     }
   }

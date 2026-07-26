@@ -4433,6 +4433,24 @@ export function findPrimaryJudgmentHearing<
   return candidates[0] || null;
 }
 
+// The case's most recent judgment hearing REGARDLESS of finality — the DISPLAY
+// counterpart of findPrimaryJudgmentHearing.
+//
+// Why a sibling and not a flag on the existing one: the two answer different
+// questions and must not drift. findPrimaryJudgmentHearing deliberately filters
+// `!judgmentFinal` because every LOGIC path that uses it (the صك receipt, the
+// appeal-direction branch) is about a PENDING first-instance ruling, so a final
+// judgment must not satisfy it. Showing "which way did the ruling go?" needs the
+// opposite: whatever ruling the case is actually sitting on, primary or final.
+export function findLatestJudgmentHearing<
+  T extends { result?: string | null; hearingDate?: string | null },
+>(hearings: T[]): T | null {
+  const candidates = (hearings || [])
+    .filter((h) => h && h.result === "حكم")
+    .sort((a, b) => String(b.hearingDate || "").localeCompare(String(a.hearingDate || "")));
+  return candidates[0] || null;
+}
+
 // Who would appeal a primary judgment:
 //   لصالحنا      → we won at first instance, so the OPPONENT may appeal.
 //   ضدنا / جزئي  → we are the appellant; filing the لائحة اعتراضية IS our appeal.

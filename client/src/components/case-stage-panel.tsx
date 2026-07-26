@@ -3,12 +3,13 @@ import { CaseProgressBar } from "@/components/case-progress-bar";
 import { useCases } from "@/lib/cases-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
+import { useHearings } from "@/lib/hearings-context";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { caseHasReturnedFromReview } from "@/lib/case-stage-utils";
-import { CaseClassification } from "@shared/schema";
+import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf } from "@shared/schema";
 import type { LawCase, CaseClassificationValue } from "@shared/schema";
 
 // SHARED case stage panel. Wraps the existing <CaseProgressBar> (the proven
@@ -42,6 +43,7 @@ export function CaseStagePanel({
   const { moveToNextStage, moveToPreviousStage, skipDataCompletion, updateCase, approveCase, rejectCase, refreshCases } = useCases();
   const { user, users } = useAuth();
   const { getDepartmentName } = useDepartments();
+  const { getHearingsByCase } = useHearings();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [stageTransitioning, setStageTransitioning] = useState(false);
@@ -58,6 +60,14 @@ export function CaseStagePanel({
       // مشطوبة / محكوم_* …) actually got along its path, since such a case can
       // be closed from any stage and currentStage no longer says where it was.
       stageHistory={caseItem.stageHistory}
+      // Which way the ruling went, for the judgment terminal badges. Resolved
+      // here (not in the bar) because the bar takes no contexts; uses the SHARED
+      // findLatestJudgmentHearing — the display counterpart of
+      // findPrimaryJudgmentHearing, which filters !judgmentFinal and so would
+      // never match a case sitting on محكوم_حكم_نهائي.
+      judgmentDirection={judgmentDirectionOf(
+        findLatestJudgmentHearing(getHearingsByCase(caseItem.id)),
+      )}
       departmentName={getDepartmentName(caseItem.departmentId || "")}
       disabled={
         stageTransitioning
