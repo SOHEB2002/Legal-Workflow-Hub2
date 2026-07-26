@@ -1176,6 +1176,7 @@ export default function ContractsPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="text-center w-[48px]">#</TableHead>
                 <TableHead className="text-center">رقم العقد</TableHead>
                 <TableHead className="text-center">العنوان</TableHead>
                 <TableHead className="text-center">العميل</TableHead>
@@ -1187,7 +1188,7 @@ export default function ContractsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedContracts.map((c) => {
+              {sortedContracts.map((c, idx) => {
                 const priorityGroup = getContractPriorityGroup(c);
                 const rowClass =
                   priorityGroup === 1
@@ -1199,6 +1200,12 @@ export default function ContractsPage() {
                         : "";
                 return (
                 <TableRow key={c.id} data-testid={`row-contract-${c.id}`} className={rowClass}>
+                  {/* Display-only sequential number — index inside the rendered
+                      list, so any filter/search/sort renumbers from 1. This
+                      table is unpaginated, so it is a plain 1..n count. */}
+                  <TableCell className="text-center text-xs text-muted-foreground" data-testid={`cell-index-${c.id}`}>
+                    {idx + 1}
+                  </TableCell>
                   <TableCell className="text-center font-medium">
                     <div className="flex flex-col items-center gap-1">
                       <LtrInline>{c.contractNumber}</LtrInline>
@@ -1372,7 +1379,7 @@ export default function ContractsPage() {
               })}
               {sortedContracts.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     لا توجد عقود مطابقة
                   </TableCell>
                 </TableRow>
