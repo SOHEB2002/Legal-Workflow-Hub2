@@ -45,8 +45,14 @@ export function HearingResultDialog({
     result: "" as string,
     resultDetails: "",
     judgmentSide: "",
-    judgmentFinal: false,
-    objectionFeasible: false,
+    // TRI-STATE, not checkboxes. A checkbox has no way to say "the lawyer
+    // answered NO" as distinct from "the lawyer didn't answer", and that
+    // ambiguity is exactly what let a judgment be saved with both boxes blank —
+    // parking the case at محكوم_حكم_ابتدائي with no deadline, no objection memo
+    // and no forward path. Both are now explicit and required (the server
+    // enforces the same rule and 400s).
+    judgmentDegree: "" as "" | "ابتدائي" | "نهائي",
+    objectionAnswer: "" as "" | "نعم" | "لا",
     // objectionDeadline removed with step 2 — the deadline is derived from the
     // صك receipt date, not entered at the session.
     nextHearingDate: "",
@@ -62,12 +68,29 @@ export function HearingResultDialog({
   // Reset the form each time a new hearing is opened (or the dialog closes).
   useEffect(() => {
     setResultForm({
-      result: "", resultDetails: "", judgmentSide: "", judgmentFinal: false,
-      objectionFeasible: false, nextHearingDate: "",
+      result: "", resultDetails: "", judgmentSide: "",
+      judgmentDegree: "", objectionAnswer: "", nextHearingDate: "",
       nextHearingTime: "", responseRequired: false, opponentResponseRequired: false,
       caseId: "", afterFailedSettlementChoice: "", transferToDepartmentId: "", transferReason: "",
     });
   }, [hearing?.id]);
+
+  // The objection question applies ONLY to a primary judgment that went against
+  // us wholly or partly — it decides whether the لائحة اعتراضية is created at صك
+  // receipt. Mirrors the server rule verbatim.
+  const judgmentNeedsObjectionAnswer =
+    resultForm.result === HearingResult.JUDGMENT
+    && resultForm.judgmentDegree === "ابتدائي"
+    && (resultForm.judgmentSide === "ضدنا" || resultForm.judgmentSide === "جزئي");
+
+  // Submit gate for a judgment: outcome + degree always, plus the objection
+  // answer when it applies. Keeps the button in step with the server's 400s
+  // instead of letting the request fail after the fact.
+  const judgmentInputsComplete =
+    resultForm.result !== HearingResult.JUDGMENT
+    || (!!resultForm.judgmentSide
+        && !!resultForm.judgmentDegree
+        && (!judgmentNeedsObjectionAnswer || !!resultForm.objectionAnswer));
 
   const handleSubmitResult = async () => {
     if (!hearing || !resultForm.result) return;
@@ -109,10 +132,16 @@ export function HearingResultDialog({
         // (persist → the judgment_side column) and :8099 (all downstream routing),
         // so لصالحنا/ضدنا behave identically to before.
         data.judgmentType = resultForm.judgmentSide;
-        data.judgmentFinal = resultForm.judgmentFinal;
+        // Both sent as explicit booleans — the tri-states above guarantee the
+        // lawyer chose, and the submit button stays disabled until they have.
+        data.judgmentFinal = resultForm.judgmentDegree === "نهائي";
         // objectionFeasible stays — it is the lawyer's legal ASSESSMENT, made at
-        // the session and read back later by the صك-receipt handler.
-        data.objectionFeasible = resultForm.objectionFeasible;
+        // the session and read back later by the صك-receipt handler. Sent only
+        // when the question actually applies (primary + ضدنا/جزئي); the server
+        // requires it in exactly that case and ignores it otherwise.
+        if (judgmentNeedsObjectionAnswer) {
+          data.objectionFeasible = resultForm.objectionAnswer === "نعم";
+        }
         // objectionDeadline is NO LONGER sent (step 2): the objection window runs
         // from the day the صك is RECEIVED, days after this session, so it cannot
         // be known here. It is captured by "تسجيل استلام الصك" instead.
@@ -275,9 +304,24 @@ export function HearingResultDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex items-center gap-2">
-                <Checkbox id="judgmentFinal" checked={resultForm.judgmentFinal} onCheckedChange={(checked) => setResultForm({ ...resultForm, judgmentFinal: !!checked })} data-testid="checkbox-judgment-final" />
-                <Label htmlFor="judgmentFinal" className="text-sm cursor-pointer">حكم نهائي (غير قابل للاعتراض)</Label>
+              <div>
+                <Label>درجة الحكم <span className="text-red-500">*</span></Label>
+                <Select
+                  value={resultForm.judgmentDegree}
+                  onValueChange={(value) => setResultForm({
+                    ...resultForm,
+                    judgmentDegree: value as "ابتدائي" | "نهائي",
+                    // Leaving ابتدائي retires the objection question — drop a
+                    // stale answer so it can't be sent for a final judgment.
+                    objectionAnswer: value === "ابتدائي" ? resultForm.objectionAnswer : "",
+                  })}
+                >
+                  <SelectTrigger data-testid="select-judgment-degree"><SelectValue placeholder="اختر درجة الحكم" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ابتدائي">حكم ابتدائي (قابل للاعتراض)</SelectItem>
+                    <SelectItem value="نهائي">حكم نهائي (غير قابل للاعتراض)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               {/* Objection sub-form. Shown for ضدنا AND جزئي: a partial judgment is
                   partially against us, so it can warrant an objection too. This gate
@@ -286,21 +330,34 @@ export function HearingResultDialog({
                   accepted جزئي — the form was the only thing blocking it, so a partial
                   judgment could never set objectionFeasible/objectionDeadline and the
                   server branch could never fire. */}
-              {!resultForm.judgmentFinal
-                && (resultForm.judgmentSide === "ضدنا" || resultForm.judgmentSide === "جزئي") && (
+              {judgmentNeedsObjectionAnswer && (
                 <>
-                  <div className="flex items-center gap-2">
-                    <Checkbox id="objectionFeasible" checked={resultForm.objectionFeasible} onCheckedChange={(checked) => setResultForm({ ...resultForm, objectionFeasible: !!checked })} data-testid="checkbox-objection" />
-                    <Label htmlFor="objectionFeasible" className="text-sm cursor-pointer">يمكن تقديم اعتراض</Label>
+                  <div>
+                    <Label>هل يمكن تقديم اعتراض؟ <span className="text-red-500">*</span></Label>
+                    <Select
+                      value={resultForm.objectionAnswer}
+                      onValueChange={(value) => setResultForm({ ...resultForm, objectionAnswer: value as "نعم" | "لا" })}
+                    >
+                      <SelectTrigger data-testid="select-objection-feasible"><SelectValue placeholder="اختر" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="نعم">نعم — سنقدم اعتراضاً</SelectItem>
+                        <SelectItem value="لا">لا — لن نعترض</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   {/* The objection DEADLINE input was removed here (step 2). The
                       window runs from the day the صك is RECEIVED — days after this
                       session — so it can't be entered now. It is captured by
                       "تسجيل استلام الصك" on the case, which computes
                       receiptDate + window and creates the لائحة اعتراضية then. */}
-                  {resultForm.objectionFeasible && (
+                  {resultForm.objectionAnswer === "نعم" && (
                     <p className="text-xs text-muted-foreground">
                       ستُحدَّد مهلة الاعتراض عند تسجيل استلام الصك، وتُنشأ اللائحة الاعتراضية حينها.
+                    </p>
+                  )}
+                  {resultForm.objectionAnswer === "لا" && (
+                    <p className="text-xs text-muted-foreground">
+                      لن تُنشأ لائحة اعتراضية. سجّل لاحقاً "لم نستأنف — الحكم نهائي" من إجراءات القضية.
                     </p>
                   )}
                 </>
@@ -385,7 +442,7 @@ export function HearingResultDialog({
           })()}
         </div>
         <DialogFooter>
-          <Button data-testid="button-submit-result" onClick={handleSubmitResult} className="w-full" disabled={!resultForm.result || submitting}>
+          <Button data-testid="button-submit-result" onClick={handleSubmitResult} className="w-full" disabled={!resultForm.result || !judgmentInputsComplete || submitting}>
             {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
             حفظ النتيجة
           </Button>

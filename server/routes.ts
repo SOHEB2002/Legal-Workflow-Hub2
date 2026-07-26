@@ -71,6 +71,9 @@ import {
   recordJudgmentDeedSchema,
   appealOutcomeSchema,
   DefaultObjectionWindowDays,
+  findPrimaryJudgmentHearing,
+  judgmentDirectionOf,
+  weAreTheAppellant,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -1241,16 +1244,9 @@ async function promoteCaseOnObjectionFiled(
   }
 }
 
-// The primary judgment a صك receipt belongs to: the case's most recent hearing
-// whose result is حكم and which is NOT final. Its judgment_side + objection_feasible
-// are what decide whether an objection memo is due — the assessment the lawyer
-// made at the session, read back at receipt time.
-function findPrimaryJudgmentHearing(hearings: Array<Record<string, any>>): Record<string, any> | null {
-  const candidates = hearings
-    .filter((h) => h.result === "حكم" && !h.judgmentFinal)
-    .sort((a, b) => String(b.hearingDate || "").localeCompare(String(a.hearingDate || "")));
-  return candidates[0] || null;
-}
+// findPrimaryJudgmentHearing moved to shared/schema.ts — the cases UI needs the
+// IDENTICAL rule to render the appeal-outcome branch, and two copies would drift
+// into the UI offering a button the server rejects.
 
 // Is this field task one of the two POST-JUDGMENT tasks whose completion ends
 // the case? Matched on the title prefix, the same discriminator getMyTasks uses
@@ -5124,6 +5120,24 @@ export async function registerRoutes(
         return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
       }
 
+      // WHO would appeal depends on the judgment direction. When the primary
+      // judgment went against us (ضدنا/جزئي) WE are the appellant — our appeal is
+      // FILING the لائحة اعتراضية, which moves the case on its own — so
+      // "الخصم استأنف" is meaningless and is rejected here. The UI hides the
+      // button in that direction, and this keeps visibility === authorization on
+      // both sides rather than only in the client.
+      //
+      // Direction UNKNOWN (no primary-judgment hearing on the case — e.g. the
+      // stage was set by a direct PATCH) → NOT rejected: we cannot prove the
+      // action wrong, and the UI correspondingly still offers both buttons.
+      const outcomeHearings = await storage.getHearingsByCase(lawCase.id);
+      const judgmentDirection = judgmentDirectionOf(findPrimaryJudgmentHearing(outcomeHearings));
+      if (outcome === "opponent_appealed" && weAreTheAppellant(judgmentDirection)) {
+        return res.status(400).json({
+          error: "الحكم الابتدائي ليس لصالحنا — الاستئناف من طرفنا يتم برفع اللائحة الاعتراضية، لا بتسجيل استئناف الخصم",
+        });
+      }
+
       const performer = await storage.getUser(reqUser.id);
       const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
 
@@ -8836,6 +8850,30 @@ export async function registerRoutes(
           // Validate required fields
           if (!judgmentType) {
             return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
+          }
+
+          // MANDATORY, EXPLICIT judgment inputs. Before this, judgmentFinal was
+          // read as `data.judgmentFinal ?? false` and objectionFeasible was never
+          // validated at all — so a judgment saved with both boxes unticked parked
+          // the case at محكوم_حكم_ابتدائي with no objection memo, no deadline and no
+          // forward path: a silent dead end. An unticked checkbox cannot express
+          // "the lawyer answered NO" as distinct from "the lawyer didn't answer",
+          // so both answers are now required to arrive as explicit booleans and
+          // the dialog sends them from tri-state selects.
+          //
+          // Skipped on an appeal hearing: isAppealStage forces isFinal = true, so
+          // there is no degree to choose.
+          if (!isAppealStage && typeof data.judgmentFinal !== "boolean") {
+            return res.status(400).json({ error: "يجب تحديد درجة الحكم (ابتدائي أم نهائي)" });
+          }
+          // Only a PRIMARY judgment that went against us (wholly or partly) raises
+          // the objection question — it decides whether the لائحة اعتراضية is
+          // created at صك receipt. A final judgment, or a primary one in our
+          // favour, has nothing to object to on our side.
+          if (!isFinal && (judgmentType === "ضدنا" || judgmentType === "جزئي")) {
+            if (typeof data.objectionFeasible !== "boolean") {
+              return res.status(400).json({ error: "يجب تحديد ما إذا كان يمكن تقديم اعتراض على الحكم الابتدائي" });
+            }
           }
 
           if (isFinal) {

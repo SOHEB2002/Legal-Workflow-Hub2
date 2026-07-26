@@ -77,6 +77,9 @@ import {
   CaseClassification,
   Priority,
   getStageLabel,
+  findPrimaryJudgmentHearing,
+  judgmentDirectionOf,
+  weAreTheAppellant,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, Attachment } from "@shared/schema";
 
@@ -1746,24 +1749,50 @@ export function CaseDetailsDialog({
                         </Button>
                       </div>
                     )}
-                    {actions?.canRecordAppealOutcome && (
-                      <div className="flex items-center justify-between p-3 rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20">
-                        <div>
-                          <p className="font-medium text-sm text-orange-700 dark:text-orange-400">نتيجة مهلة الاعتراض</p>
-                          <p className="text-xs text-muted-foreground">
-                            سجّل ما إذا كان الخصم قد استأنف الحكم الابتدائي أم انتهت المهلة دون استئناف
-                          </p>
+                    {actions?.canRecordAppealOutcome && (() => {
+                      // WHO would appeal depends on the judgment direction, read
+                      // from the case's own primary-judgment hearing via the SAME
+                      // shared helper the server enforces with — so the UI can
+                      // never offer a button the endpoint rejects.
+                      //   لصالحنا     → the OPPONENT may appeal → both buttons.
+                      //   ضدنا/جزئي  → WE are the appellant, and our appeal IS
+                      //                filing the لائحة اعتراضية (which moves the
+                      //                case by itself) → "الخصم استأنف" is
+                      //                nonsense, so only the final-judgment button.
+                      //   unknown    → no primary-judgment hearing found; we can't
+                      //                prove either wrong, so BOTH are offered and
+                      //                the row says the direction is undetermined
+                      //                (the server likewise doesn't reject).
+                      const direction = judgmentDirectionOf(
+                        findPrimaryJudgmentHearing(getHearingsByCase(selectedCase.id)),
+                      );
+                      const weAppeal = weAreTheAppellant(direction);
+                      return (
+                        <div className="flex items-center justify-between p-3 rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+                          <div>
+                            <p className="font-medium text-sm text-orange-700 dark:text-orange-400">نتيجة مهلة الاعتراض</p>
+                            <p className="text-xs text-muted-foreground">
+                              {weAppeal
+                                ? "الحكم ليس لصالحنا — الاستئناف من طرفنا يتم برفع اللائحة الاعتراضية. سجّل هنا إن قررنا عدم الاستئناف."
+                                : direction === "لصالحنا"
+                                ? "الحكم لصالحنا — سجّل ما إذا كان الخصم قد استأنف أم انتهت المهلة دون استئناف"
+                                : "تعذّر تحديد اتجاه الحكم (لا توجد جلسة حكم ابتدائي مسجّلة) — اختر ما ينطبق"}
+                            </p>
+                          </div>
+                          <div className="flex gap-2 shrink-0">
+                            {!weAppeal && (
+                              <Button size="sm" variant="outline" className="border-orange-500 text-orange-600 hover:bg-orange-50" data-testid={`button-opponent-appealed-${selectedCase.id}`} onClick={() => { actions.onOpponentAppealed(); }}>
+                                <Gavel className="w-4 h-4 ml-1" />الخصم استأنف
+                              </Button>
+                            )}
+                            <Button size="sm" variant="outline" className="border-green-500 text-green-600 hover:bg-green-50" data-testid={`button-no-appeal-${selectedCase.id}`} onClick={() => { actions.onNoAppeal(); }}>
+                              <CheckCircle className="w-4 h-4 ml-1" />
+                              {weAppeal ? "لم نستأنف" : "لم يستأنف"}
+                            </Button>
+                          </div>
                         </div>
-                        <div className="flex gap-2 shrink-0">
-                          <Button size="sm" variant="outline" className="border-orange-500 text-orange-600 hover:bg-orange-50" data-testid={`button-opponent-appealed-${selectedCase.id}`} onClick={() => { actions.onOpponentAppealed(); }}>
-                            <Gavel className="w-4 h-4 ml-1" />الخصم استأنف
-                          </Button>
-                          <Button size="sm" variant="outline" className="border-green-500 text-green-600 hover:bg-green-50" data-testid={`button-no-appeal-${selectedCase.id}`} onClick={() => { actions.onNoAppeal(); }}>
-                            <CheckCircle className="w-4 h-4 ml-1" />لم يستأنف
-                          </Button>
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                     {actions?.canReopen && (
                       <div className="flex items-center justify-between p-3 rounded-lg border border-green-200 bg-green-50 dark:bg-green-950/20">
                         <div>
