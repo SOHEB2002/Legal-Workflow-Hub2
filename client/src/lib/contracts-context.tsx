@@ -41,6 +41,11 @@ interface ContractsContextType {
   skipCommittee: (id: string, reason: string) => Promise<void>;
   recordTakeNotesOutcome: (id: string, outcome: NoteOutcomeValue, notes?: string) => Promise<void>;
   earlyCloseContract: (id: string, reason: string) => Promise<void>;
+  // Re-open a CLOSED contract for a client follow-up question
+  // ("استشارة تعقيبية"). question MANDATORY — the server 400s on empty.
+  // Returns the authoritative updated row so the caller can sync the open
+  // details dialog directly (same as the consultations-side handler).
+  startContractFollowUp: (id: string, question: string) => Promise<Contract>;
   pauseContract: (id: string, reason: string) => Promise<void>;
   unpauseContract: (id: string, notes?: string) => Promise<void>;
   awaitCompletion: (id: string, reason: string) => Promise<void>;
@@ -167,6 +172,16 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
     apply(updated);
   };
 
+  // Server returns the raw contract (like early-close/skip-committee), not a
+  // { contract } envelope. Returned to the caller as well as applied to the
+  // list, so the details dialog can sync against the freshest payload.
+  const startContractFollowUp = async (id: string, question: string): Promise<Contract> => {
+    const res = await apiRequest("POST", `/api/contracts/${id}/start-follow-up`, { question });
+    const updated = (await res.json()) as Contract;
+    apply(updated);
+    return updated;
+  };
+
   const pauseContract = async (id: string, reason: string): Promise<void> => {
     const res = await apiRequest("POST", `/api/contracts/${id}/pause`, { reason });
     const updated = (await res.json()) as Contract;
@@ -213,6 +228,7 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
         skipCommittee,
         recordTakeNotesOutcome,
         earlyCloseContract,
+        startContractFollowUp,
         pauseContract,
         unpauseContract,
         awaitCompletion,

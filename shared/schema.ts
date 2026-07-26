@@ -444,6 +444,16 @@ export const contracts = pgTable("contracts", {
   // stage). Mirrors lawCases.dataCompletionLastAckAt — the unified-tasks feed
   // suppresses the data_completion_contract task for 2 days after each ack.
   dataCompletionLastAckAt: timestamp("data_completion_last_ack_at"),
+  // Follow-up cycles ("استشارة تعقيبية" on a contract). Mirrors
+  // consultations.followUpCount / followUpStartedAt EXACTLY: when a closed
+  // contract is re-opened for a client follow-up question, the row stays the
+  // same — only status/currentStage flip and followUpCount increments.
+  // NOT NULL + default 0 so existing rows backfill cleanly.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — see the ALTER statements in the
+  // commit message; both DBs must have these columns BEFORE this code serves
+  // traffic, because drizzle selects declared columns explicitly.
+  followUpCount:     integer("follow_up_count").notNull().default(0),
+  followUpStartedAt: timestamp("follow_up_started_at"),
   createdBy:          varchar("created_by", { length: 255 }).notNull(),
   createdAt:          timestamp("created_at").defaultNow(),
   updatedAt:          timestamp("updated_at").defaultNow(),
@@ -2827,6 +2837,30 @@ export function remapContractStageForType(
   return ContractStage.RECEIVED;
 }
 
+// ============ Contract follow-up cycle ("استشارة تعقيبية") ============
+// Direct mirror of isInFollowUpCycle on the consultations side. A closed
+// contract can be re-opened on the SAME record for a client follow-up
+// question (followUpCount bumps, status flips to active, currentStage
+// resets to RECEIVED).
+//
+// ⚠ DELIBERATE DIVERGENCE from consultations: there is NO contract
+// equivalent of getStagesForConsultationCycle / ConsultationCycleStages*.
+// Consultations collapse a follow-up round into a 3-stage mini-flow whose
+// shape is chosen by consultationType — contracts have a SINGLE stage flow
+// (getContractStagesForType is type-agnostic by design), so there is no
+// per-type shape to pick and inventing a contract mini-flow would be new
+// workflow design, not a mirror. A re-opened contract therefore runs the
+// normal 8-stage path from استلام.
+//
+// Status-gated exactly like the consultation helper, so a CLOSED row that
+// carries followUpCount > 0 (a finished cycle) reports false.
+export function isContractInFollowUpCycle(
+  c: { followUpCount?: number | null; status?: string | null } | null | undefined,
+): boolean {
+  if (!c) return false;
+  return (c.followUpCount ?? 0) > 0 && c.status === "active";
+}
+
 export const ContractStatus = {
   ACTIVE: "active",
   PAUSED: "paused",
@@ -2944,6 +2978,12 @@ export const ContractActivityType = {
   REVIEWER_ASSIGNED:        "reviewer_assigned",
   PRIORITY_SET:             "priority_set",
   SENT:                     "contract_sent",
+  // A closed contract was re-opened for a client follow-up question
+  // ("استشارة تعقيبية"). Same token as ConsultationActivityType.FOLLOW_UP_STARTED
+  // — the two logs are separate tables, so reusing the value keeps the two
+  // mechanisms readable side by side. Type-only: activity_type is free text
+  // → no migration for THIS constant (the two contract COLUMNS do need one).
+  FOLLOW_UP_STARTED:        "follow_up_started",
 } as const;
 
 export type ContractActivityTypeValue =
@@ -2974,6 +3014,7 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   reviewer_assigned:      "تعيين مراجع داخلي",
   priority_set:           "تحديث الأولوية",
   contract_sent:          "إرسال العقد",
+  follow_up_started:      "بدء استشارة تعقيبية",
 };
 
 export interface Contract {
@@ -2999,6 +3040,11 @@ export interface Contract {
   awaitingCompletion: boolean;
   savedStage: string | null;
   dataCompletionLastAckAt: string | null;
+  // Follow-up cycle counters — mirror Consultation.followUpCount /
+  // followUpStartedAt. followUpCount is NOT NULL default 0 in the column, so
+  // it is a plain number here (never null), same as the consultation side.
+  followUpCount: number;
+  followUpStartedAt: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -4401,6 +4447,13 @@ export const assignConsultationSchema = z.object({
 }).passthrough();
 
 export const startConsultationFollowUpSchema = z.object({
+  question: z.string().optional(),
+}).passthrough();
+
+// POST /api/contracts/:id/start-follow-up. Byte-for-byte the same tolerant
+// Pattern-A gate as the consultation schema above — type check only; the
+// handler keeps its own Arabic 400 for the empty-question case.
+export const startContractFollowUpSchema = z.object({
   question: z.string().optional(),
 }).passthrough();
 
