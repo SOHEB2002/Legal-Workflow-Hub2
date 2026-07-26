@@ -845,7 +845,11 @@ export default function MyTasksPage() {
     // terminal stage, so the progress bar shows a badge and no advance button.
     // Deep-link to the case instead (/cases?openCase=<id>, cases.tsx:451-473).
     if (task.id.startsWith("judgment_deed:")) {
-      setLocation(`/cases?openCase=${task.caseId || task.entityId}`);
+      // &action=judgment-deed auto-opens the صك receipt dialog on arrival, so the
+      // button performs the ACTION instead of dropping the user in the case file
+      // to hunt for it in the الإجراءات tab. cases.tsx re-checks the stage and the
+      // permission before opening, and falls back to just showing the case.
+      setLocation(`/cases?openCase=${task.caseId || task.entityId}&action=judgment-deed`);
       return;
     }
     if (isCaseStageKind(task)) {

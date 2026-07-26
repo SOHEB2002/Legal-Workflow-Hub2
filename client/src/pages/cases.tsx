@@ -454,6 +454,7 @@ export default function CasesPage() {
   // pending id is resolved by the second effect below once cases load.
   // Param is stripped from the URL so a refresh doesn't re-open the dialog.
   const [pendingOpenCaseId, setPendingOpenCaseId] = useState<string | null>(null);
+  const [pendingOpenAction, setPendingOpenAction] = useState<string | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const s = params.get("status");
@@ -469,8 +470,15 @@ export default function CasesPage() {
     const openCaseId = params.get("openCase");
     if (openCaseId) {
       setPendingOpenCaseId(openCaseId);
+      // Optional companion param: which ACTION to open once the case resolves.
+      // Extends the existing deep-link rather than adding a second mechanism —
+      // the مهامي "متابعة" button on the صك follow-up task uses
+      // ?openCase=<id>&action=judgment-deed so it lands on the action itself
+      // instead of dropping the user in the case file to hunt for it.
+      setPendingOpenAction(params.get("action"));
       const url = new URL(window.location.href);
       url.searchParams.delete("openCase");
+      url.searchParams.delete("action");
       window.history.replaceState({}, "", url);
     }
   }, []);
@@ -1023,9 +1031,22 @@ export default function CasesPage() {
     const c = cases.find((x) => x.id === pendingOpenCaseId);
     if (c) {
       openDetailsDialog(c);
+      // ?action=judgment-deed → open the صك receipt dialog straight away, so the
+      // مهامي "متابعة" button lands on the ACTION rather than on the case file.
+      // GUARDED: only when the case is still at محكوم_حكم_ابتدائي and the user is
+      // actually authorized. If the receipt was already recorded (or anyone else
+      // moved the case on) the deep-link degrades to "just open the case" instead
+      // of popping a dialog whose endpoint would 400.
+      if (pendingOpenAction === "judgment-deed" && canRecordJudgmentDeed(c)) {
+        setDeedCase(c);
+        setDeedDate(c.judgmentDeedReceivedDate || "");
+        setDeedWindowDays(String(c.objectionWindowDays ?? 30));
+        setShowDeedDialog(true);
+      }
       setPendingOpenCaseId(null);
+      setPendingOpenAction(null);
     }
-  }, [pendingOpenCaseId, cases]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pendingOpenCaseId, pendingOpenAction, cases]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The source-consultation back-link lookup moved into <CaseDetailsDialog> along
   // with the banner that renders it.
