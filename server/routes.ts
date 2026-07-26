@@ -47,6 +47,7 @@ import {
   ContractStage,
   ContractStagesAll,
   ContractStageLabels,
+  ContractStatus,
   ContractType,
   ContractTypeLabels,
   ContractActivityType,
@@ -103,6 +104,7 @@ import {
   workflowOutcomeSchema,
   assignConsultationSchema,
   startConsultationFollowUpSchema,
+  startContractFollowUpSchema,
   updateConsultationSchema,
   assignContractSchema,
   advanceContractStageSchema,
@@ -7015,6 +7017,115 @@ export async function registerRoutes(
         performedBy: reqUser.id,
       });
       if (!updated) return res.status(500).json({ error: "فشل الإغلاق المبكر" });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/contracts/:id/start-follow-up
+  // Re-opens a CLOSED contract into a follow-up cycle ("استشارة تعقيبية"),
+  // mirroring POST /api/consultations/:id/start-follow-up field-for-field.
+  // Same row: status flips back to active, currentStage resets to RECEIVED,
+  // followUpCount increments, followUpStartedAt is stamped, and the previous
+  // closure metadata (closedAt / closureReason*) plus stale pause/await
+  // fields are cleared so the row doesn't carry the old cycle forward. The
+  // activity log preserves the full history — the closure entry stays put and
+  // the follow-up entry is appended.
+  //
+  // TWO DELIBERATE DIVERGENCES from the consultation handler, both forced by
+  // what contracts actually have:
+  //   1. NO expectedDeliveryDate recompute — contracts have no SLA column
+  //      (no expectedDeliveryDate / category on the contracts table), so
+  //      there is no SLA window to refresh.
+  //   2. Role gate follows the CONTRACTS convention, not the consultations
+  //      one — see the comment on the gate below.
+  app.post("/api/contracts/:id/start-follow-up", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+
+      // Role gate — CONTRACTS convention (the early-close / pause-like set),
+      // NOT the consultations one. The consultation endpoint is admin-only
+      // (admin_support | branch_manager) because on that module closing is
+      // itself an admin-only step, so re-opening matches its closer. On
+      // contracts, closing is NOT admin-only: /early-close is open to
+      // branch_manager | admin_support | own-dept department_head | the
+      // assigned lawyer. Importing the narrower consultations gate would mean
+      // an own-dept head or the assigned lawyer could CLOSE a contract but
+      // not re-open the one they just closed. Gate restated verbatim from
+      // /early-close above, including its non-empty-departmentId guard so a
+      // null-dept head can't match a null-dept contract.
+      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
+      const allowed =
+        ["admin_support", "branch_manager"].includes(reqUser.role) ||
+        (reqUser.role === "department_head"
+          && !!reqUser.departmentId
+          && !!contract.departmentId
+          && contract.departmentId === reqUser.departmentId) ||
+        isAssigned;
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لبدء استشارة تعقيبية" });
+      }
+
+      if (contract.status !== "closed") {
+        return res.status(400).json({ error: "يمكن بدء التعقيبية فقط من عقد مغلق" });
+      }
+
+      // The cycle question is the client's new follow-up inquiry. Stored in
+      // the activity-log metadata only (no new column) — the UI reads the
+      // latest FOLLOW_UP_STARTED entry to surface it during the cycle.
+      // Pattern-A gate: type check only; the handler check below stays.
+      const bodyCheck = startContractFollowUpSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const question = String(req.body?.question ?? "").trim();
+      if (!question) {
+        return res.status(400).json({ error: "السؤال مطلوب لبدء استشارة تعقيبية" });
+      }
+
+      const nextCount = (contract.followUpCount ?? 0) + 1;
+
+      const updated = await storage.updateContractAndLog(
+        contract.id,
+        {
+          status: ContractStatus.ACTIVE,
+          currentStage: ContractStage.RECEIVED,
+          followUpCount: nextCount,
+          followUpStartedAt: new Date().toISOString(),
+          // Clear previous closure metadata — it described the prior
+          // lifecycle, not the new cycle.
+          closedAt: null,
+          closureReason: null,
+          closureReasonOther: null,
+          // Defensive cleanup — clear any stale pause/await state the row
+          // might carry from before its original closure so the new cycle
+          // starts cleanly. Same list as the consultation handler.
+          pausedAt: null,
+          pausedBy: null,
+          pauseReason: null,
+          awaitingCompletion: false,
+          savedStage: null,
+        },
+        {
+          activityType: ContractActivityType.FOLLOW_UP_STARTED,
+          // Description carries a truncated preview so the timeline reads
+          // naturally without expanding; the full question lives in
+          // metadata.followUpQuestion and is surfaced in the detail dialog.
+          description: `بدء استشارة تعقيبية #${nextCount}: ${question.slice(0, 80)}${question.length > 80 ? "..." : ""}`,
+          metadata: {
+            followUpCount: nextCount,
+            followUpQuestion: question,
+            fromStage: contract.currentStage,
+          },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل بدء التعقيبية" });
       res.json(updated);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

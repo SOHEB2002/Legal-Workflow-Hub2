@@ -865,6 +865,11 @@ function mapDbContract(row: any): Contract {
     awaitingCompletion: row.awaitingCompletion ?? false,
     savedStage: row.savedStage ?? null,
     dataCompletionLastAckAt: toISOStringOrNull(row.dataCompletionLastAckAt),
+    // Follow-up cycle — mirrors mapDbConsultation. The column is NOT NULL
+    // default 0; `?? 0` keeps the mapper's shape identical to the
+    // consultation side and safe for any row that predates the backfill.
+    followUpCount: row.followUpCount ?? 0,
+    followUpStartedAt: toISOStringOrNull(row.followUpStartedAt),
     createdBy: row.createdBy,
     createdAt: toISOString(row.createdAt),
     updatedAt: toISOString(row.updatedAt),
@@ -5498,6 +5503,11 @@ export class DatabaseStorage implements IStorage {
       pausedAt: null,
       awaitingCompletion: false,
       savedStage: null,
+      // Explicit rather than relying on the column default, so the object
+      // returned by mapDbContract(newContract) below (which reads this local
+      // object, not a re-SELECT) carries the same shape as a fetched row.
+      followUpCount: 0,
+      followUpStartedAt: null,
       createdBy,
       createdAt: now,
       updatedAt: now,
@@ -5542,11 +5552,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined> {
-    const { createdAt, updatedAt, closedAt, dataCompletionLastAckAt, ...rest } = data;
+    const { createdAt, updatedAt, closedAt, dataCompletionLastAckAt, followUpStartedAt, ...rest } = data;
     const update: any = { ...rest, updatedAt: new Date() };
     if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
     if (dataCompletionLastAckAt !== undefined) {
       update.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
+    }
+    // Date-mode column, ISO string on the interface — same conversion the
+    // closedAt idiom does (Phase-3 3C / S3 archivedAt lesson: letting a raw
+    // string reach a date-mode column throws inside drizzle).
+    if (followUpStartedAt !== undefined) {
+      update.followUpStartedAt = followUpStartedAt ? new Date(followUpStartedAt) : null;
     }
     await db.update(contracts).set(update).where(eq(contracts.id, id));
     return this.getContractById(id);
@@ -5560,10 +5576,15 @@ export class DatabaseStorage implements IStorage {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
       if (!existing) return undefined;
-      const { createdAt, updatedAt, closedAt, ...rest } = data;
+      const { createdAt, updatedAt, closedAt, followUpStartedAt, ...rest } = data;
       const now = new Date();
       const update: any = { ...rest, updatedAt: now };
       if (closedAt !== undefined) update.closedAt = closedAt ? new Date(closedAt) : null;
+      // Date-mode column — same conversion as closedAt. Mirrors the
+      // followUpStartedAt handling in updateConsultationAndLog.
+      if (followUpStartedAt !== undefined) {
+        update.followUpStartedAt = followUpStartedAt ? new Date(followUpStartedAt) : null;
+      }
       await tx.update(contracts).set(update).where(eq(contracts.id, id));
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),

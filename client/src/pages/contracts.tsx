@@ -25,7 +25,7 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
-  Upload, Download, FileIcon, Paperclip, Eye,
+  Upload, Download, FileIcon, Paperclip, Eye, RotateCw,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -38,6 +38,7 @@ import {
   ContractPriority, ContractPriorityLabels,
   ContractAttachmentSlot, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
+  ContractActivityType, isContractInFollowUpCycle,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
 import { useClients } from "@/lib/clients-context";
@@ -241,7 +242,7 @@ export default function ContractsPage() {
     contracts, addContract, updateContract, deleteContract,
     assignContract, advanceStage, returnStage,
     submitInternalReview, submitCommitteeDecision, skipCommittee, recordTakeNotesOutcome,
-    earlyCloseContract, pauseContract, unpauseContract,
+    earlyCloseContract, startContractFollowUp, pauseContract, unpauseContract,
     awaitCompletion, resumeFromCompletion, skipCompletion,
     refreshContracts,
   } = useContracts();
@@ -885,6 +886,39 @@ export default function ContractsPage() {
     return false;
   };
 
+  // FE permission gate mirroring POST /api/contracts/:id/start-follow-up.
+  // Restates the SERVER rule verbatim → visibility == authorization. Note it
+  // is the same actor set as canEarlyClose above (the contracts convention),
+  // NOT the narrower admin-only gate the consultations follow-up uses: on
+  // contracts an own-dept head / the assigned lawyer can close, so they must
+  // be able to re-open. Only difference from canEarlyClose is the status
+  // check — closed instead of active.
+  const canStartFollowUp = (c: Contract): boolean => {
+    if (!user) return false;
+    if (c.status !== "closed") return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head"
+      && !!user.departmentId
+      && !!c.departmentId
+      && user.departmentId === c.departmentId) return true;
+    if (!!c.assignedTo && c.assignedTo === user.id) return true;
+    return false;
+  };
+
+  const [showFollowUp, setShowFollowUp] = useState(false);
+  const [followUpTarget, setFollowUpTarget] = useState<Contract | null>(null);
+  const [followUpQuestion, setFollowUpQuestion] = useState("");
+  const openFollowUpDialog = (c: Contract) => {
+    setFollowUpTarget(c);
+    setFollowUpQuestion("");
+    setShowFollowUp(true);
+  };
+  const closeFollowUpDialog = () => {
+    setShowFollowUp(false);
+    setFollowUpTarget(null);
+    setFollowUpQuestion("");
+  };
+
   const [busy, setBusy] = useState(false);
   const wrap = async (fn: () => Promise<void>, successMsg: string) => {
     setBusy(true);
@@ -894,6 +928,36 @@ export default function ContractsPage() {
       toast({ title: successMsg });
     } catch (err) {
       toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Mirrors handleStartFollowUp on the consultations page: the endpoint
+  // returns the authoritative updated row, so sync the open details dialog
+  // against it directly rather than waiting for the list refetch to
+  // re-resolve `selected` (otherwise the dialog briefly renders the stale
+  // closed row — no badge, button still showing).
+  const handleStartFollowUp = async () => {
+    if (!followUpTarget) return;
+    const question = followUpQuestion.trim();
+    if (!question) {
+      toast({ title: "اكتب السؤال أو الاستفسار الجديد", variant: "destructive" });
+      return;
+    }
+    const nextNum = (followUpTarget.followUpCount ?? 0) + 1;
+    const targetId = followUpTarget.id;
+    setBusy(true);
+    try {
+      const updated = await startContractFollowUp(targetId, question);
+      await refreshContracts();
+      // Guard against a stale fire — the user could have switched dialogs
+      // mid-flight. Only sync if it's still the same row.
+      if (selected?.id === targetId) setSelected(updated);
+      toast({ title: `تم بدء التعقيبية #${nextNum}` });
+      closeFollowUpDialog();
+    } catch (err) {
+      toast({ title: "فشل بدء التعقيبية", description: extractApiError(err), variant: "destructive" });
     } finally {
       setBusy(false);
     }
@@ -1397,10 +1461,54 @@ export default function ContractsPage() {
             <DialogTitle className="flex items-center gap-2">
               <span>تفاصيل العقد</span>
               {selected && <LtrInline>{selected.contractNumber}</LtrInline>}
+              {/* Follow-up cycle badge — mirrors badge-consultation-follow-up
+                  in the consultations detail dialog, including the
+                  status-agnostic `followUpCount > 0` condition so a finished
+                  cycle still shows which round the contract reached. */}
+              {selected && (selected.followUpCount ?? 0) > 0 && (
+                <Badge
+                  variant="outline"
+                  className="border-blue-500 bg-blue-500/10 text-blue-700 text-xs"
+                  data-testid="badge-contract-follow-up"
+                  title="استشارة تعقيبية"
+                >
+                  تعقيبية #{selected.followUpCount}
+                </Badge>
+              )}
             </DialogTitle>
           </DialogHeader>
           {selected && (
             <div className="space-y-4">
+              {/* Cycle question card. Visible only on an ACTIVE cycle — reads
+                  the freshest FOLLOW_UP_STARTED entry from the activity list
+                  (the endpoint returns them DESC by performedAt; .find() picks
+                  the newest). metadata.followUpQuestion is written by
+                  /start-follow-up. Direct mirror of banner-follow-up-question
+                  on the consultations page. */}
+              {isContractInFollowUpCycle(selected) && (() => {
+                const latest = activities.find(
+                  (a) => a.activityType === ContractActivityType.FOLLOW_UP_STARTED,
+                );
+                const question = latest?.metadata?.followUpQuestion;
+                if (!question) return null;
+                return (
+                  <div
+                    className="rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-900"
+                    data-testid="banner-contract-follow-up-question"
+                  >
+                    <div className="flex items-center gap-2 font-medium text-blue-800">
+                      <RotateCw className="w-4 h-4" />
+                      السؤال التعقيبي الحالي
+                      <span className="text-xs opacity-80">
+                        (تعقيبية #{selected.followUpCount})
+                      </span>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap break-words">
+                      <BidiText>{String(question)}</BidiText>
+                    </p>
+                  </div>
+                );
+              })()}
               <ContractStagesBar currentStage={selected.currentStage} />
 
               {/* Action row */}
@@ -1494,6 +1602,22 @@ export default function ContractsPage() {
                     onClick={() => { setEarlyCloseTarget(selected); setEarlyCloseReason(""); setShowEarlyClose(true); }}>
                     <XCircle className="w-4 h-4 ml-1" />
                     إغلاق مبكر
+                  </Button>
+                )}
+                {/* Re-open a closed contract for a client follow-up question.
+                    Sits directly after إغلاق مبكر — the same relative slot the
+                    consultations dialog uses (its follow-up button follows its
+                    early-close button). Gate restates the server rule. */}
+                {canStartFollowUp(selected) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-blue-500 text-blue-600 hover:bg-blue-50"
+                    data-testid={`dialog-button-start-follow-up-${selected.id}`}
+                    onClick={() => openFollowUpDialog(selected)}
+                  >
+                    <RotateCw className="w-4 h-4 ml-1" />
+                    استشارة تعقيبية
                   </Button>
                 )}
                 {selected.status === "active" && !selected.awaitingCompletion && canPause(selected, user) && (
@@ -2378,6 +2502,51 @@ export default function ContractsPage() {
               }}
               disabled={!earlyCloseReason.trim() || busy}
             >تأكيد الإغلاق</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============ Start-follow-up dialog ("استشارة تعقيبية") ============
+          Same content as the consultations dialog — required Textarea for the
+          client's new question, count in the title, blue confirm. Built on
+          <Dialog> rather than the consultations page's <AlertDialog> to match
+          the CONTRACTS convention: every workflow dialog on this page
+          (pause / await / early-close / assign / advance) is a Dialog, and
+          AlertDialog is reserved here for the delete confirmation. The body
+          text is copied verbatim minus the SLA sentence — contracts have no
+          expectedDeliveryDate to renew. */}
+      <Dialog open={showFollowUp} onOpenChange={(open) => { if (!open) closeFollowUpDialog(); }}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCw className="w-5 h-5 text-blue-600" />
+              بدء استشارة تعقيبية #{(followUpTarget?.followUpCount ?? 0) + 1}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              سيتم فتح العقد من جديد في مرحلة الاستلام.
+            </p>
+            <Label>السؤال أو الاستفسار الجديد <span className="text-red-500">*</span></Label>
+            <Textarea
+              data-testid="input-contract-follow-up-question"
+              value={followUpQuestion}
+              onChange={(e) => setFollowUpQuestion(e.target.value)}
+              placeholder="اكتب السؤال الذي طرحه العميل..."
+              rows={4}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeFollowUpDialog}>إلغاء</Button>
+            <Button
+              data-testid="button-confirm-start-contract-follow-up"
+              onClick={handleStartFollowUp}
+              disabled={busy || !followUpQuestion.trim()}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <RotateCw className="w-4 h-4 ml-1" />
+              بدء
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
