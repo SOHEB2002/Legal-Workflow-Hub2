@@ -2545,7 +2545,11 @@ export default function ConsultationsPage() {
                         </span>
                       )}
                     </div>
-                    <p className="mt-1 whitespace-pre-wrap break-words">
+                    {/* Same legibility fix as the contracts banner: the
+                        inherited text-blue-900 is near-invisible on the
+                        blue-500/10 tint in the dark theme. Heading keeps its
+                        blue styling; the question body reads as foreground. */}
+                    <p className="mt-1 whitespace-pre-wrap break-words text-foreground">
                       <BidiText>{String(question)}</BidiText>
                     </p>
                   </div>
