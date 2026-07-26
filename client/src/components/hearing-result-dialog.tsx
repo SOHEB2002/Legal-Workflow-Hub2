@@ -47,7 +47,8 @@ export function HearingResultDialog({
     judgmentSide: "",
     judgmentFinal: false,
     objectionFeasible: false,
-    objectionDeadline: "",
+    // objectionDeadline removed with step 2 — the deadline is derived from the
+    // صك receipt date, not entered at the session.
     nextHearingDate: "",
     nextHearingTime: "",
     responseRequired: false,
@@ -62,7 +63,7 @@ export function HearingResultDialog({
   useEffect(() => {
     setResultForm({
       result: "", resultDetails: "", judgmentSide: "", judgmentFinal: false,
-      objectionFeasible: false, objectionDeadline: "", nextHearingDate: "",
+      objectionFeasible: false, nextHearingDate: "",
       nextHearingTime: "", responseRequired: false, opponentResponseRequired: false,
       caseId: "", afterFailedSettlementChoice: "", transferToDepartmentId: "", transferReason: "",
     });
@@ -109,8 +110,12 @@ export function HearingResultDialog({
         // so لصالحنا/ضدنا behave identically to before.
         data.judgmentType = resultForm.judgmentSide;
         data.judgmentFinal = resultForm.judgmentFinal;
+        // objectionFeasible stays — it is the lawyer's legal ASSESSMENT, made at
+        // the session and read back later by the صك-receipt handler.
         data.objectionFeasible = resultForm.objectionFeasible;
-        data.objectionDeadline = resultForm.objectionDeadline || undefined;
+        // objectionDeadline is NO LONGER sent (step 2): the objection window runs
+        // from the day the صك is RECEIVED, days after this session, so it cannot
+        // be known here. It is captured by "تسجيل استلام الصك" instead.
       }
       if (resultForm.result === HearingResult.NEW_SESSION) {
         data.nextHearingDate = resultForm.nextHearingDate;
@@ -288,11 +293,15 @@ export function HearingResultDialog({
                     <Checkbox id="objectionFeasible" checked={resultForm.objectionFeasible} onCheckedChange={(checked) => setResultForm({ ...resultForm, objectionFeasible: !!checked })} data-testid="checkbox-objection" />
                     <Label htmlFor="objectionFeasible" className="text-sm cursor-pointer">يمكن تقديم اعتراض</Label>
                   </div>
+                  {/* The objection DEADLINE input was removed here (step 2). The
+                      window runs from the day the صك is RECEIVED — days after this
+                      session — so it can't be entered now. It is captured by
+                      "تسجيل استلام الصك" on the case, which computes
+                      receiptDate + window and creates the لائحة اعتراضية then. */}
                   {resultForm.objectionFeasible && (
-                    <div>
-                      <Label>مهلة الاعتراض</Label>
-                      <HijriDatePicker value={resultForm.objectionDeadline} onChange={(v) => setResultForm({ ...resultForm, objectionDeadline: v })} data-testid="input-objection-deadline" />
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      ستُحدَّد مهلة الاعتراض عند تسجيل استلام الصك، وتُنشأ اللائحة الاعتراضية حينها.
+                    </p>
                   )}
                 </>
               )}

@@ -19,6 +19,7 @@ import {
   MessageSquare,
   Pause,
   RotateCcw,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -136,6 +137,11 @@ export interface CaseDetailsActions {
   // visibility equals the server's authorization.
   canReopen: boolean;
   onReopen: () => void;
+  // "تسجيل استلام الصك" on a case at محكوم_حكم_ابتدائي. Same rule the server
+  // enforces on POST /api/cases/:id/judgment-deed (canActOnMohrSettlement),
+  // computed by the host so visibility equals authorization.
+  canRecordJudgmentDeed: boolean;
+  onRecordJudgmentDeed: () => void;
   canTransfer: boolean;
   onTransfer: () => void;
   canRemind: boolean;
@@ -1718,6 +1724,22 @@ export function CaseDetailsDialog({
                         </Button>
                       </div>
                     )}
+                    {actions?.canRecordJudgmentDeed && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border border-purple-200 bg-purple-50 dark:bg-purple-950/20">
+                        <div>
+                          <p className="font-medium text-sm text-purple-700 dark:text-purple-400">تسجيل استلام الصك</p>
+                          <p className="text-xs text-muted-foreground">
+                            {selectedCase.judgmentDeedReceivedDate
+                              ? `مُسجَّل بتاريخ ${selectedCase.judgmentDeedReceivedDate} — يمكن تعديله وستُحدَّث مهلة الاعتراض`
+                              : "تبدأ مهلة الاعتراض من تاريخ استلام الصك"}
+                          </p>
+                        </div>
+                        <Button size="sm" variant="outline" className="border-purple-500 text-purple-600 hover:bg-purple-50" data-testid={`button-judgment-deed-${selectedCase.id}`} onClick={() => { actions.onRecordJudgmentDeed(); }}>
+                          <FileText className="w-4 h-4 ml-1" />
+                          {selectedCase.judgmentDeedReceivedDate ? "تعديل" : "تسجيل"}
+                        </Button>
+                      </div>
+                    )}
                     {actions?.canReopen && (
                       <div className="flex items-center justify-between p-3 rounded-lg border border-green-200 bg-green-50 dark:bg-green-950/20">
                         <div>
@@ -1757,7 +1779,8 @@ export function CaseDetailsDialog({
                         مهامي hub) shows it too — nothing in this tab is actionable
                         there beyond the stage/settlement blocks above. */}
                     {!actions?.canAssign && !actions?.canReview && !actions?.canClose
-                      && !actions?.canEarlyClose && !actions?.canReopen && !actions?.canTransfer && !actions?.canRemind && (
+                      && !actions?.canEarlyClose && !actions?.canReopen && !actions?.canRecordJudgmentDeed
+                      && !actions?.canTransfer && !actions?.canRemind && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>

@@ -685,6 +685,8 @@ function mapDbCase(dbCase: any): LawCase {
     grievanceResult: dbCase.grievanceResult || null,
     struckOffDate: dbCase.struckOffDate || null,
     struckOffReopenDeadline: dbCase.struckOffReopenDeadline || null,
+    judgmentDeedReceivedDate: dbCase.judgmentDeedReceivedDate || null,
+    objectionWindowDays: dbCase.objectionWindowDays ?? null,
     appealLawyerId: dbCase.appealLawyerId || null,
     internalReviewerId: dbCase.internalReviewerId || null,
     moeenNumber: dbCase.moeenNumber || null,
