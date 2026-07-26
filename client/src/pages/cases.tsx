@@ -503,6 +503,9 @@ export default function CasesPage() {
   const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
   const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
+  const [appealOutcomeCase, setAppealOutcomeCase] = useState<LawCase | null>(null);
+  const [appealOutcomeKind, setAppealOutcomeKind] = useState<"opponent_appealed" | "no_appeal">("opponent_appealed");
+  const [appealSubmitting, setAppealSubmitting] = useState(false);
   const [showDeedDialog, setShowDeedDialog] = useState(false);
   const [deedCase, setDeedCase] = useState<LawCase | null>(null);
   const [deedDate, setDeedDate] = useState("");
@@ -1990,6 +1993,11 @@ export default function CasesPage() {
           onEarlyClose: () => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); },
           canReopen: canReopenCase(selectedCase),
           onReopen: () => { setReopenCase(selectedCase); setShowReopenDialog(true); },
+          // Same gate as the صك action — both live only at محكوم_حكم_ابتدائي and
+          // answer to the same role set, so one helper covers both.
+          canRecordAppealOutcome: canRecordJudgmentDeed(selectedCase),
+          onOpponentAppealed: () => { setAppealOutcomeKind("opponent_appealed"); setAppealOutcomeCase(selectedCase); },
+          onNoAppeal: () => { setAppealOutcomeKind("no_appeal"); setAppealOutcomeCase(selectedCase); },
           canRecordJudgmentDeed: canRecordJudgmentDeed(selectedCase),
           onRecordJudgmentDeed: () => {
             setDeedCase(selectedCase);
@@ -2259,6 +2267,81 @@ export default function CasesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Appeal outcome — the two manual routes out of محكوم_حكم_ابتدائي.
+          "لم يستأنف" warns (never blocks) when the objection window computed from
+          the صك receipt hasn't lapsed yet: only the lawyer knows whether the
+          opponent actually filed, so the confirmation is theirs to give. */}
+      <AlertDialog open={!!appealOutcomeCase} onOpenChange={(open) => !open && setAppealOutcomeCase(null)}>
+        <AlertDialogContent dir="rtl">
+          {appealOutcomeCase && (() => {
+            const isOpponentAppeal = appealOutcomeKind === "opponent_appealed";
+            // Derived from the same inputs the server used: receipt + window.
+            const receipt = appealOutcomeCase.judgmentDeedReceivedDate || "";
+            const windowDays = appealOutcomeCase.objectionWindowDays ?? 30;
+            let deadlineStr = "";
+            let deadlinePassed = true;
+            if (receipt) {
+              const d = new Date(receipt);
+              if (!isNaN(d.getTime())) {
+                d.setDate(d.getDate() + windowDays);
+                deadlineStr = d.toISOString().split("T")[0];
+                deadlinePassed = d.getTime() <= Date.now();
+              }
+            }
+            return (
+              <>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {isOpponentAppeal ? "تأكيد: الخصم استأنف" : "تأكيد: لم يستأنف الخصم — الحكم نهائي"}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {isOpponentAppeal
+                      ? "ستنتقل القضية إلى مرحلة منظورة استئناف، ويُسجَّل الحكم النهائي لاحقاً من نتيجة الجلسة."
+                      : "ستنتقل القضية إلى مرحلة محكوم حكم نهائي. تُستكمل بعدها إجراءات ما بعد الحكم (التحصيل/التنفيذ) إن وُجدت."}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                {!isOpponentAppeal && !deadlinePassed && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-amber-800 dark:text-amber-300" data-testid="warning-appeal-window-open">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <p className="text-xs">
+                      {deadlineStr
+                        ? <>مهلة الاعتراض لم تنتهِ بعد (تنتهي في <LtrInline>{deadlineStr}</LtrInline>). تأكد من عدم تقديم الخصم لاعتراض قبل التأكيد.</>
+                        : <>لم يُسجَّل تاريخ استلام الصك، فلا يمكن التحقق من انتهاء مهلة الاعتراض. تأكد قبل التأكيد.</>}
+                    </p>
+                  </div>
+                )}
+                <AlertDialogFooter className="gap-2">
+                  <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={appealSubmitting}
+                    data-testid="button-confirm-appeal-outcome"
+                    className={isOpponentAppeal ? "bg-orange-600 hover:bg-orange-700" : "bg-green-600 hover:bg-green-700"}
+                    onClick={async () => {
+                      setAppealSubmitting(true);
+                      try {
+                        await apiRequest("POST", `/api/cases/${appealOutcomeCase.id}/appeal-outcome`, {
+                          outcome: appealOutcomeKind,
+                        });
+                        await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                        await refreshCases();
+                        toast({ title: isOpponentAppeal ? "تم تسجيل استئناف الخصم" : "تم تسجيل أن الحكم أصبح نهائياً" });
+                        setAppealOutcomeCase(null);
+                      } catch (err) {
+                        toast({ title: "تعذّر تسجيل النتيجة", description: extractApiError(err), variant: "destructive" });
+                      } finally {
+                        setAppealSubmitting(false);
+                      }
+                    }}
+                  >
+                    تأكيد
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </>
+            );
+          })()}
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* "تسجيل استلام الصك" — judgment-lifecycle step 2. Capturing the receipt
           date starts the objection clock: the server computes

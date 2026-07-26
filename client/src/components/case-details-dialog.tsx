@@ -20,6 +20,7 @@ import {
   Pause,
   RotateCcw,
   FileText,
+  Gavel,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -142,6 +143,11 @@ export interface CaseDetailsActions {
   // computed by the host so visibility equals authorization.
   canRecordJudgmentDeed: boolean;
   onRecordJudgmentDeed: () => void;
+  // The two manual routes out of محكوم_حكم_ابتدائي (appeal path). Same rule the
+  // server enforces on POST /api/cases/:id/appeal-outcome.
+  canRecordAppealOutcome: boolean;
+  onOpponentAppealed: () => void;
+  onNoAppeal: () => void;
   canTransfer: boolean;
   onTransfer: () => void;
   canRemind: boolean;
@@ -1740,6 +1746,24 @@ export function CaseDetailsDialog({
                         </Button>
                       </div>
                     )}
+                    {actions?.canRecordAppealOutcome && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+                        <div>
+                          <p className="font-medium text-sm text-orange-700 dark:text-orange-400">نتيجة مهلة الاعتراض</p>
+                          <p className="text-xs text-muted-foreground">
+                            سجّل ما إذا كان الخصم قد استأنف الحكم الابتدائي أم انتهت المهلة دون استئناف
+                          </p>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <Button size="sm" variant="outline" className="border-orange-500 text-orange-600 hover:bg-orange-50" data-testid={`button-opponent-appealed-${selectedCase.id}`} onClick={() => { actions.onOpponentAppealed(); }}>
+                            <Gavel className="w-4 h-4 ml-1" />الخصم استأنف
+                          </Button>
+                          <Button size="sm" variant="outline" className="border-green-500 text-green-600 hover:bg-green-50" data-testid={`button-no-appeal-${selectedCase.id}`} onClick={() => { actions.onNoAppeal(); }}>
+                            <CheckCircle className="w-4 h-4 ml-1" />لم يستأنف
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     {actions?.canReopen && (
                       <div className="flex items-center justify-between p-3 rounded-lg border border-green-200 bg-green-50 dark:bg-green-950/20">
                         <div>
@@ -1780,7 +1804,7 @@ export function CaseDetailsDialog({
                         there beyond the stage/settlement blocks above. */}
                     {!actions?.canAssign && !actions?.canReview && !actions?.canClose
                       && !actions?.canEarlyClose && !actions?.canReopen && !actions?.canRecordJudgmentDeed
-                      && !actions?.canTransfer && !actions?.canRemind && (
+                      && !actions?.canRecordAppealOutcome && !actions?.canTransfer && !actions?.canRemind && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>
