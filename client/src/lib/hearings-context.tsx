@@ -138,6 +138,14 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     if (Array.isArray(result?.createdMemos) && result.createdMemos.length > 0) {
       queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
     }
+    // Recording a result clears "مطلوب رد من الخصم" on the case's OTHER hearings
+    // too (the session happened). Those rows aren't in this response, and the
+    // badge is `.some(h => h.opponentResponseRequired)` across all of a case's
+    // hearings — so refetch immediately instead of waiting for the background
+    // pass, otherwise the indicator lingers for a few seconds after it's gone.
+    if (typeof result?.clearedOpponentResponse === "number" && result.clearedOpponentResponse > 0) {
+      queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
+    }
     return result;
   };
 

@@ -151,6 +151,11 @@ export interface CaseDetailsActions {
   canRecordAppealOutcome: boolean;
   onOpponentAppealed: () => void;
   onNoAppeal: () => void;
+  // "تم استلام رد الخصم" — clears the مطلوب رد من الخصم indicator. The host gates
+  // it on the same rule the server enforces AND on the indicator actually being
+  // on, so visibility === authorization on both terms.
+  canRecordOpponentResponse: boolean;
+  onOpponentResponseReceived: () => void;
   canTransfer: boolean;
   onTransfer: () => void;
   canRemind: boolean;
@@ -1749,6 +1754,19 @@ export function CaseDetailsDialog({
                         </Button>
                       </div>
                     )}
+                    {actions?.canRecordOpponentResponse && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+                        <div>
+                          <p className="font-medium text-sm text-orange-700 dark:text-orange-400">تم استلام رد الخصم</p>
+                          <p className="text-xs text-muted-foreground">
+                            يزيل مؤشر "مطلوب رد من الخصم" ويسأل إن كنا بحاجة لتحرير مذكرة جوابية
+                          </p>
+                        </div>
+                        <Button size="sm" variant="outline" className="border-orange-500 text-orange-600 hover:bg-orange-50" data-testid={`button-opponent-response-${selectedCase.id}`} onClick={() => { actions.onOpponentResponseReceived(); }}>
+                          <MessageSquare className="w-4 h-4 ml-1" />تسجيل الاستلام
+                        </Button>
+                      </div>
+                    )}
                     {actions?.canRecordAppealOutcome && (() => {
                       // WHO would appeal depends on the judgment direction, read
                       // from the case's own primary-judgment hearing via the SAME
@@ -1833,7 +1851,8 @@ export function CaseDetailsDialog({
                         there beyond the stage/settlement blocks above. */}
                     {!actions?.canAssign && !actions?.canReview && !actions?.canClose
                       && !actions?.canEarlyClose && !actions?.canReopen && !actions?.canRecordJudgmentDeed
-                      && !actions?.canRecordAppealOutcome && !actions?.canTransfer && !actions?.canRemind && (
+                      && !actions?.canRecordAppealOutcome && !actions?.canRecordOpponentResponse
+                      && !actions?.canTransfer && !actions?.canRemind && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>

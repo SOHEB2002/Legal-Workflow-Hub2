@@ -87,7 +87,8 @@ export function HearingResultDialog({
   const judgmentIsAppealRuling = judgmentCase?.currentStage === "منظورة_استئناف";
 
   // The ONLY judgment question besides the outcome: is the FIRST-INSTANCE ruling
-  // objectionable? Some are not at all (القضاء المستعجل), and the answer decides
+  // objectionable? Some rulings are not objectionable at all — it is a property
+  // of the ruling itself, not of any one court type — and the answer decides
   // whether the case goes to محكوم_حكم_ابتدائي (objection/appeal path) or straight
   // to محكوم_حكم_نهائي. Never asked for an appeal ruling.
   const judgmentNeedsObjectionAnswer =
@@ -338,7 +339,7 @@ export function HearingResultDialog({
                       <SelectTrigger data-testid="select-objection-feasible"><SelectValue placeholder="اختر" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="نعم">نعم — قابل للاعتراض</SelectItem>
-                        <SelectItem value="لا">لا — غير قابل للاعتراض (مثل القضاء المستعجل)</SelectItem>
+                        <SelectItem value="لا">لا — غير قابل للاعتراض</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
