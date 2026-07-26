@@ -91,6 +91,9 @@ import {
   TerminalCaseStages,
   getReopenTargetStages,
   stageNumberRequirement,
+  findPrimaryJudgmentHearing,
+  judgmentDirectionOf,
+  weAreTheAppellant,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -2276,6 +2279,11 @@ export default function CasesPage() {
         <AlertDialogContent dir="rtl">
           {appealOutcomeCase && (() => {
             const isOpponentAppeal = appealOutcomeKind === "opponent_appealed";
+            // Same shared helpers the row and the server use, so the wording
+            // ("لم نستأنف" vs "لم يستأنف الخصم") matches the button that opened it.
+            const weAppeal = weAreTheAppellant(
+              judgmentDirectionOf(findPrimaryJudgmentHearing(getHearingsByCase(appealOutcomeCase.id))),
+            );
             // Derived from the same inputs the server used: receipt + window.
             const receipt = appealOutcomeCase.judgmentDeedReceivedDate || "";
             const windowDays = appealOutcomeCase.objectionWindowDays ?? 30;
@@ -2293,7 +2301,11 @@ export default function CasesPage() {
               <>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
-                    {isOpponentAppeal ? "تأكيد: الخصم استأنف" : "تأكيد: لم يستأنف الخصم — الحكم نهائي"}
+                    {isOpponentAppeal
+                      ? "تأكيد: الخصم استأنف"
+                      : weAppeal
+                      ? "تأكيد: لم نستأنف — الحكم نهائي"
+                      : "تأكيد: لم يستأنف الخصم — الحكم نهائي"}
                   </AlertDialogTitle>
                   <AlertDialogDescription>
                     {isOpponentAppeal
@@ -2306,7 +2318,7 @@ export default function CasesPage() {
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                     <p className="text-xs">
                       {deadlineStr
-                        ? <>مهلة الاعتراض لم تنتهِ بعد (تنتهي في <LtrInline>{deadlineStr}</LtrInline>). تأكد من عدم تقديم الخصم لاعتراض قبل التأكيد.</>
+                        ? <>مهلة الاعتراض لم تنتهِ بعد (تنتهي في <LtrInline>{deadlineStr}</LtrInline>). {weAppeal ? "تأكد من قرار عدم الاستئناف قبل التأكيد." : "تأكد من عدم تقديم الخصم لاعتراض قبل التأكيد."}</>
                         : <>لم يُسجَّل تاريخ استلام الصك، فلا يمكن التحقق من انتهاء مهلة الاعتراض. تأكد قبل التأكيد.</>}
                     </p>
                   </div>

@@ -4415,6 +4415,41 @@ export const DefaultObjectionWindowDays = 30;
 // POST /api/cases/:id/judgment-deed — recording (or correcting) the صك receipt.
 // Tolerant gate (Pattern A): type check only; the handler keeps its own Arabic
 // 400s for the missing/invalid date and the out-of-range window.
+// ==================== JUDGMENT DIRECTION (shared server + client) ====================
+// The primary judgment a case is currently sitting on: its most recent hearing
+// whose result is حكم and which is NOT final. Lives here — not in routes.ts —
+// because BOTH sides need the identical rule: the server enforces the
+// appeal-outcome branch on it, the cases UI renders the branch from it. A second
+// copy would drift and let the UI offer a button the server rejects.
+//
+// Generic over the row shape so the server can pass DB rows and the client can
+// pass its Hearing interface without either importing the other's type.
+export function findPrimaryJudgmentHearing<
+  T extends { result?: string | null; judgmentFinal?: boolean | null; hearingDate?: string | null },
+>(hearings: T[]): T | null {
+  const candidates = (hearings || [])
+    .filter((h) => h && h.result === "حكم" && !h.judgmentFinal)
+    .sort((a, b) => String(b.hearingDate || "").localeCompare(String(a.hearingDate || "")));
+  return candidates[0] || null;
+}
+
+// Who would appeal a primary judgment:
+//   لصالحنا      → we won at first instance, so the OPPONENT may appeal.
+//   ضدنا / جزئي  → we are the appellant; filing the لائحة اعتراضية IS our appeal.
+//   null         → no primary-judgment hearing found, direction UNKNOWN.
+export function judgmentDirectionOf(
+  hearing: { judgmentSide?: string | null } | null | undefined,
+): "لصالحنا" | "ضدنا" | "جزئي" | null {
+  const side = String(hearing?.judgmentSide || "").trim();
+  return side === "لصالحنا" || side === "ضدنا" || side === "جزئي" ? side : null;
+}
+
+// True when WE are the party who would appeal — i.e. the "الخصم استأنف" action
+// is nonsense and must be neither offered nor accepted.
+export function weAreTheAppellant(direction: string | null): boolean {
+  return direction === "ضدنا" || direction === "جزئي";
+}
+
 // POST /api/cases/:id/appeal-outcome — the two manual routes out of
 // محكوم_حكم_ابتدائي. Tolerant gate; the handler enumerates the valid outcomes.
 export const appealOutcomeSchema = z.object({
