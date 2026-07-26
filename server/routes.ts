@@ -8997,6 +8997,21 @@ export async function registerRoutes(
         updateData.objectionDeadline = data.objectionDeadline || null;
       }
 
+      // "مطلوب رد من الخصم" LIVES ON THE NEWEST HEARING OF THE CASE — the newly
+      // created next session when there is one, otherwise the hearing whose
+      // result was just recorded. Never blocks: ticking the box without a next
+      // date is allowed and still records the flag.
+      //
+      // Whichever row ends up holding it is spared by the end-of-handler sweep;
+      // everything older is unset. Recording a result on a hearing NEWER than the
+      // flagged one therefore clears it, which is the intended lifecycle.
+      //
+      // (The original bug: the flag was written onto the just-CLOSED hearing even
+      // when a next session existed, and the sweep — correctly — cleared that
+      // stale row. With no next session that was the only row, so the flag was
+      // written and immediately wiped, leaving zero rows in the DB.)
+      let opponentFlagHearingId: string | null = null;
+
       // New-session data. memoRequired is the canonical "this hearing still
       // needs an auto-memo generated" flag. Coalesce responseRequired into it
       // so the deferred-memo trigger works whether the client sends one or
@@ -9006,25 +9021,15 @@ export async function registerRoutes(
         updateData.nextHearingTime = data.nextHearingTime || null;
         updateData.responseRequired = data.responseRequired ?? false;
         updateData.memoRequired = !!(data.memoRequired || data.responseRequired);
-        // opponentResponseRequired is NO LONGER written onto THIS hearing.
-        // The flag means "the opponent must respond BEFORE the next session", so
-        // it belongs on the NOT-YET-HELD hearing — which is what the dialog's own
-        // toast says ("تم تعليم الجلسة القادمة"). Writing it here put it on the
-        // session that just finished, and the end-of-handler sweep then correctly
-        // cleared that stale row — so with no next session scheduled the flag was
-        // written and immediately wiped, leaving zero rows in the DB. It is now
-        // written ONLY on the new hearing created below.
-      }
-      // Ticking the box with no next session gives the flag nowhere to live.
-      // Refuse rather than silently drop it (which is exactly what happened).
-      if (
-        data.result === HearingResult.NEW_SESSION &&
-        data.opponentResponseRequired === true &&
-        !data.nextHearingDate
-      ) {
-        return res.status(400).json({
-          error: "يجب تحديد تاريخ الجلسة القادمة عند تعليم \"مطلوب رد من الخصم\" — المؤشر يُسجَّل على الجلسة القادمة",
-        });
+        // No next session will be created → THIS hearing is the newest one, so it
+        // carries the flag. With a date, the new hearing below carries it instead
+        // and this row is deliberately left for the sweep to clean.
+        if (!data.nextHearingDate) {
+          updateData.opponentResponseRequired = data.opponentResponseRequired ?? false;
+          if (data.opponentResponseRequired === true) {
+            opponentFlagHearingId = hearingId;
+          }
+        }
       }
 
       const updatedHearing = await storage.updateHearing(hearingId, updateData);
@@ -9046,9 +9051,6 @@ export async function registerRoutes(
 
       const createdTasks: any[] = [];
       const createdMemos: any[] = [];
-      // The next session this result may schedule — the one hearing the
-      // opponent-response clearing sweep at the end must NOT unset.
-      let newSessionHearingIdForClear: string | null = null;
       let existingCase = effectiveCaseId ? await storage.getCaseById(effectiveCaseId) : null;
       // isAppealStage was replaced by judgmentIsAppealRuling, derived up front
       // (before any mutation) from the same case row so the judgment guard and
@@ -9135,14 +9137,16 @@ export async function registerRoutes(
               courtRoom: hearing.courtRoom,
               status: HearingStatus.UPCOMING,
               attendingLawyerId: hearing.attendingLawyerId,
-              // THE ONLY writer of this flag on the موعد_جديد path. The row is
-              // spared by the end-of-handler sweep (newSessionHearingIdForClear),
+              // The flag's carrier whenever a next session exists — this row is
+              // the one the end-of-handler sweep spares (opponentFlagHearingId),
               // so it survives and is what lights the "مطلوب رد من الخصم" badge.
               opponentResponseRequired: data.opponentResponseRequired || false,
               notes: `موعد جديد من جلسة ${hearing.hearingDate}`,
             });
             newSessionHearingId = newHearing.id;
-            newSessionHearingIdForClear = newHearing.id;
+            // The new session is now the newest hearing, so it is the flag's
+            // carrier and the row the sweep must spare.
+            opponentFlagHearingId = newHearing.id;
             createdTasks.push({ type: "new_hearing", id: newHearing.id, description: "تم إنشاء جلسة جديدة تلقائياً" });
           }
 
@@ -9519,14 +9523,15 @@ export async function registerRoutes(
       // judged or closed case carrying the badge forever.
       //
       // Runs LAST, after the new hearing has been created and after this hearing's
-      // own flag was written, and skips both of those ids: a result that schedules
-      // another session and re-ticks the box must keep the flag it just set on the
-      // NEW hearing. Everything older is unset.
+      // flag was written. Spares exactly ONE row — opponentFlagHearingId, the
+      // NEWEST hearing of the case: the newly created next session when there is
+      // one, otherwise the hearing just recorded (when the box was ticked without
+      // a next date). Everything older is unset.
       let clearedOpponentResponse = 0;
       if (effectiveCaseId) {
         clearedOpponentResponse = await clearOpponentResponseFlag(
           effectiveCaseId,
-          [newSessionHearingIdForClear],
+          [opponentFlagHearingId],
         );
       }
 
