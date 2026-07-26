@@ -1,6 +1,6 @@
 import type { Express, Request } from "express";
 import { type Server } from "http";
-import { storage } from "./storage";
+import { storage, type CaseNumberField, type ReopenLifecycleFlags } from "./storage";
 import {
   loginSchema,
   insertUserSchema,
@@ -63,6 +63,9 @@ import {
   ClosureReason,
   ConsultationActivityType,
   getStagesForClassification,
+  getReopenTargetStages,
+  stageNumberRequirement,
+  reopenCaseSchema,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -4883,6 +4886,148 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error: any) {
       console.error("[cases/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/cases/:id/reopen
+  // Body: { targetStage, notes?, <the one number field the target needs>? }.
+  // Reopens a CLOSED case (مقفلة) at a caller-chosen stage. This is the "PART B"
+  // referenced by the defendant settlement-failure close (:8442, :8462), widened
+  // by owner decision (2026-07) from "settlement-failed cases" to ANY closed case.
+  //
+  // Deliberately bypasses validateStageTransition — the same precedent
+  // skip-committee sets above. NO from:"مقفلة" edge is added to
+  // ALLOWED_CASE_TRANSITIONS, so مقفلة stays terminal for the generic
+  // stage-advance route and this endpoint is the only way out of it.
+  //
+  // AUTHORIZED ROLES: branch_manager + department_head (of the case's own
+  // department) + the assigned lawyer — i.e. canActOnMohrSettlement verbatim.
+  // admin_support is EXCLUDED by owner decision, which makes this INTENTIONALLY
+  // NARROWER than the early-CLOSE gate (cases.tsx canEarlyCloseCase includes
+  // admin_support): admin support can close a case but not bring it back.
+  //
+  // TARGET STAGES: the case's own resolved path PLUS منظورة always (option A).
+  // منظورة is absent from InCourtSettlementStages, yet reopening into court is
+  // the entire promise the defendant close makes to the user ("يمكن إعادة فتحها
+  // لاحقاً عند رفع الخصم للدعوى"), so it is offered unconditionally and the
+  // lifecycle flags below make the path re-resolve to an array that contains it.
+  app.post("/api/cases/:id/reopen", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = reopenCaseSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      if (lawCase.currentStage !== "مقفلة") {
+        return res.status(400).json({ error: "يمكن إعادة الفتح فقط لقضية مقفلة" });
+      }
+
+      if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح القضية" });
+      }
+
+      // PATH RESOLUTION SAFETY — refuse rather than guess. getStagesForClassification
+      // SILENTLY falls back to UnderStudyGeneralStages when the department name
+      // isn't one of the four canonical labels, which would offer a labor case the
+      // General (ناجز) path. Resolve the name server-side (the /taradi idiom) and
+      // reject when it can't be resolved for an under-study case.
+      const department = lawCase.departmentId
+        ? await storage.getDepartmentById(lawCase.departmentId)
+        : null;
+      const departmentName = department?.name;
+      const CANONICAL_DEPARTMENTS = ["عام", "تجاري", "عمالي", "إداري"];
+      if (
+        lawCase.caseClassification === CaseClassification.UNDER_STUDY &&
+        (!departmentName || !CANONICAL_DEPARTMENTS.includes(departmentName))
+      ) {
+        return res.status(400).json({ error: "تعذّر تحديد مسار القضية — حدّد القسم أولاً" });
+      }
+
+      const targetStage = String(req.body?.targetStage ?? "").trim();
+      if (!targetStage) {
+        return res.status(400).json({ error: "يجب اختيار المرحلة التي ستُفتح عندها القضية" });
+      }
+      const allowedTargets = getReopenTargetStages(
+        (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
+        departmentName,
+        lawCase.clientRole || undefined,
+        !!lawCase.memoRequired,
+        !!lawCase.isSettlementCase,
+      );
+      if (!allowedTargets.includes(targetStage as CaseStageValue)) {
+        return res.status(400).json({ error: "المرحلة المختارة ليست ضمن مسار هذه القضية" });
+      }
+
+      // Required number for the TARGET stage. Prompt/enforce only when the stage
+      // needs one AND the row doesn't already carry it — a commercial case
+      // reopening at مداولة_الصلح still has the taradiNumber it captured on
+      // تراضي-entry (closure clears nothing), so it must not be re-demanded.
+      const requirement = stageNumberRequirement(targetStage as CaseStageValue, departmentName);
+      let numberField: { field: CaseNumberField; value: string } | null = null;
+      if (requirement) {
+        const supplied = typeof (req.body as Record<string, unknown>)[requirement.field] === "string"
+          ? String((req.body as Record<string, unknown>)[requirement.field]).trim()
+          : "";
+        const stored = String((lawCase as unknown as Record<string, unknown>)[requirement.field] ?? "").trim();
+        if (!supplied && !stored) {
+          // Same Arabic strings the advance flow already 400s with, so the two
+          // paths are indistinguishable to the user.
+          const MISSING_NUMBER_ERRORS: Record<string, string> = {
+            taradiNumber: "يجب إدخال رقم الطلب في تراضي",
+            mohrNumber: "يجب إدخال رقم الدعوى في التسوية الودية",
+            najizNumber: "يجب إدخال رقم القيد في ناجز",
+            moeenNumber: "يجب إدخال رقم القيد في معين",
+            courtCaseNumber: "يرجى إدخال رقم الدعوى في المحكمة",
+          };
+          return res.status(400).json({ error: MISSING_NUMBER_ERRORS[requirement.field] || "يجب إدخال الرقم المطلوب" });
+        }
+        // Write only when the user actually supplied something — never blank out
+        // a stored number with an empty submission.
+        if (supplied) numberField = { field: requirement.field, value: supplied.substring(0, 100) };
+      }
+
+      // LIFECYCLE FLAGS (owner decision 1). Reopening INTO COURT must leave the
+      // case in a state where getStagesForClassification resolves to an array
+      // that CONTAINS the target — otherwise the stage lands off-path and the
+      // progress bar collapses onto استلام (the class of bug fixed in 3fcd4e3).
+      //   • isSettlementCase=false — with it true the resolver returns
+      //     InCourtSettlementStages BEFORE consulting memoRequired/clientRole,
+      //     and that array has no منظورة. Same idiom as the "استكمال إجراءاتها"
+      //     branch (case-progress-bar.tsx).
+      //   • classification + clientRole — mirrors the auto-promotion the PATCH
+      //     handler already performs for these targets (routes.ts :2481-2500):
+      //     منظورة is also the last stage of every قيد_الدراسة array, so without
+      //     this a case would sit in court still classified قيد_الدراسة.
+      const flags: ReopenLifecycleFlags = {};
+      if (targetStage === "منظورة" || targetStage === "منظورة_استئناف") {
+        flags.isSettlementCase = false;
+        if (lawCase.caseClassification === CaseClassification.UNDER_STUDY) {
+          flags.caseClassification = CaseClassification.IN_COURT;
+          if (!lawCase.clientRole) flags.clientRole = "مدعي";
+        }
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+      const updated = await storage.reopenCase(lawCase.id, {
+        targetStage,
+        notes: String(req.body?.notes ?? "").trim(),
+        performedBy: reqUser.id,
+        performerName,
+        numberField,
+        flags,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إعادة فتح القضية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/reopen] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });

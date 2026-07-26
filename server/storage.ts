@@ -56,6 +56,24 @@ function generateCaseNumber(): string {
   return `C-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
 }
 
+// The five per-platform number columns a case can carry. Deliberately does NOT
+// include caseNumber — that column is varchar(50) NOT NULL UNIQUE and must never
+// receive a varchar(100) platform number (the 23505/22001 bug fixed in bbcdf33).
+export type CaseNumberField =
+  | "taradiNumber"
+  | "mohrNumber"
+  | "najizNumber"
+  | "moeenNumber"
+  | "courtCaseNumber";
+
+// Lifecycle flags the reopen ROUTE decides and this layer merely writes. Typed
+// concretely (not `unknown`) so drizzle's .set() keeps validating them.
+export type ReopenLifecycleFlags = {
+  isSettlementCase?: boolean;
+  caseClassification?: string;
+  clientRole?: string;
+};
+
 function generateConsultationNumber(): string {
   return `CON-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
 }
@@ -368,6 +386,21 @@ export interface IStorage {
     id: string,
     input: { reason: string; performedBy: string; performerName: string },
   ): Promise<LawCase | undefined>;
+  // Reopen a CLOSED case (مقفلة) at a caller-chosen stage. Same one-transaction
+  // shape as skipCaseCommittee: stage update + stage-history entry + activity-log
+  // row. All lifecycle flags the reopen must flip are decided by the ROUTE and
+  // passed in via `flags` — this method writes, it does not decide.
+  reopenCase(
+    id: string,
+    input: {
+      targetStage: string;
+      notes: string;
+      performedBy: string;
+      performerName: string;
+      numberField: { field: CaseNumberField; value: string } | null;
+      flags: ReopenLifecycleFlags;
+    },
+  ): Promise<LawCase | undefined>;
   returnMemoToCommittee(
     id: string,
     input: { notes: string; performedBy: string },
@@ -579,6 +612,15 @@ function reachedSettlement(dbCase: any): boolean {
 
 function deriveCurrentCaseNumber(dbCase: any): string {
   const base = dbCase.caseNumber;
+  // COURT NUMBER WINS (owner decision 2026-07). Existence-based, exactly like
+  // the najiz rule below it: once a case has a court-issued number that IS the
+  // case's number everywhere else, so no later platform number should mask it.
+  // Mostly a no-op by construction — createCase stores a user-supplied
+  // courtCaseNumber AS caseNumber, so base already yields it for cases created
+  // in court. It changes the display only for cases that acquired the number
+  // LATER, via the منظورة capture (routes.ts :2787) after a najiz/معين run.
+  const court = (dbCase.courtCaseNumber || "").trim();
+  if (court) return court;
   const najiz = (dbCase.najizNumber || "").trim();
   if (najiz) return najiz;
   const settlement = (dbCase.mohrNumber || dbCase.taradiNumber || "").trim();
@@ -4942,6 +4984,89 @@ export class DatabaseStorage implements IStorage {
         details: input.reason.slice(0, 120),
         previousValue: fromStage,
         newValue: targetStage,
+        createdAt: now,
+      });
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  async reopenCase(
+    id: string,
+    input: {
+      targetStage: string;
+      notes: string;
+      performedBy: string;
+      performerName: string;
+      numberField: { field: CaseNumberField; value: string } | null;
+      flags: ReopenLifecycleFlags;
+    },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: input.targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: input.notes
+            ? `إعادة فتح القضية — ${input.notes}`
+            : "إعادة فتح القضية",
+        },
+      ];
+      // The closure metadata is CLEARED on the row (the case is no longer
+      // closed) but PRESERVED in the activity row's details below, so the audit
+      // trail keeps why/when it had been closed. stageHistory is append-only, so
+      // the original مقفلة entry survives regardless.
+      const clearedReason = existing.closureReason || "";
+      const clearedClosedAt = existing.closedAt ? new Date(existing.closedAt).toISOString() : "";
+      await tx.update(lawCases).set({
+        currentStage: input.targetStage,
+        // Matches createCase (status is a legacy parallel tracker, never synced
+        // with currentStage; consumers only ever test it for "مغلق").
+        status: CaseStatus.RECEIVED,
+        closedAt: null,
+        closureReason: null,
+        closureReasonOther: null,
+        // A closed case auto-archives after 6 months (scheduler
+        // autoArchiveClosedCases) WITHOUT leaving مقفلة, so an archived case
+        // reaches this method. Reopening while still flagged archived would
+        // yield a live case filtered out of nearly every view.
+        isArchived: false,
+        archivedAt: null,
+        archiveReason: null,
+        stageHistory,
+        // Dedicated column ONLY — never case_number. That column is
+        // varchar(50) NOT NULL UNIQUE while every platform number is
+        // varchar(100); writing one into it throws 23505/22001 (the bug fixed
+        // in bbcdf33). The displayed number is derived, so no sync is needed.
+        ...(input.numberField ? { [input.numberField.field]: input.numberField.value } : {}),
+        // Lifecycle flags decided by the route (منظورة/منظورة_استئناف targets).
+        ...input.flags,
+        updatedAt: now,
+      }).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "case_reopened",
+        title: "إعادة فتح القضية",
+        details: [
+          input.notes,
+          clearedReason ? `سبب الإغلاق السابق: ${clearedReason}` : "",
+          clearedClosedAt ? `تاريخ الإغلاق السابق: ${clearedClosedAt}` : "",
+        ].filter(Boolean).join(" — ").slice(0, 500),
+        previousValue: fromStage,
+        newValue: input.targetStage,
         createdAt: now,
       });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));

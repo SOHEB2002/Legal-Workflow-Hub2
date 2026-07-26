@@ -1533,6 +1533,69 @@ export function getStageLabel(stage: CaseStageValue): string {
   return CaseStageLabels[stage] || stage;
 }
 
+// The platform/court number a case must carry to SIT on a given stage, keyed on
+// the TARGET stage alone. Used by the reopen flow (POST /api/cases/:id/reopen +
+// its dialog), where the "from" stage is always مقفلة and so every from-keyed
+// rule is meaningless.
+//
+// Mirrors the server's own target-keyed gates in routes.ts, which are the
+// authority — تراضي (:2420), مداولة_الصلح/labor (:2442), ناجز (:2453),
+// معين (:2465) — with the labels/placeholders copied verbatim from the
+// advance-flow prompt (platformFieldInfo, case-progress-bar.tsx) so the user
+// sees identical wording in both flows.
+//
+// TWO DELIBERATE DIVERGENCES from the advance flow:
+//   • منظورة requires courtCaseNumber UNCONDITIONALLY here. In the advance flow
+//     that capture is FROM-keyed (ناجز/معين/أغلق_طلب_الصلح → منظورة, routes.ts
+//     :2787), which can't apply to a reopen. Entering court without the court
+//     number is exactly what the reopen feature exists to prevent.
+//   • مداولة_الصلح stays LABOR-ONLY. Commercial/general capture their taradi
+//     number on تراضي-entry and that value survives closure untouched, so
+//     re-prompting for it would be asking for something the row already has.
+//
+// NOTE this deliberately does NOT replace platformFieldInfo — the live advance
+// flow is left byte-identical; only the new reopen consumers use this.
+export function stageNumberRequirement(
+  stage: CaseStageValue,
+  departmentName?: string,
+): { field: "taradiNumber" | "mohrNumber" | "najizNumber" | "moeenNumber" | "courtCaseNumber"; label: string; placeholder: string } | null {
+  switch (stage) {
+    case "قيد_التدقيق_في_تراضي":
+      return { field: "taradiNumber", label: "رقم الطلب في تراضي", placeholder: "أدخل رقم الطلب في منصة تراضي" };
+    case "مداولة_الصلح":
+      return departmentName === "عمالي"
+        ? { field: "mohrNumber", label: "رقم الدعوى في التسوية الودية", placeholder: "أدخل رقم الدعوى في التسوية الودية" }
+        : null;
+    case "قيد_التدقيق_في_ناجز":
+      return { field: "najizNumber", label: "رقم القيد في ناجز", placeholder: "أدخل رقم القيد في ناجز" };
+    case "قيد_التدقيق_في_معين":
+      return { field: "moeenNumber", label: "رقم القيد في معين", placeholder: "أدخل رقم القيد في معين" };
+    case "منظورة":
+      return { field: "courtCaseNumber", label: "رقم الدعوى في المحكمة", placeholder: "أدخل رقم الدعوى الصادر من المحكمة" };
+    default:
+      return null;
+  }
+}
+
+// The stages a CLOSED case may be reopened at: its own resolved path, plus
+// منظورة always. Option A (owner decision 2026-07): a defendant settlement case
+// closed at مقفلة must be able to reopen INTO COURT when the opponent files —
+// the very promise the close dialog makes — but منظورة is absent from
+// InCourtSettlementStages, so the path alone can't express it. The endpoint
+// clears isSettlementCase (and promotes classification) when منظورة is chosen,
+// which is what makes the path re-resolve to an array that CONTAINS منظورة —
+// without that the stage would land off-path and collapse the progress bar.
+export function getReopenTargetStages(
+  classification: CaseClassificationValue,
+  departmentName?: string,
+  clientRole?: string,
+  memoRequired?: boolean,
+  isSettlementCase?: boolean,
+): CaseStageValue[] {
+  const path = getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase);
+  return path.indexOf("منظورة") >= 0 ? [...path] : [...path, "منظورة"];
+}
+
 // ملاحظة: يمكن الانتقال من أي مرحلة إلى "مقفلة" بواسطة الدعم الإداري فقط (إغلاق مبكر) - يتم التحقق في routes.ts
 
 // سجل انتقال المراحل
@@ -4298,6 +4361,22 @@ export const assignConsultationSchema = z.object({
 
 export const startConsultationFollowUpSchema = z.object({
   question: z.string().optional(),
+}).passthrough();
+
+// POST /api/cases/:id/reopen. Tolerant gate (Pattern A): type check only — the
+// handler keeps its own Arabic 400s for "targetStage missing / not on the path"
+// and "required number missing", so behaviour is decided there, not here.
+// targetStage is NOT enum-narrowed (2D' rule: stage values stay z.string();
+// membership is validated against the case's own resolved path in the handler).
+// The five number fields mirror their columns — all varchar, all nullable.
+export const reopenCaseSchema = z.object({
+  targetStage: z.string().optional(),
+  notes: z.string().optional(),
+  taradiNumber: z.string().optional(),
+  mohrNumber: z.string().optional(),
+  najizNumber: z.string().optional(),
+  moeenNumber: z.string().optional(),
+  courtCaseNumber: z.string().optional(),
 }).passthrough();
 
 // ---- 2D' V2b — contracts/memos/misc Tier-2 bodies ----

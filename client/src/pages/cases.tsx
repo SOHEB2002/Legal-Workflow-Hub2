@@ -89,6 +89,8 @@ import {
   CaseClassificationLabels,
   getStageLabel,
   TerminalCaseStages,
+  getReopenTargetStages,
+  stageNumberRequirement,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -344,6 +346,30 @@ export default function CasesPage() {
     return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
 
+  // Reopen permission gate — the MIRROR of canEarlyCloseCase above, with two
+  // deliberate differences that restate the server rule for
+  // POST /api/cases/:id/reopen (canActOnMohrSettlement + the مقفلة guard):
+  //   • the stage test is INVERTED — only a CLOSED case can be reopened;
+  //   • admin_support is DROPPED (owner decision) — admin support may close a
+  //     case but not bring it back, so this set is narrower than early-close.
+  // Same both-sides-non-empty departmentId rule as early-close, so a dept_head
+  // with a null department can't match a case that also has none.
+  const canReopenCase = (c: LawCase): boolean => {
+    if (!user) return false;
+    if (c.currentStage !== "مقفلة") return false;
+    if (user.role === "branch_manager") return true;
+    if (
+      user.role === "department_head" &&
+      !!user.departmentId &&
+      !!c.departmentId &&
+      c.departmentId === user.departmentId
+    ) {
+      return true;
+    }
+    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
+    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+  };
+
   // isCasePaused now comes from case-stage-utils — the same helper the extracted
   // details dialog uses for its paused banner (identical `!!c.pausedAt` rule).
 
@@ -443,6 +469,12 @@ export default function CasesPage() {
   const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
   const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
+  const [showReopenDialog, setShowReopenDialog] = useState(false);
+  const [reopenCase, setReopenCase] = useState<LawCase | null>(null);
+  const [reopenTargetStage, setReopenTargetStage] = useState("");
+  const [reopenNumber, setReopenNumber] = useState("");
+  const [reopenNotes, setReopenNotes] = useState("");
+  const [reopenSubmitting, setReopenSubmitting] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editCaseId, setEditCaseId] = useState<string | null>(null);
   const [reassignCaseDialog, setReassignCaseDialog] = useState<LawCase | null>(null);
@@ -1899,6 +1931,8 @@ export default function CasesPage() {
           canClose: canClose(selectedCase),
           canEarlyClose: canEarlyCloseCase(selectedCase),
           onEarlyClose: () => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); },
+          canReopen: canReopenCase(selectedCase),
+          onReopen: () => { setReopenCase(selectedCase); setShowReopenDialog(true); },
           // Transfer gate, verbatim: assigned lawyer + admin_support +
           // department_head (own dept) + branch_manager. Stage no longer matters —
           // the server lifted that restriction.
@@ -2157,6 +2191,137 @@ export default function CasesPage() {
               تأكيد الإغلاق
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reopen a CLOSED case at a chosen stage. The stage list and the
+          conditional number prompt come from the SAME shared helpers the server
+          validates with (getReopenTargetStages / stageNumberRequirement), so the
+          dialog can never offer a stage the endpoint rejects or omit a number it
+          demands. */}
+      <Dialog
+        open={showReopenDialog}
+        onOpenChange={(open) => {
+          setShowReopenDialog(open);
+          if (!open) { setReopenCase(null); setReopenTargetStage(""); setReopenNumber(""); setReopenNotes(""); }
+        }}
+      >
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>إعادة فتح القضية</DialogTitle>
+          </DialogHeader>
+          {reopenCase && (() => {
+            const reopenDeptName = getDepartmentName(reopenCase.departmentId || "");
+            const reopenStages = getReopenTargetStages(
+              (reopenCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
+              reopenDeptName,
+              reopenCase.clientRole || undefined,
+              !!reopenCase.memoRequired,
+              !!reopenCase.isSettlementCase,
+            );
+            const requirement = reopenTargetStage
+              ? stageNumberRequirement(reopenTargetStage as CaseStageValue, reopenDeptName)
+              : null;
+            // Prompt only when the stage requires a number AND the row doesn't
+            // already carry it — mirrors the server's supplied-or-stored check.
+            const storedNumber = requirement
+              ? String((reopenCase as unknown as Record<string, unknown>)[requirement.field] ?? "").trim()
+              : "";
+            const needsNumber = !!requirement && !storedNumber;
+            // Closures the product treats as genuinely final. Allowed (owner
+            // decision) but confirmed with an explicit warning.
+            const isTerminalClosure =
+              reopenCase.closureReason === "حكم_نهائي_ضدنا" ||
+              reopenCase.closureReason === "شطب_بدون_إعادة_قيد";
+            return (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <Label>المرحلة التي ستُفتح عندها القضية <span className="text-red-500">*</span></Label>
+                    <Select
+                      value={reopenTargetStage}
+                      onValueChange={(v) => { setReopenTargetStage(v); setReopenNumber(""); }}
+                    >
+                      <SelectTrigger data-testid="select-reopen-stage">
+                        <SelectValue placeholder="اختر المرحلة" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {reopenStages.map((s) => (
+                          <SelectItem key={s} value={s}>{getStageLabel(s)}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {needsNumber && requirement && (
+                    <div>
+                      <Label>{requirement.label} <span className="text-red-500">*</span></Label>
+                      <Input
+                        value={reopenNumber}
+                        onChange={(e) => setReopenNumber(e.target.value)}
+                        placeholder={requirement.placeholder}
+                        data-testid="input-reopen-number"
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <Label>ملاحظات (اختياري)</Label>
+                    <Textarea
+                      value={reopenNotes}
+                      onChange={(e) => setReopenNotes(e.target.value)}
+                      placeholder="سبب إعادة الفتح..."
+                      data-testid="input-reopen-notes"
+                    />
+                  </div>
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-amber-800 dark:text-amber-300">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <p className="text-xs">
+                      سيتم إعادة فتح القضية. الجلسات والمذكرات التي أُلغيت عند الإغلاق لن تُستعاد تلقائياً.
+                    </p>
+                  </div>
+                  {isTerminalClosure && (
+                    <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/20 p-3 text-red-700 dark:text-red-400" data-testid="warning-reopen-terminal-closure">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <p className="text-xs">
+                        أُغلقت هذه القضية لسبب نهائي ({reopenCase.closureReason?.replace(/_/g, " ")}). تأكد من صحة إعادة الفتح.
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setShowReopenDialog(false)}>إلغاء</Button>
+                  <Button
+                    data-testid="button-confirm-reopen"
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                    disabled={!reopenTargetStage || (needsNumber && !reopenNumber.trim()) || reopenSubmitting}
+                    onClick={async () => {
+                      setReopenSubmitting(true);
+                      try {
+                        await apiRequest("POST", `/api/cases/${reopenCase.id}/reopen`, {
+                          targetStage: reopenTargetStage,
+                          notes: reopenNotes.trim(),
+                          ...(needsNumber && requirement ? { [requirement.field]: reopenNumber.trim() } : {}),
+                        });
+                        await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                        await refreshCases();
+                        toast({ title: "تم إعادة فتح القضية" });
+                        setShowReopenDialog(false);
+                        setReopenCase(null);
+                        setReopenTargetStage("");
+                        setReopenNumber("");
+                        setReopenNotes("");
+                      } catch (err) {
+                        toast({ title: "تعذّر إعادة فتح القضية", description: extractApiError(err), variant: "destructive" });
+                      } finally {
+                        setReopenSubmitting(false);
+                      }
+                    }}
+                  >
+                    تأكيد إعادة الفتح
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
