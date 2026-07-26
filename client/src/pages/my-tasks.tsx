@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -719,6 +720,7 @@ export default function MyTasksPage() {
   const { contracts } = useContracts();
   const { getClientName } = useClients();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const [specialtyFilter, setSpecialtyFilter] = useState<"all" | TaskSpecialtyValue>("all");
 
@@ -835,6 +837,15 @@ export default function MyTasksPage() {
       } catch (err) {
         toast({ title: "تعذّر فتح الجلسة", description: extractApiError(err), variant: "destructive" });
       }
+      return;
+    }
+    // The judgment-deed follow-up shares kind case_work but NOT its destination:
+    // its action is "تسجيل استلام الصك", which lives in the case-details
+    // الإجراءات tab. The stage panel would be a dead end — محكوم_حكم_ابتدائي is a
+    // terminal stage, so the progress bar shows a badge and no advance button.
+    // Deep-link to the case instead (/cases?openCase=<id>, cases.tsx:451-473).
+    if (task.id.startsWith("judgment_deed:")) {
+      setLocation(`/cases?openCase=${task.caseId || task.entityId}`);
       return;
     }
     if (isCaseStageKind(task)) {

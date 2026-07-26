@@ -9143,12 +9143,18 @@ export async function registerRoutes(
             // and a failure between the two writes stranded it. Both auto-moves
             // are REMOVED: the stage is now written ONCE, with its stage-history
             // entry, and the case stays there.
-            //   • لصالحنا/جزئي → the post-judgment tasks below drive the close
-            //     (see maybeCloseCaseAfterPostJudgmentTasks).
-            //   • ضدنا → no task, no auto-close; closing is the lawyer's action
-            //     once nothing remains (the appeal path is a later step).
+            //   • لصالحنا/جزئي → REST here. The post-judgment tasks below drive
+            //     the close (maybeCloseCaseAfterPostJudgmentTasks) once collection
+            //     — and execution, when both exist — are complete.
+            //   • ضدنا → REST here only momentarily: a FINAL judgment against us
+            //     leaves nothing to do, so it AUTO-CLOSES immediately below.
             // تحصيل remains a STAGE for the SETTLEMENT path only (مداولة_الصلح →
             // تحصيل); judgments no longer route through it.
+            //
+            // NOTE the two writes here are NOT the old non-atomic auto-move: the
+            // judgment stage is written and PERSISTS for لصالحنا/جزئي, and for
+            // ضدنا the second write is a genuine, separately-recorded closure with
+            // its own history entry — not a stage the case never occupied.
             const finalStageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
             caseUpdate.currentStage = "محكوم_حكم_نهائي";
             caseUpdate.stageHistory = [
@@ -9198,13 +9204,61 @@ export async function registerRoutes(
                 await notifyFieldTaskCreated(executionTask, reqUser); // D4
                 createdTasks.push({ type: "execution_task", id: executionTask.id, description: "مهمة رفع طلب تنفيذ" });
               }
-              // NO stage move here any more. The case rests at محكوم_حكم_نهائي and
-              // is closed by maybeCloseCaseAfterPostJudgmentTasks once these
-              // task(s) are resolved — both of them when لصالحنا created two.
+              // NO stage move here. The case rests at محكوم_حكم_نهائي and is
+              // closed by maybeCloseCaseAfterPostJudgmentTasks once these task(s)
+              // are resolved — both of them when لصالحنا created two.
+            } else if (judgmentType === "ضدنا") {
+              // A FINAL judgment AGAINST US leaves nothing to do: no collection,
+              // no execution, and — because it is final — no objection and no
+              // appeal. So it AUTO-CLOSES (owner decision 2026-07-27), partially
+              // restoring what b41553a removed but ONLY for this one outcome.
+              //
+              // SCOPE: `isFinal` here means an appeal ruling OR a first-instance
+              // ruling the lawyer marked NOT objectionable. A ضدنا judgment that
+              // IS objectionable never reaches this branch — it takes the
+              // محكوم_حكم_ابتدائي path below and rests there awaiting the صك and a
+              // possible objection.
+              //
+              // The stage history keeps BOTH entries — the judgment written above
+              // and this closure — so the record reads truthfully as "final
+              // judgment against us, then closed", not as a case that teleported
+              // to مقفلة.
+              const closedAtIso = new Date().toISOString();
+              const closingHistory = Array.isArray(caseUpdate.stageHistory)
+                ? caseUpdate.stageHistory
+                : [];
+              await storage.updateCase(effectiveCaseId, {
+                currentStage: "مقفلة",
+                // Set alongside the stage — the judgment closes used to write only
+                // the stage, which left three route guards testing `status` able to
+                // act on a closed case.
+                status: "مغلق",
+                closedAt: closedAtIso,
+                closureReason: ClosureReason.JUDGMENT_AGAINST,
+                stageHistory: [
+                  ...closingHistory,
+                  {
+                    stage: "مقفلة",
+                    timestamp: closedAtIso,
+                    userId: "system",
+                    userName: "النظام",
+                    notes: "إغلاق تلقائي — حكم نهائي ضدنا",
+                  },
+                ],
+              } as Partial<LawCase>);
+              // Same cleanup every other close path runs — otherwise the closed
+              // case keeps live hearings/memos/tasks emitting reminders.
+              await cancelOpenCaseChildrenOnClose(effectiveCaseId);
+              await logCaseActivityActing(req, {
+                caseId: effectiveCaseId,
+                userId: reqUser.id,
+                userName: reqUser.name || reqUser.id,
+                actionType: "case_closed",
+                title: "إغلاق تلقائي — حكم نهائي ضدنا",
+                previousValue: "محكوم_حكم_نهائي",
+                newValue: "مقفلة",
+              });
             }
-            // ضدنا intentionally has no branch: no post-judgment task, and NO
-            // auto-close (removed with this batch). closureReason is written only
-            // where a case actually closes.
           } else {
             // === PRIMARY (ابتدائي) JUDGMENTS ===
             // A primary judgment is NOT terminal — it can still be objected
