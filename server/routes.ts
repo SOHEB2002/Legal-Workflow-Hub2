@@ -42,6 +42,8 @@ import {
   remapConsultationStageForType,
   isInFollowUpCycle,
   getStagesForConsultationCycle,
+  isContractInFollowUpCycle,
+  getStagesForContractCycle,
   ConsultationCategorySLADays,
   ConsultationCategory,
   ContractStage,
@@ -720,6 +722,31 @@ function getContractTransitionsForType(_type: string): StageTransitionRule[] {
   return ALLOWED_CONTRACT_TRANSITIONS;
 }
 
+// Follow-up cycle transitions ("استشارة تعقيبية" on a contract). Mirrors
+// ALLOWED_CONSULTATION_CYCLE_TRANSITIONS_WRITTEN: 2 forward steps —
+// RECEIVED → READY (the work: answer the question), READY → CLOSED
+// (admin-gated, matching the main-flow closure edge). The cycle deliberately
+// contains NO تحرير / مراجعة_داخلية / لجنة_مراجعة edges: a follow-up is
+// answer-and-close, not a re-run of the full contract flow.
+//
+// /advance-stage already flips status='closed' + closedAt whenever CLOSED is
+// reached (the `reachedClosed` branch), so the cycle's final step re-closes
+// the contract with no extra branch — same as the consultations comment.
+//
+// Roles copied verbatim from the WRITTEN consultation cycle, and they happen
+// to match the contract's own main-flow gates: the closure edge READY →
+// CLOSED is admin_support/branch_manager in ALLOWED_CONTRACT_TRANSITIONS too.
+const ALLOWED_CONTRACT_CYCLE_TRANSITIONS: StageTransitionRule[] = [
+  { from: ContractStage.RECEIVED, to: ContractStage.READY,  allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: ContractStage.READY,    to: ContractStage.CLOSED, allowedRoles: ["admin_support", "branch_manager"] },
+];
+
+// Type-keyed for shape-parity with getContractTransitionsForType /
+// getConsultationCycleTransitionsForType, though contracts have one flow.
+function getContractCycleTransitionsForType(_type: string): StageTransitionRule[] {
+  return ALLOWED_CONTRACT_CYCLE_TRANSITIONS;
+}
+
 // 4c-4 (contracts) — per-identity original logic (mirror of cases/consultations).
 // consultations_review_head IS admin-class here (contracts committee chair);
 // cases_review_head is intentionally EXCLUDED (they can still match via
@@ -1009,7 +1036,14 @@ function validateStageTransition(
   // dept-scope check, which let a dept_head from any dept call
   // /return-stage on any contract just by knowing its id.
   if (entityType === "contract" && entityData) {
-    const stages = ContractStagesAll as readonly string[];
+    // Cycle-aware, mirroring the consultation rollback block below: a
+    // follow-up cycle rolls back inside its own 3-stage list (the 1-step-back
+    // rule still applies, just on the shorter list). isContractInFollowUpCycle
+    // includes the active-status check; outside a cycle we keep ContractStagesAll.
+    const stages = (isContractInFollowUpCycle(entityData)
+      ? getStagesForContractCycle(entityData)
+      : ContractStagesAll
+    ) as readonly string[];
     const currentIdx = stages.indexOf(currentStage);
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
@@ -1036,7 +1070,9 @@ function validateStageTransition(
       : entityType === "memo"
         ? ALLOWED_MEMO_TRANSITIONS
         : entityType === "contract"
-          ? getContractTransitionsForType(entityData?.contractType)
+          ? (isContractInFollowUpCycle(entityData)
+              ? getContractCycleTransitionsForType(entityData?.contractType)
+              : getContractTransitionsForType(entityData?.contractType))
           : (isInFollowUpCycle(entityData)
               ? getConsultationCycleTransitionsForType(entityData?.consultationType)
               : getConsultationTransitionsForType(entityData?.consultationType));

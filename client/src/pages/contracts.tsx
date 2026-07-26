@@ -38,7 +38,7 @@ import {
   ContractPriority, ContractPriorityLabels,
   ContractAttachmentSlot, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
-  ContractActivityType, isContractInFollowUpCycle,
+  ContractActivityType, isContractInFollowUpCycle, getStagesForContractCycle,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
 import { useClients } from "@/lib/clients-context";
@@ -61,6 +61,24 @@ const LINEAR_ADVANCE: Partial<Record<ContractStageValue, { target: ContractStage
   [ContractStage.READY]:                       { target: ContractStage.CLOSED,                      roles: ["admin_support", "branch_manager"] },
 };
 
+// Cycle linear-advance table — mirrors ALLOWED_CONTRACT_CYCLE_TRANSITIONS on
+// the server, exactly as LINEAR_ADVANCE_CYCLE_WRITTEN mirrors its server table
+// on the consultations page. 2 forward steps: RECEIVED → READY (answer the
+// follow-up question) → CLOSED (re-close). No تحرير / مراجعة / لجنة edges — a
+// follow-up must not re-run the full flow.
+const LINEAR_ADVANCE_CYCLE: Partial<Record<ContractStageValue, { target: ContractStageValue; roles: string[] }>> = {
+  [ContractStage.RECEIVED]: { target: ContractStage.READY,  roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  [ContractStage.READY]:    { target: ContractStage.CLOSED, roles: ["admin_support", "branch_manager"] },
+};
+
+// Mirror of getLinearAdvanceTable on the consultations page. Contracts have a
+// single type-agnostic flow, so the only axis is in-cycle vs not.
+function getLinearAdvanceTable(
+  c: { followUpCount?: number | null; status?: string | null },
+): Partial<Record<ContractStageValue, { target: ContractStageValue; roles: string[] }>> {
+  return isContractInFollowUpCycle(c) ? LINEAR_ADVANCE_CYCLE : LINEAR_ADVANCE;
+}
+
 function getAdvanceTarget(
   c: Contract,
   userRole: string,
@@ -69,7 +87,7 @@ function getAdvanceTarget(
 ): ContractStageValue | null {
   if (c.status !== "active") return null;
   if (c.awaitingCompletion) return null;
-  const rule = LINEAR_ADVANCE[c.currentStage];
+  const rule = getLinearAdvanceTable(c)[c.currentStage];
   if (!rule) return null;
   if (userRole === "department_head" && c.departmentId !== userDeptId) return null;
   const isAssigned = !!c.assignedTo && c.assignedTo === userId;
@@ -87,8 +105,11 @@ function getReturnTargets(
   if (c.status !== "active") return [];
   if (c.awaitingCompletion) return [];
   if (userRole === "department_head" && c.departmentId !== userDeptId) return [];
-  const stages =
-    c.currentStage === ContractStage.TAKING_NOTES ? ContractStagesAll : ContractStagesOrder;
+  // Cycle-aware, mirroring getReturnTargets on the consultations page: inside
+  // a follow-up cycle the rollback list is the 3-stage cycle, not the full path.
+  const stages: readonly ContractStageValue[] = isContractInFollowUpCycle(c)
+    ? getStagesForContractCycle(c)
+    : c.currentStage === ContractStage.TAKING_NOTES ? ContractStagesAll : ContractStagesOrder;
   const idx = stages.indexOf(c.currentStage);
   if (idx <= 0) return [];
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
@@ -1503,13 +1524,24 @@ export default function ContractsPage() {
                         (تعقيبية #{selected.followUpCount})
                       </span>
                     </div>
-                    <p className="mt-1 whitespace-pre-wrap break-words">
+                    {/* text-foreground, NOT the wrapper's text-blue-900: the
+                        inherited blue-900 sits almost invisibly on the
+                        blue-500/10 tint in the dark theme. The heading keeps
+                        its blue styling; only the question body is promoted
+                        to the standard foreground colour so it reads. */}
+                    <p className="mt-1 whitespace-pre-wrap break-words text-foreground">
                       <BidiText>{String(question)}</BidiText>
                     </p>
                   </div>
                 );
               })()}
-              <ContractStagesBar currentStage={selected.currentStage} />
+              {/* followUpCount switches the bar to the 3-stage cycle
+                  (استلام → جاهزة للإرسال → مغلقة) — same prop and same
+                  status-agnostic semantics as ConsultationStagesBar. */}
+              <ContractStagesBar
+                currentStage={selected.currentStage}
+                followUpCount={selected.followUpCount}
+              />
 
               {/* Action row */}
               <div className="flex flex-wrap gap-2 justify-end">

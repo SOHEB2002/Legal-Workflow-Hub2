@@ -4,6 +4,7 @@ import {
   ContractStageLabels,
   ContractStagesAll,
   ContractStagesOrder,
+  getStagesForContractCycle,
   type ContractStageValue,
 } from "@shared/schema";
 
@@ -15,17 +16,28 @@ interface ContractStagesBarProps {
   // alone whether it ever happened, so callers compute it from the
   // committee-decision history and pass it in.
   hasTakingNotesHistory?: boolean;
+  // When > 0, the contract is (or was last) in a follow-up cycle — render the
+  // 3-stage cycle bar instead of the full contract flow. Status-agnostic on
+  // purpose, mirroring ConsultationStagesBar: a re-closed cycle still shows
+  // the cycle bar with مغلقة highlighted, not the original 8-stage path.
+  followUpCount?: number | null;
 }
 
 export function ContractStagesBar({
   currentStage,
   hasTakingNotesHistory = false,
+  followUpCount,
 }: ContractStagesBarProps) {
-  const showTakingNotes =
-    currentStage === ContractStage.TAKING_NOTES || hasTakingNotesHistory;
-  const stages: ContractStageValue[] = showTakingNotes
-    ? [...ContractStagesAll]
-    : [...ContractStagesOrder];
+  const stages: ContractStageValue[] = (() => {
+    // Checked FIRST, exactly like ConsultationStagesBar — the cycle list wins
+    // over the taking-notes toggle (a cycle never visits التحرير/اللجنة).
+    if ((followUpCount ?? 0) > 0) {
+      return [...getStagesForContractCycle({ followUpCount })];
+    }
+    const showTakingNotes =
+      currentStage === ContractStage.TAKING_NOTES || hasTakingNotesHistory;
+    return showTakingNotes ? [...ContractStagesAll] : [...ContractStagesOrder];
+  })();
 
   const rawIndex = stages.indexOf(currentStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;

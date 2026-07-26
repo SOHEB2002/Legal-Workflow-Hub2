@@ -2840,27 +2840,49 @@ export function remapContractStageForType(
 }
 
 // ============ Contract follow-up cycle ("استشارة تعقيبية") ============
-// Direct mirror of isInFollowUpCycle on the consultations side. A closed
-// contract can be re-opened on the SAME record for a client follow-up
-// question (followUpCount bumps, status flips to active, currentStage
-// resets to RECEIVED).
+// A closed contract can be re-opened on the SAME record for a client
+// follow-up question (followUpCount bumps, status flips to active,
+// currentStage resets to RECEIVED). Direct mirror of the consultations
+// follow-up cycle — see ConsultationCycleStages* / isInFollowUpCycle /
+// getStagesForConsultationCycle above.
 //
-// ⚠ DELIBERATE DIVERGENCE from consultations: there is NO contract
-// equivalent of getStagesForConsultationCycle / ConsultationCycleStages*.
-// Consultations collapse a follow-up round into a 3-stage mini-flow whose
-// shape is chosen by consultationType — contracts have a SINGLE stage flow
-// (getContractStagesForType is type-agnostic by design), so there is no
-// per-type shape to pick and inventing a contract mini-flow would be new
-// workflow design, not a mirror. A re-opened contract therefore runs the
-// normal 8-stage path from استلام.
+// A follow-up is just "answer the question and close again" — it must NOT
+// re-run the full flow through تحرير / مراجعة داخلية / لجنة المراجعة. So a
+// cycle collapses to a 3-stage mini-flow, exactly as consultations do.
 //
-// Status-gated exactly like the consultation helper, so a CLOSED row that
-// carries followUpCount > 0 (a finished cycle) reports false.
+// Consultations pick their cycle shape by consultationType (WRITTEN
+// substitutes READY for COMPLETED at stage 2). Contracts have a SINGLE
+// type-agnostic flow (getContractStagesForType ignores its argument by
+// design), so there is nothing to choose from: ONE fixed cycle list.
+// Stage tokens are reused from the main enum — no new labels, no new
+// column, no migration.
+export const ContractCycleStages: ContractStageValue[] = [
+  ContractStage.RECEIVED,
+  ContractStage.READY,
+  ContractStage.CLOSED,
+];
+
+// True while the contract is actively inside a follow-up cycle. Status-gated
+// exactly like isInFollowUpCycle, so a CLOSED row carrying followUpCount > 0
+// (a finished cycle) reports false — gating callers (transition validation,
+// advance/return targets) use this to decide whether cycle rules apply.
 export function isContractInFollowUpCycle(
   c: { followUpCount?: number | null; status?: string | null } | null | undefined,
 ): boolean {
   if (!c) return false;
   return (c.followUpCount ?? 0) > 0 && c.status === "active";
+}
+
+// Stages list for the stage bar / rollback validator. Mirrors
+// getStagesForConsultationCycle including its STATUS-AGNOSTIC condition:
+// whenever followUpCount > 0 the cycle list wins, so a re-closed cycle still
+// renders the 3-stage bar with مغلقة highlighted rather than snapping back to
+// the original 8-stage path. Falls back to the full contract stages list.
+export function getStagesForContractCycle(
+  c: { followUpCount?: number | null } | null | undefined,
+): readonly ContractStageValue[] {
+  if (!c || (c.followUpCount ?? 0) <= 0) return ContractStagesAll;
+  return ContractCycleStages;
 }
 
 export const ContractStatus = {
