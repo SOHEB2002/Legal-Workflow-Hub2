@@ -54,6 +54,10 @@ export function CaseStagePanel({
       clientRole={caseItem.clientRole || undefined}
       memoRequired={!!caseItem.memoRequired}
       isSettlementCase={!!caseItem.isSettlementCase}
+      // Read-only: lets the bar work out how far a TERMINAL case (مقفلة /
+      // مشطوبة / محكوم_* …) actually got along its path, since such a case can
+      // be closed from any stage and currentStage no longer says where it was.
+      stageHistory={caseItem.stageHistory}
       departmentName={getDepartmentName(caseItem.departmentId || "")}
       disabled={
         stageTransitioning

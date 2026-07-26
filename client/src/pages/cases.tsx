@@ -88,6 +88,7 @@ import {
   CaseClassification,
   CaseClassificationLabels,
   getStageLabel,
+  TerminalCaseStages,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -209,17 +210,11 @@ const WAITING_EXTERNAL_STAGES = new Set([
   "تقديم_التظلم",
   "انتظار_رد_التظلم",
 ]);
-// Terminal stages — final outcomes. محكوم_حكم_ابتدائي is qualified
-// elsewhere: only terminal when no active memo (an open objection
-// memo means the case is still alive).
-const TERMINATED_STAGES = new Set([
-  "محكوم_حكم_نهائي",
-  "محكوم_حكم_ابتدائي",
-  "مشطوبة",
-  "تحصيل",
-  "مقفلة",
-  "مؤرشفة",
-]);
+// Terminal stages — final outcomes. The set itself now lives in
+// shared/schema.ts (TerminalCaseStages) because the stage progress bar needs
+// the same list; this file's semantics are unchanged (same six stages).
+// محكوم_حكم_ابتدائي is qualified below: only terminal when no active memo
+// (an open objection memo means the case is still alive).
 // Stages where the case is sitting in court with the firm's role
 // being to push the active memo forward; if the memo is open this
 // outranks "waiting on external" / "terminated".
@@ -249,7 +244,7 @@ function getCasePriorityGroup(
   // the firm is still actively pushing paperwork.
   if (IN_COURT_STAGES_FOR_MEMO_GROUP.has(stage) && hasActiveMemo) return 3;
 
-  if (TERMINATED_STAGES.has(stage)) return 5;
+  if (TerminalCaseStages.has(stage)) return 5;
 
   // Paused or awaiting-completion = waiting on external action even
   // if the underlying stage would otherwise put the case in group 2.
