@@ -690,6 +690,12 @@ export function CaseDetailsDialog({
                         <p className="font-medium"><LtrInline>{selectedCase.mohrNumber}</LtrInline></p>
                       </div>
                     )}
+                    {selectedCase.executionRequestNumber && (
+                      <div>
+                        <Label className="text-muted-foreground">رقم طلب التنفيذ</Label>
+                        <p className="font-medium"><LtrInline>{selectedCase.executionRequestNumber}</LtrInline></p>
+                      </div>
+                    )}
                     {(selectedCase.currentStage === "قيد_التدقيق_في_تراضي" ||
                       selectedCase.currentStage === "قيد_التدقيق_في_ناجز" ||
                       selectedCase.currentStage === "قيد_التدقيق_في_معين") && (
@@ -1036,6 +1042,33 @@ export function CaseDetailsDialog({
                               <>
                                 <p className="font-medium">{selectedCase.courtCaseNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
                                 <Button variant="ghost" size="sm" data-testid="button-edit-court-case-number" onClick={() => { setInlineEditField(`court-${selectedCase.id}`); setInlineEditValue(selectedCase.courtCaseNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        {/* رقم طلب التنفيذ — captured (mandatory) when the EXECUTION
+                            post-judgment task is completed, and correctable here
+                            afterwards. Mirrors the courtCaseNumber field above
+                            field-for-field: same inline-edit idiom, same
+                            updateCase path, so the same PATCH /api/cases/:id
+                            permission (canModifyCase) gates it. */}
+                        <div className="text-right">
+                          <Label className="text-muted-foreground block text-right">رقم طلب التنفيذ</Label>
+                          <div className="flex items-center gap-2 mt-1 justify-end">
+                            {inlineEditField === `execution-${selectedCase.id}` ? (
+                              <>
+                                <Input value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-32" autoFocus data-testid="input-execution-request-number"
+                                  onKeyDown={async e => {
+                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { executionRequestNumber: inlineEditValue }); setInlineEditField(null); }
+                                    else if (e.key === "Escape") setInlineEditField(null);
+                                  }} />
+                                <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { executionRequestNumber: inlineEditValue }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
+                                <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
+                              </>
+                            ) : (
+                              <>
+                                <p className="font-medium">{selectedCase.executionRequestNumber || <span className="text-muted-foreground text-sm italic">غير مُضاف</span>}</p>
+                                <Button variant="ghost" size="sm" data-testid="button-edit-execution-request-number" onClick={() => { setInlineEditField(`execution-${selectedCase.id}`); setInlineEditValue(selectedCase.executionRequestNumber || ""); }}><Pencil className="w-3 h-3" /></Button>
                               </>
                             )}
                           </div>

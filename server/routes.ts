@@ -4981,11 +4981,12 @@ export async function registerRoutes(
   });
 
   // Complete an EXECUTION (تنفيذ) task by recording رقم طلب التنفيذ. The number is
-  // written ONLY to the case activity log (the sole record — no case column; a
-  // future execution-requests page extracts from the log) and the field_task is
-  // marked complete. Gated like the field-task PATCH: the assignee, OR anyone who
-  // can modify the parent case (admin_support / branch_manager / dept_head(own) /
-  // the case's lawyer). Delegation actorDisplayName stamping applies if acting-as.
+  // MANDATORY (400 below) and is now written to law_cases.execution_request_number
+  // as well as the activity log — it used to live ONLY in the log + the task's
+  // completionNotes, so it could not be displayed on the case or corrected later.
+  // Gated like the field-task PATCH: the assignee, OR anyone who can modify the
+  // parent case (admin_support / branch_manager / dept_head(own) / the case's
+  // lawyer). Delegation actorDisplayName stamping applies if acting-as.
   app.post("/api/field-tasks/:id/execution-request", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
@@ -5010,10 +5011,27 @@ export async function registerRoutes(
         title: `تم رفع طلب تنفيذ رقم ${executionRequestNumber} بواسطة ${actorName}`,
         details: `رقم طلب التنفيذ: ${executionRequestNumber}`,
       });
+      // Persist on the CASE so it survives, displays beside the other platform
+      // numbers, and stays correctable. Dedicated column only — never
+      // case_number (varchar(50) NOT NULL UNIQUE), and deliberately NOT part of
+      // deriveCurrentCaseNumber: this is a reference field, not the case's number.
+      await storage.updateCase(task.caseId, {
+        executionRequestNumber: executionRequestNumber.substring(0, 100),
+      } as Partial<LawCase>);
       const updated = await storage.updateFieldTask(String(req.params.id), {
         status: FieldTaskStatus.COMPLETED,
         completionNotes: `رقم طلب التنفيذ: ${executionRequestNumber}`,
       });
+
+      // BUGFIX (found while adding the number): this endpoint completes the
+      // EXECUTION task by writing through storage directly, so it BYPASSED the
+      // post-judgment auto-close hook — which lives in PATCH /api/field-tasks/:id.
+      // A case whose collection task was completed via the PATCH route and whose
+      // execution task was completed HERE therefore never closed, even with both
+      // tasks done. Same call, same guards (no-ops unless the case is at
+      // محكوم_حكم_نهائي and every post-judgment task is resolved).
+      await maybeCloseCaseAfterPostJudgmentTasks(req, task.caseId, user);
+
       res.json(updated);
     } catch (error) {
       console.error("Error filing execution request:", error);
