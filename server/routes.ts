@@ -1185,6 +1185,40 @@ async function ensureObjectionMemoForCase(
   return { action: "created", memoId: memo.id };
 }
 
+// Recording a judgment MEANS the case is in court, so a case found on any other
+// stage is repaired in place rather than refused. Mirrors the hearing-creation
+// promotion field-for-field (POST /api/hearings): منظورة, and for a قيد_الدراسة
+// case also منظورة_بالمحكمة with clientRole defaulting to "مدعي", plus a
+// stage-history entry. Deliberately silent — the caller neither warns nor blocks.
+// NEVER called for a case already at منظورة_استئناف: that would demote an appeal
+// back to first instance and break the appeal-ruling branch.
+async function promoteCaseToCourtForJudgment(
+  lawCase: LawCase,
+  actor: { id: string; name?: string },
+): Promise<LawCase | undefined> {
+  const history = Array.isArray(lawCase.stageHistory) ? lawCase.stageHistory : [];
+  const promoteClassification = lawCase.caseClassification === "قيد_الدراسة";
+  return await storage.updateCase(lawCase.id, {
+    currentStage: "منظورة",
+    ...(promoteClassification
+      ? {
+          caseClassification: "منظورة_بالمحكمة",
+          ...(!lawCase.clientRole ? { clientRole: "مدعي" } : {}),
+        }
+      : {}),
+    stageHistory: [
+      ...history,
+      {
+        stage: "منظورة",
+        timestamp: new Date().toISOString(),
+        userId: actor.id,
+        userName: actor.name || actor.id,
+        notes: "انتقال تلقائي عند تسجيل الحكم — القضية منظورة أمام المحكمة",
+      },
+    ],
+  } as Partial<LawCase>);
+}
+
 // Judgment-lifecycle step 3 — move a case onto the appeal/final track.
 // One writer for all four routes into these two stages (objection filed, court
 // hearing after a primary judgment, "الخصم استأنف", "لم يستأنف الخصم") so the
@@ -8739,25 +8773,35 @@ export async function registerRoutes(
         if (!judgmentType) {
           return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
         }
-        // A judgment presupposes the case is in court. Since c5e930e every court
-        // hearing promotes its case to منظورة (or منظورة_استئناف after a primary
-        // judgment), so a judgment-bearing case is always on one of the two; any
-        // other stage means the data is inconsistent and the degree cannot be
-        // derived. Refuse rather than guess — this is the guard that used to be
-        // missing, which let a judgment be recorded from أغلق_طلب_الصلح and
-        // produce the wrong-path bug.
+        // A hearing with no linked case is a real error — there is nothing to
+        // record the judgment against.
         if (!settlementProbeCase) {
           return res.status(400).json({ error: "لا يمكن تسجيل حكم لجلسة غير مرتبطة بقضية" });
         }
+        // SILENT PROMOTION, NOT A BLOCK (owner decision). The blocking guard that
+        // stood here is removed: the owner already placed the guard at HEARING
+        // CREATION (c5e930e — creating a court hearing promotes the case), and a
+        // second block at judgment time rejected legitimate work on cases whose
+        // hearings predate that change.
+        //
+        // Recording a judgment MEANS the case is in court, so a case found on any
+        // other stage is repaired rather than refused: promoted exactly the way
+        // hearing creation promotes it (منظورة + قيد_الدراسة → منظورة_بالمحكمة with
+        // clientRole defaulting to مدعي, plus a stage-history entry). No error, no
+        // message. This runs BEFORE the degree is derived, so a promoted case
+        // correctly reads as ابتدائي — it is at منظورة by the time we look.
+        //
+        // A case already at منظورة_استئناف is left ALONE so the appeal-ruling
+        // branch still fires for it.
+        let judgmentCase = settlementProbeCase;
         if (
-          settlementProbeCase.currentStage !== "منظورة" &&
-          settlementProbeCase.currentStage !== "منظورة_استئناف"
+          judgmentCase.currentStage !== "منظورة" &&
+          judgmentCase.currentStage !== "منظورة_استئناف"
         ) {
-          return res.status(400).json({
-            error: "لا يمكن تسجيل حكم إلا لقضية منظورة أمام المحكمة أو منظورة استئناف",
-          });
+          const promoted = await promoteCaseToCourtForJudgment(judgmentCase, req.user!);
+          if (promoted) judgmentCase = promoted;
         }
-        judgmentIsAppealRuling = settlementProbeCase.currentStage === "منظورة_استئناف";
+        judgmentIsAppealRuling = judgmentCase.currentStage === "منظورة_استئناف";
         if (!judgmentIsAppealRuling) {
           // Explicit boolean required — an unanswered question is what used to
           // park a case at محكوم_حكم_ابتدائي with no deadline and no way forward.

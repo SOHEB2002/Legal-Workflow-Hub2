@@ -75,33 +75,29 @@ export function HearingResultDialog({
   }, [hearing?.id]);
 
   // THE DEGREE IS DERIVED FROM THE CASE PATH, never asked — mirrors the server.
-  //   منظورة        → the ruling is ابتدائي (first instance)
   //   منظورة_استئناف → the ruling is استئنافي, final by nature
-  // Any other stage means a judgment cannot be recorded at all (the server 400s),
-  // so the form says so rather than letting the request fail after the fact.
+  //   anything else  → the ruling is ابتدائي (first instance). A case not yet at
+  //                    منظورة is PROMOTED there by the server as it records the
+  //                    judgment, so it derives ابتدائي correctly; the form does
+  //                    not block on the stage (the owner's guard lives at hearing
+  //                    creation, not here).
   const judgmentCase = hearing?.caseId
     ? getCaseById(hearing.caseId)
     : (resultForm.caseId && resultForm.caseId !== "none" ? getCaseById(resultForm.caseId) : null);
   const judgmentIsAppealRuling = judgmentCase?.currentStage === "منظورة_استئناف";
-  const judgmentStageValid =
-    judgmentCase?.currentStage === "منظورة" || judgmentIsAppealRuling;
 
   // The ONLY judgment question besides the outcome: is the FIRST-INSTANCE ruling
   // objectionable? Some are not at all (القضاء المستعجل), and the answer decides
   // whether the case goes to محكوم_حكم_ابتدائي (objection/appeal path) or straight
   // to محكوم_حكم_نهائي. Never asked for an appeal ruling.
   const judgmentNeedsObjectionAnswer =
-    resultForm.result === HearingResult.JUDGMENT
-    && judgmentStageValid
-    && !judgmentIsAppealRuling;
+    resultForm.result === HearingResult.JUDGMENT && !judgmentIsAppealRuling;
 
-  // Submit gate for a judgment: a valid court stage + the outcome, plus the
-  // objectionability answer when it applies. Keeps the button in step with the
-  // server's 400s.
+  // Submit gate for a judgment: the outcome, plus the objectionability answer
+  // when it applies. No stage term — the server promotes rather than refusing.
   const judgmentInputsComplete =
     resultForm.result !== HearingResult.JUDGMENT
-    || (judgmentStageValid
-        && !!resultForm.judgmentSide
+    || (!!resultForm.judgmentSide
         && (!judgmentNeedsObjectionAnswer || !!resultForm.objectionAnswer));
 
   const handleSubmitResult = async () => {
@@ -321,19 +317,9 @@ export function HearingResultDialog({
                   old "ابتدائي أم نهائي" select posed a false opposition (the
                   opposite of ابتدائي is استئنافي; نهائي is a different concept).
                   Shown read-only so the lawyer can see which degree applies. */}
-              {!judgmentStageValid ? (
-                <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/20 p-3 text-red-700 dark:text-red-400" data-testid="warning-judgment-stage-invalid">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <p className="text-xs">
-                    لا يمكن تسجيل حكم إلا لقضية منظورة أمام المحكمة أو منظورة استئناف.
-                    {judgmentCase ? ` المرحلة الحالية: ${judgmentCase.currentStage}.` : " لم تُحدَّد القضية المرتبطة."}
-                  </p>
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground" data-testid="text-judgment-degree">
-                  درجة الحكم: <strong>{judgmentIsAppealRuling ? "استئنافي (نهائي بطبيعته)" : "ابتدائي"}</strong> — مُستمدة من مرحلة القضية.
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground" data-testid="text-judgment-degree">
+                درجة الحكم: <strong>{judgmentIsAppealRuling ? "استئنافي (نهائي بطبيعته)" : "ابتدائي"}</strong> — مُستمدة من مرحلة القضية.
+              </p>
               {/* Objection sub-form. Shown for ضدنا AND جزئي: a partial judgment is
                   partially against us, so it can warrant an objection too. This gate
                   mirrors the SERVER's objection-memo branch verbatim (routes.ts:8203,
