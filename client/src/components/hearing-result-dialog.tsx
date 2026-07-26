@@ -120,20 +120,6 @@ export function HearingResultDialog({
       toast({ title: "اختر إجراء الصلح: إغلاق نهائي أو استكمال الإجراءات", variant: "destructive" });
       return;
     }
-    // "مطلوب رد من الخصم" is recorded ON THE NEXT SESSION, so without a date it
-    // has nowhere to live. Mirrors the server's 400 so the user is told here.
-    if (
-      resultForm.result === HearingResult.NEW_SESSION &&
-      resultForm.opponentResponseRequired &&
-      !resultForm.nextHearingDate
-    ) {
-      toast({
-        title: "حدد تاريخ الجلسة القادمة",
-        description: "مؤشر \"مطلوب رد من الخصم\" يُسجَّل على الجلسة القادمة، فلا يمكن حفظه بدون تاريخها.",
-        variant: "destructive",
-      });
-      return;
-    }
     if (resultForm.result === HearingResult.JURISDICTION_DECLINED && !resultForm.transferToDepartmentId) {
       toast({ title: "اختر القسم المحوّل إليه عند تسجيل عدم الاختصاص", variant: "destructive" });
       return;
