@@ -2203,6 +2203,24 @@ export default function ConsultationsPage() {
                           بانتظار
                         </Badge>
                       )}
+                      {/* Follow-up cycle indicator — DERIVED, exactly like
+                          "مذكرة جارية" / "بانتظار استلام الصك" in cases.tsx: no
+                          stored flag, no clearing code. isInFollowUpCycle is
+                          count>0 AND status active, so it self-clears when the
+                          cycle re-closes. Same gate + label + classes as the
+                          contracts row badge. The DIALOG badge stays
+                          count-only/status-agnostic on purpose. */}
+                      {isInFollowUpCycle(consultation) && (
+                        <Badge
+                          variant="outline"
+                          className="border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-consultation-follow-up-${consultation.id}`}
+                          title="الاستشارة في جولة استشارة تعقيبية"
+                        >
+                          <RotateCw className="w-2.5 h-2.5 ml-1" />
+                          تعقيبية #{consultation.followUpCount}
+                        </Badge>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell className="text-center">{getDepartmentName(consultation.departmentId)}</TableCell>
