@@ -1224,6 +1224,7 @@ export default function MemosPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="text-center w-[48px]">#</TableHead>
                     <TableHead className="text-center">العنوان</TableHead>
                     <TableHead className="text-center">العميل</TableHead>
                     <TableHead className="text-center">الخصم</TableHead>
@@ -1235,7 +1236,7 @@ export default function MemosPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pagedMemos.map((memo) => {
+                  {pagedMemos.map((memo, idx) => {
                       const caseDetails = getCaseDetails(memo.caseId);
                       const relatedCaseForRow = cases.find((c) => c.id === memo.caseId);
                       const priorityGroup = getMemoPriorityGroup(memo);
@@ -1249,6 +1250,13 @@ export default function MemosPage() {
                               : "";
                       return (
                       <TableRow key={memo.id} data-testid={`row-memo-${memo.id}`} className={rowClass}>
+                        {/* Display-only sequential number — index inside the
+                            RENDERED page, so filters/sorting/search renumber
+                            from 1. Continues across pages via the page offset
+                            (the pager is a plain slice of one sorted list). */}
+                        <TableCell className="text-center text-xs text-muted-foreground" data-testid={`cell-index-${memo.id}`}>
+                          {(memoPage - 1) * MEMO_PAGE_SIZE + idx + 1}
+                        </TableCell>
                         <TableCell className="text-center">
                           <div className="flex flex-col items-center text-center w-full">
                             <p className="font-medium text-sm text-center w-full">{memo.title}</p>

@@ -433,6 +433,7 @@ export default function ClientsPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="text-right w-[48px]">#</TableHead>
                 <TableHead className="text-right">العميل</TableHead>
                 <TableHead className="text-right">النوع</TableHead>
                 <TableHead className="text-right">التواصل</TableHead>
@@ -442,8 +443,15 @@ export default function ClientsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredClients.map((client) => (
+              {filteredClients.map((client, idx) => (
                 <TableRow key={client.id} data-testid={`row-client-${client.id}`}>
+                  {/* Display-only sequential number — index inside the rendered
+                      list, so the search box and the type filter renumber the
+                      visible rows from 1. This table is unpaginated, so it is a
+                      plain 1..n count. */}
+                  <TableCell className="text-xs text-muted-foreground" data-testid={`cell-index-${client.id}`}>
+                    {idx + 1}
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">

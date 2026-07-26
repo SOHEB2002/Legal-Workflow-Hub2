@@ -912,17 +912,19 @@ export default function HearingsPage() {
             <div className="w-full overflow-hidden">
               <table className="w-full caption-bottom text-xs" style={{ tableLayout: 'fixed' }}>
                 <colgroup>
+                  <col style={{ width: '4%' }} />
+                  <col style={{ width: '11%' }} />
                   <col style={{ width: '12%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '12%' }} />
                   <col style={{ width: '6%' }} />
                   <col style={{ width: '17%' }} />
                   <col style={{ width: '11%' }} />
                   <col style={{ width: '11%' }} />
-                  <col style={{ width: '17%' }} />
+                  <col style={{ width: '16%' }} />
                 </colgroup>
                 <thead className="[&_tr]:border-b">
                   <tr className="border-b">
+                    <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">#</th>
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">التاريخ</th>
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">المدعي</th>
                     <th className="h-10 px-1 text-center align-middle font-medium text-muted-foreground text-xs">المدعى عليه</th>
@@ -973,6 +975,16 @@ export default function HearingsPage() {
                               : "border-b transition-colors hover:bg-muted/50"
                           }
                         >
+                          {/* Display-only sequential number — index inside the
+                              RENDERED page, so filters/sorting/search renumber
+                              from 1. Continues across pages via the page offset
+                              (the pager is a plain slice of one sorted list). */}
+                          <td
+                            className="text-center px-1 py-2 text-xs align-middle overflow-hidden text-muted-foreground"
+                            data-testid={`cell-index-${hearing.id}`}
+                          >
+                            {(hearingPage - 1) * HEARING_PAGE_SIZE + idx + 1}
+                          </td>
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
                               {/* Top: full Hijri date — e.g. "18 ذو القعدة 1447 هـ".

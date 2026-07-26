@@ -1188,18 +1188,20 @@ export default function CasesPage() {
           <div className="overflow-x-auto">
           <Table className="w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
+              <col style={{ width: '4%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
               <col style={{ width: '11%' }} />
-              <col style={{ width: '13%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '12%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
             </colgroup>
             <TableHeader>
               <TableRow>
+                <TableHead className="text-center">#</TableHead>
                 <TableHead className="text-center">رقم القضية</TableHead>
                 <TableHead className="text-center">العميل</TableHead>
                 <TableHead className="text-center">الخصم</TableHead>
@@ -1214,7 +1216,7 @@ export default function CasesPage() {
             <TableBody>
               {casesLoading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
                     <div className="flex items-center justify-center gap-2">
                       <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                       <span>جاري التحميل...</span>
@@ -1223,11 +1225,11 @@ export default function CasesPage() {
                 </TableRow>
               ) : pagedCases.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
                     لا توجد قضايا مطابقة للبحث
                   </TableCell>
                 </TableRow>
-              ) : pagedCases.map((c) => {
+              ) : pagedCases.map((c, idx) => {
                 const hasActiveMemo = !!caseHasActiveMemoMap.get(c.id);
                 const priorityGroup = getCasePriorityGroup(c, hasActiveMemo);
                 // Row tinting: group 1 picks up an amber background to
@@ -1243,6 +1245,14 @@ export default function CasesPage() {
                         : "";
                 return (
                 <TableRow key={c.id} data-testid={`row-case-${c.id}`} className={rowClass}>
+                  {/* Display-only sequential number. Derived from the index
+                      inside the RENDERED page, so any filter/sort/search
+                      renumbers from 1. Continues across pages (the page
+                      offset is added) because the pager is a plain slice
+                      of one already-sorted list. */}
+                  <TableCell className="text-center text-xs text-muted-foreground" data-testid={`cell-index-${c.id}`}>
+                    {(casePage - 1) * PAGE_SIZE + idx + 1}
+                  </TableCell>
                   <TableCell className="text-center font-medium">
                     <div className="flex flex-col items-center gap-1">
                       <LtrInline>{c.caseNumber}</LtrInline>
