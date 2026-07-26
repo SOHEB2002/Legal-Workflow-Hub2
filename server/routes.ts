@@ -9006,7 +9006,25 @@ export async function registerRoutes(
         updateData.nextHearingTime = data.nextHearingTime || null;
         updateData.responseRequired = data.responseRequired ?? false;
         updateData.memoRequired = !!(data.memoRequired || data.responseRequired);
-        updateData.opponentResponseRequired = data.opponentResponseRequired ?? false;
+        // opponentResponseRequired is NO LONGER written onto THIS hearing.
+        // The flag means "the opponent must respond BEFORE the next session", so
+        // it belongs on the NOT-YET-HELD hearing — which is what the dialog's own
+        // toast says ("تم تعليم الجلسة القادمة"). Writing it here put it on the
+        // session that just finished, and the end-of-handler sweep then correctly
+        // cleared that stale row — so with no next session scheduled the flag was
+        // written and immediately wiped, leaving zero rows in the DB. It is now
+        // written ONLY on the new hearing created below.
+      }
+      // Ticking the box with no next session gives the flag nowhere to live.
+      // Refuse rather than silently drop it (which is exactly what happened).
+      if (
+        data.result === HearingResult.NEW_SESSION &&
+        data.opponentResponseRequired === true &&
+        !data.nextHearingDate
+      ) {
+        return res.status(400).json({
+          error: "يجب تحديد تاريخ الجلسة القادمة عند تعليم \"مطلوب رد من الخصم\" — المؤشر يُسجَّل على الجلسة القادمة",
+        });
       }
 
       const updatedHearing = await storage.updateHearing(hearingId, updateData);
@@ -9117,6 +9135,9 @@ export async function registerRoutes(
               courtRoom: hearing.courtRoom,
               status: HearingStatus.UPCOMING,
               attendingLawyerId: hearing.attendingLawyerId,
+              // THE ONLY writer of this flag on the موعد_جديد path. The row is
+              // spared by the end-of-handler sweep (newSessionHearingIdForClear),
+              // so it survives and is what lights the "مطلوب رد من الخصم" badge.
               opponentResponseRequired: data.opponentResponseRequired || false,
               notes: `موعد جديد من جلسة ${hearing.hearingDate}`,
             });
