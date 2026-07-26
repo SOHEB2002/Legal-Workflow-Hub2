@@ -21,7 +21,7 @@ import {
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType,
-  CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix,
+  CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, findPrimaryJudgmentHearing,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
   adminSupportTaskAssignments,
@@ -3327,6 +3327,78 @@ export class DatabaseStorage implements IStorage {
           entityType: "case", entityId: r.id, caseId: r.id,
           ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
         });
+      }
+    }
+
+    // ---- 1c. judgment-deed follow-up — case at محكوم_حكم_ابتدائي, صك not received ----
+    // Closes the judgment-stage SILENCE: a case resting on محكوم_حكم_ابتدائي
+    // emitted NO case-level task at all (that stage is not in LAWYER_WORK_STAGES),
+    // so it was invisible to the lawyer and the dept head — only the derived
+    // "بانتظار استلام الصك" badge showed it, and only to someone already reading
+    // the cases list.
+    //
+    // STAGE-PRESENCE, exactly like case_work and the D1 settlement task: computed
+    // from the case's own state, never stored. It shows while
+    //   currentStage === محكوم_حكم_ابتدائي AND judgment_deed_received_date is empty
+    // and DISAPPEARS on the next feed read the moment the صك receipt is recorded.
+    // No scheduler, no completion flag, no clearing code — the same two terms the
+    // badge derives from, so badge and task can never disagree.
+    //
+    // OWNER = المترافع, the lawyer who ATTENDED the judgment hearing
+    // (hearings.attending_lawyer_id), NOT necessarily the assigned lawyer — he is
+    // the one who was in court and can chase the deed. Falls back to
+    // primaryLawyerId → responsibleLawyerId → "" when unset (old hearings, or a
+    // session nobody was recorded for). The judgment hearing is located with the
+    // SHARED findPrimaryJudgmentHearing, the same rule the صك endpoint and the
+    // appeal-direction UI use.
+    //
+    // CANNOT DUPLICATE the two blocks above: محكوم_حكم_ابتدائي is in neither
+    // LAWYER_WORK_STAGES nor توجيه_العميل_بالتسوية, and a case has exactly one
+    // currentStage — the three blocks are mutually exclusive. The id prefix is
+    // DISTINCT (`judgment_deed:`) so the FE can route its click-through to the
+    // case-details dialog (where "تسجيل استلام الصك" lives) instead of the
+    // stage-advance panel, which has nothing to offer at a terminal stage.
+    // Kind REUSES CASE_WORK — no new MyTaskKind, no KIND_META wiring needed.
+    {
+      const PRIMARY_JUDGMENT_STAGE = "محكوم_حكم_ابتدائي";
+      const deedMissing = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL OR ${lawCases.judgmentDeedReceivedDate} = '')`;
+      // The personal scope cannot be expressed in SQL here: the owner may be the
+      // ATTENDING lawyer, who is on the hearing row, not the case. Candidates are
+      // fetched by stage (+ dept for a head) and filtered by resolved owner below.
+      const deedWhere = deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing)
+        : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing);
+      const deedRows = await db.select({
+        id: lawCases.id, caseNumber: lawCases.caseNumber,
+        primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+      }).from(lawCases).where(deedWhere);
+      if (deedRows.length > 0) {
+        const deedCaseIds = deedRows.map((r) => r.id);
+        const deedHearings = await db.select({
+          id: hearings.id, caseId: hearings.caseId, result: hearings.result,
+          judgmentFinal: hearings.judgmentFinal, hearingDate: hearings.hearingDate,
+          attendingLawyerId: hearings.attendingLawyerId,
+        }).from(hearings).where(inArray(hearings.caseId, deedCaseIds));
+        const hearingsByCase = new Map<string, typeof deedHearings>();
+        for (const h of deedHearings) {
+          if (!h.caseId) continue;
+          const list = hearingsByCase.get(h.caseId) || [];
+          list.push(h);
+          hearingsByCase.set(h.caseId, list);
+        }
+        for (const r of deedRows) {
+          const judgmentHearing = findPrimaryJudgmentHearing(hearingsByCase.get(r.id) || []);
+          const ownerId = judgmentHearing?.attendingLawyerId || r.primaryLawyerId || r.responsibleLawyerId || "";
+          // Supervisors (branch_manager firm-wide, dept_head for their dept) see
+          // every one; everyone else sees only the ones they own.
+          if (!firmWideScoped && !deptHeadScoped && ownerId !== uid) continue;
+          tasks.push({
+            id: `judgment_deed:${r.id}`, kind: MyTaskKind.CASE_WORK,
+            title: `تابع استلام صك الحكم — قضية ${r.caseNumber}`,
+            entityType: "case", entityId: r.id, caseId: r.id,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          });
+        }
       }
     }
 
