@@ -4411,6 +4411,12 @@ export const DefaultObjectionWindowDays = 30;
 // POST /api/cases/:id/judgment-deed — recording (or correcting) the صك receipt.
 // Tolerant gate (Pattern A): type check only; the handler keeps its own Arabic
 // 400s for the missing/invalid date and the out-of-range window.
+// POST /api/cases/:id/appeal-outcome — the two manual routes out of
+// محكوم_حكم_ابتدائي. Tolerant gate; the handler enumerates the valid outcomes.
+export const appealOutcomeSchema = z.object({
+  outcome: z.string().optional(),
+}).passthrough();
+
 export const recordJudgmentDeedSchema = z.object({
   judgmentDeedReceivedDate: z.string().optional(),
   objectionWindowDays: z.union([z.number(), z.string()]).nullable().optional(),

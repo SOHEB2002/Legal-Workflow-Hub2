@@ -69,6 +69,7 @@ import {
   stageNumberRequirement,
   reopenCaseSchema,
   recordJudgmentDeedSchema,
+  appealOutcomeSchema,
   DefaultObjectionWindowDays,
   canCreateMemos,
   canReviewMemos,
@@ -1176,6 +1177,68 @@ async function ensureObjectionMemoForCase(
   const activeCount = await getActiveMemoCount(lawCase.id);
   await storage.updateCase(lawCase.id, { activeMemoCount: activeCount });
   return { action: "created", memoId: memo.id };
+}
+
+// Judgment-lifecycle step 3 — move a case onto the appeal/final track.
+// One writer for all four routes into these two stages (objection filed, court
+// hearing after a primary judgment, "الخصم استأنف", "لم يستأنف الخصم") so the
+// stage-history note and the activity row are shaped identically every time.
+// Guarded on محكوم_حكم_ابتدائي by every caller — a no-op elsewhere.
+async function moveCaseFromPrimaryJudgment(
+  req: AuthRequest,
+  lawCase: LawCase,
+  target: "منظورة_استئناف" | "محكوم_حكم_نهائي",
+  input: { actorId: string; actorName: string; note: string; actionType: string; title: string },
+): Promise<LawCase | undefined> {
+  const now = new Date().toISOString();
+  const history = Array.isArray(lawCase.stageHistory) ? lawCase.stageHistory : [];
+  const updated = await storage.updateCase(lawCase.id, {
+    currentStage: target,
+    stageHistory: [
+      ...history,
+      { stage: target, timestamp: now, userId: input.actorId, userName: input.actorName, notes: input.note },
+    ],
+  } as Partial<LawCase>);
+  if (updated) {
+    await logCaseActivityActing(req, {
+      caseId: lawCase.id,
+      userId: input.actorId,
+      userName: input.actorName,
+      actionType: input.actionType,
+      title: input.title,
+      previousValue: "محكوم_حكم_ابتدائي",
+      newValue: target,
+    });
+  }
+  return updated;
+}
+
+// WE APPEALED — filing the لائحة اعتراضية IS the appeal. Called from BOTH filing
+// paths (PATCH /api/memos/:id status→مرفوعة and POST /api/memos/:id/advance-stage
+// targetStage→مرفوعة), which are both live in the UI: the memo detail button and
+// the stage-bar advance panel respectively. Narrow on purpose — only an OBJECTION
+// memo, only on a case sitting at محكوم_حكم_ابتدائي — so filing an ordinary memo
+// never moves a case. Best-effort: a failure here must not fail the filing.
+async function promoteCaseOnObjectionFiled(
+  req: AuthRequest,
+  memo: { caseId?: string | null; memoType?: string | null },
+  actor: { id: string; name?: string },
+): Promise<void> {
+  try {
+    if (!memo.caseId) return;
+    if (memo.memoType !== MemoType.OBJECTION) return;
+    const lawCase = await storage.getCaseById(memo.caseId);
+    if (!lawCase || lawCase.currentStage !== "محكوم_حكم_ابتدائي") return;
+    await moveCaseFromPrimaryJudgment(req, lawCase, "منظورة_استئناف", {
+      actorId: actor.id,
+      actorName: actor.name || actor.id,
+      note: "رفع اللائحة الاعتراضية — انتقال للاستئناف",
+      actionType: "appeal_filed",
+      title: "تم رفع اللائحة الاعتراضية — القضية منظورة استئناف",
+    });
+  } catch (e) {
+    console.error("[objection filed] case appeal-promotion failed:", e);
+  }
 }
 
 // The primary judgment a صك receipt belongs to: the case's most recent hearing
@@ -5020,6 +5083,74 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/cases/:id/appeal-outcome
+  // Body: { outcome: "opponent_appealed" | "no_appeal" }.
+  // Judgment-lifecycle step 3 — the two MANUAL routes out of محكوم_حكم_ابتدائي:
+  //   • opponent_appealed → منظورة_استئناف ("الخصم استأنف"). The other trigger
+  //     for the same outcome is creating a COURT hearing at this stage, handled
+  //     in POST /api/hearings; both are valid and land on the same stage.
+  //   • no_appeal        → محكوم_حكم_نهائي ("لم يستأنف الخصم — الحكم نهائي").
+  //     DELIBERATELY MANUAL, never automatic: only the lawyer knows the window
+  //     truly lapsed with no filing. Under step 1 محكوم_حكم_نهائي is a RESTING
+  //     stage, so the case waits there rather than auto-closing.
+  //
+  // "WE appealed" is NOT here — that is driven by FILING the لائحة اعتراضية
+  // (promoteCaseOnObjectionFiled), which is the strong memo↔case link the owner
+  // asked for.
+  //
+  // AUTHORIZED ROLES: canActOnMohrSettlement — branch_manager | department_head
+  // of the case's own department | assigned lawyer, delegation-aware.
+  // admin_support excluded, consistent with the MOHR / reopen / صك actions.
+  app.post("/api/cases/:id/appeal-outcome", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = appealOutcomeSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const outcome = String(req.body?.outcome ?? "").trim();
+      if (outcome !== "opponent_appealed" && outcome !== "no_appeal") {
+        return res.status(400).json({ error: "يجب تحديد نتيجة مهلة الاعتراض" });
+      }
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (lawCase.currentStage !== "محكوم_حكم_ابتدائي") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضية عليها حكم ابتدائي" });
+      }
+      if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+
+      const updated = outcome === "opponent_appealed"
+        ? await moveCaseFromPrimaryJudgment(req, lawCase, "منظورة_استئناف", {
+            actorId: reqUser.id,
+            actorName: performerName,
+            note: "الخصم استأنف الحكم الابتدائي",
+            actionType: "opponent_appealed",
+            title: "الخصم استأنف — القضية منظورة استئناف",
+          })
+        : await moveCaseFromPrimaryJudgment(req, lawCase, "محكوم_حكم_نهائي", {
+            actorId: reqUser.id,
+            actorName: performerName,
+            note: "انتهت مهلة الاعتراض دون استئناف — الحكم نهائي",
+            actionType: "judgment_became_final",
+            title: "لم يستأنف الخصم — أصبح الحكم نهائياً",
+          });
+
+      if (!updated) return res.status(500).json({ error: "فشل تحديث حالة القضية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/appeal-outcome] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // POST /api/cases/:id/judgment-deed
   // Body: { judgmentDeedReceivedDate, objectionWindowDays? }.
   // Judgment-lifecycle step 2 — records (or corrects) the date the صك was
@@ -7559,6 +7690,13 @@ export async function registerRoutes(
         },
       );
       if (!updated) return res.status(500).json({ error: "فشل تحديث المذكرة" });
+
+      // WE APPEALED — the stage-bar route to filing. Same hook as the status
+      // route (PATCH /api/memos/:id), since both are live in the UI.
+      if (targetStage === MemoStage.FILED) {
+        await promoteCaseOnObjectionFiled(req, memo, reqUser);
+      }
+
       res.json(updated);
     } catch (error: any) {
       console.error("[memos/advance-stage] error:", error);
@@ -8174,16 +8312,27 @@ export async function registerRoutes(
               // silently erase the judgment. For that group we still repair a
               // STALE CLASSIFICATION (exactly the cohort the bug above created)
               // without touching the stage or the history.
+              // CARVE-OUT (appeal path): a court hearing scheduled on a case at
+              // محكوم_حكم_ابتدائي means THE OPPONENT APPEALED — a primary judgment
+              // was issued and the court is sitting again. Promote to
+              // منظورة_استئناف (NOT منظورة, which would read as a fresh first-
+              // instance trial). This is one of the two opponent-appeal triggers;
+              // the other is the explicit "الخصم استأنف" button.
+              //
+              // محكوم_حكم_نهائي and everything after stay PROTECTED below: a final
+              // judgment is not appealable in-app, and writing any earlier stage
+              // over it would erase the judgment.
               const STAGES_AT_OR_PAST_COURT = new Set([
                 "منظورة",
                 "منظورة_استئناف",
-                "محكوم_حكم_ابتدائي",
                 "محكوم_حكم_نهائي",
                 "تحصيل",
                 "مشطوبة",
                 "مؤرشفة",
                 "مقفلة",
               ]);
+              const isOpponentAppeal = currentStage === "محكوم_حكم_ابتدائي";
+              const courtTargetStage = isOpponentAppeal ? "منظورة_استئناف" : "منظورة";
               const promoteClassification = caseForStage.caseClassification === "قيد_الدراسة";
               const classificationFields = promoteClassification
                 ? {
@@ -8197,11 +8346,19 @@ export async function registerRoutes(
               if (!STAGES_AT_OR_PAST_COURT.has(currentStage)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
                 await storage.updateCase(caseForStage.id, {
-                  currentStage: "منظورة",
+                  currentStage: courtTargetStage,
                   ...classificationFields,
                   stageHistory: [
                     ...stageHistory,
-                    { stage: "منظورة", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة محكمة" },
+                    {
+                      stage: courtTargetStage,
+                      timestamp: new Date().toISOString(),
+                      userId: user?.id || "system",
+                      userName: user?.name || "النظام",
+                      notes: isOpponentAppeal
+                        ? "انتقال تلقائي — جلسة محكمة بعد حكم ابتدائي (استئناف الخصم)"
+                        : "انتقال تلقائي عند إنشاء جلسة محكمة",
+                    },
                   ],
                 });
               } else if (promoteClassification) {
@@ -10213,6 +10370,12 @@ export async function registerRoutes(
         }
 
         await storage.updateCase(memo.caseId, caseUpdate);
+      }
+
+      // WE APPEALED — filing the objection memo moves the case to منظورة_استئناف.
+      // Runs after the case write above so the stage it sets is not overwritten.
+      if (updateData.status === MemoStatus.SUBMITTED) {
+        await promoteCaseOnObjectionFiled(req, memo, user);
       }
 
       res.json(updated);
