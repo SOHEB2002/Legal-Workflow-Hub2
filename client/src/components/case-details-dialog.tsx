@@ -18,6 +18,7 @@ import {
   X,
   MessageSquare,
   Pause,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -128,6 +129,13 @@ export interface CaseDetailsActions {
   canClose: boolean;
   canEarlyClose: boolean;
   onEarlyClose: () => void;
+  // Reopen a CLOSED case at a chosen stage (POST /api/cases/:id/reopen). The
+  // host computes canReopen with the SAME rule the server enforces
+  // (branch_manager | dept_head of the case's dept | assigned lawyer — note
+  // admin_support is excluded, unlike canEarlyClose), so the button's
+  // visibility equals the server's authorization.
+  canReopen: boolean;
+  onReopen: () => void;
   canTransfer: boolean;
   onTransfer: () => void;
   canRemind: boolean;
@@ -1710,6 +1718,17 @@ export function CaseDetailsDialog({
                         </Button>
                       </div>
                     )}
+                    {actions?.canReopen && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border border-green-200 bg-green-50 dark:bg-green-950/20">
+                        <div>
+                          <p className="font-medium text-sm text-green-700 dark:text-green-400">إعادة فتح القضية</p>
+                          <p className="text-xs text-muted-foreground">إعادة فتح القضية المقفلة عند المرحلة التي تختارها</p>
+                        </div>
+                        <Button size="sm" variant="outline" className="border-green-500 text-green-600 hover:bg-green-50" data-testid={`button-reopen-${selectedCase.id}`} onClick={() => { actions.onReopen(); }}>
+                          <RotateCcw className="w-4 h-4 ml-1" />إعادة فتح
+                        </Button>
+                      </div>
+                    )}
                     {actions?.canTransfer && (
                       <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
                         <div>
@@ -1738,7 +1757,7 @@ export function CaseDetailsDialog({
                         مهامي hub) shows it too — nothing in this tab is actionable
                         there beyond the stage/settlement blocks above. */}
                     {!actions?.canAssign && !actions?.canReview && !actions?.canClose
-                      && !actions?.canEarlyClose && !actions?.canTransfer && !actions?.canRemind && (
+                      && !actions?.canEarlyClose && !actions?.canReopen && !actions?.canTransfer && !actions?.canRemind && (
                       <div className="text-center text-muted-foreground py-8">
                         <p className="text-sm">لا توجد إجراءات متاحة لهذه القضية حالياً</p>
                       </div>
