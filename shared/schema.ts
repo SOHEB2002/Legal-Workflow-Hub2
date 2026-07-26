@@ -1461,16 +1461,33 @@ export const InCourtSettlementStages: CaseStageValue[] = [
   "تحصيل",
 ];
 
-export const PostTrialStages: CaseStageValue[] = [
-  "منظورة",
-  "محكوم_حكم_ابتدائي",
-  "منظورة_استئناف",
+// TERMINAL case stages — final outcomes with no further workflow of their own.
+// NONE of these belongs to any array returned by getStagesForClassification:
+// they are reachable from MANY stages (early close from anywhere, struck-off
+// from منظورة/منظورة_استئناف, تحصيل from مداولة_الصلح or a final judgment), so
+// they have no fixed position in a linear path.
+//
+// Consumers:
+//   • cases.tsx getCasePriorityGroup — pushes terminal rows to the bottom of
+//     the cases table (was a local TERMINATED_STAGES copy; hoisted here).
+//   • case-progress-bar.tsx — renders the terminal-badge state instead of
+//     collapsing the bar onto استلام (indexOf → -1 → index 0).
+//
+// محكوم_حكم_ابتدائي is qualified at the cases.tsx call site: only terminal when
+// no active memo (an open objection memo means the case is still alive).
+//
+// منظورة_استئناف is deliberately NOT here — an appeal-pending case is still
+// LIVE, and the cases table sorts it as "waiting on external" (group 4). It is
+// nonetheless off-path, so the progress bar extends this set by that one stage
+// for DISPLAY purposes only; see TERMINAL_BAR_STAGES in case-progress-bar.tsx.
+export const TerminalCaseStages: ReadonlySet<CaseStageValue> = new Set<CaseStageValue>([
   "محكوم_حكم_نهائي",
+  "محكوم_حكم_ابتدائي",
   "مشطوبة",
   "تحصيل",
-  "مؤرشفة",
   "مقفلة",
-];
+  "مؤرشفة",
+]);
 
 // Stage selection is keyed on the case's DEPARTMENT (a stable FK to the
 // departments table), not on caseType. caseType is a free-text user input

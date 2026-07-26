@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { type CaseStageValue, type CaseClassificationValue, canMoveToPreviousStage, canReviewCases, type UserRoleType, getStagesForClassification, getStageLabel } from "@shared/schema";
+import { type CaseStageValue, type CaseClassificationValue, type CaseStageTransition, canMoveToPreviousStage, canReviewCases, type UserRoleType, getStagesForClassification, getStageLabel, TerminalCaseStages } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,6 +15,50 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
+
+// ==================== TERMINAL / OFF-PATH STAGE DISPLAY ====================
+// None of the terminal stages belongs to ANY array returned by
+// getStagesForClassification (they are reachable from many stages, so they have
+// no fixed position in a linear path). indexOf therefore returns -1 for them,
+// and the `rawIndex >= 0 ? rawIndex : 0` fallback below used to collapse the bar
+// onto index 0 — a CLOSED case rendered with استلام lit up as its current stage.
+//
+// The set is the shared TerminalCaseStages (schema.ts) plus منظورة_استئناف:
+// an appeal-pending case is still LIVE for the cases-table sort (which is why
+// schema.ts excludes it) but it is equally off-path, so for DISPLAY it needs the
+// same treatment. Keeping the extension here means the cases-table priority sort
+// is untouched.
+const TERMINAL_BAR_STAGES: ReadonlySet<CaseStageValue> = new Set<CaseStageValue>([
+  ...Array.from(TerminalCaseStages),
+  "منظورة_استئناف",
+]);
+
+type TerminalTone = "success" | "danger" | "warning" | "neutral";
+
+// Badge copy + colour per terminal stage. Labels come from CaseStageLabels via
+// getStageLabel — never hard-coded — so a label rename in schema.ts flows here.
+// The "القضية …" prefix is used only where it reads naturally in Arabic and
+// mirrors the existing wording in case-details-dialog.tsx ("القضية مشطوبة").
+const TERMINAL_BADGES: Partial<Record<CaseStageValue, { text: string; tone: TerminalTone }>> = {
+  "مقفلة": { text: `القضية ${getStageLabel("مقفلة")}`, tone: "danger" },
+  "مشطوبة": { text: `القضية ${getStageLabel("مشطوبة")}`, tone: "danger" },
+  "مؤرشفة": { text: `القضية ${getStageLabel("مؤرشفة")}`, tone: "neutral" },
+  "محكوم_حكم_ابتدائي": { text: getStageLabel("محكوم_حكم_ابتدائي"), tone: "warning" },
+  "محكوم_حكم_نهائي": { text: getStageLabel("محكوم_حكم_نهائي"), tone: "warning" },
+  "منظورة_استئناف": { text: getStageLabel("منظورة_استئناف"), tone: "neutral" },
+  // تحصيل reached from مداولة_الصلح gets the dedicated "تم الصلح — تحصيل" badge
+  // built in the component (see the PRESERVED branch); this entry is the
+  // fallback for تحصيل reached WITHOUT a conciliation stage in the path (e.g.
+  // after a final judgment in our favour), where "تم الصلح" would be false.
+  "تحصيل": { text: getStageLabel("تحصيل"), tone: "success" },
+};
+
+const TERMINAL_TONE_CLASSES: Record<TerminalTone, string> = {
+  success: "border-green-600 bg-green-500/10 text-green-700 dark:text-green-300",
+  danger: "border-red-600 bg-red-500/10 text-red-700 dark:text-red-300",
+  warning: "border-amber-600 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  neutral: "border-muted-foreground/40 bg-muted text-muted-foreground",
+};
 
 interface CaseProgressBarProps {
   currentStage: CaseStageValue;
@@ -52,6 +96,11 @@ interface CaseProgressBarProps {
   clientRole?: string;
   memoRequired?: boolean;
   isSettlementCase?: boolean;
+  // The case's stage history, used ONLY to locate how far along the rendered
+  // path a TERMINAL case actually got (a closed case can be closed from any
+  // stage, so the bar can't infer it from currentStage). Optional: with no
+  // history the terminal renderer falls back to marking the whole path done.
+  stageHistory?: CaseStageTransition[];
   reviewNotes?: string;
   reviewDecision?: string;
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
@@ -90,6 +139,7 @@ export function CaseProgressBar({
   clientRole,
   memoRequired,
   isSettlementCase,
+  stageHistory,
   reviewNotes,
   reviewDecision,
   eligibleInternalReviewers = [],
@@ -185,16 +235,54 @@ export function CaseProgressBar({
   }
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
-  // Settlement-success terminal (تحصيل) is reached from مداولة_الصلح via the
-  // "تم الصلح" action. It lives OFF the قيد_الدراسة stage arrays, so rawIndex
-  // is -1 and the bar would otherwise collapse onto استلام (currentIndex=0).
-  // Detect it and render the prep run up to مداولة_الصلح as done, with a
-  // terminal "تم الصلح — تحصيل" badge. Applies to every department (labor,
-  // commercial, general) since مداولة_الصلح exists in all of their arrays.
-  const settlementReachedTerminal =
-    rawIndex < 0 && normalizedStage === "تحصيل" && stagesOrder.indexOf("مداولة_الصلح") >= 0;
-  const settlementDoneIndex = settlementReachedTerminal ? stagesOrder.indexOf("مداولة_الصلح") : -1;
-  const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled && !settlementReachedTerminal;
+
+  // TERMINAL / OFF-PATH stages (مقفلة، مشطوبة، مؤرشفة، محكوم_*، منظورة_استئناف and
+  // تحصيل — see TERMINAL_BAR_STAGES above). rawIndex is -1 for all of them, and
+  // the `: 0` fallback above would light up استلام as the "current" stage on a
+  // closed case. Instead render the path with everything the case actually
+  // reached as completed, NOTHING current, and let a badge carry the outcome.
+  //
+  // Gated on rawIndex < 0 so a stage that IS in the resolved path keeps its
+  // normal rendering — notably تحصيل on InCourtSettlementStages, where تحصيل is
+  // a real member (index 2) and must stay a plain "current" stage as today.
+  //
+  // reachedIndex = furthest stage of the rendered path found in the case's
+  // stageHistory (a case can be closed from anywhere, so the current stage
+  // says nothing about how far it got). Falls back to the whole path when no
+  // history is available.
+  const furthestReachedIndex = Array.isArray(stageHistory)
+    ? stageHistory.reduce(
+        (furthest, entry) => Math.max(furthest, stagesOrder.indexOf(entry?.stage)),
+        -1,
+      )
+    : -1;
+
+  let terminalState: { reachedIndex: number; text: string; tone: TerminalTone } | null = null;
+  if (rawIndex < 0 && TERMINAL_BAR_STAGES.has(normalizedStage)) {
+    // PRESERVED VERBATIM — settlement-success terminal. تحصيل is reached from
+    // مداولة_الصلح via the "تم الصلح" action; the prep run up to مداولة_الصلح
+    // renders done, the litigation stages after it never ran and stay grey, and
+    // the green "تم الصلح — تحصيل" badge carries the outcome. Applies to every
+    // department since مداولة_الصلح exists in all of their arrays.
+    const conciliationIndex =
+      normalizedStage === "تحصيل" ? stagesOrder.indexOf("مداولة_الصلح") : -1;
+    if (conciliationIndex >= 0) {
+      terminalState = { reachedIndex: conciliationIndex, text: "تم الصلح — تحصيل", tone: "success" };
+    } else {
+      const badge = TERMINAL_BADGES[normalizedStage];
+      terminalState = {
+        reachedIndex: furthestReachedIndex >= 0 ? furthestReachedIndex : stagesOrder.length - 1,
+        text: badge?.text ?? getStageLabel(normalizedStage),
+        tone: badge?.tone ?? "neutral",
+      };
+    }
+  }
+
+  // A terminal case has no next stage — suppress the generic advance button so
+  // it can't render a dead "المرحلة التالية" pointing at stagesOrder[1].
+  // canGoPrev needs no equivalent guard: currentIndex is 0 whenever rawIndex < 0,
+  // so `currentIndex > 0` already keeps the rollback button hidden.
+  const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled && !terminalState;
   const canGoPrev = currentIndex > 0 && canMoveToPreviousStage(userRole) && !disabled;
 
   const isAtReception = normalizedStage === "استلام";
@@ -202,11 +290,12 @@ export function CaseProgressBar({
   const canSkip = isAtReception && nextStageIsDataCompletion && !!onSkipDataCompletion && !disabled;
 
   const getStageStatus = (stageIndex: number) => {
-    if (settlementReachedTerminal) {
-      // Everything up to and including مداولة_الصلح is done; the litigation
-      // stages after it never ran (settlement succeeded), so leave them
-      // upcoming/grey and let the terminal badge carry the outcome.
-      return stageIndex <= settlementDoneIndex ? "completed" : "upcoming";
+    if (terminalState) {
+      // Everything up to and including the last stage the case reached is done;
+      // the stages after it never ran, so leave them upcoming/grey and let the
+      // terminal badge carry the outcome. Nothing is "current" — the case is
+      // no longer moving along this path.
+      return stageIndex <= terminalState.reachedIndex ? "completed" : "upcoming";
     }
     if (stageIndex < currentIndex) return "completed";
     if (stageIndex === currentIndex) return "current";
@@ -512,7 +601,7 @@ export function CaseProgressBar({
               {index < stagesOrder.length - 1 && (
                 <div
                   className={`h-1 flex-1 mx-1 rounded ${
-                    (settlementReachedTerminal ? index < settlementDoneIndex : index < currentIndex)
+                    (terminalState ? index < terminalState.reachedIndex : index < currentIndex)
                       ? "bg-green-500"
                       : "bg-muted"
                   }`}
@@ -523,13 +612,13 @@ export function CaseProgressBar({
         })}
       </div>
 
-      {settlementReachedTerminal && (
+      {terminalState && (
         <div className="flex justify-center pb-1">
           <span
-            className="rounded-md border border-green-600 bg-green-500/10 px-3 py-1 text-sm font-bold text-green-700 dark:text-green-300"
+            className={`rounded-md border px-3 py-1 text-sm font-bold ${TERMINAL_TONE_CLASSES[terminalState.tone]}`}
             data-testid="badge-settlement-terminal"
           >
-            تم الصلح — تحصيل
+            {terminalState.text}
           </span>
         </div>
       )}
