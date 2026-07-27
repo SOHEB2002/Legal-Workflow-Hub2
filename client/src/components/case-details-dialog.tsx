@@ -58,6 +58,7 @@ import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { CaseStagePanel } from "@/components/case-stage-panel";
+import { HearingDetailsDialog } from "@/components/hearing-details-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
@@ -244,6 +245,11 @@ export function CaseDetailsDialog({
   // Re-runs on updatedAt (every mutation bumps it) so the history stays current
   // after a stage transition. On failure we simply fall back to whatever the host
   // gave us — no worse than before.
+  // Hearing opened from the الجلسات tab, rendered NESTED over this dialog by the
+  // shared HearingDetailsDialog. Closing it returns the user to this dialog on the
+  // same tab — nothing about this component's state is touched.
+  const [hearingDetailId, setHearingDetailId] = useState<string | null>(null);
+
   const [fetchedHistory, setFetchedHistory] = useState<{ id: string; stageHistory: LawCase["stageHistory"] } | null>(null);
   useEffect(() => {
     if (!open || !caseItem?.id) return;
@@ -414,7 +420,8 @@ export function CaseDetailsDialog({
   }, [selectedCase?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-      <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setActiveTab("info"); }}>
+    <>
+      <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setActiveTab("info"); setHearingDetailId(null); } }}>
         <DialogContent className="max-w-7xl max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <div className="flex items-center justify-between">
@@ -1235,7 +1242,11 @@ export function CaseDetailsDialog({
                                       variant="ghost"
                                       title="عرض تفاصيل الجلسة"
                                       data-testid={`button-view-hearing-${hearing.id}`}
-                                      onClick={() => setLocation(`/hearings?openHearing=${hearing.id}`)}
+                                      // Opens the hearing IN PLACE, over this dialog.
+                                      // Was setLocation("/hearings?openHearing=…"),
+                                      // a wouter route push that navigated the whole
+                                      // app away from the case being read.
+                                      onClick={() => setHearingDetailId(hearing.id)}
                                     >
                                       <Eye className="w-4 h-4" />
                                     </Button>
@@ -1969,5 +1980,20 @@ export function CaseDetailsDialog({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Hearing details, NESTED over the case dialog. Rendered as a SIBLING of it
+          (inside the same fragment) rather than inside its DialogContent, so its own
+          overlay stacks cleanly above — the same shape the AlertDialogs in the
+          الإجراءات tab already use. Closing it leaves the user exactly where they
+          were: still in the case dialog, still on الجلسات. Cleared when the case
+          dialog itself closes, so reopening never shows a stale hearing.
+          NO `actions` prop — the workflow steps render READ-ONLY here; recording a
+          result or writing a report stays on the hearings page, which owns those
+          dialogs. */}
+      <HearingDetailsDialog
+        hearingId={hearingDetailId}
+        onOpenChange={(nextOpen) => !nextOpen && setHearingDetailId(null)}
+      />
+    </>
   );
 }
