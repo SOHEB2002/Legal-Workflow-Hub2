@@ -582,7 +582,24 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer", "department_head"] },
 
-  { from: "محكوم_حكم_نهائي", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  // محكوم_حكم_نهائي → تحصيل is DELIBERATELY ABSENT (removed). A final judgment
+  // RESTS at محكوم_حكم_نهائي (b41553a): the collection / execution field tasks are
+  // created there, and completing them closes the case DIRECTLY to مقفلة with
+  // تم_التحصيل via maybeCloseCaseAfterPostJudgmentTasks. It must not detour through
+  // تحصيل, which belongs exclusively to the SETTLEMENT (مداولة_الصلح → تحصيل) and
+  // GRIEVANCE (انتظار_رد_التظلم → تحصيل) routes — the only two edges that create the
+  // collection task on entry.
+  //
+  // The edge was API-ONLY: no UI path ever offered it (محكوم_حكم_نهائي is in
+  // TerminalCaseStages, so the stage bar suppresses the advance button, and both
+  // تحصيل writers in the client are gated on currentStage === مداولة_الصلح). Taking
+  // it by hand-rolled PATCH moved a JUDGMENT case onto the settlement route's stage
+  // and — because 5ea9c23 deliberately does not create a second collection task on
+  // this edge — a case whose tasks were already resolved landed somewhere its only
+  // exits are the event-driven auto-close (which would not re-fire) and the
+  // zero-outstanding-task escape. Removing the rule seals it for EVERY role
+  // including branch_manager: the `if (!rule)` denial runs BEFORE the
+  // branch_manager bypass.
   { from: "محكوم_حكم_نهائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
 
   // تحصيل → مقفلة is DELIBERATELY ABSENT. A case at تحصيل closes AUTOMATICALLY

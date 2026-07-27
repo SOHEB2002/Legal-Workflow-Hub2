@@ -1515,8 +1515,12 @@ export const InCourtSettlementStages: CaseStageValue[] = [
 // TERMINAL case stages — final outcomes with no further workflow of their own.
 // NONE of these belongs to any array returned by getStagesForClassification:
 // they are reachable from MANY stages (early close from anywhere, struck-off
-// from منظورة/منظورة_استئناف, تحصيل from مداولة_الصلح or a final judgment), so
+// from منظورة/منظورة_استئناف, تحصيل from مداولة_الصلح or انتظار_رد_التظلم), so
 // they have no fixed position in a linear path.
+// (This comment used to say "تحصيل from مداولة_الصلح or a final judgment" — that
+// described the PRE-b41553a model, where a final judgment auto-moved to تحصيل.
+// A final judgment now RESTS at محكوم_حكم_نهائي and closes from there; the
+// محكوم_حكم_نهائي → تحصيل edge has been removed from ALLOWED_CASE_TRANSITIONS.)
 //
 // Consumers:
 //   • cases.tsx getCasePriorityGroup — pushes terminal rows to the bottom of
