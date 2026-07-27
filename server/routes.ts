@@ -932,6 +932,66 @@ function canActAtDepartmentTier(
   return tier === "manager" || tier === "department";
 }
 
+// CREATE-SCOPE (owner-approved follow-up) — department_head and employee may now
+// OPEN a record on any of the four entities, but ONLY into their OWN department.
+// branch_manager / admin_support (and any review head a module grants creation to)
+// stay global and are passed straight through.
+//
+// FORCED **and** REJECTED — deliberately both, split on whether the client was
+// explicit about the department:
+//   • departmentId ABSENT or empty  → FORCED to the actor's own department. The FE
+//     locks the selector for these two roles, so an omitted value is the normal
+//     request shape, not an attempt to cross departments. Forcing here means a
+//     client that simply doesn't send the field still lands correctly.
+//   • departmentId PRESENT and DIFFERENT → REJECTED with a clean 400. Silently
+//     rewriting an explicit, differing value would hide a real frontend bug and
+//     would leave the activity log disagreeing with what the user believed they
+//     submitted. A cross-department attempt should be visible, not absorbed.
+// A department_head / employee with NO department of their own is rejected outright
+// rather than being allowed to create an unscoped record.
+//
+// MEMOS DO NOT USE THIS — they carry no departmentId; their scope is the PARENT
+// CASE's department, enforced at the memo create route through entityActorTier.
+type CreateScopeResult =
+  | { ok: true; departmentId: string | null }
+  | { ok: false; error: string };
+
+function scopedCreateDepartmentId(
+  user: { role: string; departmentId: string | null },
+  bodyDepartmentId: unknown,
+): CreateScopeResult {
+  const requested = typeof bodyDepartmentId === "string" ? bodyDepartmentId.trim() : "";
+  if (user.role !== "department_head" && user.role !== "employee") {
+    return { ok: true, departmentId: requested || null };
+  }
+  if (!user.departmentId) {
+    return { ok: false, error: "لا يمكن الإنشاء: لم يتم تعيين قسم لحسابك" };
+  }
+  if (requested && requested !== user.departmentId) {
+    return { ok: false, error: "يمكنك الإنشاء في قسمك فقط" };
+  }
+  return { ok: true, departmentId: user.departmentId };
+}
+
+// Final-closure edges — the terminal step that ends a file's life. Owner-adopted
+// carve-out: DEPARTMENT tier and above, so the widened ASSIGNEE tier is excluded.
+// Early-close is deliberately NOT here: it stays open to the assignee (it demands a
+// mandatory reason and is fully audited — the lawyer's legitimate path). Only these
+// terminal edges tighten. Each of these edges ALSO excluded the assigned lawyer in
+// its own transition table before the widening, so this restores that exactly.
+function isFinalClosureEdge(entityType: string, currentStage: string, targetStage: string): boolean {
+  if (entityType === "case") {
+    return targetStage === "مقفلة" && (
+      currentStage === "تحصيل"
+      || currentStage === "محكوم_حكم_ابتدائي"
+      || currentStage === "محكوم_حكم_نهائي"
+    );
+  }
+  if (entityType === "consultation") return targetStage === ConsultationStage.CLOSED_FINAL;
+  if (entityType === "contract") return targetStage === ContractStage.CLOSED;
+  return false;
+}
+
 // Committee-decision edges — the ONE class of forward transition the widened
 // department/assignee tiers may NOT traverse (carve-out 3). Leaving the committee
 // stage is a chair's ruling; the sanctioned override for everyone else is
@@ -1287,11 +1347,14 @@ function validateStageTransition(
   // Delegation-aware through the same grant* helpers the rest of this function uses
   // (grantDeptHeadDept honours effectiveDeptHeadDepts; grantAssignedLawyer honours
   // effectiveIdsFor), so a delegate inherits the delegator's traversal.
+  //   • FINAL CLOSURE (owner-adopted carve-out) — the department tier keeps these
+  //     terminal edges, the ASSIGNEE tier does not. Early-close is unaffected: it
+  //     runs through the early-close shortcut far above, not through this matcher.
   if (!isCommitteeDecisionEdge(entityType, currentStage)) {
     if (grantDeptHeadDept(entityData?.departmentId)) {
       return { allowed: true };
     }
-    if (grantAssignedLawyer()) {
+    if (!isFinalClosureEdge(entityType, currentStage, targetStage) && grantAssignedLawyer()) {
       return { allowed: true };
     }
   }
@@ -2334,18 +2397,20 @@ export async function registerRoutes(
   app.post("/api/cases", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
-      // WIDENED MODEL — a department_head may now open a case IN THEIR OWN
-      // DEPARTMENT (branch_manager / admin_support stay global). Creation cannot
-      // reach the assignee tier: a case that does not exist yet is assigned to
-      // nobody, so there is no "assigned to me" to scope by. Scoped on the TARGET
-      // department from the body, since there is no entity to read it from.
-      const createDeptId = typeof req.body?.departmentId === "string" ? req.body.departmentId : "";
-      const canCreateCase =
-        ["branch_manager", "admin_support"].includes(user.role)
-        || (user.role === "department_head" && !!user.departmentId && createDeptId === user.departmentId);
-      if (!canCreateCase) {
-        return res.status(403).json({ error: "إنشاء القضايا متاح لمدير الفرع والدعم الإداري ورئيس القسم في قسمه" });
+      // CREATE-SCOPE — department_head AND employee may open a case, but only into
+      // THEIR OWN department; branch_manager / admin_support stay global.
+      // scopedCreateDepartmentId forces an omitted department and rejects an
+      // explicitly different one (see its comment for the forced-vs-rejected split).
+      if (!["branch_manager", "admin_support", "department_head", "employee"].includes(user.role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء القضايا" });
       }
+      const caseScope = scopedCreateDepartmentId(user, req.body?.departmentId);
+      if (!caseScope.ok) {
+        return res.status(400).json({ error: caseScope.error });
+      }
+      // Write the resolved department back BEFORE parsing so the created row and the
+      // validated payload agree.
+      req.body.departmentId = caseScope.departmentId;
       const validatedData = insertCaseSchema.parse(req.body);
       // Carry clientRole forward explicitly — earlier the field wasn't in the
       // schema, so parse() stripped it and the case was inserted with null.
@@ -3915,17 +3980,20 @@ export async function registerRoutes(
       // POST /api/cases enforces the identical set (inline, :2149).
       // department_head is deliberately NOT added: widening creation rights is
       // permissions work, not a security fix.
-      // WIDENED MODEL — a department_head may now open a consultation IN THEIR OWN
-      // DEPARTMENT. Creation cannot reach the assignee tier (nothing is assigned yet),
-      // so it is scoped on the TARGET department from the body, exactly like
-      // POST /api/cases.
-      const createConsultDeptId = typeof req.body?.departmentId === "string" ? req.body.departmentId : "";
+      // CREATE-SCOPE — department_head AND employee may open a consultation, but only
+      // into THEIR OWN department; canAddCasesAndConsultations (branch_manager |
+      // admin_support) stays global. Same forced-vs-rejected split as POST /api/cases.
       if (
         !canAddCasesAndConsultations(reqUser.role)
-        && !(reqUser.role === "department_head" && !!reqUser.departmentId && createConsultDeptId === reqUser.departmentId)
+        && !["department_head", "employee"].includes(reqUser.role)
       ) {
-        return res.status(403).json({ error: "إنشاء الاستشارات متاح لمدير الفرع والدعم الإداري ورئيس القسم في قسمه" });
+        return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء الاستشارات" });
       }
+      const consultScope = scopedCreateDepartmentId(reqUser, req.body?.departmentId);
+      if (!consultScope.ok) {
+        return res.status(400).json({ error: consultScope.error });
+      }
+      req.body.departmentId = consultScope.departmentId;
       const validatedData = insertConsultationSchema.parse(req.body);
       // Phase-6: prefer the authenticated user id over the body-provided
       // createdBy so the activity log's performedBy is always the real
@@ -5957,8 +6025,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يمكن إعادة الفتح فقط لقضية مقفلة" });
       }
 
-      if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح القضية" });
+      // OWNER-ADOPTED CARVE-OUT — reopen is DEPARTMENT tier and above. Was
+      // canActOnMohrSettlement (branch_manager | own-dept head | ASSIGNED LAWYER);
+      // the assignee is now excluded. Reopening carries legal weight (it clears
+      // closureReason / closedAt and the archive flags) and is only partly
+      // reversible — cancelled hearings, memos and field tasks are NOT restored, so
+      // a reopened case comes back hollow. Early-close is deliberately untouched and
+      // stays open to the assignee: it demands a mandatory reason and is fully
+      // audited. Only reopen and the terminal closure edges tighten.
+      // The other five canActOnMohrSettlement endpoints are UNCHANGED.
+      if (!canActAtDepartmentTier(reqUser, lawCase, lawCase.departmentId, req.actingContext, lawCase.id ?? null)) {
+        return res.status(403).json({ error: "إعادة فتح القضية متاحة لرئيس القسم ومدير الفرع فقط" });
       }
 
       // PATH RESOLUTION SAFETY — refuse rather than guess. getStagesForClassification
@@ -6451,15 +6528,20 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-      // Per spec: only branch_manager / admin_support / department_head
-      // can create contracts. Employees / lawyers / review committee
-      // chairs are NOT allowed to open new files. Server is the source
-      // of truth — the UI hides the button but a hand-rolled POST would
-      // bypass that gate.
-      const allowedCreators = ["branch_manager", "admin_support", "department_head"];
+      // CREATE-SCOPE — branch_manager / admin_support stay global. employee is now
+      // ADMITTED (it was excluded), and department_head — which this route granted
+      // FIRM-WIDE, the gap flagged after 571e5e2 — is now SCOPED like every other
+      // create: both roles may open a contract only in THEIR OWN department.
+      // Same forced-vs-rejected split as the cases / consultations twins.
+      const allowedCreators = ["branch_manager", "admin_support", "department_head", "employee"];
       if (!allowedCreators.includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء عقود" });
       }
+      const contractScope = scopedCreateDepartmentId(reqUser, req.body?.departmentId);
+      if (!contractScope.ok) {
+        return res.status(400).json({ error: contractScope.error });
+      }
+      req.body.departmentId = contractScope.departmentId;
       const validated = insertContractSchema.parse(req.body);
       const createdBy = reqUser?.id || "unknown";
       const created = await storage.createContract(validated, createdBy);
@@ -11422,18 +11504,26 @@ export async function registerRoutes(
       let resolvedAssignedTo = "";
       const relatedCase = validatedData.caseId ? await storage.getCaseById(validatedData.caseId) : null;
 
-      // WIDENED MODEL — creation was canCreateMemos only (branch_manager |
-      // cases_review_head | department_head | admin_support, all firm-wide). A lawyer
-      // ASSIGNED TO THE PARENT CASE may now raise a memo on it: the memo hangs off an
-      // item already assigned to them. Evaluated against the PARENT CASE because a
-      // memo has no department and no assignee of its own until it exists.
-      // canCreateMemos is kept and OR-ed, so nobody loses access. A memo with no
-      // caseId keeps the original rule — there is no parent to scope by.
-      if (
-        !canCreateMemos(user.role)
-        && !(!!relatedCase && canActOnEntityTiered(
-          user, relatedCase, relatedCase.departmentId, req.actingContext, relatedCase.id ?? null))
-      ) {
+      // CREATE-SCOPE — memos carry NO departmentId, so scopedCreateDepartmentId does
+      // not apply: a memo's department IS its parent case's, and its "assigned to me"
+      // is the parent case's assignment. Both scoped tiers therefore resolve against
+      // the PARENT CASE via entityActorTier.
+      //   • department_head — was granted FIRM-WIDE by canCreateMemos, so a head
+      //     could raise a memo on ANOTHER department's case. Now removed from the
+      //     global set and admitted only through the tier check, i.e. own-dept only.
+      //   • employee — admitted when assigned to the parent case.
+      //   • branch_manager / cases_review_head / admin_support — unchanged, global.
+      // A memo with NO parent case keeps the original canCreateMemos rule verbatim
+      // (including department_head): there is nothing to scope against, and this
+      // is not a real workflow — memos.case_id is NOT NULL.
+      const canCreateThisMemo = relatedCase
+        ? (
+            (canCreateMemos(user.role) && user.role !== "department_head")
+            || canActOnEntityTiered(
+              user, relatedCase, relatedCase.departmentId, req.actingContext, relatedCase.id ?? null)
+          )
+        : canCreateMemos(user.role);
+      if (!canCreateThisMemo) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء المذكرات" });
       }
 

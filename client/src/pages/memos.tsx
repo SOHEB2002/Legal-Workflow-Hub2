@@ -96,7 +96,6 @@ import {
   CommitteeDecision,
   NoteOutcome,
   Priority,
-  canCreateMemos,
   canChangeMemoStatus,
   canDeleteMemos,
 } from "@shared/schema";
@@ -643,18 +642,32 @@ export default function MemosPage() {
   // dept_head (own dept, resolved via parent case) / assigned lawyer.
   // Memos don't carry departmentId directly, so dept_head needs the
   // parent case lookup.
-  // WIDENED MODEL — memo creation was canCreateMemos only. A lawyer assigned to
-  // ANY case may now raise a memo on it (the server scopes the check to the PARENT
-  // CASE chosen in the dialog; the button just needs to know whether the user has
-  // at least one case to raise one against, otherwise the dialog would be empty).
-  const canCreateMemosWidened =
-    !!user && (
-      canCreateMemos(user.role)
-      || cases.some((c) =>
-        c.primaryLawyerId === user.id
-        || c.responsibleLawyerId === user.id
-        || (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id)))
-    );
+  // CREATE-SCOPE — memos carry no departmentId, so "their own department" resolves
+  // through the PARENT CASE, exactly as the server does at POST /api/memos:
+  //   • branch_manager / cases_review_head / admin_support — every case (global).
+  //   • department_head — cases in THEIR OWN department only. canCreateMemos grants
+  //     the role firm-wide, which is the gap this closes: a head could previously
+  //     raise a memo on another department's case.
+  //   • employee — cases ASSIGNED to them.
+  // This same list drives the case picker in the add dialog, so the picker can only
+  // offer a case the server would accept.
+  const memoCreatableCases = useMemo(() => {
+    if (!user) return [];
+    if (["branch_manager", "cases_review_head", "admin_support"].includes(user.role)) return cases;
+    if (user.role === "department_head") {
+      return user.departmentId
+        ? cases.filter((c) => c.departmentId === user.departmentId)
+        : [];
+    }
+    return cases.filter((c) =>
+      c.primaryLawyerId === user.id
+      || c.responsibleLawyerId === user.id
+      || (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id)));
+  }, [cases, user]);
+
+  // The button needs at least one case the user could actually raise a memo on —
+  // otherwise the dialog opens onto an empty picker.
+  const canCreateMemosWidened = memoCreatableCases.length > 0;
 
   // MISMATCH FIX — memo reassign was department_head ONLY, so a branch_manager
   // could not reassign a memo from the UI at all, and admin_support / the review
@@ -1607,7 +1620,7 @@ export default function MemosPage() {
                     <CommandList>
                       <CommandEmpty>لا توجد نتائج</CommandEmpty>
                       <CommandGroup>
-                        {cases
+                        {memoCreatableCases
                           .filter(c => c.status !== "مغلق")
                           .map(c => (
                             <CommandItem

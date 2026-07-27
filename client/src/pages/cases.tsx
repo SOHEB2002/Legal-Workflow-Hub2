@@ -390,20 +390,23 @@ export default function CasesPage() {
   //     case but not bring it back, so this set is narrower than early-close.
   // Same both-sides-non-empty departmentId rule as early-close, so a dept_head
   // with a null department can't match a case that also has none.
+  // OWNER-ADOPTED CARVE-OUT — reopen is DEPARTMENT tier and above. The assigned
+  // lawyer is now EXCLUDED (it used to be admitted): reopening carries legal weight
+  // and is only partly reversible — cancelled hearings, memos and field tasks are
+  // not restored, so the case comes back hollow. Mirrors the server gate on
+  // POST /api/cases/:id/reopen, which switched from canActOnMohrSettlement to
+  // canActAtDepartmentTier. canEarlyCloseCase is deliberately UNCHANGED and still
+  // includes the assignee — closing with a mandatory reason stays the lawyer's path.
   const canReopenCase = (c: LawCase): boolean => {
     if (!user) return false;
     if (c.currentStage !== "مقفلة") return false;
     if (user.role === "branch_manager") return true;
-    if (
+    return (
       user.role === "department_head" &&
       !!user.departmentId &&
       !!c.departmentId &&
       c.departmentId === user.departmentId
-    ) {
-      return true;
-    }
-    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
-    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+    );
   };
 
   // "تسجيل استلام الصك" permission gate — the SAME rule the server enforces on
@@ -743,7 +746,8 @@ export default function CasesPage() {
       plaintiffName: "",
       caseType: "",
       caseTypeOther: "",
-      departmentId: "",
+      // CREATE-SCOPE — pre-filled and locked for a department_head / employee.
+      departmentId: defaultCreateDepartmentId,
       departmentOther: "",
       priority: "متوسط",
       courtName: "",
@@ -1162,12 +1166,23 @@ export default function CasesPage() {
     return canActOnCaseWorkflow(c);
   };
 
-  // WIDENED MODEL — a department_head may open a case in THEIR OWN department.
-  // Mirrors POST /api/cases, which scopes on the body's target department; the
-  // add-case dialog defaults the department for a head, so the two agree.
+  // CREATE-SCOPE — department_head AND employee may open a case, but only in THEIR
+  // OWN department. Mirrors POST /api/cases + scopedCreateDepartmentId.
   const canCreateCase =
     !!permissions.canAddCasesAndConsultations
-    || (user?.role === "department_head" && !!user.departmentId);
+    || (["department_head", "employee"].includes(user?.role ?? "") && !!user?.departmentId);
+
+  // CREATE-SCOPE picker mirror — for the two scoped roles the department list is
+  // filtered to their own department AND the control is locked, so the value the
+  // server will accept is the only value they can pick. Belt-and-braces on purpose:
+  // the server rejects a differing explicit departmentId with a 400, and this makes
+  // that 400 unreachable through the UI.
+  const isDeptScopedCreator =
+    user?.role === "department_head" || user?.role === "employee";
+  const creatableDepartments = isDeptScopedCreator
+    ? departments.filter((d) => d.id === user?.departmentId)
+    : departments;
+  const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "") : "";
 
   const canClose = (c: LawCase) =>
     permissions.canCloseCases &&
@@ -1759,15 +1774,18 @@ export default function CasesPage() {
                   <Select
                     value={formData.departmentId}
                     onValueChange={(value) => setFormData({ ...formData, departmentId: value, departmentOther: "" })}
+                    disabled={isDeptScopedCreator}
                   >
                     <SelectTrigger data-testid="select-department">
                       <SelectValue placeholder="اختر القسم" />
                     </SelectTrigger>
                     <SelectContent>
-                      {departments.map((dept) => (
+                      {creatableDepartments.map((dept) => (
                         <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
                       ))}
-                      <SelectItem value="أخرى">أخرى</SelectItem>
+                      {/* "أخرى" would land the case outside any department, which a
+                          dept-scoped creator is not allowed to do. */}
+                      {!isDeptScopedCreator && <SelectItem value="أخرى">أخرى</SelectItem>}
                     </SelectContent>
                   </Select>
                   {formData.departmentId === "أخرى" && (
