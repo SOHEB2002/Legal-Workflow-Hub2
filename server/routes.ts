@@ -78,6 +78,7 @@ import {
   findPrimaryJudgmentHearing,
   judgmentDirectionOf,
   weAreTheAppellant,
+  canAddCasesAndConsultations,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -279,7 +280,11 @@ function canModifyCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
   if (u.role === "labor_review_head") return caseData.departmentId === u.departmentId;
-  if (u.role === "department_head" && caseData.departmentId === u.departmentId) return true;
+  // !!u.departmentId — a department_head whose own departmentId is null/"" must
+  // not match a row whose departmentId is also empty (legacy / "أخرى" rows).
+  // Mirrors the guard canActOnMohrSettlement (:345) and the skip-committee gates
+  // already carry. Same fix applied to the consultation + contract twins below.
+  if (u.role === "department_head" && !!u.departmentId && caseData.departmentId === u.departmentId) return true;
   if (caseData.primaryLawyerId === u.id || caseData.responsibleLawyerId === u.id) return true;
   if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) return true;
   if (caseData.internalReviewerId && caseData.internalReviewerId === u.id) return true;
@@ -353,7 +358,8 @@ function canModifyConsultationIdentity(u: CaseActorIdentity, consultation: any):
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
   if (u.role === "labor_review_head") return consultation.departmentId === u.departmentId;
-  if (u.role === "department_head" && consultation.departmentId === u.departmentId) return true;
+  // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+  if (u.role === "department_head" && !!u.departmentId && consultation.departmentId === u.departmentId) return true;
   if (consultation.assignedTo === u.id || consultation.createdBy === u.id) return true;
   return false;
 }
@@ -755,7 +761,8 @@ function getContractCycleTransitionsForType(_type: string): StageTransitionRule[
 function canModifyContractIdentity(u: CaseActorIdentity, contract: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "department_head" && contract.departmentId === u.departmentId) return true;
+  // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+  if (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId) return true;
   if (contract.assignedTo === u.id || contract.createdBy === u.id) return true;
   if (contract.internalReviewerId === u.id) return true;
   return false;
@@ -3672,8 +3679,20 @@ export async function registerRoutes(
 
   app.post("/api/consultations", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const validatedData = insertConsultationSchema.parse(req.body);
       const reqUser = req.user!;
+      // SECURITY (audit R8) — this route was requireAuth-ONLY: any authenticated
+      // user could create a consultation with a hand-rolled POST. The UI has
+      // always gated the "استشارة جديدة" button on
+      // permissions.canAddCasesAndConsultations, so the server now enforces the
+      // SAME shared predicate the FE reads (branch_manager | admin_support)
+      // rather than an inline copy — the two can no longer drift apart.
+      // POST /api/cases enforces the identical set (inline, :2149).
+      // department_head is deliberately NOT added: widening creation rights is
+      // permissions work, not a security fix.
+      if (!canAddCasesAndConsultations(reqUser.role)) {
+        return res.status(403).json({ error: "إنشاء الاستشارات متاح فقط لمدير الفرع والدعم الإداري" });
+      }
+      const validatedData = insertConsultationSchema.parse(req.body);
       // Phase-6: prefer the authenticated user id over the body-provided
       // createdBy so the activity log's performedBy is always the real
       // actor. Fall back for legacy clients that still pass it explicitly.
@@ -4942,7 +4961,8 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه الاستشارة" });
 
@@ -5796,7 +5816,8 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssignedLawyer;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه القضية" });
 
@@ -11216,6 +11237,48 @@ export async function registerRoutes(
 
       if (updateData.status && !canChangeStatus) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
+      }
+
+      // SECURITY (audit R8) — the NON-status fields were completely UNGATED.
+      // Only `status` was ever checked above, so title / description / priority /
+      // assignedTo / deadline / content / fileLink / reviewNotes / reviewerId were
+      // writable by ANY authenticated non-viewer on ANY memo in the firm (a live
+      // IDOR; only the viewerWriteGuard in server/index.ts stopped viewers).
+      //
+      // Gated with canActOnMemo — the memo module's central authority helper —
+      // rather than a new hand-rolled rule. It already does the two things this
+      // route needs and gets wrong when hand-rolled: it resolves department_head
+      // through the PARENT CASE (memos carry no departmentId of their own) and it
+      // guards memo.assignedTo's "" unassigned sentinel (assigned_to is NOT NULL).
+      //
+      // ADMIN SET = the widest existing memo-action set — POST /api/memos/:id/cancel's
+      // ["branch_manager","admin_support","cases_review_head"] — PLUS labor_review_head
+      // so BOTH committee chairs match. A memo's committee is chaired by
+      // cases_review_head, or by labor_review_head for a labor-department memo
+      // (ALLOWED_MEMO_TRANSITIONS + the dept-routing guard in /advance-stage), and the
+      // update schema exposes the committee's own reviewNotes / reviewerId fields.
+      // Without labor_review_head the labor chair could APPROVE a labor memo through
+      // the status gate above (canReviewMemos includes it) but not annotate it.
+      //
+      // Parent-case lawyers who are NOT the memo assignee are deliberately NOT
+      // admitted: canActOnMemo excludes them, and memos.tsx canCancelMemo documents
+      // that exclusion as a deliberate fix (the old gate showed them a button the
+      // server 403'd). The status gate above keeps its own, wider rule untouched.
+      //
+      // Evaluated on the ZOD-VALIDATED keys only, before the handler adds its own
+      // server-side fields (startedAt / completedAt / submittedAt / reviewerId below),
+      // so those never trip this gate.
+      const nonStatusFields = Object.keys(updateData).filter((k) => k !== "status");
+      if (nonStatusFields.length > 0) {
+        const canEditMemoFields = await canActOnMemo(user, memo, req.actingContext, [
+          "branch_manager",
+          "admin_support",
+          "cases_review_head",
+          "labor_review_head",
+        ]);
+        if (!canEditMemoFields) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لتعديل هذه المذكرة" });
+        }
       }
 
       // Validate assignedTo user is active if being changed
