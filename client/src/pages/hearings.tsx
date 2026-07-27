@@ -78,7 +78,7 @@ import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
-import { CaseStageLabels, HearingResultLabels } from "@shared/schema";
+import { CaseStageLabels, HearingResultLabels, isFirmFuture } from "@shared/schema";
 import type { CaseStageValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
@@ -114,13 +114,14 @@ function getUrgencyColor(hearingDate: string) {
   return "bg-accent text-accent-foreground";
 }
 
+// TIMEZONE FIX — same one-line class as the server guard on POST /:id/result:
+// parsing "YYYY-MM-DD" as UTC and then reinterpreting it in the HOST's local time
+// used two different calendars, so a browser west of the firm dimmed the
+// record-result button on the hearing's own day. isFirmFuture compares calendar
+// days as strings in the firm's timezone. (The SERVER decides; this only controls
+// whether the button looks available.)
 function isHearingInFuture(hearingDate: string): boolean {
-  if (!hearingDate) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const hd = new Date(hearingDate);
-  hd.setHours(0, 0, 0, 0);
-  return hd.getTime() > today.getTime();
+  return isFirmFuture(hearingDate);
 }
 
 // `cancellationReason` is optional and used ONLY by the ملغية branch, where it
@@ -262,6 +263,19 @@ export default function HearingsPage() {
     });
     setReplaceHearingId(null);
     setConflictHearing(null);
+  };
+
+  // Seeds the report dialog FROM the hearing, so an EDIT opens on the existing
+  // text instead of a blank form that would wipe it on save. For a hearing with
+  // no report yet every field is empty, i.e. identical to resetReportForm — so
+  // this is the single entry point for both writing and correcting.
+  const prefillReportForm = (h: Hearing) => {
+    setReportForm({
+      hearingReport: h.hearingReport || "",
+      recommendations: h.recommendations || "",
+      nextSteps: h.nextSteps || "",
+      contactCompleted: !!h.contactCompleted,
+    });
   };
 
   const resetReportForm = () => {
@@ -1315,7 +1329,7 @@ export default function HearingsPage() {
                                       className="h-7 w-7"
                                       data-testid={`button-report-${hearing.id}`}
                                       onClick={() => {
-                                        resetReportForm();
+                                        prefillReportForm(hearing);
                                         setReportDialogHearing(hearing);
                                       }}
                                     >
@@ -1596,7 +1610,7 @@ export default function HearingsPage() {
         onOpenChange={(open) => !open && setDetailHearingId(null)}
         actions={{
           onRecordResult: (h) => setResultDialogHearing(h),
-          onWriteReport: (h) => { resetReportForm(); setReportDialogHearing(h); },
+          onWriteReport: (h) => { prefillReportForm(h); setReportDialogHearing(h); },
           onMarkContactCompleted: handleMarkContactCompleted,
           onCloseHearing: handleCloseHearing,
           busy: submitting,

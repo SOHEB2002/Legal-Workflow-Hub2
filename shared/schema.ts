@@ -3715,6 +3715,21 @@ export const hearingReportSchema = z.object({
 
 export type HearingReportInput = z.infer<typeof hearingReportSchema>;
 
+// PATCH /api/hearings/:id/result-details — phase 2, SAFE-FIELD result correction.
+// The ONLY two hearing fields a recorded result exposes that drive NO cascade:
+//   • resultDetails   — free text, read by nobody but the display
+//   • objectionDeadline — judgment only, and historical record ONLY: the objection
+//     clock now runs from the صك RECEIPT date (routes.ts documents this column is
+//     "no longer authoritative for anything")
+// Deliberately NOT .passthrough(): every other field on a recorded hearing drives a
+// side-effect cascade, and the handler REJECTS them by name rather than letting zod
+// silently strip them — a silent strip would look like a successful edit that did
+// nothing. The rejected list lives in the handler so the 400 can name the field.
+export const hearingResultDetailsSchema = z.object({
+  resultDetails: z.string().optional(),
+  objectionDeadline: z.string().nullable().optional(),
+});
+
 export const insertFieldTaskSchema = z.object({
   title: z.string().min(1, "عنوان المهمة مطلوب"),
   description: z.string().optional().default(""),
@@ -4570,6 +4585,44 @@ export const DefaultObjectionWindowDays = 30;
 //
 // Generic over the row shape so the server can pass DB rows and the client can
 // pass its Hearing interface without either importing the other's type.
+// ==================== CALENDAR DAY (firm timezone) ====================
+//
+// 🔴 THE BUG THIS REPLACES. Date columns that hold a bare "YYYY-MM-DD" (hearings
+// .hearing_date, struck_off_date, …) were being compared like this:
+//     const hd = new Date(value); hd.setHours(0, 0, 0, 0);
+// new Date("2026-07-28") parses as UTC MIDNIGHT, and setHours then reinterprets
+// that instant in SERVER-LOCAL time — so the two steps use different calendars.
+// On a UTC server (Replit's default) with users in Riyadh (UTC+3), between 00:00
+// and 03:00 Riyadh the server's local day is still YESTERDAY. Any "is this today"
+// or "is this in the future" test was therefore wrong by one day for three hours
+// every night.
+//
+// THE FIX: never parse the stored string. HijriDatePicker writes it from LOCAL
+// Gregorian parts (`${getFullYear()}-${mm}-${dd}` — Hijri is display-only), so the
+// stored value IS a calendar day, and the only correct comparison is against
+// today's calendar day in the SAME calendar. en-CA formats as ISO YYYY-MM-DD, and
+// timeZone pins it to the firm's day rather than the host's. Plain string
+// comparison then works for both equality and ordering (YYYY-MM-DD sorts
+// lexicographically), and no timezone can shift it.
+export const FirmTimeZone = "Asia/Riyadh";
+
+/** Today's calendar day in the firm's timezone, as "YYYY-MM-DD". */
+export function firmToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: FirmTimeZone }).format(new Date());
+}
+
+/** True when a stored "YYYY-MM-DD" is the firm's TODAY. Never parses the value. */
+export function isFirmToday(day: string | null | undefined): boolean {
+  const d = String(day || "").trim();
+  return !!d && d === firmToday();
+}
+
+/** True when a stored "YYYY-MM-DD" is strictly AFTER the firm's today. */
+export function isFirmFuture(day: string | null | undefined): boolean {
+  const d = String(day || "").trim();
+  return !!d && d > firmToday();
+}
+
 export function findPrimaryJudgmentHearing<
   T extends { result?: string | null; judgmentFinal?: boolean | null; hearingDate?: string | null },
 >(hearings: T[]): T | null {
