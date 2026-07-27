@@ -278,6 +278,7 @@ function caseActorIdentities(user: CaseActorIdentity, caseData: any, ctx?: Actin
 function canModifyCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
+  if (u.role === "labor_review_head") return caseData.departmentId === u.departmentId;
   if (u.role === "department_head" && caseData.departmentId === u.departmentId) return true;
   if (caseData.primaryLawyerId === u.id || caseData.responsibleLawyerId === u.id) return true;
   if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) return true;
@@ -291,6 +292,7 @@ function canModifyCase(user: CaseActorIdentity, caseData: any, ctx?: ActingConte
 function canViewCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
+  if (u.role === "labor_review_head") return caseData.departmentId === u.departmentId;
   if (u.role === "department_head") return caseData.departmentId === u.departmentId;
   if (u.role === "employee") {
     return caseData.primaryLawyerId === u.id ||
@@ -350,6 +352,7 @@ function canActOnMohrSettlement(user: CaseActorIdentity, caseData: any, ctx?: Ac
 function canModifyConsultationIdentity(u: CaseActorIdentity, consultation: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
+  if (u.role === "labor_review_head") return consultation.departmentId === u.departmentId;
   if (u.role === "department_head" && consultation.departmentId === u.departmentId) return true;
   if (consultation.assignedTo === u.id || consultation.createdBy === u.id) return true;
   return false;
@@ -480,11 +483,11 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "branch_manager"] },
-  { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "branch_manager"] },
-  { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
   { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["internal_reviewer", "branch_manager"] },
-  { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: "إحالة_للجنة_المراجعة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
 
   // Skip data completion
   { from: "استلام", to: "دراسة", allowedRoles: ["department_head", "branch_manager", "assigned_lawyer"] },
@@ -559,7 +562,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // After review (with or without notes) an in-court case goes straight to
   // منظورة — it's already filed, so there's no ناجز/تراضي step and no
   // جاهزة_للرفع gate.
-  { from: "إحالة_للجنة_المراجعة", to: "منظورة", allowedRoles: ["cases_review_head", "branch_manager", "department_head"] },
+  { from: "إحالة_للجنة_المراجعة", to: "منظورة", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager", "department_head"] },
   { from: "الأخذ_بالملاحظات", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
   // ==================== POST-TRIAL TRANSITIONS ====================
@@ -787,8 +790,8 @@ const ALLOWED_MEMO_TRANSITIONS: StageTransitionRule[] = [
   { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.DRAFTING,        allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.COMMITTEE,       allowedRoles: ["internal_reviewer", "branch_manager"] },
   // Committee decisions (cases_review_head is the committee chair for memos).
-  { from: MemoStage.COMMITTEE,       to: MemoStage.READY,           allowedRoles: ["cases_review_head", "branch_manager"] },
-  { from: MemoStage.COMMITTEE,       to: MemoStage.TAKING_NOTES,    allowedRoles: ["cases_review_head", "branch_manager"] },
+  { from: MemoStage.COMMITTEE,       to: MemoStage.READY,           allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
+  { from: MemoStage.COMMITTEE,       to: MemoStage.TAKING_NOTES,    allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
   // Take-notes outcome (any of تم | لم_يتم | جزئياً all advance to READY)
   { from: MemoStage.TAKING_NOTES,    to: MemoStage.READY,           allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   // Filing
@@ -2825,6 +2828,19 @@ export async function registerRoutes(
         if (!stageCheck.allowed) {
           return res.status(400).json({ error: stageCheck.reason });
         }
+        // Committee decision is department-routed: a case at إحالة_للجنة_المراجعة
+        // is chaired by labor_review_head if عمالي, else cases_review_head. Only
+        // constrains the two review-head roles; branch_manager / department_head
+        // keep their table-granted authority.
+        if (existing.currentStage === "إحالة_للجنة_المراجعة" &&
+            (user.role === "cases_review_head" || user.role === "labor_review_head")) {
+          const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+          const committeeHead = (!!laborDeptId && existing.departmentId === laborDeptId)
+            ? "labor_review_head" : "cases_review_head";
+          if (user.role !== committeeHead) {
+            return res.status(403).json({ error: "ليس لديك صلاحية لقرار لجنة المراجعة على هذه القضية" });
+          }
+        }
         // === EARLY CLOSURE VALIDATION ===
         // Closing a case from a non-terminal stage now requires a reason
         // for any role allowed by validateStageTransition's early-close
@@ -4179,8 +4195,8 @@ export async function registerRoutes(
       // Scope is null — consultations carry no caseId, so only all_cases
       // delegations apply. No delegation → exactly the own-role check (parity).
       const ctx = req.actingContext;
-      const ownRoleDecides = ["consultations_review_head", "branch_manager"].includes(reqUser.role);
-      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "branch_manager"))) {
+      const ownRoleDecides = ["consultations_review_head", "labor_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "labor_review_head", "branch_manager"))) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
 
@@ -4203,6 +4219,19 @@ export async function registerRoutes(
 
       if (consultation.currentStage !== ConsultationStage.COMMITTEE) {
         return res.status(400).json({ error: "الاستشارة ليست في مرحلة لجنة المراجعة" });
+      }
+
+      // Labor consultations are chaired by labor_review_head EXCLUSIVELY; all
+      // others by consultations_review_head. branch_manager always. This is the
+      // authoritative department gate (the fast-deny above only avoids a wasted load).
+      {
+        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+        const committeeHead = (!!laborDeptId && consultation.departmentId === laborDeptId)
+          ? "labor_review_head" : "consultations_review_head";
+        const headDecides = [committeeHead, "branch_manager"].includes(reqUser.role);
+        if (!headDecides && !(ctx && hasEffectiveRole(ctx, null, committeeHead, "branch_manager"))) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+        }
       }
 
       // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
@@ -6805,8 +6834,8 @@ export async function registerRoutes(
       // 4c-7: committee decisions INHERIT (scope null — contracts carry no
       // caseId → all_cases delegations only). No delegation → own-role (parity).
       const ctx = req.actingContext;
-      const ownRoleDecides = ["consultations_review_head", "branch_manager"].includes(reqUser.role);
-      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "branch_manager"))) {
+      const ownRoleDecides = ["consultations_review_head", "labor_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, null, "consultations_review_head", "labor_review_head", "branch_manager"))) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
@@ -6830,6 +6859,16 @@ export async function registerRoutes(
       }
       if (contract.currentStage !== ContractStage.COMMITTEE) {
         return res.status(400).json({ error: "العقد ليس في مرحلة لجنة المراجعة" });
+      }
+      // Labor contracts → labor_review_head EXCLUSIVELY; others → consultations_review_head.
+      {
+        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+        const committeeHead = (!!laborDeptId && contract.departmentId === laborDeptId)
+          ? "labor_review_head" : "consultations_review_head";
+        const headDecides = [committeeHead, "branch_manager"].includes(reqUser.role);
+        if (!headDecides && !(ctx && hasEffectiveRole(ctx, null, committeeHead, "branch_manager"))) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+        }
       }
       // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
       // standing in for the review head may NOT decide a committee on a contract
@@ -8114,6 +8153,17 @@ export async function registerRoutes(
         req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
+      // Same department routing as the dedicated committee endpoint — this
+      // generic path can also reach لجنة_مراجعة → READY/TAKING_NOTES via the table.
+      if (memo.currentStage === MemoStage.COMMITTEE &&
+          (reqUser.role === "cases_review_head" || reqUser.role === "labor_review_head")) {
+        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+        const committeeHead = (!!laborDeptId && memoParentCase?.departmentId === laborDeptId)
+          ? "labor_review_head" : "cases_review_head";
+        if (reqUser.role !== committeeHead) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لقرار لجنة المراجعة على هذه المذكرة" });
+        }
+      }
 
       // Phase-9.1 — DRAFTING → INTERNAL_REVIEW requires a designated
       // peer reviewer. Same rules as the cases-side (server/routes.ts
@@ -8344,7 +8394,7 @@ export async function registerRoutes(
       // the pre-fetch 403 byte-identical for non-delegated users; a user with an
       // active delegation defers to the scoped check below.
       const ctx = req.actingContext;
-      const ownRoleDecides = ["cases_review_head", "branch_manager"].includes(reqUser.role);
+      const ownRoleDecides = ["cases_review_head", "labor_review_head", "branch_manager"].includes(reqUser.role);
       if (!ownRoleDecides && (!ctx || ctx.delegators.length === 0)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
       }
@@ -8372,8 +8422,18 @@ export async function registerRoutes(
       // 4c-7: scoped committee grant — a delegate inheriting cases_review_head/
       // branch_manager for this memo's PARENT case may decide. Non-delegated
       // users already resolved at the fast-deny above (this is a no-op for them).
-      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, memo.caseId, "cases_review_head", "branch_manager"))) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      // Labor memos (parent case in عمالي) → labor_review_head EXCLUSIVELY; all
+      // others → cases_review_head. branch_manager always. Memos have no
+      // departmentId, so resolve it through the PARENT case.
+      {
+        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+        const parentCaseForDept = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+        const committeeHead = (!!laborDeptId && parentCaseForDept?.departmentId === laborDeptId)
+          ? "labor_review_head" : "cases_review_head";
+        const headDecides = [committeeHead, "branch_manager"].includes(reqUser.role);
+        if (!headDecides && !(ctx && hasEffectiveRole(ctx, memo.caseId, committeeHead, "branch_manager"))) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+        }
       }
       // FOUR-EYES (HUMAN-only; delegation-derived authority only): a delegate
       // standing in for the review head may NOT decide a committee on a memo

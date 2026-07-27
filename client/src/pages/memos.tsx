@@ -257,10 +257,12 @@ function canDoMemoInternalReview(
 function canDoMemoCommitteeDecision(
   memo: Memo,
   userRole: string,
+  isLaborEntity: boolean,
 ): boolean {
   if (!memoIsActionable(memo)) return false;
   if (memo.currentStage !== MemoStage.COMMITTEE) return false;
-  return userRole === "cases_review_head" || userRole === "branch_manager";
+  return userRole === "branch_manager" ||
+    userRole === (isLaborEntity ? "labor_review_head" : "cases_review_head");
 }
 
 // Reasoned override — "تجاوز لجنة المراجعة". Gate for the button that calls
@@ -329,7 +331,7 @@ export default function MemosPage() {
   } = useMemos();
   const { cases, updateCase } = useCases();
   const { getHearingsByCase, getHearingById } = useHearings();
-  const { departments } = useDepartments();
+  const { departments, getDepartmentName } = useDepartments();
   const { user } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
   const { clients } = useClients();
@@ -1933,7 +1935,7 @@ export default function MemosPage() {
                       المراجعة الداخلية
                     </Button>
                   )}
-                  {user && canDoMemoCommitteeDecision(detailMemo, user.role) && (
+                  {user && canDoMemoCommitteeDecision(detailMemo, user.role, getDepartmentName(cases.find((c) => c.id === detailMemo.caseId)?.departmentId || "") === "عمالي") && (
                     <Button
                       data-testid={`button-committee-decision-${detailMemo.id}`}
                       onClick={() => openCommitteeDialog(detailMemo)}

@@ -278,10 +278,12 @@ function canDoInternalReview(
 function canDoCommitteeDecision(
   consultation: Consultation,
   userRole: string,
+  isLaborEntity: boolean,
 ): boolean {
   if (consultation.status !== "active") return false;
   if (consultation.currentStage !== ConsultationStage.COMMITTEE) return false;
-  return userRole === "consultations_review_head" || userRole === "branch_manager";
+  return userRole === "branch_manager" ||
+    userRole === (isLaborEntity ? "labor_review_head" : "consultations_review_head");
 }
 
 // Reasoned override — "تجاوز لجنة المراجعة". Gate for the button that calls
@@ -2516,7 +2518,7 @@ export default function ConsultationsPage() {
                               المراجعة الداخلية
                             </DropdownMenuItem>
                           )}
-                          {user && canDoCommitteeDecision(consultation, user.role) && (
+                          {user && canDoCommitteeDecision(consultation, user.role, getDepartmentName(consultation.departmentId) === "عمالي") && (
                             <DropdownMenuItem
                               data-testid={`button-committee-decision-${consultation.id}`}
                               onClick={() => openCommitteeDialog(consultation)}
@@ -2821,7 +2823,7 @@ export default function ConsultationsPage() {
                         المراجعة الداخلية
                       </Button>
                     )}
-                    {canDoCommitteeDecision(selectedConsultation, user.role) && (
+                    {canDoCommitteeDecision(selectedConsultation, user.role, getDepartmentName(selectedConsultation.departmentId) === "عمالي") && (
                       <Button
                         size="sm"
                         variant="outline"

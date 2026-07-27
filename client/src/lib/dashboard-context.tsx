@@ -59,6 +59,12 @@ export function getDefaultWidgetsByRole(role?: UserRoleType): WidgetConfig[] {
         "recent_cases",
       ]);
 
+    case "labor_review_head":
+      return buildWidgets([
+        "pending_review", "active_cases", "active_consultations", "overdue_tasks",
+        "recent_cases",
+      ]);
+
     case "department_head":
       return buildWidgets([
         "active_cases", "active_consultations", "pending_review", "today_hearings",
