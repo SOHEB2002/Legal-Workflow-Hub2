@@ -572,6 +572,12 @@ export const hearings = pgTable("hearings", {
   flagReason: varchar("flag_reason", { length: 500 }),
   flaggedBy:  varchar("flagged_by", { length: 255 }),
   flaggedAt:  timestamp("flagged_at"),
+  // سبب الإلغاء — captured when a hearing is cancelled (status → ملغية).
+  // Name and shape mirror memos.cancellation_reason EXACTLY (the existing
+  // precedent for "why was this cancelled"); nullable because cancellations
+  // before this feature captured none.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — see the ALTER in the commit message.
+  cancellationReason: varchar("cancellation_reason", { length: 500 }),
   attendingLawyerId: varchar("attending_lawyer_id", { length: 255 }),
   reminderSent24h: boolean("reminder_sent_24h").default(false),
   reminderSent1h: boolean("reminder_sent_1h").default(false),
@@ -2713,6 +2719,11 @@ export const ConsultationActivityType = {
   COMPLETION_SKIPPED:     "completion_skipped",
   TYPE_CHANGED:           "consultation_type_changed",
   FOLLOW_UP_STARTED:      "follow_up_started",
+  // Record-level correction via "تعديل البيانات" (client / question / source).
+  // Deliberately distinct from TYPE_CHANGED and DEPARTMENT-transfer entries:
+  // those are workflow events, this is a data fix. Type-only — activity_type is
+  // free text, so no migration.
+  DETAILS_EDITED:         "details_edited",
 } as const;
 
 export type ConsultationActivityTypeValue =
@@ -2738,6 +2749,7 @@ export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValu
   resume_from_completion:   "العودة من الاستكمال",
   completion_skipped:       "تجاوز مرحلة الاستكمال",
   consultation_type_changed: "تغيير نوع الاستشارة",
+  details_edited:           "تعديل البيانات",
   follow_up_started:        "بدء استشارة تعقيبية",
 };
 
@@ -3004,6 +3016,10 @@ export const ContractActivityType = {
   COMPLETION_SKIPPED:       "completion_skipped",
   TYPE_CHANGED:             "contract_type_changed",
   DEPARTMENT_TRANSFERRED:   "department_transferred",
+  // Record-level correction via "تعديل البيانات" (title / client / description).
+  // Distinct from TYPE_CHANGED and DEPARTMENT_TRANSFERRED, which are workflow
+  // events. Type-only — activity_type is free text, so no migration.
+  DETAILS_EDITED:           "details_edited",
   ATTACHMENT_ADDED:         "attachment_added",
   ATTACHMENT_REPLACED:      "attachment_replaced",
   ATTACHMENT_DELETED:       "attachment_deleted",
@@ -3043,6 +3059,7 @@ export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, strin
   resume_from_completion: "العودة من الاستكمال",
   completion_skipped:     "تجاوز مرحلة الاستكمال",
   contract_type_changed:  "تغيير نوع العقد",
+  details_edited:         "تعديل البيانات",
   department_transferred: "تحويل القسم",
   attachment_added:       "إضافة مرفق",
   attachment_replaced:    "استبدال مرفق",
@@ -3243,6 +3260,8 @@ export interface Hearing {
   flagReason: string | null;
   flaggedBy: string | null;
   flaggedAt: string | null;
+  // سبب الإلغاء — required whenever a hearing is cancelled (enforced server-side).
+  cancellationReason: string | null;
   attendingLawyerId: string | null;
   reminderSent24h: boolean;
   reminderSent1h: boolean;

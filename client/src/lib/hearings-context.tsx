@@ -34,7 +34,7 @@ interface HearingsContextType {
   submitResult: (id: string, data: HearingResultData) => Promise<any>;
   submitReport: (id: string, data: HearingReportData) => Promise<void>;
   closeHearing: (id: string) => Promise<void>;
-  cancelHearing: (id: string) => Promise<void>;
+  cancelHearing: (id: string, reason: string) => Promise<void>;
   setHearingFlag: (id: string, flagged: boolean, reason?: string) => Promise<void>;
   getHearingById: (id: string) => Hearing | undefined;
   getHearingsByCase: (caseId: string) => Hearing[];
@@ -181,9 +181,17 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     scheduleBackgroundRefetch();
   };
 
-  const cancelHearing = async (id: string): Promise<void> => {
-    await apiRequest("PATCH", `/api/hearings/${id}`, { status: HearingStatus.CANCELLED });
-    patchLocal(id, { status: HearingStatus.CANCELLED } as any);
+  // Cancellation now goes through the dedicated endpoint so the mandatory
+  // reason is captured (the old PATCH-status call recorded nothing). The server
+  // returns the updated row, so upsert it verbatim rather than patching status
+  // alone — that keeps cancellationReason in the cache for the detail banner.
+  const cancelHearing = async (id: string, reason: string): Promise<void> => {
+    const res = await apiRequest("POST", `/api/hearings/${id}/cancel`, { reason });
+    const updated = await res.json();
+    if (updated && updated.id) upsertLocal(updated);
+    // No cast: patchLocal takes Partial<Hearing> and status is HearingStatusValue.
+    // (The pre-existing `as any` here was vestigial — removed rather than moved.)
+    else patchLocal(id, { status: HearingStatus.CANCELLED });
     scheduleBackgroundRefetch();
   };
 

@@ -12,6 +12,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -116,7 +126,10 @@ function isHearingInFuture(hearingDate: string): boolean {
   return hd.getTime() > today.getTime();
 }
 
-function getStatusBadge(status: HearingStatusValue) {
+// `cancellationReason` is optional and used ONLY by the ملغية branch, where it
+// becomes the badge's title — the same badge+title idiom the flag badge uses,
+// so a cancelled row explains itself on hover without opening the dialog.
+function getStatusBadge(status: HearingStatusValue, cancellationReason?: string | null) {
   const label = HearingStatusLabels[status] || status;
   switch (status) {
     case HearingStatus.UPCOMING:
@@ -126,7 +139,15 @@ function getStatusBadge(status: HearingStatusValue) {
     case HearingStatus.POSTPONED:
       return <Badge variant="outline" className="border-orange-500 text-orange-500"><ArrowLeftRight className="w-3 h-3 ml-1" />{label}</Badge>;
     case HearingStatus.CANCELLED:
-      return <Badge variant="outline" className="border-destructive text-destructive"><XCircle className="w-3 h-3 ml-1" />{label}</Badge>;
+      return (
+        <Badge
+          variant="outline"
+          className="border-destructive text-destructive"
+          title={cancellationReason ? `سبب الإلغاء: ${cancellationReason}` : undefined}
+        >
+          <XCircle className="w-3 h-3 ml-1" />{label}
+        </Badge>
+      );
     default:
       return <Badge variant="outline">{label}</Badge>;
   }
@@ -179,6 +200,12 @@ export default function HearingsPage() {
   const [flagDialogHearing, setFlagDialogHearing] = useState<Hearing | null>(null);
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [flagSubmitting, setFlagSubmitting] = useState(false);
+  // Unflagging is destructive-ish (it wipes the team's alert + its reason), so
+  // it now asks first. No reason needed — just confirm.
+  const [unflagConfirmHearing, setUnflagConfirmHearing] = useState<Hearing | null>(null);
+  // Cancel-hearing confirmation + its MANDATORY reason.
+  const [cancelDialogHearing, setCancelDialogHearing] = useState<Hearing | null>(null);
+  const [cancelReasonInput, setCancelReasonInput] = useState("");
   const [editDialogHearing, setEditDialogHearing] = useState<Hearing | null>(null);
   const [reassignDialogHearing, setReassignDialogHearing] = useState<Hearing | null>(null);
   const [reassignLawyerId, setReassignLawyerId] = useState<string>("");
@@ -341,13 +368,29 @@ export default function HearingsPage() {
     }
   };
 
-  const handleCancelHearing = async (hearing: Hearing) => {
+  // Cancelling used to fire immediately on click with no confirmation and no
+  // reason. Now it opens a dialog that captures the MANDATORY سبب الإلغاء; the
+  // server 400s on an empty reason regardless.
+  const openCancelDialog = (hearing: Hearing) => {
+    setCancelReasonInput("");
+    setCancelDialogHearing(hearing);
+  };
+
+  const handleConfirmCancelHearing = async () => {
+    if (!cancelDialogHearing) return;
+    const reason = cancelReasonInput.trim();
+    if (!reason) {
+      toast({ title: "خطأ", description: "سبب الإلغاء مطلوب", variant: "destructive" });
+      return;
+    }
     setSubmitting(true);
     try {
-      await cancelHearing(hearing.id);
+      await cancelHearing(cancelDialogHearing.id, reason);
       toast({ title: "تم إلغاء الجلسة" });
+      setCancelDialogHearing(null);
+      setCancelReasonInput("");
     } catch (e: any) {
-      toast({ title: "خطأ", description: e.message, variant: "destructive" });
+      toast({ title: "خطأ", description: extractApiError(e), variant: "destructive" });
     } finally {
       setSubmitting(false);
     }
@@ -356,21 +399,30 @@ export default function HearingsPage() {
   // Toggle entry point. Already flagged → clear immediately (no question to
   // ask). Not flagged → open the dialog, because the reason is MANDATORY and
   // the server 400s without it.
-  const handleToggleFlag = async (hearing: Hearing) => {
+  const handleToggleFlag = (hearing: Hearing) => {
+    // Already flagged → confirm before clearing. Unflagging destroys the team's
+    // alert AND its reason (the server nulls reason/by/at together), so a
+    // mis-click is not silently recoverable.
     if (hearing.isFlagged) {
-      setFlagSubmitting(true);
-      try {
-        await setHearingFlag(hearing.id, false);
-        toast({ title: "تم إلغاء تعليم الجلسة" });
-      } catch (e: any) {
-        toast({ title: "خطأ", description: extractApiError(e), variant: "destructive" });
-      } finally {
-        setFlagSubmitting(false);
-      }
+      setUnflagConfirmHearing(hearing);
       return;
     }
     setFlagReasonInput("");
     setFlagDialogHearing(hearing);
+  };
+
+  const handleConfirmUnflag = async () => {
+    if (!unflagConfirmHearing) return;
+    setFlagSubmitting(true);
+    try {
+      await setHearingFlag(unflagConfirmHearing.id, false);
+      toast({ title: "تم إلغاء تعليم الجلسة" });
+      setUnflagConfirmHearing(null);
+    } catch (e: any) {
+      toast({ title: "خطأ", description: extractApiError(e), variant: "destructive" });
+    } finally {
+      setFlagSubmitting(false);
+    }
   };
 
   const handleConfirmFlag = async () => {
@@ -1107,7 +1159,7 @@ export default function HearingsPage() {
                           </td>
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
                             <div className="flex flex-col items-center gap-1">
-                              {getStatusBadge(hearing.status)}
+                              {getStatusBadge(hearing.status, hearing.cancellationReason)}
                               {hearing.result && (
                                 <Badge variant="secondary" className="text-xs">
                                   {HearingResultLabels[hearing.result] || hearing.result}
@@ -1244,7 +1296,7 @@ export default function HearingsPage() {
                                         variant="ghost"
                                         className="h-7 w-7"
                                         data-testid={`button-cancel-${hearing.id}`}
-                                        onClick={() => handleCancelHearing(hearing)}
+                                        onClick={() => openCancelDialog(hearing)}
                                       >
                                         <XCircle className="w-4 h-4 text-destructive" />
                                       </Button>
@@ -1546,6 +1598,23 @@ export default function HearingsPage() {
                 section). Mirrors the memo cancellation-banner idiom in
                 memos.tsx: destructive-tinted rounded box, icon + heading, then
                 the reason, then who/when in smaller muted text. */}
+            {/* سبب الإلغاء — shown wherever the cancellation is. Same banner
+                shape as the flag banner below, above the tabs so it is visible
+                whichever tab is open. */}
+            {detailHearing.status === HearingStatus.CANCELLED && detailHearing.cancellationReason && (
+              <div
+                className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                data-testid="banner-hearing-cancelled"
+              >
+                <div className="flex items-center gap-2 font-medium">
+                  <XCircle className="w-4 h-4" />
+                  جلسة ملغاة
+                </div>
+                <div className="mt-1">
+                  سبب الإلغاء: <BidiText>{detailHearing.cancellationReason}</BidiText>
+                </div>
+              </div>
+            )}
             {detailHearing.isFlagged && (
               <div
                 className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -1966,6 +2035,81 @@ export default function HearingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* CANCEL HEARING — confirmation + MANDATORY سبب الإلغاء. A Dialog rather
+          than the page's legacy window.confirm (used by delete): a native
+          confirm cannot hold a text field, is not RTL-styled, and CLAUDE.md
+          discourages browser modals. Same shape as the flag dialog above. */}
+      <Dialog
+        open={!!cancelDialogHearing}
+        onOpenChange={(open) => { if (!open) { setCancelDialogHearing(null); setCancelReasonInput(""); } }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>إلغاء الجلسة</DialogTitle>
+            <DialogDescription>
+              سيتم تعليم الجلسة كملغاة مع حفظ سبب الإلغاء وعرضه في تفاصيل الجلسة.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="cancel-reason">سبب الإلغاء <span className="text-destructive">*</span></Label>
+            <Textarea
+              id="cancel-reason"
+              data-testid="input-cancel-reason"
+              value={cancelReasonInput}
+              onChange={(e) => setCancelReasonInput(e.target.value)}
+              placeholder="مثال: تأجيل من المحكمة — لم يتم تحديد موعد بديل"
+              maxLength={500}
+              rows={3}
+            />
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-abort-cancel-hearing"
+              onClick={() => { setCancelDialogHearing(null); setCancelReasonInput(""); }}
+            >
+              تراجع
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid="button-confirm-cancel-hearing"
+              onClick={handleConfirmCancelHearing}
+              disabled={!cancelReasonInput.trim() || submitting}
+            >
+              {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
+              تأكيد الإلغاء
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* UNFLAG — plain confirmation, no reason. AlertDialog (the app-wide
+          confirm idiom, as used on the cases page) rather than this page's
+          legacy window.confirm. */}
+      <AlertDialog
+        open={!!unflagConfirmHearing}
+        onOpenChange={(open) => { if (!open) setUnflagConfirmHearing(null); }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>إلغاء تعليم الجلسة</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إزالة التعليم وسبَبه، ولن تظهر الجلسة باللون الأحمر لبقية الفريق. هل تريد المتابعة؟
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex gap-2">
+            <AlertDialogCancel data-testid="button-abort-unflag">تراجع</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-unflag"
+              onClick={handleConfirmUnflag}
+              disabled={flagSubmitting}
+            >
+              تأكيد
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={!!conflictHearing} onOpenChange={(open) => { if (!open) setConflictHearing(null); }}>
         <DialogContent dir="rtl">

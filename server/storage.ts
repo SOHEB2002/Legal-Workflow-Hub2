@@ -949,6 +949,7 @@ function mapDbHearing(dbHearing: any): Hearing {
     flagReason: dbHearing.flagReason ?? null,
     flaggedBy: dbHearing.flaggedBy ?? null,
     flaggedAt: toISOStringOrNull(dbHearing.flaggedAt),
+    cancellationReason: dbHearing.cancellationReason ?? null,
     attendingLawyerId: dbHearing.attendingLawyerId || null,
     reminderSent24h: dbHearing.reminderSent24h ?? false,
     reminderSent1h: dbHearing.reminderSent1h ?? false,

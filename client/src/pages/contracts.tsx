@@ -25,7 +25,7 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
-  Upload, Download, FileIcon, Paperclip, Eye, RotateCw,
+  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, Pencil,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -890,6 +890,50 @@ export default function ContractsPage() {
 
   const canDeleteContract = (): boolean => !!user && user.role === "branch_manager";
 
+  // "تعديل البيانات" — record-level correction, mirroring the cases page.
+  //
+  // GATE: reuses canTransferContract's exact shape (branch_manager |
+  // admin_support | own-dept department_head) — the page's own convention for
+  // record administration, and a strict SUBSET of the server's
+  // canModifyContract gate on PATCH, so nothing rendered can ever 403.
+  const canEditContract = (c: Contract): boolean => canTransferContract(c);
+
+  const [editContract, setEditContract] = useState<Contract | null>(null);
+  const [editForm, setEditForm] = useState({ title: "", clientId: "", description: "" });
+  const [editSaving, setEditSaving] = useState(false);
+
+  const openEditContractDialog = (c: Contract) => {
+    setEditForm({
+      title: c.title || "",
+      clientId: c.clientId || "",
+      description: c.description || "",
+    });
+    setEditContract(c);
+  };
+
+  const handleEditContract = async () => {
+    if (!editContract) return;
+    if (!editForm.title.trim() || !editForm.clientId) {
+      toast({ title: "خطأ", description: "العنوان والعميل مطلوبان", variant: "destructive" });
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await updateContract(editContract.id, {
+        title: editForm.title.trim(),
+        clientId: editForm.clientId,
+        description: editForm.description,
+      });
+      await refreshContracts();
+      toast({ title: "تم تحديث بيانات العقد" });
+      setEditContract(null);
+    } catch (err) {
+      toast({ title: "فشل حفظ التعديل", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   // Early-close gate. Mirrors canEarlyCloseCase in cases.tsx and the
   // server gate in /api/contracts/:id/early-close: branch_manager /
   // admin_support (global), department_head (own dept), assigned lawyer.
@@ -1371,6 +1415,19 @@ export default function ContractsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {/* "تعديل البيانات" — mirrors the cases page: first
+                              item, Pencil icon, same label. Not status-gated —
+                              correcting the title or client on a closed contract
+                              is legitimate and touches no workflow field. */}
+                          {canEditContract(c) && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-edit-${c.id}`}
+                              onClick={() => openEditContractDialog(c)}
+                            >
+                              <Pencil className="w-4 h-4 ml-2" />
+                              تعديل البيانات
+                            </DropdownMenuItem>
+                          )}
                           {/* Assign / reassign — available at ANY stage (not
                               just RECEIVED) for branch_manager, admin_support,
                               and own-dept department_head. The button label
@@ -2112,6 +2169,65 @@ export default function ContractsPage() {
       </Dialog>
 
       {/* ============ Assign dialog ============ */}
+      {/* "تعديل البيانات" — record-level correction. Controls reused from the
+          create dialog. Deliberately NARROW: contractType has its own inline
+          editor in the detail panel, departmentId change is a full DEPARTMENT
+          TRANSFER server-side (clears assignee + reviewer, resets the stage to
+          استلام) and so is not a "correction", assignee has its own action, and
+          every workflow field (currentStage, status, closure, followUpCount) is
+          excluded outright. */}
+      <Dialog
+        open={!!editContract}
+        onOpenChange={(open) => { if (!open) setEditContract(null); }}
+      >
+        <DialogContent className="max-w-lg" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="w-5 h-5" />
+              تعديل بيانات العقد
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>العنوان</Label>
+              <Input
+                data-testid="input-edit-contract-title"
+                value={editForm.title}
+                onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label>العميل</Label>
+              <ClientAutocomplete
+                value={editForm.clientId}
+                onChange={(clientId) => setEditForm({ ...editForm, clientId })}
+              />
+            </div>
+            <div>
+              <Label>الوصف</Label>
+              <Textarea
+                data-testid="input-edit-contract-description"
+                value={editForm.description}
+                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" data-testid="button-cancel-edit-contract" onClick={() => setEditContract(null)}>
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-save-edit-contract"
+              onClick={handleEditContract}
+              disabled={editSaving || !editForm.title.trim() || !editForm.clientId}
+            >
+              حفظ التعديل
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showAssign} onOpenChange={setShowAssign}>
         <DialogContent dir="rtl">
           <DialogHeader><DialogTitle>إسناد العقد</DialogTitle></DialogHeader>

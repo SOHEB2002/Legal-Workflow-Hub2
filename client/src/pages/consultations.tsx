@@ -46,7 +46,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play, RotateCw } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play, RotateCw, Pencil } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -1442,6 +1442,60 @@ export default function ConsultationsPage() {
   // (admin_support, department_head, branch_manager) per §3.2.1. Admin
   // support and branch manager are global; dept_head is scoped to their
   // own department.
+  // "تعديل البيانات" — record-level correction, mirroring the cases page's
+  // edit action (same ⋯ dropdown, same Pencil + label, same dialog shape).
+  //
+  // GATE: the page's OWN convention — branch_manager | admin_support |
+  // department_head of the consultation's dept. Identical in shape to
+  // canAssignConsultation below, and a strict SUBSET of the server's
+  // canModifyConsultation gate on PATCH, so nothing rendered can ever 403.
+  // (The assigned lawyer / creator can PATCH via the API but do not get this
+  // dialog — record administration is the same audience as assign/transfer.)
+  // Deliberately NOT stage- or status-gated: correcting a mistyped client on a
+  // closed consultation is legitimate, and none of these fields is workflow.
+  const canEditConsultation = (c: Consultation) => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+    return false;
+  };
+
+  const [editConsultation, setEditConsultation] = useState<Consultation | null>(null);
+  const [editForm, setEditForm] = useState({ clientId: "", questionSummary: "", source: "" });
+  const [editSaving, setEditSaving] = useState(false);
+
+  const openEditConsultationDialog = (c: Consultation) => {
+    setEditForm({
+      clientId: c.clientId || "",
+      questionSummary: c.questionSummary || "",
+      source: c.source || ConsultationSource.GROUP,
+    });
+    setEditConsultation(c);
+  };
+
+  const handleEditConsultation = async () => {
+    if (!editConsultation) return;
+    if (!editForm.clientId || !editForm.questionSummary.trim()) {
+      toast({ title: "خطأ", description: "العميل ونص الاستشارة مطلوبان", variant: "destructive" });
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await updateConsultation(editConsultation.id, {
+        clientId: editForm.clientId,
+        questionSummary: editForm.questionSummary.trim(),
+        source: editForm.source as ConsultationSourceValue,
+      });
+      await refreshConsultations();
+      toast({ title: "تم تحديث بيانات الاستشارة" });
+      setEditConsultation(null);
+    } catch (err) {
+      toast({ title: "فشل حفظ التعديل", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   const canAssignConsultation = (c: Consultation) => {
     if (c.status !== "active" || c.currentStage !== ConsultationStage.RECEIVED) return false;
     if (user?.role === "branch_manager" || user?.role === "admin_support") return true;
@@ -2255,6 +2309,21 @@ export default function ConsultationsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {/* "تعديل البيانات" — mirrors the cases page: first
+                              item, Pencil icon, same label. Sits OUTSIDE the
+                              paused / awaiting-completion branch below because
+                              it is not a workflow action: a paused
+                              consultation's client or question text must still
+                              be correctable. */}
+                          {canEditConsultation(consultation) && (
+                            <DropdownMenuItem
+                              data-testid={`button-edit-consultation-${consultation.id}`}
+                              onClick={() => openEditConsultationDialog(consultation)}
+                            >
+                              <Pencil className="w-4 h-4 ml-2" />
+                              تعديل البيانات
+                            </DropdownMenuItem>
+                          )}
                           {/* Phase-8 — when paused, all workflow actions hide.
                               Only "إلغاء التعليق" (and delete for branch_manager)
                               are available. The pause/unpause action itself is
@@ -3089,6 +3158,75 @@ export default function ConsultationsPage() {
             <Button onClick={handleSendReminder} data-testid="button-send-reminder">
               <Bell className="w-4 h-4 ml-2" />
               إرسال التذكير
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "تعديل البيانات" — record-level correction. Field controls are reused
+          verbatim from the create dialog (ClientAutocomplete, the source
+          Select, the question Textarea) so the two forms cannot drift.
+          Deliberately NARROW: type / category / department / assignee /
+          delivery date / priority / reviewer are all excluded because each has
+          its own dedicated action elsewhere, and every workflow field
+          (currentStage, status, closure, followUpCount) is excluded outright. */}
+      <Dialog
+        open={!!editConsultation}
+        onOpenChange={(open) => { if (!open) setEditConsultation(null); }}
+      >
+        <DialogContent className="max-w-lg" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="w-5 h-5" />
+              تعديل بيانات الاستشارة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>العميل</Label>
+              <ClientAutocomplete
+                value={editForm.clientId}
+                onChange={(clientId) => setEditForm({ ...editForm, clientId })}
+              />
+            </div>
+            <div>
+              <Label>وصلتنا عبر</Label>
+              <Select
+                value={editForm.source}
+                onValueChange={(value) => setEditForm({ ...editForm, source: value })}
+              >
+                <SelectTrigger data-testid="select-edit-consultation-source">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.values(ConsultationSource) as string[]).map((s) => (
+                    <SelectItem key={s} value={s} data-testid={`option-edit-source-${s}`}>
+                      {ConsultationSourceLabels[s as keyof typeof ConsultationSourceLabels] || s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>نص الاستشارة</Label>
+              <Textarea
+                data-testid="input-edit-question-summary"
+                value={editForm.questionSummary}
+                onChange={(e) => setEditForm({ ...editForm, questionSummary: e.target.value })}
+                rows={5}
+              />
+            </div>
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" data-testid="button-cancel-edit-consultation" onClick={() => setEditConsultation(null)}>
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-save-edit-consultation"
+              onClick={handleEditConsultation}
+              disabled={editSaving || !editForm.clientId || !editForm.questionSummary.trim()}
+            >
+              حفظ التعديل
             </Button>
           </DialogFooter>
         </DialogContent>
