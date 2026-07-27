@@ -585,7 +585,14 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "محكوم_حكم_نهائي", to: "تحصيل", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "محكوم_حكم_نهائي", to: "مقفلة", allowedRoles: ["department_head", "branch_manager"] },
 
-  { from: "تحصيل", to: "مقفلة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
+  // تحصيل → مقفلة is DELIBERATELY ABSENT. A case at تحصيل closes AUTOMATICALLY
+  // when its collection/execution tasks are resolved
+  // (maybeCloseCaseAfterPostJudgmentTasks); a manual close would bypass that and
+  // leave those tasks dangling. Removing the rule seals the generic transition path
+  // for EVERY role including branch_manager, because the `if (!rule)` denial above
+  // returns BEFORE the branch_manager bypass. The early-close shortcut is excluded
+  // separately, and the single escape for a case with NO outstanding task is the
+  // dedicated guard in PATCH /api/cases/:id. Do not re-add this edge.
 
   { from: "مشطوبة", to: "منظورة", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: "مشطوبة", to: "منظورة_استئناف", allowedRoles: ["admin_support", "department_head", "branch_manager"] },
@@ -981,9 +988,11 @@ function scopedCreateDepartmentId(
 // its own transition table before the widening, so this restores that exactly.
 function isFinalClosureEdge(entityType: string, currentStage: string, targetStage: string): boolean {
   if (entityType === "case") {
+    // تحصيل is NOT listed: its edge is removed from the table outright, so this
+    // predicate is unreachable for it. The two judgment closures keep the a1e3456
+    // treatment — department tier and above, assignee excluded.
     return targetStage === "مقفلة" && (
-      currentStage === "تحصيل"
-      || currentStage === "محكوم_حكم_ابتدائي"
+      currentStage === "محكوم_حكم_ابتدائي"
       || currentStage === "محكوم_حكم_نهائي"
     );
   }
@@ -1055,7 +1064,17 @@ function validateStageTransition(
   // Mirrors the consultations-side canEarlyClose gate. The closure reason
   // is required for all four roles (validated separately in the PATCH
   // handler).
-  if (entityType === "case" && targetStage === "مقفلة") {
+  //
+  // ⚠ EXCEPT FROM تحصيل — sealed for EVERY role, branch_manager included. A case at
+  // تحصيل closes automatically when its collection/execution tasks resolve
+  // (maybeCloseCaseAfterPostJudgmentTasks); an early-close from there would bypass
+  // that and orphan those tasks. This exclusion is LOAD-BEARING: the three role
+  // checks below `return { allowed: true }` before any fall-through, so the old
+  // trailing comment claiming "تحصيل … don't depend on the early-close shortcut"
+  // was simply wrong — this shortcut WAS the way a manual close from تحصيل
+  // succeeded. The only remaining way out of تحصيل by hand is the zero-outstanding-
+  // task guard in PATCH /api/cases/:id, which bypasses this function entirely.
+  if (entityType === "case" && targetStage === "مقفلة" && currentStage !== "تحصيل") {
     if (grantRoles("branch_manager", "admin_support")) {
       return { allowed: true };
     }
@@ -1066,8 +1085,7 @@ function validateStageTransition(
       return { allowed: true };
     }
     // Fall through to ALLOWED_CASE_TRANSITIONS for stage-specific rules
-    // (e.g. تحصيل/مشطوبة/post-judgment closures don't depend on the
-    // early-close shortcut).
+    // (e.g. مشطوبة / post-judgment closures have their own edges).
   }
 
   // Designated-reviewer synthetic role — HUMAN ONLY. This feeds the
@@ -1709,14 +1727,22 @@ function isPostJudgmentTask(title: string | null | undefined): boolean {
   return t.startsWith(CollectionTaskTitlePrefix) || t.startsWith(ExecutionTaskTitlePrefix);
 }
 
-// Judgment-lifecycle step 1: a case RESTS at محكوم_حكم_نهائي until every
-// post-judgment task is resolved, then closes automatically with
+// Judgment-lifecycle step 1: a case RESTS at محكوم_حكم_نهائي — or at تحصيل — until
+// every collection/execution task is resolved, then closes automatically with
 // closureReason = تم_التحصيل. "مقفلة" means nothing is left to do on the case.
 //
+// ⚠ EXTENDED TO تحصيل (owner decision). This helper used to fire ONLY at
+// محكوم_حكم_نهائي and deliberately left the settlement/تحصيل path alone — which meant
+// a case at تحصيل had NO automatic close at all, and closed only by hand. Now تحصيل
+// is the mirror image: manual close is SEALED there (the تحصيل → مقفلة transition
+// rule is removed and the early-close shortcut excludes it), and this is the way out.
+// Both stages carry the same task shape — the settlement edge مداولة_الصلح → تحصيل and
+// the grievance edge انتظار_رد_التظلم → تحصيل each create a collection task, and the
+// judgment path creates collection (+ execution) tasks — so one rule serves all.
+//
 // Gate rules:
-//   • the case must currently be AT محكوم_حكم_نهائي — never closes a case parked
-//     anywhere else (a collection task also exists on the SETTLEMENT path, whose
-//     stage is تحصيل; that path is deliberately untouched by this);
+//   • the case must currently be AT محكوم_حكم_نهائي or تحصيل — never closes a case
+//     parked anywhere else;
 //   • there must be at least one post-judgment task (otherwise nothing to gate);
 //   • ALL of them must be مكتمل or ملغي. Cancelled counts as resolved — a task
 //     someone cancelled is not outstanding work, and excluding it would let one
@@ -1734,7 +1760,7 @@ async function maybeCloseCaseAfterPostJudgmentTasks(
   try {
     const lawCase = await storage.getCaseById(caseId);
     if (!lawCase) return;
-    if (lawCase.currentStage !== "محكوم_حكم_نهائي") return;
+    if (lawCase.currentStage !== "محكوم_حكم_نهائي" && lawCase.currentStage !== "تحصيل") return;
 
     const tasks = await storage.getFieldTasksByCase(caseId);
     const postJudgment = tasks.filter((t) => isPostJudgmentTask(t.title));
@@ -3119,12 +3145,57 @@ export async function registerRoutes(
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
+        // ==================== تحصيل SEAL + ZERO-TASK ESCAPE ====================
+        // A case at تحصيل closes AUTOMATICALLY when its collection/execution tasks
+        // are resolved (maybeCloseCaseAfterPostJudgmentTasks). Manual close from
+        // تحصيل is therefore sealed: the تحصيل → مقفلة rule is removed from the
+        // transition table and the early-close shortcut excludes تحصيل, so
+        // validateStageTransition denies this move for EVERY role, branch_manager
+        // included.
+        //
+        // The ONE escape, and the reason this guard is here rather than in
+        // validateStageTransition (which is synchronous and cannot read field
+        // tasks): a case at تحصيل with NO OUTSTANDING collection/execution task has
+        // nothing left to collect, so the automatic mechanism has nothing to fire
+        // on. Two populations reach that state —
+        //   • legacy cases already sitting at تحصيل from before this change, and
+        //     grievance-path cases that entered before the collection task was
+        //     added to انتظار_رد_التظلم → تحصيل (they carry no task at all);
+        //   • cases whose tasks are ALL resolved but whose auto-close did not land
+        //     (the helper swallows its own errors) — here a manual close is simply
+        //     a retry of what should already have happened.
+        // Both are allowed, at DEPARTMENT tier and above, matching the other
+        // final-closure edges. Deliberately bypasses validateStageTransition — the
+        // same precedent skip-committee and reopen set.
+        //
+        // This can never bypass the automatic mechanism: while ANY collection or
+        // execution task is still outstanding the close is refused outright, for
+        // every role and every tier.
+        let tahseelManualCloseAllowed = false;
+        if (existing.currentStage === "تحصيل" && req.body.currentStage === "مقفلة") {
+          const tahseelTasks = await storage.getFieldTasksByCase(existing.id);
+          const outstanding = tahseelTasks.filter(
+            (t) => isPostJudgmentTask(t.title) && t.status !== "مكتمل" && t.status !== "ملغي",
+          );
+          if (outstanding.length > 0) {
+            return res.status(400).json({
+              error: "لا يمكن إغلاق القضية يدويًا من مرحلة التحصيل — تُغلق تلقائيًا عند إنجاز مهام التحصيل المرتبطة بها",
+            });
+          }
+          if (!canActAtDepartmentTier(user, existing, existing.departmentId, req.actingContext, existing.id ?? null)) {
+            return res.status(403).json({ error: "إغلاق قضية في مرحلة التحصيل متاح لرئيس القسم ومدير الفرع فقط" });
+          }
+          tahseelManualCloseAllowed = true;
+        }
+
         // 4c-1: cases are act-as enabled — canModifyCase above and this
         // transition check both consult the acting context. (Four-eyes: the
         // INTERNAL_REVIEW lock inside stays human-only.)
-        const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, req.actingContext);
-        if (!stageCheck.allowed) {
-          return res.status(400).json({ error: stageCheck.reason });
+        if (!tahseelManualCloseAllowed) {
+          const stageCheck = validateStageTransition(existing.currentStage, req.body.currentStage, user.role, "case", user, mergedCase, req.actingContext);
+          if (!stageCheck.allowed) {
+            return res.status(400).json({ error: stageCheck.reason });
+          }
         }
         // Committee decision is department-routed: a case at إحالة_للجنة_المراجعة
         // is chaired by labor_review_head if عمالي, else cases_review_head. Only
@@ -3538,12 +3609,23 @@ export async function registerRoutes(
           req.body.closedAt = new Date().toISOString();
         }
 
-        // Conciliation outcome: when moving مداولة_الصلح → تحصيل, auto-create
-        // a field task for admin_support to draft the collection letter. The
-        // task itself is created AFTER storage.updateCase succeeds so we
-        // don't leave orphan tasks on a failed transition.
+        // Entering تحصيل auto-creates the admin collection-letter field task. The
+        // task itself is created AFTER storage.updateCase succeeds so we don't leave
+        // orphan tasks on a failed transition.
+        //
+        // ⚠ NOW COVERS BOTH ENTRY EDGES, not just settlement. تحصيل can no longer be
+        // closed by hand — it closes when its collection task resolves — so an entry
+        // edge that created NO task would strand the case. انتظار_رد_التظلم → تحصيل
+        // (the grievance path) created none and was exactly that dead end; it is
+        // included here now. The third entry edge, محكوم_حكم_نهائي → تحصيل, is NOT
+        // listed: those cases already carry the collection/execution tasks the
+        // judgment recording created, and adding a second collection task would make
+        // the auto-close wait on duplicated work.
         shouldCreateCollectionTask =
-          existing.currentStage === "مداولة_الصلح" && req.body.currentStage === "تحصيل";
+          req.body.currentStage === "تحصيل" && (
+            existing.currentStage === "مداولة_الصلح"
+            || existing.currentStage === "انتظار_رد_التظلم"
+          );
 
         // Settlement FAILED → litigation resumes (مداولة_الصلح → أغلق_طلب_الصلح):
         // create the defendant جوابية memo that POST /api/cases deliberately did
@@ -3594,7 +3676,11 @@ export async function registerRoutes(
           const collectionTask = await storage.createFieldTask(
             {
               title: `${CollectionTaskTitlePrefix} — قضية رقم ${updated.caseNumber}`,
-              description: `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
+              // Entry-edge-specific wording: the settlement path and the grievance
+              // path both land on تحصيل but for different reasons.
+              description: existing.currentStage === "انتظار_رد_التظلم"
+                ? `تم قبول التظلم — يرجى إعداد خطاب التحصيل`
+                : `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
               taskType: "متابعة_محكمة",
               caseId: updated.id,
               assignedTo: assignee,

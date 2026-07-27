@@ -369,6 +369,11 @@ export default function CasesPage() {
   const canEarlyCloseCase = (c: LawCase): boolean => {
     if (!user) return false;
     if (c.currentStage === "مقفلة") return false;
+    // تحصيل SEAL — a case at تحصيل closes AUTOMATICALLY when its collection tasks
+    // resolve, and the server refuses a manual close from there for EVERY role
+    // (the transition rule is removed and the early-close shortcut excludes it).
+    // Hidden for everyone, branch_manager included, so no button can 403.
+    if (c.currentStage === "تحصيل") return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
     if (
       user.role === "department_head" &&
