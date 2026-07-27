@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { PaginationControls } from "@/components/ui/pagination-controls";
+import { usePageSize } from "@/hooks/use-page-size";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1910,6 +1912,23 @@ export default function ConsultationsPage() {
     return tb - ta;
   });
 
+  // Pagination — added to match cases / hearings / memos, which this page
+  // previously lacked entirely (it rendered the whole filtered list). Same
+  // shape as those three: configurable size, page state, reset-to-1 on any
+  // filter change, and a slice feeding the table.
+  const [CONSULTATION_PAGE_SIZE, setConsultationPageSize] = usePageSize("consultations");
+  const [consultationPage, setConsultationPage] = useState(1);
+  useEffect(() => { setConsultationPage(1); }, [advFilters]);
+  const consultationTotalPages = Math.max(1, Math.ceil(sortedConsultations.length / CONSULTATION_PAGE_SIZE));
+  const pagedConsultations = sortedConsultations.slice(
+    (consultationPage - 1) * CONSULTATION_PAGE_SIZE,
+    consultationPage * CONSULTATION_PAGE_SIZE,
+  );
+  const handleConsultationPageSizeChange = (size: number) => {
+    setConsultationPageSize(size);
+    setConsultationPage(1);
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -2196,7 +2215,7 @@ export default function ConsultationsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedConsultations.map((consultation, idx) => {
+              {pagedConsultations.map((consultation, idx) => {
                 const priorityGroup = getConsultationPriorityGroup(consultation);
                 const rowClass =
                   priorityGroup === 1
@@ -2208,12 +2227,14 @@ export default function ConsultationsPage() {
                         : "";
                 return (
                 <TableRow key={consultation.id} data-testid={`row-consultation-${consultation.id}`} className={rowClass}>
-                  {/* Display-only sequential number — index inside the rendered
-                      list (sortedConsultations), so every active filter/search
-                      and the priority sort renumber the visible rows from 1.
-                      This table is unpaginated, so it is a plain 1..n count. */}
+                  {/* Display-only sequential number — index inside the RENDERED
+                      page, so every active filter/search and the priority sort
+                      renumber from 1. Continues across pages via the page
+                      offset, and stays correct at any page size because the
+                      offset is computed from the live size (the pager is a
+                      plain slice of one already-sorted list). */}
                   <TableCell className="text-center text-xs text-muted-foreground" data-testid={`cell-index-${consultation.id}`}>
-                    {idx + 1}
+                    {(consultationPage - 1) * CONSULTATION_PAGE_SIZE + idx + 1}
                   </TableCell>
                   <TableCell className="text-center font-medium">
                     <div className="flex flex-col items-center gap-1">
@@ -2570,6 +2591,13 @@ export default function ConsultationsPage() {
               })}
             </TableBody>
           </Table>
+          <PaginationControls
+            currentPage={consultationPage}
+            totalPages={consultationTotalPages}
+            onPageChange={setConsultationPage}
+            pageSize={CONSULTATION_PAGE_SIZE}
+            onPageSizeChange={handleConsultationPageSizeChange}
+          />
         </CardContent>
       </Card>
 

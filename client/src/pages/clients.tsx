@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { PaginationControls } from "@/components/ui/pagination-controls";
+import { usePageSize } from "@/hooks/use-page-size";
 import { Button } from "@/components/ui/button";
 import { SmartInput } from "@/components/ui/smart-input";
 import { Label } from "@/components/ui/label";
@@ -238,6 +240,21 @@ export default function ClientsPage() {
     return matchesSearch && matchesType;
   });
 
+  // Pagination — added to match cases / hearings / memos, which this page
+  // previously lacked entirely (it rendered the whole filtered list).
+  const [CLIENT_PAGE_SIZE, setClientPageSize] = usePageSize("clients");
+  const [clientPage, setClientPage] = useState(1);
+  useEffect(() => { setClientPage(1); }, [searchQuery, typeFilter]);
+  const clientTotalPages = Math.max(1, Math.ceil(filteredClients.length / CLIENT_PAGE_SIZE));
+  const pagedClients = filteredClients.slice(
+    (clientPage - 1) * CLIENT_PAGE_SIZE,
+    clientPage * CLIENT_PAGE_SIZE,
+  );
+  const handleClientPageSizeChange = (size: number) => {
+    setClientPageSize(size);
+    setClientPage(1);
+  };
+
   const renderClientForm = () => (
     <div className="space-y-4">
       <div>
@@ -443,14 +460,15 @@ export default function ClientsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredClients.map((client, idx) => (
+              {pagedClients.map((client, idx) => (
                 <TableRow key={client.id} data-testid={`row-client-${client.id}`}>
-                  {/* Display-only sequential number — index inside the rendered
-                      list, so the search box and the type filter renumber the
-                      visible rows from 1. This table is unpaginated, so it is a
-                      plain 1..n count. */}
+                  {/* Display-only sequential number — index inside the RENDERED
+                      page, so the search box and the type filter renumber from
+                      1. Continues across pages via the page offset, and stays
+                      correct at any page size because the offset is computed
+                      from the live size. */}
                   <TableCell className="text-xs text-muted-foreground" data-testid={`cell-index-${client.id}`}>
-                    {idx + 1}
+                    {(clientPage - 1) * CLIENT_PAGE_SIZE + idx + 1}
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-3">
@@ -556,6 +574,13 @@ export default function ClientsPage() {
               ))}
             </TableBody>
           </Table>
+          <PaginationControls
+            currentPage={clientPage}
+            totalPages={clientTotalPages}
+            onPageChange={setClientPage}
+            pageSize={CLIENT_PAGE_SIZE}
+            onPageSizeChange={handleClientPageSizeChange}
+          />
         </CardContent>
       </Card>
 

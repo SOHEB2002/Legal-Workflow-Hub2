@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
+import { usePageSize } from "@/hooks/use-page-size";
 import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -610,11 +611,13 @@ export default function HearingsPage() {
       return (a.hearingTime || "").localeCompare(b.hearingTime || "") * dir;
     });
 
-  const HEARING_PAGE_SIZE = 15;
+  // Rows-per-page is user-configurable and persisted per user + per page.
+  const [HEARING_PAGE_SIZE, setHearingPageSize] = usePageSize("hearings");
   const [hearingPage, setHearingPage] = useState(1);
   useEffect(() => { setHearingPage(1); }, [basicSearch, filterStatus, filterDepartment, filterLawyer, advFilters]);
   const hearingTotalPages = Math.max(1, Math.ceil(filteredHearings.length / HEARING_PAGE_SIZE));
   const pagedHearings = filteredHearings.slice((hearingPage - 1) * HEARING_PAGE_SIZE, hearingPage * HEARING_PAGE_SIZE);
+  const handleHearingPageSizeChange = (size: number) => { setHearingPageSize(size); setHearingPage(1); };
 
   const getCaseInfo = (caseId: string) => {
     const caseData = getCaseById(caseId);
@@ -1371,6 +1374,8 @@ export default function HearingsPage() {
             currentPage={hearingPage}
             totalPages={hearingTotalPages}
             onPageChange={setHearingPage}
+            pageSize={HEARING_PAGE_SIZE}
+            onPageSizeChange={handleHearingPageSizeChange}
           />
         </CardContent>
       </Card>

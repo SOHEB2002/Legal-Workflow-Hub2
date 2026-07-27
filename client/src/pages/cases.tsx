@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { PaginationControls } from "@/components/ui/pagination-controls";
+import { usePageSize } from "@/hooks/use-page-size";
 import { LtrInline } from "@/components/ui/bidi-text";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
@@ -987,11 +988,16 @@ export default function CasesPage() {
     }
   }, [departmentFilteredLawyers, lawyerFilter]);
 
-  const PAGE_SIZE = 15;
+  // Rows-per-page is user-configurable and persisted per user + per page
+  // (see use-page-size). Default stays 15.
+  const [PAGE_SIZE, setPageSize] = usePageSize("cases");
   const [casePage, setCasePage] = useState(1);
   useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters]);
   const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
   const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
+  // Changing the size resets to page 1 — the old page number is meaningless
+  // against a different slice size (page 4 of 15 may not exist at 50).
+  const handlePageSizeChange = (size: number) => { setPageSize(size); setCasePage(1); };
 
   const isDeptHead = user?.role === "department_head";
 
@@ -1594,6 +1600,8 @@ export default function CasesPage() {
             currentPage={casePage}
             totalPages={casesTotalPages}
             onPageChange={setCasePage}
+            pageSize={PAGE_SIZE}
+            onPageSizeChange={handlePageSizeChange}
           />
         </CardContent>
       </Card>

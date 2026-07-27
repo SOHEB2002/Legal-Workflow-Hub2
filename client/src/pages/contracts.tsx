@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { PaginationControls } from "@/components/ui/pagination-controls";
+import { usePageSize } from "@/hooks/use-page-size";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -340,6 +342,23 @@ export default function ContractsPage() {
     },
     [filteredContracts],
   );
+
+  // Pagination — added to match cases / hearings / memos, which this page
+  // previously lacked entirely (it rendered the whole filtered list).
+  const [CONTRACT_PAGE_SIZE, setContractPageSize] = usePageSize("contracts");
+  const [contractPage, setContractPage] = useState(1);
+  useEffect(() => {
+    setContractPage(1);
+  }, [searchTerm, stageFilter, typeFilter, deptFilter, assignedToFilter]);
+  const contractTotalPages = Math.max(1, Math.ceil(sortedContracts.length / CONTRACT_PAGE_SIZE));
+  const pagedContracts = sortedContracts.slice(
+    (contractPage - 1) * CONTRACT_PAGE_SIZE,
+    contractPage * CONTRACT_PAGE_SIZE,
+  );
+  const handleContractPageSizeChange = (size: number) => {
+    setContractPageSize(size);
+    setContractPage(1);
+  };
 
   // ---- Create dialog ----
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -1333,7 +1352,7 @@ export default function ContractsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedContracts.map((c, idx) => {
+              {pagedContracts.map((c, idx) => {
                 const priorityGroup = getContractPriorityGroup(c);
                 const rowClass =
                   priorityGroup === 1
@@ -1345,11 +1364,13 @@ export default function ContractsPage() {
                         : "";
                 return (
                 <TableRow key={c.id} data-testid={`row-contract-${c.id}`} className={rowClass}>
-                  {/* Display-only sequential number — index inside the rendered
-                      list, so any filter/search/sort renumbers from 1. This
-                      table is unpaginated, so it is a plain 1..n count. */}
+                  {/* Display-only sequential number — index inside the RENDERED
+                      page, so any filter/search/sort renumbers from 1.
+                      Continues across pages via the page offset, and stays
+                      correct at any page size because the offset is computed
+                      from the live size. */}
                   <TableCell className="text-center text-xs text-muted-foreground" data-testid={`cell-index-${c.id}`}>
-                    {idx + 1}
+                    {(contractPage - 1) * CONTRACT_PAGE_SIZE + idx + 1}
                   </TableCell>
                   <TableCell className="text-center font-medium">
                     <div className="flex flex-col items-center gap-1">
@@ -1562,6 +1583,13 @@ export default function ContractsPage() {
               )}
             </TableBody>
           </Table>
+          <PaginationControls
+            currentPage={contractPage}
+            totalPages={contractTotalPages}
+            onPageChange={setContractPage}
+            pageSize={CONTRACT_PAGE_SIZE}
+            onPageSizeChange={handleContractPageSizeChange}
+          />
         </CardContent>
       </Card>
 

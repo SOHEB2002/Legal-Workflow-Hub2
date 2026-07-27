@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
+import { usePageSize } from "@/hooks/use-page-size";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1096,11 +1097,13 @@ export default function MemosPage() {
     });
   }, [memos, cases, filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters]);
 
-  const MEMO_PAGE_SIZE = 15;
+  // Rows-per-page is user-configurable and persisted per user + per page.
+  const [MEMO_PAGE_SIZE, setMemoPageSize] = usePageSize("memos");
   const [memoPage, setMemoPage] = useState(1);
   useEffect(() => { setMemoPage(1); }, [filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters]);
   const memoTotalPages = Math.max(1, Math.ceil(filteredMemos.length / MEMO_PAGE_SIZE));
   const pagedMemos = filteredMemos.slice((memoPage - 1) * MEMO_PAGE_SIZE, memoPage * MEMO_PAGE_SIZE);
+  const handleMemoPageSizeChange = (size: number) => { setMemoPageSize(size); setMemoPage(1); };
 
   if (isLoading) {
     return (
@@ -1483,6 +1486,8 @@ export default function MemosPage() {
             currentPage={memoPage}
             totalPages={memoTotalPages}
             onPageChange={setMemoPage}
+            pageSize={MEMO_PAGE_SIZE}
+            onPageSizeChange={handleMemoPageSizeChange}
           />
         </CardContent>
       </Card>
