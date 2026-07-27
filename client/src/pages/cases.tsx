@@ -475,6 +475,10 @@ export default function CasesPage() {
   // Param is stripped from the URL so a refresh doesn't re-open the dialog.
   const [pendingOpenCaseId, setPendingOpenCaseId] = useState<string | null>(null);
   const [pendingOpenAction, setPendingOpenAction] = useState<string | null>(null);
+  // Which tab the details dialog should open on. Null = its own default
+  // (المعلومات). Only an ?action= deep-link whose target is a row in الإجراءات
+  // sets it.
+  const [detailsInitialTab, setDetailsInitialTab] = useState<string | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const s = params.get("status");
@@ -1077,6 +1081,23 @@ export default function CasesPage() {
         setDeedDate(c.judgmentDeedReceivedDate || "");
         setDeedWindowDays(String(c.objectionWindowDays ?? 30));
         setShowDeedDialog(true);
+      }
+      // The other two follow-up tasks land on ROWS inside the الإجراءات tab
+      // rather than on a dialog of their own, so the deep-link selects that tab
+      // and lets the user press the button that applies. Both are guarded by the
+      // SAME predicate the row itself is gated on, so a link whose condition has
+      // already cleared just opens the case on its default tab.
+      //   appeal-outcome    → نتيجة مهلة الاعتراض (الخصم استأنف / لم يستأنف)
+      //   opponent-response → تم استلام رد الخصم
+      if (pendingOpenAction === "appeal-outcome" && canRecordJudgmentDeed(c)) {
+        setDetailsInitialTab("actions");
+      }
+      if (
+        pendingOpenAction === "opponent-response"
+        && canActOnCaseWorkflow(c)
+        && getHearingsByCase(c.id).some((h) => h.opponentResponseRequired)
+      ) {
+        setDetailsInitialTab("actions");
       }
       setPendingOpenCaseId(null);
       setPendingOpenAction(null);
@@ -2076,7 +2097,11 @@ export default function CasesPage() {
         open={showDetailsDialog}
         onOpenChange={setShowDetailsDialog}
         onHearingPrompt={setHearingPrompt}
-        onClosed={() => setSelectedCaseId(null)}
+        // Set only by an ?action= deep-link that targets a row in the الإجراءات
+        // tab; cleared as soon as the dialog closes so a manual re-open goes
+        // back to المعلومات.
+        initialTab={detailsInitialTab}
+        onClosed={() => { setSelectedCaseId(null); setDetailsInitialTab(null); }}
         actions={selectedCase ? {
           // Each can* is this page's OWN permission helper, unchanged and still
           // defined here — no permission logic moved out with the dialog.

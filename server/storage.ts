@@ -34,6 +34,11 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import type { ActingContext } from "./acting-context";
+// MERGE NOTE (origin/main → branch): both sides independently added `ne` to
+// this import — e1f6569 for the labor-committee department exclusions, and
+// a8ecc40 for the opponent-response task's `ne(status, "مغلق")` guard. Same
+// symbol, same intent, different position in the list; kept main's ordering so
+// the line is textually identical on both sides. Both call sites survive.
 import { eq, and, or, gt, ne, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
@@ -3417,6 +3422,117 @@ export class DatabaseStorage implements IStorage {
           tasks.push({
             id: `judgment_deed:${r.id}`, kind: MyTaskKind.CASE_WORK,
             title: `تابع استلام صك الحكم — قضية ${r.caseNumber}`,
+            entityType: "case", entityId: r.id, caseId: r.id,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          });
+        }
+      }
+    }
+
+    // ---- 1d. objection-window lapsed — صك RECEIVED, window passed, no outcome ----
+    // THE SILENT GAP: 1c covers محكوم_حكم_ابتدائي only while the صك is MISSING.
+    // The moment the receipt is recorded, 1c stops — and the case then sits at
+    // محكوم_حكم_ابتدائي with NOTHING watching it, forever. Worst for a لصالحنا
+    // judgment: the objection window belongs to the OPPONENT, so there is no
+    // لائحة اعتراضية of ours whose deadline the memo reminders would chase. The
+    // window simply lapses in silence and the case leaves the radar.
+    //
+    // TRIGGER IS A DATE COMPARISON, NOT A STAGE — and it still needs no
+    // scheduler, because BOTH terms live on the case row:
+    //   receipt = judgment_deed_received_date, window = objection_window_days ?? 30
+    // so "today > receipt + window" is computable at feed time, on every read.
+    // A scheduler job would add a second source of truth for a value that is
+    // already derivable — the D3 najiz reminder exists only because it needs a
+    // CADENCE (every 3 days) and a stage-entry timestamp; this needs neither.
+    //
+    // The date filter is applied in JS rather than SQL: judgment_deed_received_date
+    // is a varchar('YYYY-MM-DD'), the candidate set is tiny (cases parked on one
+    // terminal stage), and JS keeps the arithmetic identical to the client's.
+    //
+    // MUTUALLY EXCLUSIVE WITH 1c by construction — 1c requires the deed date to be
+    // EMPTY, this one requires it present. A case can never emit both.
+    //
+    // OWNER = the assigned lawyer (primary → responsible), not the attending
+    // lawyer: recording the appeal outcome is a case-file decision, not a
+    // courtroom observation. Supervisors see all, as everywhere else here.
+    // CLEARS ITSELF when the outcome is recorded, because both actions move the
+    // case OFF محكوم_حكم_ابتدائي (→ منظورة_استئناف or → محكوم_حكم_نهائي/مقفلة).
+    {
+      const PRIMARY_JUDGMENT_STAGE = "محكوم_حكم_ابتدائي";
+      const deedPresent = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL AND ${lawCases.judgmentDeedReceivedDate} <> '')`;
+      const lapsedWhere = firmWideScoped
+        ? and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent)
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent)
+        : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent,
+            or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const lapsedRows = await db.select({
+        id: lawCases.id, caseNumber: lawCases.caseNumber,
+        deedDate: lawCases.judgmentDeedReceivedDate, windowDays: lawCases.objectionWindowDays,
+        primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+      }).from(lawCases).where(lapsedWhere);
+      const todayMs = new Date(new Date().toISOString().slice(0, 10)).getTime();
+      for (const r of lapsedRows) {
+        const receiptMs = new Date(String(r.deedDate)).getTime();
+        if (!Number.isFinite(receiptMs)) continue; // unparseable date → never nag
+        // Default 30 mirrors the server + the صك dialog; 10 is القضاء المستعجل.
+        const windowDays = r.windowDays ?? 30;
+        const deadlineMs = receiptMs + windowDays * 24 * 60 * 60 * 1000;
+        if (todayMs <= deadlineMs) continue; // still inside the window — silent by design
+        const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
+        if (!firmWideScoped && !deptHeadScoped && ownerId !== uid) continue;
+        tasks.push({
+          id: `appeal_window:${r.id}`, kind: MyTaskKind.CASE_WORK,
+          title: `انتهت مهلة الاعتراض — سجّل النتيجة — قضية ${r.caseNumber}`,
+          entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+        });
+      }
+    }
+
+    // ---- 1e. opponent-response follow-up — "مطلوب رد من الخصم" is on ----
+    // The indicator had a BADGE and nothing else: a case waiting on the
+    // opponent's reply reached no worklist, so the wait was only ever noticed by
+    // someone already scrolling the hearings list.
+    //
+    // STAGE-PRESENCE against the hearings table rather than the case row: the
+    // flag lives on the case's NEWEST hearing (the 8c615fe invariant). The task
+    // therefore mirrors the badge's own rule — `.some(h => h.opponentResponseRequired)`
+    // — so badge and task can never disagree.
+    //
+    // CLEARS ITSELF through all three existing clearing paths, with no extra
+    // code: the explicit "تم استلام رد الخصم" action, recording a result on a
+    // NEWER hearing, and every close path (cancelOpenCaseChildrenOnClose).
+    // Closed / archived cases are excluded here too, belt-and-braces, so a case
+    // whose flag somehow survived closure still cannot nag.
+    //
+    // OWNER = the assigned lawyer — the person who must decide whether the reply
+    // needs a مذكرة جوابية (the action asks exactly that).
+    {
+      const flaggedHearings = await db.select({ caseId: hearings.caseId })
+        .from(hearings)
+        .where(eq(hearings.opponentResponseRequired, true));
+      const flaggedCaseIds = Array.from(
+        new Set(flaggedHearings.map((h) => h.caseId).filter((id): id is string => !!id)),
+      );
+      if (flaggedCaseIds.length > 0) {
+        const oppWhere = firmWideScoped
+          ? and(inArray(lawCases.id, flaggedCaseIds), ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
+          : deptHeadScoped
+          ? and(inArray(lawCases.id, flaggedCaseIds), eq(lawCases.departmentId, userDept!),
+              ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
+          : and(inArray(lawCases.id, flaggedCaseIds), ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`,
+              or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+        const oppRows = await db.select({
+          id: lawCases.id, caseNumber: lawCases.caseNumber,
+          primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+        }).from(lawCases).where(oppWhere);
+        for (const r of oppRows) {
+          const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
+          if (!firmWideScoped && !deptHeadScoped && ownerId !== uid) continue;
+          tasks.push({
+            id: `opponent_response:${r.id}`, kind: MyTaskKind.CASE_WORK,
+            title: `متابعة رد الخصم — قضية ${r.caseNumber}`,
             entityType: "case", entityId: r.id, caseId: r.id,
             ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
           });
