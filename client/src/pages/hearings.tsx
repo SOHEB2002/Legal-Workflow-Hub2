@@ -1838,8 +1838,19 @@ export default function HearingsPage() {
                     )}
                     {detailHearing.judgmentFinal !== null && (
                       <div>
-                        <p className="text-xs text-muted-foreground">نوع الحكم</p>
-                        <p className="text-sm">{detailHearing.judgmentFinal ? "حكم نهائي" : "حكم ابتدائي"}</p>
+                        {/* judgment_final is FINALITY — "can this still be objected
+                            to?" — NOT the degree. Labelling it "نوع الحكم" and
+                            printing "حكم ابتدائي" for a non-final ruling was the
+                            SAME false opposition a3f7897 removed from the recording
+                            form ("درجة الحكم: ابتدائي أم نهائي") but which survived
+                            here in the display: the opposite of ابتدائي is استئنافي,
+                            while نهائي is a separate property. It read as the degree
+                            and so contradicted the النتيجة line, which states the
+                            real degree. Now names the property it actually holds. */}
+                        <p className="text-xs text-muted-foreground">نهائية الحكم</p>
+                        <p className="text-sm">
+                          {detailHearing.judgmentFinal ? "نهائي (غير قابل للاعتراض)" : "غير نهائي (قابل للاعتراض)"}
+                        </p>
                       </div>
                     )}
                     {detailHearing.objectionStatus && (
