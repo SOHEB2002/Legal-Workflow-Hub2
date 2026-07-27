@@ -40,7 +40,7 @@ import type { ActingContext } from "./acting-context";
 // symbol, same intent, different position in the list; kept main's ordering so
 // the line is textually identical on both sides. Both call sites survive.
 import { eq, and, or, gt, ne, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
+import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
 import { hashPassword } from "./auth";
@@ -3700,35 +3700,90 @@ export class DatabaseStorage implements IStorage {
 
     // ---- 7. review_pending — internal-review (identity) + committee (role) ----
     // Internal review: the designated internalReviewerId on cases/contracts/memos.
+    // TWO FIXES APPLIED HERE (see the batch report — the memo internal-review
+    // task itself was NOT missing; it has always been emitted below):
+    //
+    // (A) LIFECYCLE FILTERS — these four queries matched on (reviewer, stage)
+    //     ALONE, with no check that the entity is still alive. currentStage is
+    //     NOT cleared when an entity is cancelled or closed, so a dead entity
+    //     parked on مراجعة_داخلية kept emitting a review task to its reviewer
+    //     FOREVER, with no way to clear it. This went live with the universal
+    //     memo cancellation (147679c): cancelActiveCaseMemos sets
+    //     status='ملغاة' and deliberately leaves currentStage untouched, so any
+    //     memo cancelled while at internal review became a permanent phantom.
+    //     Block 6 (memo_pending) already filters `status <> 'ملغاة'` and the
+    //     consultation query below already filtered `status='active'` — the
+    //     other three simply never got the same treatment. Now all four do.
+    //
+    // (B) SUPERVISORY SCOPING — these were the only feed blocks with none: they
+    //     hardcoded `ownerId: uid, ownerScope: "self"`, so nobody above the
+    //     reviewer could see that a review was sitting unactioned. The reviewer
+    //     is now read from the ROW and supervisory rows are tagged
+    //     ownerScope:"team", exactly as every other block does via scopeOf().
+    //     For a plain user the where-clause is still `internalReviewerId = uid`
+    //     — byte-identical behaviour.
+    //
+    //     ⚠ branch_manager ONLY — NOT department_head, deliberately. All FOUR
+    //     internal-review decisions are locked to (designated reviewer |
+    //     branch_manager): memos and contracts 403 with
+    //     "فقط المراجع الداخلي المعين أو مدير الفرع…", consultations likewise,
+    //     and the case equivalent is a stage transition whose allowedRoles are
+    //     ["internal_reviewer", "branch_manager"]. department_head is authorized
+    //     on NONE of them. Since the مهامي team section renders the SAME action
+    //     button as the personal list, giving a dept_head visibility here would
+    //     hand them a button that always 403s — breaking visibility ===
+    //     authorization. So supervisory visibility stops at branch_manager,
+    //     who can actually act.
     {
-      const caseRows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-        .from(lawCases).where(and(eq(lawCases.internalReviewerId, uid),
-          inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"])));
+      // "a reviewer is actually designated" — the supervisory variants match on
+      // this instead of a specific uid.
+      const hasReviewer = (col: AnyPgColumn) => sql`${col} IS NOT NULL AND ${col} <> ''`;
+
+      const caseReviewWhere = firmWideScoped
+        ? and(hasReviewer(lawCases.internalReviewerId), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
+            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
+        : and(eq(lawCases.internalReviewerId, uid), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
+            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`);
+      const caseRows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber,
+          reviewerId: lawCases.internalReviewerId })
+        .from(lawCases).where(caseReviewWhere);
       for (const r of caseRows) tasks.push({ id: `review_pending:case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
         title: `مراجعة داخلية بانتظارك — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
-        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        ownerId: r.reviewerId || uid, ownerScope: scopeOf(r.reviewerId || uid), dueDate: null, isOverdue: false, actionHint: "review" });
 
-      const contractRows = await db.select({ id: contracts.id, title: contracts.title })
-        .from(contracts).where(and(eq(contracts.internalReviewerId, uid), eq(contracts.currentStage, "مراجعة_داخلية")));
+      const contractReviewWhere = firmWideScoped
+        ? and(hasReviewer(contracts.internalReviewerId), eq(contracts.currentStage, "مراجعة_داخلية"), eq(contracts.status, "active"))
+        : and(eq(contracts.internalReviewerId, uid), eq(contracts.currentStage, "مراجعة_داخلية"), eq(contracts.status, "active"));
+      const contractRows = await db.select({ id: contracts.id, title: contracts.title,
+          reviewerId: contracts.internalReviewerId })
+        .from(contracts).where(contractReviewWhere);
       for (const r of contractRows) tasks.push({ id: `review_pending:contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
         title: `مراجعة داخلية بانتظارك — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
-        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        ownerId: r.reviewerId || uid, ownerScope: scopeOf(r.reviewerId || uid), dueDate: null, isOverdue: false, actionHint: "review" });
 
-      const memoRows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
-        .from(memos).where(and(eq(memos.internalReviewerId, uid), eq(memos.currentStage, "مراجعة_داخلية")));
+      // Memos carry no departmentId — the dept-head scope joins the parent case,
+      // the same way block 6 and the committee block below do.
+      const memoReviewWhere = firmWideScoped
+        ? and(hasReviewer(memos.internalReviewerId), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"))
+        : and(eq(memos.internalReviewerId, uid), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"));
+      const memoRows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId,
+          reviewerId: memos.internalReviewerId })
+        .from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id)).where(memoReviewWhere);
       for (const r of memoRows) tasks.push({ id: `review_pending:memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
         title: `مراجعة داخلية بانتظارك — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
-        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        ownerId: r.reviewerId || uid, ownerScope: scopeOf(r.reviewerId || uid), dueDate: null, isOverdue: false, actionHint: "review" });
 
       // Consultations now carry a designated reviewer at internal review too
       // (mirrors cases) — surface to that reviewer.
+      const consultReviewWhere = firmWideScoped
+        ? and(hasReviewer(consultations.internalReviewerId), eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية"))
+        : and(eq(consultations.internalReviewerId, uid), eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية"));
       const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType,
-          consultationNumber: consultations.consultationNumber })
-        .from(consultations).where(and(eq(consultations.internalReviewerId, uid),
-          eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية")));
+          consultationNumber: consultations.consultationNumber, reviewerId: consultations.internalReviewerId })
+        .from(consultations).where(consultReviewWhere);
       for (const r of consultReviewRows) tasks.push({ id: `review_pending:consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
         title: `مراجعة داخلية بانتظارك — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
-        ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
+        ownerId: r.reviewerId || uid, ownerScope: scopeOf(r.reviewerId || uid), dueDate: null, isOverdue: false, actionHint: "review" });
 
       // Committee routing:
       //  • cases_review_head          → NON-labor cases + memos
