@@ -773,6 +773,7 @@ function mapDbConsultation(dbCon: any): Consultation {
   return {
     id: dbCon.id,
     consultationNumber: dbCon.consultationNumber,
+    title: dbCon.title ?? null,
     clientId: dbCon.clientId,
     consultationType: dbCon.consultationType,
     deliveryType: dbCon.deliveryType,
@@ -1483,6 +1484,9 @@ export class DatabaseStorage implements IStorage {
     // insert site so the column defaults aren't the only line of defence.
     const baseConsultation = {
       id,
+      // Optional — the column is nullable and pre-existing rows have none, so
+      // an empty title is stored as NULL rather than "".
+      title: data.title?.trim() ? data.title.trim() : null,
       clientId: data.clientId || "",
       consultationType: data.consultationType || "عام",
       deliveryType: data.deliveryType || "مكتوبة",

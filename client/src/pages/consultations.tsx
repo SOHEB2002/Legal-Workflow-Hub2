@@ -1459,14 +1459,24 @@ export default function ConsultationsPage() {
   };
 
   const [editConsultation, setEditConsultation] = useState<Consultation | null>(null);
-  const [editForm, setEditForm] = useState({ clientId: "", questionSummary: "", source: "" });
+  const [editForm, setEditForm] = useState({
+    clientId: "",
+    title: "",
+    consultationType: "",
+    category: "",
+    source: "",
+    questionSummary: "",
+  });
   const [editSaving, setEditSaving] = useState(false);
 
   const openEditConsultationDialog = (c: Consultation) => {
     setEditForm({
       clientId: c.clientId || "",
-      questionSummary: c.questionSummary || "",
+      title: c.title || "",
+      consultationType: c.consultationType || ConsultationType.WRITTEN,
+      category: c.category || ConsultationCategory.STANDARD,
       source: c.source || ConsultationSource.GROUP,
+      questionSummary: c.questionSummary || "",
     });
     setEditConsultation(c);
   };
@@ -1474,15 +1484,23 @@ export default function ConsultationsPage() {
   const handleEditConsultation = async () => {
     if (!editConsultation) return;
     if (!editForm.clientId || !editForm.questionSummary.trim()) {
-      toast({ title: "خطأ", description: "العميل ونص الاستشارة مطلوبان", variant: "destructive" });
+      toast({ title: "خطأ", description: "العميل وملخص السؤال مطلوبان", variant: "destructive" });
       return;
     }
     setEditSaving(true);
     try {
+      // consultationType is sent ONLY when it actually changed, so the server's
+      // existing type-change branch runs the full dedicated flow —
+      // remapConsultationStageForType + a TYPE_CHANGED activity entry — exactly
+      // as the detail-panel Select does. The column is never written bare.
+      const typeChanged = editForm.consultationType !== editConsultation.consultationType;
       await updateConsultation(editConsultation.id, {
         clientId: editForm.clientId,
-        questionSummary: editForm.questionSummary.trim(),
+        title: editForm.title.trim() || null,
+        category: editForm.category as ConsultationCategoryValue,
         source: editForm.source as ConsultationSourceValue,
+        questionSummary: editForm.questionSummary.trim(),
+        ...(typeChanged ? { consultationType: editForm.consultationType } : {}),
       });
       await refreshConsultations();
       toast({ title: "تم تحديث بيانات الاستشارة" });
@@ -1695,6 +1713,7 @@ export default function ConsultationsPage() {
 
   const [formData, setFormData] = useState({
     clientId: "",
+    title: "",
     // Workflow discriminator — picks the stage flow at creation time.
     // مكتوبة keeps the full 7+1 review/committee path; هاتفية and
     // إجرائية are simple 5-stage flows.
@@ -1710,6 +1729,7 @@ export default function ConsultationsPage() {
   const resetForm = () => {
     setFormData({
       clientId: "",
+      title: "",
       consultationType: ConsultationType.WRITTEN,
       departmentId: "",
       questionSummary: "",
@@ -1800,6 +1820,9 @@ export default function ConsultationsPage() {
       const clientName = getClientName(consultation.clientId);
       const haystack = [
         consultation.consultationNumber,
+        // Title joins the haystack for parity with the contracts search, which
+        // already includes c.title. The `|| ""` below covers the NULL rows.
+        consultation.title,
         consultation.questionSummary,
         clientName,
         consultation.consultationType,
@@ -1910,6 +1933,19 @@ export default function ConsultationsPage() {
                   <ClientAutocomplete
                     value={formData.clientId}
                     onChange={(clientId) => setFormData({ ...formData, clientId })}
+                  />
+                </div>
+                {/* عنوان — placed right after the client, the same slot the
+                    contracts dialog uses. OPTIONAL: the column is nullable
+                    because existing rows have none, so requiring it here would
+                    make the form stricter than the data. */}
+                <div>
+                  <Label>العنوان</Label>
+                  <Input
+                    data-testid="input-consultation-title"
+                    value={formData.title}
+                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    placeholder="مثال: استفسار عن فسخ عقد إيجار"
                   />
                 </div>
                 <div>
@@ -2145,6 +2181,9 @@ export default function ConsultationsPage() {
                 {/* Phase-5: all table cells (header + body) center-aligned. */}
                 <TableHead className="text-center w-[48px]">#</TableHead>
                 <TableHead className="text-center">رقم الاستشارة</TableHead>
+                {/* عنوان — same slot the contracts table uses (right after the
+                    number, before the client). */}
+                <TableHead className="text-center">العنوان</TableHead>
                 <TableHead className="text-center">العميل</TableHead>
                 <TableHead className="text-center">النوع</TableHead>
                 <TableHead className="text-center">الحالة</TableHead>
@@ -2189,6 +2228,15 @@ export default function ConsultationsPage() {
                         </Badge>
                       )}
                     </div>
+                  </TableCell>
+                  {/* عنوان — NULL on every row created before the column
+                      existed, so it falls back to an em dash in muted text.
+                      Never renders "undefined", and an empty title keeps the
+                      row height identical to a filled one. */}
+                  <TableCell className="text-center" data-testid={`cell-title-${consultation.id}`}>
+                    {consultation.title
+                      ? <BidiText>{consultation.title}</BidiText>
+                      : <span className="text-muted-foreground">—</span>}
                   </TableCell>
                   <TableCell className="text-center">
                     <BidiText>{getClientName(consultation.clientId)}</BidiText>
@@ -3180,12 +3228,78 @@ export default function ConsultationsPage() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {/* Same field order as the ADD dialog. */}
             <div>
               <Label>العميل</Label>
               <ClientAutocomplete
                 value={editForm.clientId}
                 onChange={(clientId) => setEditForm({ ...editForm, clientId })}
               />
+            </div>
+            <div>
+              <Label>العنوان</Label>
+              <Input
+                data-testid="input-edit-consultation-title"
+                value={editForm.title}
+                onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                placeholder="مثال: استفسار عن فسخ عقد إيجار"
+              />
+            </div>
+            <div>
+              <Label>نوع الاستشارة</Label>
+              <Select
+                value={editForm.consultationType}
+                onValueChange={(value) => setEditForm({ ...editForm, consultationType: value })}
+              >
+                <SelectTrigger data-testid="select-edit-consultation-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.values(ConsultationType) as string[]).map((t) => (
+                    <SelectItem key={t} value={t} data-testid={`option-edit-consultation-type-${t}`}>
+                      {ConsultationTypeLabels[t as keyof typeof ConsultationTypeLabels] || t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {editConsultation && editForm.consultationType !== editConsultation.consultationType && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                  تغيير النوع قد يُعيد ضبط مرحلة الاستشارة وسيُسجَّل في سجل النشاط.
+                </p>
+              )}
+            </div>
+            {/* القسم — READ-ONLY here BY DESIGN. Moving a consultation between
+                departments is a TRANSFER with its own required reason and
+                activity entry, not a field correction. */}
+            <div>
+              <Label>القسم</Label>
+              <Input
+                data-testid="input-edit-consultation-department"
+                value={departments.find((d) => d.id === editConsultation?.departmentId)?.name || "—"}
+                readOnly
+                disabled
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                لتغيير القسم استخدم إجراء "تحويل لقسم آخر" — يتطلب سبب التحويل ويُسجَّل في سجل النشاط.
+              </p>
+            </div>
+            <div>
+              <Label>تصنيف المدة</Label>
+              <Select
+                value={editForm.category}
+                onValueChange={(value) => setEditForm({ ...editForm, category: value })}
+              >
+                <SelectTrigger data-testid="select-edit-consultation-category">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.values(ConsultationCategory) as string[]).map((c) => (
+                    <SelectItem key={c} value={c} data-testid={`option-edit-category-${c}`}>
+                      {ConsultationCategoryLabels[c as keyof typeof ConsultationCategoryLabels] || c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label>وصلتنا عبر</Label>
@@ -3206,7 +3320,7 @@ export default function ConsultationsPage() {
               </Select>
             </div>
             <div>
-              <Label>نص الاستشارة</Label>
+              <Label>ملخص السؤال</Label>
               <Textarea
                 data-testid="input-edit-question-summary"
                 value={editForm.questionSummary}

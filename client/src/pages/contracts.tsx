@@ -898,13 +898,19 @@ export default function ContractsPage() {
   const canEditContract = (c: Contract): boolean => canTransferContract(c);
 
   const [editContract, setEditContract] = useState<Contract | null>(null);
-  const [editForm, setEditForm] = useState({ title: "", clientId: "", description: "" });
+  const [editForm, setEditForm] = useState({
+    clientId: "",
+    title: "",
+    contractType: "",
+    description: "",
+  });
   const [editSaving, setEditSaving] = useState(false);
 
   const openEditContractDialog = (c: Contract) => {
     setEditForm({
-      title: c.title || "",
       clientId: c.clientId || "",
+      title: c.title || "",
+      contractType: c.contractType || ContractType.REVIEW,
       description: c.description || "",
     });
     setEditContract(c);
@@ -913,15 +919,22 @@ export default function ContractsPage() {
   const handleEditContract = async () => {
     if (!editContract) return;
     if (!editForm.title.trim() || !editForm.clientId) {
-      toast({ title: "خطأ", description: "العنوان والعميل مطلوبان", variant: "destructive" });
+      toast({ title: "خطأ", description: "العميل والعنوان مطلوبان", variant: "destructive" });
       return;
     }
     setEditSaving(true);
     try {
+      // contractType is sent ONLY when it actually changed. The server's
+      // existing type-change branch then runs the full dedicated flow —
+      // remapContractStageForType + a TYPE_CHANGED activity entry — exactly as
+      // the detail-panel Select does. Sending it unchanged would be harmless but
+      // sending it conditionally keeps the DETAILS_EDITED log entry accurate.
+      const typeChanged = editForm.contractType !== editContract.contractType;
       await updateContract(editContract.id, {
-        title: editForm.title.trim(),
         clientId: editForm.clientId,
+        title: editForm.title.trim(),
         description: editForm.description,
+        ...(typeChanged ? { contractType: editForm.contractType as ContractTypeValue } : {}),
       });
       await refreshContracts();
       toast({ title: "تم تحديث بيانات العقد" });
@@ -1065,6 +1078,15 @@ export default function ContractsPage() {
               <DialogTitle>إضافة عقد جديد</DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
+              {/* CLIENT FIRST — matches the consultations dialogs, and the
+                  edit dialog below uses the same order. */}
+              <div>
+                <Label>العميل</Label>
+                <ClientAutocomplete
+                  value={formData.clientId}
+                  onChange={(clientId) => setFormData({ ...formData, clientId })}
+                />
+              </div>
               <div>
                 <Label>العنوان</Label>
                 <Input
@@ -1072,13 +1094,6 @@ export default function ContractsPage() {
                   value={formData.title}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   placeholder="مثال: مراجعة عقد توريد للعميل ..."
-                />
-              </div>
-              <div>
-                <Label>العميل</Label>
-                <ClientAutocomplete
-                  value={formData.clientId}
-                  onChange={(clientId) => setFormData({ ...formData, clientId })}
                 />
               </div>
               <div>
@@ -2187,6 +2202,15 @@ export default function ContractsPage() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {/* Same field order as the ADD dialog: client → title → type →
+                department → request text. */}
+            <div>
+              <Label>العميل</Label>
+              <ClientAutocomplete
+                value={editForm.clientId}
+                onChange={(clientId) => setEditForm({ ...editForm, clientId })}
+              />
+            </div>
             <div>
               <Label>العنوان</Label>
               <Input
@@ -2196,14 +2220,47 @@ export default function ContractsPage() {
               />
             </div>
             <div>
-              <Label>العميل</Label>
-              <ClientAutocomplete
-                value={editForm.clientId}
-                onChange={(clientId) => setEditForm({ ...editForm, clientId })}
+              <Label>نوع العقد</Label>
+              <Select
+                value={editForm.contractType}
+                onValueChange={(value) => setEditForm({ ...editForm, contractType: value })}
+              >
+                <SelectTrigger data-testid="select-edit-contract-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.values(ContractType) as string[]).map((t) => (
+                    <SelectItem key={t} value={t} data-testid={`option-edit-contract-type-${t}`}>
+                      {ContractTypeLabels[t as keyof typeof ContractTypeLabels] || t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {editContract && editForm.contractType !== editContract.contractType && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                  تغيير النوع قد يُعيد ضبط مرحلة العقد وسيُسجَّل في سجل النشاط.
+                </p>
+              )}
+            </div>
+            {/* القسم — READ-ONLY here BY DESIGN. Changing a contract's department
+                is a TRANSFER, not a correction: the server resets the stage to
+                استلام and clears the assigned lawyer + internal reviewer. That
+                belongs in the dedicated "تحويل لقسم آخر" action, which spells
+                those consequences out before you confirm. */}
+            <div>
+              <Label>القسم</Label>
+              <Input
+                data-testid="input-edit-contract-department"
+                value={departments.find((d) => d.id === editContract?.departmentId)?.name || "—"}
+                readOnly
+                disabled
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                لتغيير القسم استخدم إجراء "تحويل لقسم آخر" — التحويل يُعيد المرحلة إلى "استلام" ويمسح الإسناد.
+              </p>
             </div>
             <div>
-              <Label>الوصف</Label>
+              <Label>طلب العميل</Label>
               <Textarea
                 data-testid="input-edit-contract-description"
                 value={editForm.description}
@@ -2211,6 +2268,13 @@ export default function ContractsPage() {
                 rows={4}
               />
             </div>
+            {/* Attachments are deliberately NOT duplicated here: an existing
+                contract already has a full المرفقات tab that can add, replace
+                and delete files against real slot keys. A second uploader in
+                this dialog would be a parallel mechanism for the same job. */}
+            <p className="text-xs text-muted-foreground border-t pt-3">
+              المرفقات تُدار من تبويب "المرفقات" في تفاصيل العقد.
+            </p>
           </div>
           <DialogFooter className="flex gap-2">
             <Button variant="outline" data-testid="button-cancel-edit-contract" onClick={() => setEditContract(null)}>
