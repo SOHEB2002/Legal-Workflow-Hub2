@@ -6025,17 +6025,12 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يمكن إعادة الفتح فقط لقضية مقفلة" });
       }
 
-      // OWNER-ADOPTED CARVE-OUT — reopen is DEPARTMENT tier and above. Was
-      // canActOnMohrSettlement (branch_manager | own-dept head | ASSIGNED LAWYER);
-      // the assignee is now excluded. Reopening carries legal weight (it clears
-      // closureReason / closedAt and the archive flags) and is only partly
-      // reversible — cancelled hearings, memos and field tasks are NOT restored, so
-      // a reopened case comes back hollow. Early-close is deliberately untouched and
-      // stays open to the assignee: it demands a mandatory reason and is fully
-      // audited. Only reopen and the terminal closure edges tighten.
-      // The other five canActOnMohrSettlement endpoints are UNCHANGED.
-      if (!canActAtDepartmentTier(reqUser, lawCase, lawCase.departmentId, req.actingContext, lawCase.id ?? null)) {
-        return res.status(403).json({ error: "إعادة فتح القضية متاحة لرئيس القسم ومدير الفرع فقط" });
+      // AUTHORIZED ROLES: canActOnMohrSettlement — branch_manager | own-dept
+      // department_head | assigned lawyer. (a1e3456 briefly narrowed this to the
+      // department tier; REVERTED — the narrowing was never requested. Reopen sits
+      // with the other five canActOnMohrSettlement case actions, unchanged.)
+      if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح القضية" });
       }
 
       // PATH RESOLUTION SAFETY — refuse rather than guess. getStagesForClassification

@@ -390,23 +390,26 @@ export default function CasesPage() {
   //     case but not bring it back, so this set is narrower than early-close.
   // Same both-sides-non-empty departmentId rule as early-close, so a dept_head
   // with a null department can't match a case that also has none.
-  // OWNER-ADOPTED CARVE-OUT — reopen is DEPARTMENT tier and above. The assigned
-  // lawyer is now EXCLUDED (it used to be admitted): reopening carries legal weight
-  // and is only partly reversible — cancelled hearings, memos and field tasks are
-  // not restored, so the case comes back hollow. Mirrors the server gate on
-  // POST /api/cases/:id/reopen, which switched from canActOnMohrSettlement to
-  // canActAtDepartmentTier. canEarlyCloseCase is deliberately UNCHANGED and still
-  // includes the assignee — closing with a mandatory reason stays the lawyer's path.
+  // Reopen permission gate — restates the server rule for POST /api/cases/:id/reopen
+  // (canActOnMohrSettlement + the مقفلة guard): branch_manager | own-dept
+  // department_head | assigned lawyer. admin_support is excluded (owner decision):
+  // admin support may CLOSE a case but not bring it back.
+  // (a1e3456 briefly dropped the assigned lawyer here; REVERTED alongside the
+  // server gate — the narrowing was never requested.)
   const canReopenCase = (c: LawCase): boolean => {
     if (!user) return false;
     if (c.currentStage !== "مقفلة") return false;
     if (user.role === "branch_manager") return true;
-    return (
+    if (
       user.role === "department_head" &&
       !!user.departmentId &&
       !!c.departmentId &&
       c.departmentId === user.departmentId
-    );
+    ) {
+      return true;
+    }
+    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
+    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
 
   // "تسجيل استلام الصك" permission gate — the SAME rule the server enforces on
