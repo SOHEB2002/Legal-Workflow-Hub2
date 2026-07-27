@@ -3775,6 +3775,26 @@ export async function registerRoutes(
         }
       }
 
+      // "تعديل البيانات" — record-level correction. Detect changes to the
+      // CORRECTABLE fields only (client / question / source): the inline
+      // committee editors (priority, priorityReason, internalReviewerId) come
+      // through this same PATCH and already have their own entries, so logging
+      // every PATCH would double-log them. typeChange keeps its dedicated entry
+      // and wins when both happen in one request — it is the more significant
+      // event and carries the stage remap.
+      // Explicit per-field comparison rather than a keyof-indexed loop: it needs
+      // no cast to index `existing`, and the three fields are the whole list.
+      const changedDetailFields: string[] = [];
+      if (req.body.clientId !== undefined && req.body.clientId !== existing.clientId) {
+        changedDetailFields.push("العميل");
+      }
+      if (req.body.questionSummary !== undefined && req.body.questionSummary !== existing.questionSummary) {
+        changedDetailFields.push("نص الاستشارة");
+      }
+      if (req.body.source !== undefined && req.body.source !== existing.source) {
+        changedDetailFields.push("مصدر الاستشارة");
+      }
+
       let updated;
       if (typeChange) {
         const fromTypeLabel = (ConsultationTypeLabels as Record<string, string>)[typeChange.from] || typeChange.from;
@@ -3797,6 +3817,17 @@ export async function registerRoutes(
               toStage: typeChange.toStage,
               stageRemapped: typeChange.remapped,
             },
+            performedBy: user.id,
+          },
+        );
+      } else if (changedDetailFields.length > 0) {
+        updated = await storage.updateConsultationAndLog(
+          String(req.params.id),
+          req.body,
+          {
+            activityType: ConsultationActivityType.DETAILS_EDITED,
+            description: `تعديل البيانات — ${changedDetailFields.join("، ")}`,
+            metadata: { fields: changedDetailFields },
             performedBy: user.id,
           },
         );
@@ -6377,9 +6408,35 @@ export async function registerRoutes(
             performedBy: user.id,
           });
         } else {
-          // No semantic change worth logging (e.g. a title-only edit).
-          // Silent write is the right outcome here.
-          updated = await storage.updateContract(String(req.params.id), req.body);
+          // "تعديل البيانات" — record-level correction (title / client /
+          // description). These used to fall through to a SILENT write ("no
+          // semantic change worth logging"), which is no longer true now that
+          // there is a UI dedicated to changing them: correcting the client on
+          // a contract is exactly the kind of edit an audit trail must show.
+          // Last in the chain on purpose — assignee / reviewer / priority are
+          // workflow events and keep their more specific entries.
+          // Explicit per-field comparison — no cast needed to index `existing`.
+          const changedDetailFields: string[] = [];
+          if (req.body.title !== undefined && req.body.title !== existing.title) {
+            changedDetailFields.push("العنوان");
+          }
+          if (req.body.clientId !== undefined && req.body.clientId !== existing.clientId) {
+            changedDetailFields.push("العميل");
+          }
+          if (req.body.description !== undefined && req.body.description !== existing.description) {
+            changedDetailFields.push("الوصف");
+          }
+          if (changedDetailFields.length > 0) {
+            updated = await storage.updateContractAndLog(String(req.params.id), req.body, {
+              activityType: ContractActivityType.DETAILS_EDITED,
+              description: `تعديل البيانات — ${changedDetailFields.join("، ")}`,
+              metadata: { fields: changedDetailFields },
+              performedBy: user.id,
+            });
+          } else {
+            // Genuinely nothing semantic changed — silent write is correct.
+            updated = await storage.updateContract(String(req.params.id), req.body);
+          }
         }
       }
       if (!updated) return res.status(404).json({ error: "العقد غير موجود" });
@@ -8985,6 +9042,80 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الجلسة" });
+    }
+  });
+
+  // POST /api/hearings/:id/cancel — cancel a hearing WITH a mandatory reason.
+  //
+  // Replaces the old client-side `PATCH /api/hearings/:id { status: "ملغية" }`,
+  // which fired with no confirmation and captured nothing: a cancelled session
+  // showed a bare "ملغية" badge and the reason lived only in someone's memory.
+  // The generic PATCH still accepts a status change (other callers rely on it) —
+  // this endpoint is what the UI uses, so the reason is always captured.
+  //
+  // Role gate: the SAME set the cancel button has always used —
+  // attending lawyer | branch_manager | admin_support (canActOnHearing),
+  // delegation-aware. Deliberately NOT narrowed to the flag endpoint's two
+  // roles: cancelling your own session is normal lawyer work, whereas flagging
+  // is supervisory.
+  app.post("/api/hearings/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية إلغاء هذه الجلسة" });
+      }
+      if (hearing.status === HearingStatus.CANCELLED) {
+        return res.status(400).json({ error: "الجلسة ملغاة بالفعل" });
+      }
+
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) {
+        return res.status(400).json({ error: "سبب الإلغاء مطلوب" });
+      }
+      // varchar(500) — refuse rather than let Postgres throw a 22001.
+      if (reason.length > 500) {
+        return res.status(400).json({ error: "سبب الإلغاء طويل جداً (الحد ٥٠٠ حرف)" });
+      }
+
+      const updated = await storage.updateHearing(hearingId, {
+        status: HearingStatus.CANCELLED,
+        cancellationReason: reason,
+      });
+      if (!updated) {
+        return res.status(500).json({ error: "فشل إلغاء الجلسة" });
+      }
+
+      // Hearings have no activity log of their own — the parent case's timeline
+      // is where this belongs (same choice the flag endpoint makes).
+      if (hearing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: hearing.caseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            actionType: "hearing_cancelled",
+            title: `تم إلغاء الجلسة — ${reason}`,
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        } catch (e) {
+          console.error("[hearings/cancel] logCaseActivity failed", e);
+        }
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error cancelling hearing:", error);
+      res.status(500).json({ error: "حدث خطأ في إلغاء الجلسة" });
     }
   });
 
