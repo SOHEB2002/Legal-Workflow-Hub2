@@ -588,10 +588,14 @@ export function HearingDetailsDialog({
                     label="تسجيل النتيجة"
                     icon={<Gavel className="w-4 h-4" />}
                     actionLabel={!detailHearing.result && detailHearing.status === HearingStatus.UPCOMING ? "تسجيل" : undefined}
-                    onAction={() => {
-                      actions?.onRecordResult(detailHearing);
+                    // Undefined when the host passes NO actions (the case-details
+                    // dialog), so WorkflowStep renders the step READ-ONLY. It used to
+                    // be an unconditional arrow, which meant the case dialog showed a
+                    // live-looking button whose only effect was to close the dialog.
+                    onAction={actions ? () => {
+                      actions.onRecordResult(detailHearing);
                       onOpenChange(false);
-                    }}
+                    } : undefined}
                   />
                   <WorkflowStep
                     done={detailHearing.adminTasksCreated}
@@ -615,10 +619,10 @@ export function HearingDetailsDialog({
                         : canEditHearingRecord ? "تعديل التقرير"
                         : undefined
                     }
-                    onAction={() => {
-                      actions?.onWriteReport(detailHearing);
+                    onAction={actions ? () => {
+                      actions.onWriteReport(detailHearing);
                       onOpenChange(false);
-                    }}
+                    } : undefined}
                   />
                   <WorkflowStep
                     done={detailHearing.contactCompleted}
@@ -626,7 +630,7 @@ export function HearingDetailsDialog({
                     icon={<Phone className="w-4 h-4" />}
                     disabled={!detailHearing.result}
                     actionLabel={detailHearing.result && !detailHearing.contactCompleted ? "تأكيد التواصل" : undefined}
-                    onAction={() => actions?.onMarkContactCompleted(detailHearing)}
+                    onAction={actions ? () => actions.onMarkContactCompleted(detailHearing) : undefined}
                     actionDisabled={submitting}
                   />
                   <WorkflowStep
@@ -635,7 +639,7 @@ export function HearingDetailsDialog({
                     icon={<Lock className="w-4 h-4" />}
                     disabled={!detailHearing.reportCompleted || !detailHearing.contactCompleted}
                     actionLabel={detailHearing.reportCompleted && detailHearing.contactCompleted && detailHearing.status !== HearingStatus.COMPLETED ? "إغلاق" : undefined}
-                    onAction={() => actions?.onCloseHearing(detailHearing)}
+                    onAction={actions ? () => actions.onCloseHearing(detailHearing) : undefined}
                     actionDisabled={submitting}
                   />
                 </div>
@@ -681,22 +685,40 @@ function WorkflowStep({
       <span className={`text-sm font-medium ${done ? "text-green-700 dark:text-green-300" : disabled ? "text-muted-foreground" : "text-orange-700 dark:text-orange-300"}`}>
         {label}
       </span>
-      {done && (
-        <Badge variant="outline" className="mr-auto border-green-600 text-green-600 dark:border-green-400 dark:text-green-400">
-          مكتمل
-        </Badge>
-      )}
-      {!done && actionLabel && onAction && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="mr-auto"
-          onClick={onAction}
-          disabled={actionDisabled}
-          data-testid={`button-workflow-action-${label}`}
-        >
-          {actionLabel}
-        </Button>
+      {/* 🔴 THE PHASE-1 BUG WAS HERE. The action button used to be gated on
+          `!done`, so a COMPLETED step could never carry an action — WorkflowStep
+          was written on the assumption that "done" means "nothing left to do".
+          That assumption held until report EDITING: the report step passes
+          done={reportCompleted}, so the instant a report was written the step went
+          done and the correctly-computed "تعديل التقرير" actionLabel was discarded
+          without ever rendering. The badge below is what the user saw instead.
+          The `!done` condition is dropped; badge and action now COEXIST.
+          SAFE FOR EVERY OTHER STEP — each of their actionLabel expressions already
+          evaluates to undefined once its own done condition holds (record-result
+          checks !result, contact checks !contactCompleted, close checks
+          status !== COMPLETED), so none of them gains a button it did not have.
+          Only the report step changes, which is the intent.
+          Wrapped so `mr-auto` lives on the group: previously the badge and the
+          button each carried it and could never appear together. */}
+      {(done || (actionLabel && onAction)) && (
+        <div className="mr-auto flex items-center gap-2">
+          {done && (
+            <Badge variant="outline" className="border-green-600 text-green-600 dark:border-green-400 dark:text-green-400">
+              مكتمل
+            </Badge>
+          )}
+          {actionLabel && onAction && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onAction}
+              disabled={actionDisabled}
+              data-testid={`button-workflow-action-${label}`}
+            >
+              {actionLabel}
+            </Button>
+          )}
+        </div>
       )}
 
     </div>
