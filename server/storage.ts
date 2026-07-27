@@ -945,6 +945,10 @@ function mapDbHearing(dbHearing: any): Hearing {
     adminTasksCreated: dbHearing.adminTasksCreated ?? false,
     opponentMemos: dbHearing.opponentMemos || "",
     hearingMinutes: dbHearing.hearingMinutes || "",
+    isFlagged: dbHearing.isFlagged ?? false,
+    flagReason: dbHearing.flagReason ?? null,
+    flaggedBy: dbHearing.flaggedBy ?? null,
+    flaggedAt: toISOStringOrNull(dbHearing.flaggedAt),
     attendingLawyerId: dbHearing.attendingLawyerId || null,
     reminderSent24h: dbHearing.reminderSent24h ?? false,
     reminderSent1h: dbHearing.reminderSent1h ?? false,
@@ -1872,12 +1876,19 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getHearingById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, agencyVerificationAckAt, ...updateFields } = data;
+    const { createdAt, updatedAt, agencyVerificationAckAt, flaggedAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     // agency_verification_ack_at is a date-mode column — convert the ISO
     // string callers pass into a Date (mirrors updateCase's idiom).
     if (agencyVerificationAckAt !== undefined) {
       updateData.agencyVerificationAckAt = agencyVerificationAckAt ? new Date(agencyVerificationAckAt) : null;
+    }
+    // flagged_at is date-mode too. Same idiom, and NOT optional: the Phase-4 S3
+    // audit found that skipping this conversion for archivedAt made drizzle
+    // throw on `value.toISOString()` inside a swallowed try/catch, silently
+    // breaking auto-archive. One chokepoint, every caller covered.
+    if (flaggedAt !== undefined) {
+      updateData.flaggedAt = flaggedAt ? new Date(flaggedAt) : null;
     }
     await db.update(hearings).set(updateData).where(eq(hearings.id, id));
 

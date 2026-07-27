@@ -18,6 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -61,8 +62,10 @@ import {
   Pencil,
   UserCog,
   Search,
+  Flag,
 } from "lucide-react";
 import { useHearings } from "@/lib/hearings-context";
+import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
@@ -139,6 +142,7 @@ export default function HearingsPage() {
     closeHearing,
     cancelHearing,
     deleteHearing,
+    setHearingFlag,
     getUpcomingHearings,
   } = useHearings();
   const { cases, getCaseById } = useCases();
@@ -169,6 +173,12 @@ export default function HearingsPage() {
   const [filterLawyer, setFilterLawyer] = useState<string>("all");
   const [advFilters, setAdvFilters] = useState<AdvancedHearingsFilters>(EMPTY_HEARINGS_ADV_FILTERS);
   const [deletingHearingId, setDeletingHearingId] = useState<string | null>(null);
+  // "جلسة مُعلَّمة" — flag dialog. Flagging opens this to capture the mandatory
+  // reason; UNflagging is immediate (nothing to ask, and the server clears the
+  // reason itself).
+  const [flagDialogHearing, setFlagDialogHearing] = useState<Hearing | null>(null);
+  const [flagReasonInput, setFlagReasonInput] = useState("");
+  const [flagSubmitting, setFlagSubmitting] = useState(false);
   const [editDialogHearing, setEditDialogHearing] = useState<Hearing | null>(null);
   const [reassignDialogHearing, setReassignDialogHearing] = useState<Hearing | null>(null);
   const [reassignLawyerId, setReassignLawyerId] = useState<string>("");
@@ -340,6 +350,48 @@ export default function HearingsPage() {
       toast({ title: "خطأ", description: e.message, variant: "destructive" });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Toggle entry point. Already flagged → clear immediately (no question to
+  // ask). Not flagged → open the dialog, because the reason is MANDATORY and
+  // the server 400s without it.
+  const handleToggleFlag = async (hearing: Hearing) => {
+    if (hearing.isFlagged) {
+      setFlagSubmitting(true);
+      try {
+        await setHearingFlag(hearing.id, false);
+        toast({ title: "تم إلغاء تعليم الجلسة" });
+      } catch (e: any) {
+        toast({ title: "خطأ", description: extractApiError(e), variant: "destructive" });
+      } finally {
+        setFlagSubmitting(false);
+      }
+      return;
+    }
+    setFlagReasonInput("");
+    setFlagDialogHearing(hearing);
+  };
+
+  const handleConfirmFlag = async () => {
+    if (!flagDialogHearing) return;
+    const reason = flagReasonInput.trim();
+    // Client pre-check mirrors the server's 400 so the user never round-trips
+    // for an empty reason; the server stays the authority.
+    if (!reason) {
+      toast({ title: "خطأ", description: "سبب التعليم مطلوب", variant: "destructive" });
+      return;
+    }
+    setFlagSubmitting(true);
+    try {
+      await setHearingFlag(flagDialogHearing.id, true, reason);
+      toast({ title: "تم تعليم الجلسة للانتباه" });
+      setFlagDialogHearing(null);
+      setFlagReasonInput("");
+    } catch (e: any) {
+      toast({ title: "خطأ", description: extractApiError(e), variant: "destructive" });
+    } finally {
+      setFlagSubmitting(false);
     }
   };
 
@@ -947,6 +999,13 @@ export default function HearingsPage() {
                         user?.role === "branch_manager" ||
                         user?.role === "admin_support";
                       const canReassignAttendingLawyer = user?.role === "department_head";
+                      // "جلسة مُعلَّمة" — the SAME two roles the server's
+                      // requireRole gate enforces, so visibility === authorization.
+                      // Everyone else still SEES the flag (tint + badge); only
+                      // these two can set or clear it.
+                      const canFlagHearing =
+                        user?.role === "branch_manager" ||
+                        user?.role === "admin_support";
                       const isFutureHearing = isHearingInFuture(hearing.hearingDate);
                       // Day-boundary separator: thicken the row's bottom
                       // border when the next row is a different date so
@@ -970,9 +1029,20 @@ export default function HearingsPage() {
                             // border-b in some themes — use border-b-4 with
                             // an amber accent so day-grouping pops without
                             // being garish. Same-day rows keep the default.
-                            isDayBoundary
-                              ? "border-b-4 border-amber-500/60 transition-colors hover:bg-muted/50"
-                              : "border-b transition-colors hover:bg-muted/50"
+                            //
+                            // The flag tint is COMPOSED onto whichever border
+                            // variant applies, never substituted for it —
+                            // dropping the day-boundary border on a flagged row
+                            // would silently break day-grouping. Mirrors the
+                            // cases-page rowClass idiom (bg-amber-50/60
+                            // dark:bg-amber-950/20 for group 1) in red.
+                            [
+                              isDayBoundary
+                                ? "border-b-4 border-amber-500/60"
+                                : "border-b",
+                              "transition-colors hover:bg-muted/50",
+                              hearing.isFlagged ? "bg-red-50/60 dark:bg-red-950/20" : "",
+                            ].filter(Boolean).join(" ")
                           }
                         >
                           {/* Display-only sequential number — index inside the
@@ -1051,6 +1121,22 @@ export default function HearingsPage() {
                                   مطلوب رد من الخصم
                                 </Badge>
                               )}
+                              {/* "جلسة مُعلَّمة" — same outline-badge shape as the
+                                  sibling above, in red, with the REASON in the
+                                  title attribute (the cases-page badge idiom).
+                                  Rendered for EVERYONE: the flag is a team
+                                  alert, so it is never gated on role. */}
+                              {hearing.isFlagged && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs border-red-500 text-red-600 dark:text-red-400"
+                                  data-testid={`badge-flagged-${hearing.id}`}
+                                  title={hearing.flagReason || "جلسة مُعلَّمة للانتباه"}
+                                >
+                                  <Flag className="w-3 h-3 ml-1" />
+                                  مُعلَّمة
+                                </Badge>
+                              )}
                             </div>
                           </td>
                           <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
@@ -1083,6 +1169,36 @@ export default function HearingsPage() {
                                     </Button>
                                   </TooltipTrigger>
                                   <TooltipContent>تعديل الجلسة</TooltipContent>
+                                </Tooltip>
+                              )}
+                              {/* "جلسة مُعلَّمة" toggle. Placed in the existing
+                                  الإجراءات cell rather than bound to a row
+                                  double-click: the <tr> carries no click handler
+                                  at all today, so a dblclick would be an
+                                  undiscoverable gesture unique to this page,
+                                  unavailable on touch (PWA/Capacitor), and
+                                  invisible — which cannot satisfy
+                                  visibility === authorization. Same
+                                  size/variant/Tooltip shape as its 8 siblings. */}
+                              {canFlagHearing && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      data-testid={`button-flag-${hearing.id}`}
+                                      disabled={flagSubmitting}
+                                      onClick={() => handleToggleFlag(hearing)}
+                                    >
+                                      <Flag
+                                        className={`w-4 h-4 ${hearing.isFlagged ? "text-destructive fill-destructive" : ""}`}
+                                      />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {hearing.isFlagged ? "إلغاء تعليم الجلسة" : "تعليم الجلسة للانتباه"}
+                                  </TooltipContent>
                                 </Tooltip>
                               )}
                               {canReassignAttendingLawyer && hearing.status === HearingStatus.UPCOMING && (
@@ -1424,6 +1540,39 @@ export default function HearingsPage() {
             </DialogTitle>
           </DialogHeader>
           {detailHearing && (
+            <>
+            {/* "جلسة مُعلَّمة" — the FULL reason, above the tabs so it is visible
+                whichever tab is open (the flag is an alert, not a detail of one
+                section). Mirrors the memo cancellation-banner idiom in
+                memos.tsx: destructive-tinted rounded box, icon + heading, then
+                the reason, then who/when in smaller muted text. */}
+            {detailHearing.isFlagged && (
+              <div
+                className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                data-testid="banner-hearing-flagged"
+              >
+                <div className="flex items-center gap-2 font-medium">
+                  <Flag className="w-4 h-4" />
+                  جلسة مُعلَّمة للانتباه
+                </div>
+                {detailHearing.flagReason && (
+                  <div className="mt-1">
+                    السبب: <BidiText>{detailHearing.flagReason}</BidiText>
+                  </div>
+                )}
+                {(detailHearing.flaggedBy || detailHearing.flaggedAt) && (
+                  <div className="mt-1 text-xs text-destructive/80">
+                    {detailHearing.flaggedBy && (
+                      <>بواسطة <BidiText>{users.find((u: any) => u.id === detailHearing.flaggedBy)?.name || detailHearing.flaggedBy}</BidiText></>
+                    )}
+                    {detailHearing.flaggedBy && detailHearing.flaggedAt ? " — " : ""}
+                    {detailHearing.flaggedAt && (
+                      <>في <LtrInline>{new Date(detailHearing.flaggedAt).toISOString().slice(0, 10)}</LtrInline></>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <Tabs defaultValue="info" className="w-full">
               <TabsList className="w-full flex">
                 <TabsTrigger value="info" className="flex-1" data-testid="tab-info">المعلومات</TabsTrigger>
@@ -1767,7 +1916,54 @@ export default function HearingsPage() {
                 </div>
               </TabsContent>
             </Tabs>
+            </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* "جلسة مُعلَّمة" — reason capture. Only opens when FLAGGING; unflagging
+          is immediate. Mirrors the memo-cancel dialog shape: required reason in
+          a Textarea, confirm disabled until it is non-empty. */}
+      <Dialog
+        open={!!flagDialogHearing}
+        onOpenChange={(open) => { if (!open) { setFlagDialogHearing(null); setFlagReasonInput(""); } }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تعليم الجلسة للانتباه</DialogTitle>
+            <DialogDescription>
+              ستظهر الجلسة باللون الأحمر لجميع المستخدمين مع سبب التعليم.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="flag-reason">سبب التعليم <span className="text-destructive">*</span></Label>
+            <Textarea
+              id="flag-reason"
+              data-testid="input-flag-reason"
+              value={flagReasonInput}
+              onChange={(e) => setFlagReasonInput(e.target.value)}
+              placeholder="مثال: مستندات ناقصة — يجب التأكد قبل الجلسة"
+              maxLength={500}
+              rows={3}
+            />
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-cancel-flag"
+              onClick={() => { setFlagDialogHearing(null); setFlagReasonInput(""); }}
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-confirm-flag"
+              onClick={handleConfirmFlag}
+              disabled={!flagReasonInput.trim() || flagSubmitting}
+            >
+              {flagSubmitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
+              تعليم الجلسة
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

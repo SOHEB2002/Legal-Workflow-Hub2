@@ -560,6 +560,18 @@ export const hearings = pgTable("hearings", {
   adminTasksCreated: boolean("admin_tasks_created").default(false),
   opponentMemos: text("opponent_memos").default(""),
   hearingMinutes: text("hearing_minutes").default(""),
+  // "جلسة مُعلَّمة" — a TEAM alert, not a personal mark: set by admin_support /
+  // branch_manager, visible to everyone, tints the row red across the list.
+  // The by/at pair mirrors the app-wide is_archived / archived_by / archived_at
+  // trio on law_cases (the closest existing analogue, since we record an actor
+  // and a time as well as the flag itself).
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — both DBs must have these columns
+  // BEFORE this code serves traffic, because drizzle selects declared columns
+  // explicitly, so a missing column breaks EVERY read of `hearings`.
+  isFlagged:  boolean("is_flagged").notNull().default(false),
+  flagReason: varchar("flag_reason", { length: 500 }),
+  flaggedBy:  varchar("flagged_by", { length: 255 }),
+  flaggedAt:  timestamp("flagged_at"),
   attendingLawyerId: varchar("attending_lawyer_id", { length: 255 }),
   reminderSent24h: boolean("reminder_sent_24h").default(false),
   reminderSent1h: boolean("reminder_sent_1h").default(false),
@@ -3225,6 +3237,12 @@ export interface Hearing {
   adminTasksCreated: boolean;
   opponentMemos: string;
   hearingMinutes: string;
+  // "جلسة مُعلَّمة" — team-wide attention flag. flagReason is REQUIRED whenever
+  // isFlagged is true (enforced server-side); unflagging clears all three.
+  isFlagged: boolean;
+  flagReason: string | null;
+  flaggedBy: string | null;
+  flaggedAt: string | null;
   attendingLawyerId: string | null;
   reminderSent24h: boolean;
   reminderSent1h: boolean;

@@ -9048,6 +9048,93 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/hearings/:id/flag — "جلسة مُعلَّمة", a TEAM attention flag.
+  // Body: { flagged: boolean, reason?: string }.
+  //
+  // Role gate: admin_support + branch_manager ONLY, via the same requireRole
+  // middleware the DELETE above uses — deliberately NOT the broader
+  // canActOnHearing (which also admits the attending lawyer). The flag is a
+  // supervisory mark ON the lawyer's session, so the lawyer is not an author.
+  // The frontend renders the button under the identical two-role condition, so
+  // visibility === authorization.
+  //
+  // Visible to EVERYONE: no read gate anywhere — the flag rides on the hearing
+  // row that every /api/hearings consumer already receives.
+  //
+  // Toggle semantics: flagged=false CLEARS reason/by/at as well, so an
+  // unflagged hearing can never surface a stale reason.
+  app.post("/api/hearings/:id/flag", requireAuth, requireRole("branch_manager", "admin_support"), async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+
+      // Tolerant gate (validation-patterns): type-check only, handler keeps its
+      // own Arabic 400s. `reason` rides in via the shared workflow shape.
+      const bodyCheck = workflowReasonSchema.extend({
+        flagged: z.boolean().optional(),
+      }).safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const flagged = req.body?.flagged !== false; // default true → flag
+      const reason = String(req.body?.reason ?? "").trim();
+
+      if (flagged && !reason) {
+        return res.status(400).json({ error: "سبب التعليم مطلوب" });
+      }
+      // varchar(500) — refuse rather than let Postgres throw a 22001.
+      if (reason.length > 500) {
+        return res.status(400).json({ error: "سبب التعليم طويل جداً (الحد ٥٠٠ حرف)" });
+      }
+
+      const updated = await storage.updateHearing(hearingId, flagged
+        ? {
+            isFlagged: true,
+            flagReason: reason,
+            flaggedBy: reqUser.id,
+            flaggedAt: new Date().toISOString(),
+          }
+        : {
+            isFlagged: false,
+            flagReason: null,
+            flaggedBy: null,
+            flaggedAt: null,
+          });
+      if (!updated) {
+        return res.status(500).json({ error: "فشل تحديث حالة تعليم الجلسة" });
+      }
+
+      // Audit trail on the parent case's timeline — the hearing has no activity
+      // log of its own, and case_activity_log.action_type is free text (no
+      // migration for a new kind).
+      if (hearing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: hearing.caseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            actionType: flagged ? "hearing_flagged" : "hearing_unflagged",
+            title: flagged ? `تم تعليم الجلسة للانتباه — ${reason}` : "تم إلغاء تعليم الجلسة",
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        } catch (e) {
+          console.error("[hearings/flag] logCaseActivity failed", e);
+        }
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error toggling hearing flag:", error);
+      res.status(500).json({ error: "حدث خطأ في تعليم الجلسة" });
+    }
+  });
+
   // ==================== Hearing Workflow ====================
 
   app.post("/api/hearings/:id/result", requireAuth, async (req: AuthRequest, res) => {
