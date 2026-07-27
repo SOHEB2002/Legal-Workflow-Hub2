@@ -208,13 +208,24 @@ function getAdvanceTarget(
   // Department head can only act inside their own department
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return null;
   const isAssignedLawyer = !!consultation.assignedTo && consultation.assignedTo === userId;
-  // WIDENED MODEL — mirrors the tier bypass added to validateStageTransition:
-  // own-dept department_head and the assigned lawyer may traverse any edge that is
-  // NOT a committee decision. None of the LINEAR_ADVANCE_* tables contains a
-  // committee edge (those run through the dedicated committee dialog), so the tier
-  // applies to every rule reachable here. Chiefly this unblocks READY →
-  // CLOSED_FINAL / COMPLETED → CLOSED_FINAL, which were admin_support|branch_manager.
-  if (consultationActorTier(consultation, userRole, userId, userDeptId)) return rule.target;
+  // WIDENED MODEL — mirrors the tier bypass in validateStageTransition: own-dept
+  // department_head and the assigned lawyer may traverse any edge that is NOT a
+  // committee decision. None of the LINEAR_ADVANCE_* tables contains a committee
+  // edge (those run through the dedicated committee dialog), so the tier applies to
+  // every rule reachable here.
+  // ⚠ EXCEPT FINAL CLOSURE (owner-adopted carve-out) — → CLOSED_FINAL is DEPARTMENT
+  // tier and above, so the assignee is excluded from that one edge and falls through
+  // to the table's own roles (admin_support | branch_manager). Early-close is a
+  // separate action (canEarlyClose) and is unaffected.
+  const isFinalClosureEdge = rule.target === ConsultationStage.CLOSED_FINAL;
+  const isDeptTier =
+    userRole === "branch_manager"
+    || (userRole === "department_head" && !!userDeptId && !!consultation.departmentId
+        && consultation.departmentId === userDeptId);
+  if (isDeptTier) return rule.target;
+  if (!isFinalClosureEdge && consultationActorTier(consultation, userRole, userId, userDeptId)) {
+    return rule.target;
+  }
   const effectiveRoles = isAssignedLawyer ? [userRole, "assigned_lawyer"] : [userRole];
   if (!effectiveRoles.some(r => rule.roles.includes(r))) return null;
   return rule.target;
@@ -1298,6 +1309,20 @@ export default function ConsultationsPage() {
   // department_head (own dept) and branch_manager only.
   // WIDENED MODEL — + the assigned lawyer (mirrors POST /:id/extend-delivery).
   // Every extension still records a mandatory reason, so the audit trail is intact.
+  // CREATE-SCOPE — department_head AND employee may open a consultation, but only in
+  // THEIR OWN department. Mirrors POST /api/consultations + scopedCreateDepartmentId:
+  // the picker is filtered to their department and locked, so the server's
+  // cross-department 400 is unreachable through the UI.
+  const canCreateConsultation =
+    !!permissions.canAddCasesAndConsultations
+    || (["department_head", "employee"].includes(user?.role ?? "") && !!user?.departmentId);
+  const isDeptScopedCreator =
+    user?.role === "department_head" || user?.role === "employee";
+  const creatableDepartments = isDeptScopedCreator
+    ? departments.filter((d) => d.id === user?.departmentId)
+    : departments;
+  const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "") : "";
+
   const canExtendDelivery = (c: Consultation): boolean => {
     if (!user) return false;
     if (c.status !== "active") return false;
@@ -1771,7 +1796,8 @@ export default function ConsultationsPage() {
       clientId: "",
       title: "",
       consultationType: ConsultationType.WRITTEN,
-      departmentId: "",
+      // CREATE-SCOPE — pre-filled and locked for a department_head / employee.
+      departmentId: defaultCreateDepartmentId,
       questionSummary: "",
       category: ConsultationCategory.STANDARD,
       source: ConsultationSource.GROUP,
@@ -1972,11 +1998,7 @@ export default function ConsultationsPage() {
           <h1 className="text-2xl font-bold text-foreground">إدارة الاستشارات</h1>
           <p className="text-muted-foreground">متابعة الاستشارات القانونية</p>
         </div>
-        {/* WIDENED MODEL — a department_head may open a consultation in THEIR OWN
-            department (mirrors POST /api/consultations, which scopes on the body's
-            target department). */}
-        {(permissions.canAddCasesAndConsultations
-          || (user?.role === "department_head" && !!user.departmentId)) && (
+        {canCreateConsultation && (
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-add-consultation" onClick={resetForm}>
@@ -2032,12 +2054,13 @@ export default function ConsultationsPage() {
                   <Select
                     value={formData.departmentId}
                     onValueChange={(value) => setFormData({ ...formData, departmentId: value })}
+                    disabled={isDeptScopedCreator}
                   >
                     <SelectTrigger data-testid="select-department">
                       <SelectValue placeholder="اختر القسم" />
                     </SelectTrigger>
                     <SelectContent>
-                      {departments.map((dept) => (
+                      {creatableDepartments.map((dept) => (
                         <SelectItem key={dept.id} value={dept.id}>
                           {dept.name}
                         </SelectItem>

@@ -93,13 +93,19 @@ function getAdvanceTarget(
   if (!rule) return null;
   if (userRole === "department_head" && c.departmentId !== userDeptId) return null;
   const isAssigned = !!c.assignedTo && c.assignedTo === userId;
-  // WIDENED MODEL — mirrors the tier bypass added to validateStageTransition:
-  // own-dept department_head and the assigned lawyer may traverse any edge that is
-  // NOT a committee decision. LINEAR_ADVANCE / LINEAR_ADVANCE_CYCLE contain no
-  // committee edge (those run through the dedicated committee dialog), so the tier
-  // applies to every rule reachable here. Chiefly this unblocks READY → CLOSED,
-  // which was admin_support | branch_manager.
-  if (userRole === "branch_manager" || userRole === "department_head" || isAssigned) {
+  // WIDENED MODEL — mirrors the tier bypass in validateStageTransition: own-dept
+  // department_head and the assigned lawyer may traverse any edge that is NOT a
+  // committee decision. LINEAR_ADVANCE / LINEAR_ADVANCE_CYCLE contain no committee
+  // edge (those run through the dedicated committee dialog).
+  // ⚠ EXCEPT FINAL CLOSURE (owner-adopted carve-out) — → CLOSED is DEPARTMENT tier
+  // and above, so the assignee is excluded from that one edge and falls through to
+  // the table's own roles (admin_support | branch_manager). Early-close is a
+  // separate action (canEarlyClose) and is unaffected.
+  const isFinalClosureEdge = rule.target === ContractStage.CLOSED;
+  if (userRole === "branch_manager" || userRole === "department_head") {
+    return rule.target;
+  }
+  if (!isFinalClosureEdge && isAssigned) {
     return rule.target;
   }
   const effectiveRoles = isAssigned ? [userRole, "assigned_lawyer"] : [userRole];
@@ -143,11 +149,15 @@ function canChangeContractType(
 // Per spec: only branch_manager / admin_support / department_head
 // can create new contracts. Employees / lawyers / committee chairs
 // must NOT see the create button. Server enforces the same gate.
-function canCreateContract(userRole: string | null | undefined): boolean {
+// CREATE-SCOPE — employee is now admitted, and department_head (which the server
+// used to grant FIRM-WIDE) is scoped: both may create only in their OWN department.
+// The dept scoping itself is applied by the picker + the server, not here — this is
+// only "may this role open a contract at all".
+function canCreateContract(userRole: string | null | undefined, userDeptId: string | null | undefined): boolean {
   if (!userRole) return false;
-  return userRole === "branch_manager"
-    || userRole === "admin_support"
-    || userRole === "department_head";
+  if (userRole === "branch_manager" || userRole === "admin_support") return true;
+  if (userRole === "department_head" || userRole === "employee") return !!userDeptId;
+  return false;
 }
 
 function canPause(c: Contract, user: { id: string; role: string; departmentId: string | null } | null): boolean {
@@ -392,6 +402,19 @@ export default function ContractsPage() {
     [departments],
   );
 
+  // CREATE-SCOPE picker mirror (server: scopedCreateDepartmentId) — a
+  // department_head / employee may only create in their OWN department, so the
+  // picker is filtered to it and locked. Everyone else keeps the full list and the
+  // existing "العقود والمشاريع" default.
+  const isDeptScopedCreator =
+    user?.role === "department_head" || user?.role === "employee";
+  const creatableDepartments = isDeptScopedCreator
+    ? departments.filter((d) => d.id === user?.departmentId)
+    : departments;
+  const defaultCreateDepartmentId = isDeptScopedCreator
+    ? (user?.departmentId || "")
+    : contractsDeptId;
+
   const [formData, setFormData] = useState({
     title: "",
     clientId: "",
@@ -428,7 +451,9 @@ export default function ContractsPage() {
     setFormData({
       title: "", clientId: "", contractType: ContractType.REVIEW,
       // Default to the contracts dept; user can route elsewhere before save.
-      departmentId: contractsDeptId,
+      // CREATE-SCOPE — a department_head / employee gets their OWN department
+      // instead, pre-filled and locked.
+      departmentId: defaultCreateDepartmentId,
       description: "",
     });
     setIntakeFile(null);
@@ -440,11 +465,11 @@ export default function ContractsPage() {
   // first render where contractsDeptId resolves later than the initial
   // useState. Doesn't overwrite a user-picked value (only fills "").
   useEffect(() => {
-    if (!formData.departmentId && contractsDeptId) {
-      setFormData((prev) => prev.departmentId ? prev : { ...prev, departmentId: contractsDeptId });
+    if (!formData.departmentId && defaultCreateDepartmentId) {
+      setFormData((prev) => prev.departmentId ? prev : { ...prev, departmentId: defaultCreateDepartmentId });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contractsDeptId]);
+  }, [defaultCreateDepartmentId]);
 
   const requiresIntakeFile = formData.contractType === ContractType.REVIEW;
 
@@ -1118,7 +1143,7 @@ export default function ContractsPage() {
           <h1 className="text-2xl font-bold text-foreground">العقود والمشاريع</h1>
           <p className="text-muted-foreground">إدارة عقود المراجعة والصياغة والمشاريع</p>
         </div>
-        {canCreateContract(user?.role) && (
+        {canCreateContract(user?.role, user?.departmentId) && (
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-contract" onClick={resetForm}>
@@ -1179,12 +1204,13 @@ export default function ContractsPage() {
                 <Select
                   value={formData.departmentId}
                   onValueChange={(value) => setFormData({ ...formData, departmentId: value })}
+                  disabled={isDeptScopedCreator}
                 >
                   <SelectTrigger data-testid="select-contract-department">
                     <SelectValue placeholder="اختر القسم" />
                   </SelectTrigger>
                   <SelectContent>
-                    {departments.map((d) => (
+                    {creatableDepartments.map((d) => (
                       <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
                     ))}
                   </SelectContent>
