@@ -13,9 +13,14 @@
 -- Those scripts stay in the repo — seed-e2e-tasks.sql is still the right tool
 -- for exhaustive مهامي task-feed coverage. This one is the workflow dataset.
 --
--- ASSERTS, NEVER CREATES: departments 1-5 and the 14 users must already exist.
--- The script aborts with a readable message if any is missing, rather than
--- failing later on a foreign key.
+-- ASSERTS, NEVER CREATES: departments 1-5 and the original 14 users must
+-- already exist. The script aborts with a readable message if any is missing,
+-- rather than failing later on a foreign key.
+--
+-- ADDS (additive, idempotent — section 1b): four users that did not exist and
+-- without which most of the 2026-07 permission work is untestable —
+-- department_head for depts 3 / 4 / 5, plus an employee in dept 3 so labor
+-- cases carry a lawyer from their OWN department.
 --
 -- CLIENTS are additive-only (INSERT ... ON CONFLICT DO NOTHING) — the wipe keeps
 -- the `clients` table, so this only guarantees the FK targets exist.
@@ -101,6 +106,74 @@ BEGIN
       missing;
   END IF;
 END $$;
+
+-- ---- 1b. ADDITIVE USERS — dept 3/4/5 heads + a labor lawyer ---------------
+-- WHY: departments 3 (عمالي), 4 (إداري) and 5 (العقود والمشاريع) had NO
+-- department_head, which made most of the 2026-07 work untestable —
+-- C3/C4 MOHR permissions (canActOnMohrSettlement), dept-scoped skip-committee
+-- on all four entities, and the labor settlement gates all resolve
+-- department_head against the ENTITY's own department. With no such user, those
+-- branches could never evaluate true on a labor/admin/contract row.
+--
+-- 🔑 HOW THE DEPT-HEAD GATE RESOLVES (verified, see the report):
+--    users.role = 'department_head' AND users.department_id = <entity's dept>
+--    NOT departments.head_id — the codebase explicitly distrusts that column
+--    ("only partially seeded and can disagree", storage.getDepartmentHeads).
+--    So THESE ROWS are what make the gates work; the head_id update below is
+--    cosmetic only.
+--
+-- ADDITIVE + IDEMPOTENT (ON CONFLICT DO NOTHING) and consistent with the
+-- existing 14: the password hash is COPIED from the manager (id='1'), so these
+-- users log in with the SAME password as the manager account.
+-- Usernames: hind, faisal, lama, saleh.
+INSERT INTO users (id, username, password, name, role, department_id, is_active,
+                   can_be_assigned_cases, can_be_assigned_consultations,
+                   must_change_password, task_specialties)
+-- task_specialties is explicitly cast — it is a jsonb column and these four are
+-- not admin_support, so they hold no specialty.
+SELECT v.id, v.username, (SELECT password FROM users WHERE id = '1'),
+       v.name, v.role, v.dept, true, true, true, false, NULL::jsonb
+FROM (VALUES
+  ('T_u_hind',  'hind',  'هند الشمراني','department_head','3'),  -- عمالي
+  ('T_u_faisal','faisal','فيصل العمري', 'department_head','4'),  -- إداري
+  ('T_u_lama',  'lama',  'لمى الحمدان', 'department_head','5'),  -- العقود والمشاريع
+  ('T_u_saleh', 'saleh', 'صالح القرني', 'employee',       '3')   -- عمالي lawyer
+) AS v(id, username, name, role, dept)
+ON CONFLICT (id) DO NOTHING;
+
+-- Guard against a PARTIAL pre-existing state: if one of these ids was absent
+-- but its USERNAME was already taken by a different row, the insert above is a
+-- silent no-op (ON CONFLICT keys on id, not username) and the gates would stay
+-- broken. Fail loudly instead.
+DO $$
+DECLARE missing text;
+BEGIN
+  SELECT string_agg(v.id, ', ')
+    INTO missing
+  FROM (VALUES ('T_u_hind'),('T_u_faisal'),('T_u_lama'),('T_u_saleh')) AS v(id)
+  WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = v.id);
+  IF missing IS NOT NULL THEN
+    RAISE EXCEPTION
+      'SEED ABORTED: could not create users -> %. A different row probably already holds one of the usernames (hind/faisal/lama/saleh), which is UNIQUE.',
+      missing;
+  END IF;
+END $$;
+
+-- ---- 1c. departments.head_id — COSMETIC ONLY, safe to delete --------------
+-- ⚠ NOT required by any permission gate (see 1b). departments.head_id is read
+-- in exactly three places, none of them authorization:
+--   • the deactivation warning "رئيس N قسم" (routes.ts)
+--   • the deactivation/deletion cleanup that nulls or reassigns it
+--   • storage.deleteUser
+-- Set here purely so 3/4/5 stop being the "partially seeded" half of the
+-- inconsistency the code complains about, and so deactivating one of the new
+-- heads warns properly. Departments is a KEEP table, so this is the ONLY line
+-- in either script that writes to it — scoped to 3/4/5, and only when the
+-- column is currently NULL, so an existing head is never overwritten.
+-- DELETE THIS STATEMENT if you would rather leave head_id untouched.
+UPDATE departments SET head_id = v.head
+FROM (VALUES ('3','T_u_hind'),('4','T_u_faisal'),('5','T_u_lama')) AS v(id, head)
+WHERE departments.id = v.id AND departments.head_id IS NULL;
 
 -- ---- 2. SESSION-LOCAL HELPERS ---------------------------------------------
 -- Created in pg_temp so they vanish when the psql session ends: no DDL is left
@@ -273,9 +346,11 @@ INSERT INTO law_cases (id, case_number, client_id, case_type, status, current_st
      'TRD-2026-100080','لم_يتم_الصلح',(CURRENT_DATE - 7)::timestamp,0,'1');
 
 -- ---- 4c. DEPT 3 (عمالي) — MOHR settlement path ----------------------------
--- ⚠ NOTE: no user exists in department 3, so these carry dept-1/2 lawyers.
--- Assigned-lawyer gates work; department_head-scoped gates have nobody to
--- match. See the report — creating dept-3/4 users was explicitly out of scope.
+-- Every labor case carries T_u_saleh (صالح القرني), an employee IN DEPARTMENT 3,
+-- so the case is dept-consistent end to end: the assigned-lawyer gate and the
+-- department_head gate (T_u_hind, also dept 3) both resolve against the same
+-- department the case belongs to. That is what makes C3/C4 MOHR permissions and
+-- the labor settlement gates actually testable — see section 1b.
 INSERT INTO law_cases (id, case_number, client_id, case_type, status, current_stage, stage_history,
                        department_id, assigned_lawyers, primary_lawyer_id, responsible_lawyer_id,
                        priority, case_classification, client_role, mohr_number, mohr_status,
@@ -283,40 +358,40 @@ INSERT INTO law_cases (id, case_number, client_id, case_type, status, current_st
   -- D1 client-settlement-direction task fires from this stage (1faf618).
   ('T_case_10','T-2010','T_cl_12','عمالي','دراسة','توجيه_العميل_بالتسوية',
      jsonb_build_array(pg_temp.sh('استلام',14,'1','مدير الفرع'),
-                       pg_temp.sh('دراسة',10,'T_u_fahd','فهد الغامدي'),
-                       pg_temp.sh('توجيه_العميل_بالتسوية',4,'T_u_fahd','فهد الغامدي')),
-     '3','["T_u_fahd"]','T_u_fahd','T_u_fahd','عالي','قيد_الدراسة',NULL,NULL,NULL,0,'1'),
+                       pg_temp.sh('دراسة',10,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('توجيه_العميل_بالتسوية',4,'T_u_saleh','صالح القرني')),
+     '3','["T_u_saleh"]','T_u_saleh','T_u_saleh','عالي','قيد_الدراسة',NULL,NULL,NULL,0,'1'),
 
   -- DELIBERATELY task-silent (owner decision) — waiting on the client.
   ('T_case_11','T-2011','T_cl_14','عمالي','دراسة','بانتظار_رفع_العميل_للتسوية',
      jsonb_build_array(pg_temp.sh('استلام',22,'1','مدير الفرع'),
-                       pg_temp.sh('دراسة',18,'T_u_maha','مها الزهراني'),
-                       pg_temp.sh('توجيه_العميل_بالتسوية',12,'T_u_maha','مها الزهراني'),
-                       pg_temp.sh('بانتظار_رفع_العميل_للتسوية',6,'T_u_maha','مها الزهراني')),
-     '3','["T_u_maha"]','T_u_maha','T_u_maha','متوسط','قيد_الدراسة',NULL,NULL,NULL,0,'1'),
+                       pg_temp.sh('دراسة',18,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('توجيه_العميل_بالتسوية',12,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('بانتظار_رفع_العميل_للتسوية',6,'T_u_saleh','صالح القرني')),
+     '3','["T_u_saleh"]','T_u_saleh','T_u_saleh','متوسط','قيد_الدراسة',NULL,NULL,NULL,0,'1'),
 
   -- AT مداولة_الصلح with a MOHR number → the mandatory mohr_number prompt has
   -- been satisfied; this is the labor mirror of T_case_07.
   ('T_case_12','T-2012','T_cl_15','عمالي','دراسة','مداولة_الصلح',
      jsonb_build_array(pg_temp.sh('استلام',30,'1','مدير الفرع'),
-                       pg_temp.sh('دراسة',26,'T_u_fahd','فهد الغامدي'),
-                       pg_temp.sh('توجيه_العميل_بالتسوية',20,'T_u_fahd','فهد الغامدي'),
-                       pg_temp.sh('بانتظار_رفع_العميل_للتسوية',14,'T_u_fahd','فهد الغامدي'),
-                       pg_temp.sh('مداولة_الصلح',5,'T_u_fahd','فهد الغامدي','جلسة تسوية مهر')),
-     '3','["T_u_fahd"]','T_u_fahd','T_u_fahd','عاجل','قيد_الدراسة',NULL,
+                       pg_temp.sh('دراسة',26,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('توجيه_العميل_بالتسوية',20,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('بانتظار_رفع_العميل_للتسوية',14,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('مداولة_الصلح',5,'T_u_saleh','صالح القرني','جلسة تسوية مهر')),
+     '3','["T_u_saleh"]','T_u_saleh','T_u_saleh','عاجل','قيد_الدراسة',NULL,
      'MHR-2026-500311','توجيه_تسوية_ودية',0,'1'),
 
   -- PAST مداولة_الصلح → mohr_number must WIN over any taradi number and over
   -- the base case_number (mohr is checked first in the settlement branch).
   ('T_case_13','T-2013','T_cl_5','عمالي','جاهز_للرفع','جاهزة_للرفع',
      jsonb_build_array(pg_temp.sh('استلام',70,'1','مدير الفرع'),
-                       pg_temp.sh('دراسة',65,'T_u_maha','مها الزهراني'),
-                       pg_temp.sh('مداولة_الصلح',40,'T_u_maha','مها الزهراني'),
-                       pg_temp.sh('أغلق_طلب_الصلح',25,'T_u_maha','مها الزهراني'),
-                       pg_temp.sh('تحرير_صحيفة_الدعوى',18,'T_u_maha','مها الزهراني'),
-                       pg_temp.sh('مراجعة_داخلية',10,'T_u_maha','مها الزهراني'),
+                       pg_temp.sh('دراسة',65,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('مداولة_الصلح',40,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('أغلق_طلب_الصلح',25,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('تحرير_صحيفة_الدعوى',18,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('مراجعة_داخلية',10,'T_u_saleh','صالح القرني'),
                        pg_temp.sh('جاهزة_للرفع',3,'T_u_abdullah','عبدالله المالكي')),
-     '3','["T_u_maha"]','T_u_maha','T_u_maha','عالي','قيد_الدراسة',NULL,
+     '3','["T_u_saleh"]','T_u_saleh','T_u_saleh','عالي','قيد_الدراسة',NULL,
      'MHR-2026-500312','انتهت_التسوية',0,'1'),
 
   -- تحصيل = the SETTLEMENT-SUCCESS terminal (L4). Off every path array, so the
@@ -324,11 +399,11 @@ INSERT INTO law_cases (id, case_number, client_id, case_type, status, current_st
   -- collapse onto استلام. Needs the مداولة_الصلح history entry to do that.
   ('T_case_14','T-2014','T_cl_13','عمالي','مغلق','تحصيل',
      jsonb_build_array(pg_temp.sh('استلام',90,'1','مدير الفرع'),
-                       pg_temp.sh('دراسة',85,'T_u_fahd','فهد الغامدي'),
-                       pg_temp.sh('توجيه_العميل_بالتسوية',75,'T_u_fahd','فهد الغامدي'),
-                       pg_temp.sh('مداولة_الصلح',60,'T_u_fahd','فهد الغامدي'),
-                       pg_temp.sh('تحصيل',20,'T_u_fahd','فهد الغامدي','تم الصلح')),
-     '3','["T_u_fahd"]','T_u_fahd','T_u_fahd','متوسط','قيد_الدراسة',NULL,
+                       pg_temp.sh('دراسة',85,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('توجيه_العميل_بالتسوية',75,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('مداولة_الصلح',60,'T_u_saleh','صالح القرني'),
+                       pg_temp.sh('تحصيل',20,'T_u_saleh','صالح القرني','تم الصلح')),
+     '3','["T_u_saleh"]','T_u_saleh','T_u_saleh','متوسط','قيد_الدراسة',NULL,
      'MHR-2026-500313','انتهت_التسوية',0,'1');
 
 -- ---- 4d. DEPT 4 (إداري) — grievance path ----------------------------------
@@ -581,7 +656,7 @@ INSERT INTO hearings (id, case_id, hearing_date, hearing_time, hearing_type, cou
   ('T_h_14','T_case_07',pg_temp.d(3), '13:00','تراضي','منصة تراضي','قادمة',
      NULL,NULL,NULL,NULL,NULL,false,'T_u_fahd',false,false,false),
   ('T_h_15','T_case_12',pg_temp.d(4), '13:30','تسوية_ودية','مكتب العمل','قادمة',
-     NULL,NULL,NULL,NULL,NULL,false,'T_u_fahd',false,false,false),
+     NULL,NULL,NULL,NULL,NULL,false,'T_u_saleh',false,false,false),
 
   -- A past session with NO result recorded yet → the "record the result" task.
   ('T_h_16','T_case_05',pg_temp.d(-2), '09:00','محكمة','المحكمة العامة بالرياض','قادمة',
@@ -799,7 +874,7 @@ INSERT INTO field_tasks (id, title, description, task_type, case_id, consultatio
   ('T_ft_08','تجهيز نسخ العقد للتوقيع','طباعة وتجهيز ٣ نسخ',
      'عام',NULL,NULL,'T_ct_03','T_u_majed','1','قيد_التنفيذ','متوسط',pg_temp.d(3),NULL),
   ('T_ft_09','زيارة العميل لتوقيع التسوية','',
-     'زيارة_عميل','T_case_10',NULL,NULL,'T_u_fahd','1','قيد_الانتظار','عالي',pg_temp.d(5),NULL),
+     'زيارة_عميل','T_case_10',NULL,NULL,'T_u_saleh','1','قيد_الانتظار','عالي',pg_temp.d(5),NULL),
   ('T_ft_10','تسليم مستندات للمحكمة','',
      'تسليم_مستندات','T_case_18',NULL,NULL,'T_u_reem','1','قيد_التنفيذ','عاجل',pg_temp.d(1),NULL),
   -- Linked to a CONSULTATION.
@@ -829,7 +904,7 @@ INSERT INTO legal_deadlines (id, case_id, hearing_id, deadline_type, title, star
 INSERT INTO contact_logs (id, client_id, contact_type, contact_date, next_follow_up_date,
                           follow_up_status, follow_up_required, follow_up_completed, case_id, created_by) VALUES
   ('T_co_01','T_cl_1','اتصال_هاتفي',pg_temp.d(-1),pg_temp.d(0), 'بانتظار_المتابعة',true, false,'T_case_17','T_u_ahmed'),
-  ('T_co_02','T_cl_12','واتساب',    pg_temp.d(-4),pg_temp.d(-1),'بانتظار_المتابعة',true, false,'T_case_10','T_u_fahd'),
+  ('T_co_02','T_cl_12','واتساب',    pg_temp.d(-4),pg_temp.d(-1),'بانتظار_المتابعة',true, false,'T_case_10','T_u_saleh'),
   ('T_co_03','T_cl_2','زيارة_شخصية',pg_temp.d(-2),pg_temp.d(3), 'بانتظار_المتابعة',true, false,'T_case_20','T_u_maha'),
   ('T_co_04','T_cl_5','اتصال_هاتفي',pg_temp.d(-9),NULL,          'تمت_المتابعة',false,true, NULL,      'T_u_sara');
 
@@ -873,8 +948,25 @@ UNION ALL SELECT 'consultations', count(*) FROM consultations WHERE id LIKE 'T\_
 UNION ALL SELECT 'field_tasks',   count(*) FROM field_tasks   WHERE id LIKE 'T\_ft\_%'
 UNION ALL SELECT 'legal_deadlines',count(*) FROM legal_deadlines WHERE id LIKE 'T\_ld\_%'
 UNION ALL SELECT 'contact_logs',  count(*) FROM contact_logs  WHERE id LIKE 'T\_co\_%'
-UNION ALL SELECT 'case_activity_log', count(*) FROM case_activity_log WHERE id LIKE 'T\_cal\_%';
--- Expect: 30 / 16 / 14 / 12 / 14 / 11 / 3 / 4 / 6
+UNION ALL SELECT 'case_activity_log', count(*) FROM case_activity_log WHERE id LIKE 'T\_cal\_%'
+UNION ALL SELECT 'new users',      count(*) FROM users
+  WHERE id IN ('T_u_hind','T_u_faisal','T_u_lama','T_u_saleh');
+-- Expect: 30 / 16 / 14 / 12 / 14 / 11 / 3 / 4 / 6 / 4
+
+-- Dept-head coverage — the gate resolves on (role, department_id), so every
+-- department that owns seeded rows must return EXACTLY ONE active head.
+-- ⚠ A count of 0 means those dept-scoped gates are untestable; >1 blocks the
+-- general-task dept-routing path outright (routes.ts refuses to guess).
+SELECT d.id, d.name,
+       count(u.id) FILTER (WHERE u.role = 'department_head' AND u.is_active) AS active_heads,
+       count(u.id) FILTER (WHERE u.role = 'employee'        AND u.is_active) AS active_employees,
+       d.head_id
+FROM departments d
+LEFT JOIN users u ON u.department_id = d.id
+WHERE d.id IN ('1','2','3','4','5')
+GROUP BY d.id, d.name, d.head_id
+ORDER BY d.id;
+-- Expect active_heads = 1 for every one of 1,2,3,4,5.
 
 -- COVERAGE ASSERTIONS — each must return at least one row.
 SELECT 'depts covered'      AS check, string_agg(DISTINCT department_id, ',' ORDER BY department_id) AS value FROM law_cases WHERE id LIKE 'T\_case\_%'
