@@ -23,6 +23,9 @@ import {
   insertMemoSchema,
   hearingResultSchema,
   hearingReportSchema,
+  hearingResultDetailsSchema,
+  isFirmToday,
+  isFirmFuture,
   HearingStatus,
   HearingResult,
   MemoStatus,
@@ -455,6 +458,70 @@ function canActOnHearing(user: { id: string; role: string }, hearing: any, ctx?:
   if (!ctx) return canActOnHearingIdentity(user, hearing);
   return actingIdentitiesFor(ctx, hearing.caseId ?? null)
     .some((i) => canActOnHearingIdentity({ id: i.userId, role: i.role }, hearing));
+}
+
+// ==================== HEARING RECORD EDITING (owner-approved 2026-07-28) ====================
+//
+// Gate for CORRECTING an already-recorded hearing — the report (phase 1) and the
+// no-cascade result fields (phase 2). Deliberately DIFFERENT from canActOnHearing,
+// which governs RECORDING and admits only the ATTENDING lawyer with no department
+// logic at all:
+//   branch_manager | admin_support                          → any time, any case
+//   department_head of the PARENT CASE's department         → only on the hearing's own day
+//   assigned lawyer of the PARENT CASE (isAssignedLawyer,   → only on the hearing's own day
+//     so all four case assignment fields)
+//
+// This is the parent-case join the permissions batch deferred for hearings (they
+// carry no departmentId of their own). Built HERE and used by these two endpoints
+// ONLY — the six canActOnHearing endpoints (result / report-exported / cancel /
+// close / agency-verify) are deliberately untouched in this commit.
+//
+// THE WINDOW is measured on the HEARING'S OWN DATE, not the recording date, and in
+// the FIRM's calendar day (isFirmToday) — see the FirmTimeZone comment in
+// shared/schema.ts for the timezone bug this avoids. Enforced SERVER-SIDE because a
+// client check reads the user's own clock.
+//
+// Delegation-aware through actingIdentitiesFor, keyed on the parent case id so
+// specific_cases delegations scope correctly.
+type HearingEditGate = { allowed: true } | { allowed: false; status: 403; error: string };
+
+async function canEditHearingRecord(
+  user: CaseActorIdentity,
+  hearing: any,
+  ctx?: ActingContext,
+): Promise<HearingEditGate> {
+  const identities: CaseActorIdentity[] = ctx
+    ? actingIdentitiesFor(ctx, hearing?.caseId ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+
+  // Admin tier — unconditional, no parent-case fetch needed.
+  if (identities.some((u) => u.role === "branch_manager" || u.role === "admin_support")) {
+    return { allowed: true };
+  }
+
+  const parentCase = hearing?.caseId ? await storage.getCaseById(hearing.caseId) : null;
+  if (!parentCase) {
+    return { allowed: false, status: 403, error: "لا تملك صلاحية تعديل هذه الجلسة" };
+  }
+
+  const isScopedActor = identities.some((u) =>
+    (u.role === "department_head"
+      && !!u.departmentId
+      && !!parentCase.departmentId
+      && parentCase.departmentId === u.departmentId)
+    || isAssignedLawyer({ id: u.id }, parentCase));
+  if (!isScopedActor) {
+    return { allowed: false, status: 403, error: "لا تملك صلاحية تعديل هذه الجلسة" };
+  }
+
+  if (!isFirmToday(hearing?.hearingDate)) {
+    return {
+      allowed: false,
+      status: 403,
+      error: "انتهت مهلة التعديل — التعديل متاح يوم الجلسة فقط. لتصحيح نتيجة خاطئة يُلغى موعد الجلسة وتُسجَّل جلسة جديدة",
+    };
+  }
+  return { allowed: true };
 }
 
 async function validateAssignedUsersActive(userIds: string[]): Promise<{ valid: boolean; inactiveUsers: string[] }> {
@@ -9785,14 +9852,13 @@ export async function registerRoutes(
       if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
-      if (hearing.hearingDate) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const hd = new Date(hearing.hearingDate);
-        hd.setHours(0, 0, 0, 0);
-        if (hd.getTime() > today.getTime()) {
-          return res.status(400).json({ error: "لا يمكن تسجيل نتيجة الجلسة قبل موعدها" });
-        }
+      // TIMEZONE FIX — was `new Date(hearingDate)` (UTC) + setHours (server-local),
+      // two different calendars, which on a UTC server made 00:00–03:00 Riyadh read
+      // as YESTERDAY and so REFUSED a result on the hearing's own day for three
+      // hours every morning. isFirmFuture compares calendar days as strings in the
+      // firm's timezone; no parse, nothing to shift.
+      if (isFirmFuture(hearing.hearingDate)) {
+        return res.status(400).json({ error: "لا يمكن تسجيل نتيجة الجلسة قبل موعدها" });
       }
       if (hearing.status !== HearingStatus.UPCOMING) {
         return res.status(400).json({ error: "لا يمكن تسجيل نتيجة لجلسة غير قادمة" });
@@ -10629,15 +10695,34 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
-      }
       if (!hearing.result) {
         return res.status(400).json({ error: "يجب تسجيل نتيجة الجلسة أولاً" });
       }
 
+      // PHASE 1 — REPORT EDITING. This endpoint was ALREADY idempotent (no
+      // re-record latch, no side effects, five plain column writes), so editing
+      // needed no new endpoint — only the right gate on the right half.
+      //
+      // TWO GATES, split on whether this is the FIRST write or a CORRECTION, so no
+      // existing capability is narrowed:
+      //   • first submission (reportCompleted falsy) → canActOnHearing, EXACTLY as
+      //     before. The attending lawyer keeps writing the report as they do today.
+      //   • correction (reportCompleted already true) → canEditHearingRecord, the
+      //     owner's three-tier rule with the hearing-day window for the two scoped
+      //     tiers. NOT OR-ed with canActOnHearing: an attending lawyer who is not on
+      //     the parent case must not get an unbounded edit right.
+      const isReportEdit = !!hearing.reportCompleted;
+      if (isReportEdit) {
+        const gate = await canEditHearingRecord(req.user!, hearing, req.actingContext);
+        if (!gate.allowed) {
+          return res.status(gate.status).json({ error: gate.error });
+        }
+      } else if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
+
       const data = hearingReportSchema.parse(req.body);
-      
+
       const updated = await storage.updateHearing(hearingId, {
         hearingReport: data.hearingReport,
         recommendations: data.recommendations || "",
@@ -10646,6 +10731,42 @@ export async function registerRoutes(
         reportCompleted: true,
       });
 
+      // AUDIT — before/after into the case activity log. action_type is free text
+      // (the committee_skipped / jurisdiction_transferred precedent), so this needs
+      // no migration and no new column.
+      const reportActor = req.user!;
+      if (isReportEdit && hearing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: hearing.caseId,
+            userId: reportActor.id,
+            userName: reportActor.name || reportActor.id,
+            actionType: "hearing_report_edited",
+            title: "تم تعديل تقرير الجلسة",
+            details: JSON.stringify({
+              hearingId,
+              hearingDate: hearing.hearingDate,
+              before: {
+                hearingReport: hearing.hearingReport || "",
+                recommendations: hearing.recommendations || "",
+                nextSteps: hearing.nextSteps || "",
+                contactCompleted: !!hearing.contactCompleted,
+              },
+              after: {
+                hearingReport: data.hearingReport,
+                recommendations: data.recommendations || "",
+                nextSteps: data.nextSteps || "",
+                contactCompleted: data.contactCompleted,
+              },
+            }),
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        } catch (e) {
+          console.error("[hearing-report/edit] logCaseActivity failed", e);
+        }
+      }
+
       res.json(updated);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -10653,6 +10774,122 @@ export async function registerRoutes(
       }
       console.error("Error submitting hearing report:", error);
       res.status(500).json({ error: "حدث خطأ في حفظ تقرير الجلسة" });
+    }
+  });
+
+  // ==================== PHASE 2 — SAFE-FIELD RESULT CORRECTION ====================
+  // Corrects the two fields on a RECORDED result that drive no side effect.
+  //
+  // ⚠ THIS IS NOT "EDIT THE RESULT". Changing the result TYPE is deliberately NOT
+  // built (owner decision): recording a result runs a cascade — stage writes,
+  // field tasks, memo cancellations, a next hearing, notifications — much of which
+  // cannot be cleanly undone (a completed collection task may already have
+  // auto-closed the case; the لواحق memos were cancelled because the session
+  // HAPPENED; sent notifications cannot be unsent). The answer for a genuinely
+  // wrong result stays: CANCEL the hearing and record a new one.
+  //
+  // The re-record latch on POST /:id/result (`status !== قادمة`) is UNTOUCHED — it
+  // is what stops that cascade running twice, and nothing here weakens it.
+  app.patch("/api/hearings/:id/result-details", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!hearing.result) {
+        return res.status(400).json({ error: "لا توجد نتيجة مسجلة لتعديلها" });
+      }
+
+      // Every field that DRIVES the cascade. Rejected BY NAME rather than stripped:
+      // a silent strip would report success while changing nothing, which is how a
+      // user ends up believing a wrong judgment was corrected.
+      const CASCADE_FIELDS = [
+        "result",
+        "judgmentSide",
+        "judgmentType",
+        "judgmentFinal",
+        "objectionFeasible",
+        "nextHearingDate",
+        "nextHearingTime",
+        "responseRequired",
+        "memoRequired",
+        "opponentResponseRequired",
+        "transferToDepartmentId",
+        "afterFailedSettlementChoice",
+        "conciliationResult",
+        "caseId",
+        "status",
+      ];
+      const offending = CASCADE_FIELDS.filter((f) =>
+        Object.prototype.hasOwnProperty.call(req.body ?? {}, f));
+      if (offending.length > 0) {
+        return res.status(400).json({
+          error: `لا يمكن تعديل هذه الحقول بعد تسجيل النتيجة: ${offending.join("، ")} — لتصحيح نتيجة خاطئة يُلغى موعد الجلسة وتُسجَّل جلسة جديدة`,
+        });
+      }
+
+      const gate = await canEditHearingRecord(req.user!, hearing, req.actingContext);
+      if (!gate.allowed) {
+        return res.status(gate.status).json({ error: gate.error });
+      }
+
+      const data = hearingResultDetailsSchema.parse(req.body);
+
+      // objectionDeadline is a JUDGMENT field. Sending it on any other result is a
+      // client bug, so it is refused rather than ignored.
+      if (data.objectionDeadline !== undefined && hearing.result !== HearingResult.JUDGMENT) {
+        return res.status(400).json({ error: "مهلة الاعتراض تخص جلسات الحكم فقط" });
+      }
+
+      const patch: Record<string, unknown> = {};
+      if (data.resultDetails !== undefined) patch.resultDetails = data.resultDetails;
+      if (data.objectionDeadline !== undefined) patch.objectionDeadline = data.objectionDeadline || null;
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ error: "لا يوجد ما يتم تعديله" });
+      }
+
+      const updated = await storage.updateHearing(hearingId, patch);
+
+      const actor = req.user!;
+      if (hearing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: hearing.caseId,
+            userId: actor.id,
+            userName: actor.name || actor.id,
+            actionType: "hearing_result_details_edited",
+            title: "تم تعديل تفاصيل نتيجة الجلسة",
+            details: JSON.stringify({
+              hearingId,
+              hearingDate: hearing.hearingDate,
+              result: hearing.result,
+              before: {
+                resultDetails: hearing.resultDetails || "",
+                objectionDeadline: hearing.objectionDeadline || null,
+              },
+              after: {
+                resultDetails: data.resultDetails !== undefined
+                  ? data.resultDetails : (hearing.resultDetails || ""),
+                objectionDeadline: data.objectionDeadline !== undefined
+                  ? (data.objectionDeadline || null) : (hearing.objectionDeadline || null),
+              },
+            }),
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        } catch (e) {
+          console.error("[hearing-result-details/edit] logCaseActivity failed", e);
+        }
+      }
+
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      console.error("Error editing hearing result details:", error);
+      res.status(500).json({ error: "حدث خطأ في تعديل تفاصيل النتيجة" });
     }
   });
 

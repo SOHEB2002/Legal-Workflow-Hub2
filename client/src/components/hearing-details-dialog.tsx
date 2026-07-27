@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,6 +16,13 @@ import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
 import { useAuth } from "@/lib/auth-context";
 import { useCaseFieldTasks } from "@/hooks/use-case-field-tasks";
+import { useToast } from "@/hooks/use-toast";
+import { useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { extractApiError } from "@/lib/utils";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   MemoType,
   MemoStatusLabels,
@@ -24,6 +31,7 @@ import {
   HearingStatus,
   HearingResultLabels,
   ObjectionStatusLabels,
+  isFirmToday,
 } from "@shared/schema";
 import type { Hearing, ObjectionStatusValue, HearingStatusValue } from "@shared/schema";
 import {
@@ -37,6 +45,7 @@ import {
   XCircle,
   Calendar,
   ArrowLeftRight,
+  Pencil,
 } from "lucide-react";
 
 // SHARED hearing-details dialog. The body was moved VERBATIM out of
@@ -78,7 +87,7 @@ export function HearingDetailsDialog({
 }) {
   const { hearings } = useHearings();
   const { getCaseById } = useCases();
-  const { users } = useAuth();
+  const { user, users } = useAuth();
   const { getMemosByCase } = useMemos();
   // Same resolution the hearings page uses for its filters: the explicitly
   // assigned attending lawyer, else the parent case's primary/responsible.
@@ -91,6 +100,68 @@ export function HearingDetailsDialog({
   // the hearing detail shows every linked task on the case.
   const { data: detailHearingTasks = [] } = useCaseFieldTasks(detailHearing?.caseId);
   const submitting = !!actions?.busy;
+
+  // CLIENT MIRROR of canEditHearingRecord (server/routes.ts) — the owner's
+  // three-tier correction rule:
+  //   branch_manager | admin_support            → any time
+  //   own-dept department_head of the PARENT CASE → hearing's own day only
+  //   assigned lawyer of the PARENT CASE         → hearing's own day only
+  // The SERVER decides; this only decides whether the affordance renders, so no
+  // button can 403. isFirmToday compares calendar days in the FIRM's timezone —
+  // never parse the stored "YYYY-MM-DD" (see FirmTimeZone in shared/schema.ts).
+  const canEditHearingRecord = (() => {
+    if (!user || !detailHearing) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    const parent = detailHearing.caseId ? getCaseById(detailHearing.caseId) : null;
+    if (!parent) return false;
+    const isOwnDeptHead =
+      user.role === "department_head"
+      && !!user.departmentId
+      && !!parent.departmentId
+      && parent.departmentId === user.departmentId;
+    const isCaseLawyer =
+      parent.primaryLawyerId === user.id
+      || parent.responsibleLawyerId === user.id
+      || (Array.isArray(parent.assignedLawyers) && parent.assignedLawyers.includes(user.id));
+    if (!isOwnDeptHead && !isCaseLawyer) return false;
+    return isFirmToday(detailHearing.hearingDate);
+  })();
+
+  // PHASE 2 — inline correction of the two no-cascade result fields. Self-contained
+  // (own state + apiRequest) rather than an injected action, so it works in BOTH
+  // hosts: the hearings page and the case-details dialog, which passes no actions.
+  const [editingResult, setEditingResult] = useState(false);
+  const [editResultDetails, setEditResultDetails] = useState("");
+  const [editObjectionDeadline, setEditObjectionDeadline] = useState("");
+  const [savingResultEdit, setSavingResultEdit] = useState(false);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const openResultEdit = () => {
+    if (!detailHearing) return;
+    setEditResultDetails(detailHearing.resultDetails || "");
+    setEditObjectionDeadline(detailHearing.objectionDeadline || "");
+    setEditingResult(true);
+  };
+
+  const saveResultEdit = async () => {
+    if (!detailHearing) return;
+    setSavingResultEdit(true);
+    try {
+      const body: Record<string, unknown> = { resultDetails: editResultDetails };
+      if (detailHearing.result === "حكم") {
+        body.objectionDeadline = editObjectionDeadline || null;
+      }
+      await apiRequest("PATCH", `/api/hearings/${detailHearing.id}/result-details`, body);
+      await queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
+      toast({ title: "تم حفظ التعديل" });
+      setEditingResult(false);
+    } catch (err) {
+      toast({ title: "تعذّر حفظ التعديل", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setSavingResultEdit(false);
+    }
+  };
 
   return (
       <Dialog open={!!detailHearing} onOpenChange={(open) => !open && onOpenChange(false)}>
@@ -340,6 +411,62 @@ export function HearingDetailsDialog({
                         <DualDateDisplay date={detailHearing.objectionDeadline} />
                       </div>
                     )}
+
+                    {/* PHASE 2 — correct the two fields that drive NO cascade.
+                        Everything else about a recorded result (the result itself,
+                        the judgment direction, the next-hearing date …) is
+                        deliberately absent: changing any of them would have to
+                        re-run tasks, memos, stage writes and notifications, much of
+                        which cannot be undone. The copy says so, so the affordance
+                        cannot be mistaken for "edit the result". */}
+                    {canEditHearingRecord && !editingResult && (
+                      <div className="pt-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={openResultEdit}
+                          data-testid="button-edit-result-details"
+                        >
+                          <Pencil className="w-3.5 h-3.5 ml-1" />
+                          تعديل التفاصيل
+                        </Button>
+                      </div>
+                    )}
+                    {editingResult && (
+                      <div className="rounded-md border p-3 space-y-3" data-testid="form-edit-result-details">
+                        <p className="text-xs text-muted-foreground">
+                          يمكن تعديل التفاصيل فقط. لتصحيح نتيجة خاطئة يُلغى موعد الجلسة وتُسجَّل جلسة جديدة.
+                        </p>
+                        <div>
+                          <Label className="text-xs">تفاصيل النتيجة</Label>
+                          <Textarea
+                            value={editResultDetails}
+                            onChange={(e) => setEditResultDetails(e.target.value)}
+                            rows={3}
+                            data-testid="input-edit-result-details"
+                          />
+                        </div>
+                        {detailHearing.result === "حكم" && (
+                          <div>
+                            <Label className="text-xs">مهلة الاعتراض (سجل تاريخي)</Label>
+                            <Input
+                              type="date"
+                              value={editObjectionDeadline}
+                              onChange={(e) => setEditObjectionDeadline(e.target.value)}
+                              data-testid="input-edit-objection-deadline"
+                            />
+                          </div>
+                        )}
+                        <div className="flex gap-2 justify-end">
+                          <Button size="sm" variant="ghost" onClick={() => setEditingResult(false)} disabled={savingResultEdit}>
+                            إلغاء
+                          </Button>
+                          <Button size="sm" onClick={saveResultEdit} disabled={savingResultEdit} data-testid="button-save-result-details">
+                            حفظ
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     {detailHearing.nextHearingDate && (
                       <div>
                         <p className="text-xs text-muted-foreground">الجلسة القادمة</p>
@@ -477,7 +604,17 @@ export function HearingDetailsDialog({
                     label="كتابة التقرير"
                     icon={<FileText className="w-4 h-4" />}
                     disabled={!detailHearing.result}
-                    actionLabel={detailHearing.result && !detailHearing.reportCompleted ? "كتابة التقرير" : undefined}
+                    // PHASE 1 — the label used to go undefined once the report was
+                    // done, so a typo was permanent. It now flips to "تعديل التقرير"
+                    // for the actors the SERVER lets correct it (canEditHearingRecord
+                    // mirror above), and the dialog opens PRE-FILLED with the
+                    // existing text rather than blank.
+                    actionLabel={
+                      !detailHearing.result ? undefined
+                        : !detailHearing.reportCompleted ? "كتابة التقرير"
+                        : canEditHearingRecord ? "تعديل التقرير"
+                        : undefined
+                    }
                     onAction={() => {
                       actions?.onWriteReport(detailHearing);
                       onOpenChange(false);
