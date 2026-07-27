@@ -195,6 +195,12 @@ export const lawCases = pgTable("law_cases", {
 export const consultations = pgTable("consultations", {
   id: varchar("id", { length: 255 }).primaryKey(),
   consultationNumber: varchar("consultation_number", { length: 50 }).notNull().unique(),
+  // عنوان الاستشارة. Name + length copied from contracts.title, the existing
+  // convention for an entity headline. NULLABLE here (contracts.title is
+  // notNull) because every pre-existing consultation row has none — a NOT NULL
+  // column would need a backfill, i.e. a migration beyond ADD COLUMN.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — see the ALTER in the commit message.
+  title: varchar("title", { length: 500 }),
   clientId: varchar("client_id", { length: 255 }).notNull(),
   consultationType: varchar("consultation_type", { length: 255 }).notNull(),
   // @deprecated Phase-5 — the delivery-type concept (مكتوبة / شفهية) was
@@ -2549,6 +2555,9 @@ export interface CaseComment {
 export interface Consultation {
   id: string;
   consultationNumber: string;
+  // عنوان الاستشارة. Nullable — rows created before the column existed have
+  // none, so every display site must fall back (the list shows "—").
+  title: string | null;
   clientId: string;
   // Stored as plain varchar — holds the workflow discriminator
   // (ConsultationTypeValue: مكتوبة / هاتفية / إجرائية) for new rows, and
@@ -3571,6 +3580,11 @@ export type InsertCase = z.infer<typeof insertCaseSchema>;
 
 export const insertConsultationSchema = z.object({
   clientId: z.string().min(1, "العميل مطلوب"),
+  // عنوان الاستشارة — OPTIONAL (the column is nullable; pre-existing rows have
+  // none). Must be declared: this schema is a strict z.object (no
+  // .passthrough()), so an undeclared key would be silently STRIPPED and the
+  // title would never reach the insert.
+  title: z.string().optional(),
   consultationType: z.string().min(1, "نوع الاستشارة مطلوب"),
   // @deprecated Phase-5 — deliveryType was retired from the UI. Kept
   // optional in the API schema so older clients still validate; the
@@ -4816,6 +4830,8 @@ export const updateCaseSchema = z.object({
 // Pattern-A gate for PATCH /api/consultations/:id.
 export const updateConsultationSchema = z.object({
   clientId: z.string().optional(),
+  // Nullable: the edit dialog clears the title by sending null, not "".
+  title: z.string().nullable().optional(),
   consultationType: z.string().optional(),
   deliveryType: z.string().optional(),
   currentStage: z.string().optional(),

@@ -3804,8 +3804,14 @@ export async function registerRoutes(
       if (req.body.clientId !== undefined && req.body.clientId !== existing.clientId) {
         changedDetailFields.push("العميل");
       }
+      if (req.body.title !== undefined && (req.body.title ?? null) !== existing.title) {
+        changedDetailFields.push("العنوان");
+      }
       if (req.body.questionSummary !== undefined && req.body.questionSummary !== existing.questionSummary) {
-        changedDetailFields.push("نص الاستشارة");
+        changedDetailFields.push("ملخص السؤال");
+      }
+      if (req.body.category !== undefined && req.body.category !== existing.category) {
+        changedDetailFields.push("تصنيف المدة");
       }
       if (req.body.source !== undefined && req.body.source !== existing.source) {
         changedDetailFields.push("مصدر الاستشارة");
