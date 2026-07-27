@@ -4663,6 +4663,7 @@ type OutcomeCaseInput = {
 type OutcomeHearingInput = {
   result?: string | null;
   judgmentSide?: string | null;
+  judgmentFinal?: boolean | null;
   hearingDate?: string | null;
 };
 
@@ -4694,11 +4695,27 @@ export function resolveCaseOutcome(
     const isAppealRuling =
       stageWasReached(lawCase, "منظورة_استئناف") || judgmentCount >= 2;
     const degree = isAppealRuling ? "استئنافي" : "ابتدائي";
+    // FINALITY is a SEPARATE property from degree (a3f7897): the opposite of
+    // ابتدائي is استئنافي, while نهائي answers "can this still be objected to?".
+    // Stating only the degree made this line look like it contradicted the stage
+    // badge ("محكوم حكم نهائي") and the hearing's own finality field — both of which
+    // say نهائي — for the perfectly ordinary case of a FIRST-INSTANCE ruling that is
+    // ALSO final (منظورة + غير قابل للاعتراض → محكوم_حكم_نهائي directly). Both
+    // properties are now stated, so the surfaces agree instead of appearing to
+    // disagree. An APPEAL ruling is final by nature, so the qualifier is redundant
+    // there and suppressed; an unknown judgmentFinal adds nothing.
+    const finalityNote = isAppealRuling
+      ? ""
+      : judgmentHearing?.judgmentFinal === true
+        ? " (نهائي)"
+        : judgmentHearing?.judgmentFinal === false
+          ? " (قابل للاعتراض)"
+          : "";
     // "انتهت" only when the case really ended; a live judged case "صدر بها حكم".
     const lead = isClosed ? "انتهت بحكم" : "صدر بها حكم";
     return {
       kind: CaseOutcomeKind.JUDGMENT,
-      text: `${lead} ${degree} ${direction}`,
+      text: `${lead} ${degree}${finalityNote} ${direction}`,
       tone: direction === "لصالحنا" ? "success" : direction === "جزئي" ? "warning" : "danger",
       concluded: isClosed,
     };
