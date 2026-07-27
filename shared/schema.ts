@@ -4602,6 +4602,195 @@ export function weAreTheAppellant(direction: string | null): boolean {
   return direction === "ضدنا" || direction === "جزئي";
 }
 
+// ==================== CASE OUTCOME (النتيجة) ====================
+//
+// WHAT THE CASE ACTUALLY ENDED IN — deliberately DISTINCT from closureReason,
+// which only says how it was closed administratively. "تم التحصيل" tells you the
+// money came in; it does not tell you whether that followed a judgment in our
+// favour or a settlement. This resolver answers the second question.
+//
+// Everything is DERIVED from data that already exists — no new column. The
+// signals, in the priority order they are evaluated:
+//   JUDGMENT            a judgment hearing exists (result === "حكم") with a
+//                       readable judgmentSide. Reuses findLatestJudgmentHearing +
+//                       judgmentDirectionOf — the same pair the stage badge uses,
+//                       never a second implementation.
+//   SETTLEMENT_SUCCESS  the case reached تحصيل having passed through مداولة_الصلح,
+//                       OR taradiStatus === تم_الصلح. Reaching تحصيل AFTER a
+//                       judgment cannot land here — JUDGMENT is evaluated first.
+//   SETTLEMENT_FAILED   closureReason === لم_يتم_الصلح, or a CLOSED case whose
+//                       history passed through أغلق_طلب_الصلح. The closed check is
+//                       load-bearing: a case that failed settlement and went on to
+//                       litigate is still running, and failure was a step, not its
+//                       ending.
+//   STRUCK_OFF          currentStage === مشطوبة, or closureReason ===
+//                       شطب_بدون_إعادة_قيد.
+//   ADMINISTRATIVE      closed on تنازل_العميل / عدم_تجديد_العقد / سداد_الخصم —
+//                       no substantive result; the closure reason IS the outcome.
+//   NONE                nothing recorded. Reported plainly, never invented.
+//
+// mohrStatus is deliberately NOT a signal: it is display-only (3 read sites, all
+// mapping), it can drift out of step with currentStage, and انتهت_التسوية does not
+// say whether the settlement SUCCEEDED or collapsed.
+export const CaseOutcomeKind = {
+  JUDGMENT: "judgment",
+  SETTLEMENT_SUCCESS: "settlement_success",
+  SETTLEMENT_FAILED: "settlement_failed",
+  STRUCK_OFF: "struck_off",
+  ADMINISTRATIVE: "administrative",
+  NONE: "none",
+} as const;
+export type CaseOutcomeKindValue = typeof CaseOutcomeKind[keyof typeof CaseOutcomeKind];
+
+export type CaseOutcomeTone = "success" | "warning" | "danger" | "neutral";
+
+export interface CaseOutcome {
+  kind: CaseOutcomeKindValue;
+  /** Plain Arabic sentence, outcome first. Empty for NONE-with-nothing-to-say. */
+  text: string;
+  tone: CaseOutcomeTone;
+  /** Whether the case has actually ENDED (vs a live case that already has a ruling). */
+  concluded: boolean;
+}
+
+type OutcomeCaseInput = {
+  currentStage?: string | null;
+  stageHistory?: Array<{ stage?: string | null } | null> | null;
+  closureReason?: string | null;
+  closureReasonOther?: string | null;
+  taradiStatus?: string | null;
+};
+type OutcomeHearingInput = {
+  result?: string | null;
+  judgmentSide?: string | null;
+  hearingDate?: string | null;
+};
+
+function stageWasReached(c: OutcomeCaseInput, stage: string): boolean {
+  if (c.currentStage === stage) return true;
+  return Array.isArray(c.stageHistory)
+    && c.stageHistory.some((entry) => entry?.stage === stage);
+}
+
+export function resolveCaseOutcome(
+  lawCase: OutcomeCaseInput,
+  hearings: OutcomeHearingInput[],
+): CaseOutcome {
+  const stage = String(lawCase.currentStage || "");
+  const reason = String(lawCase.closureReason || "").trim();
+  const isClosed = stage === "مقفلة";
+
+  // 1. JUDGMENT — the ruling is the result, whether or not the case has closed yet.
+  const judgmentHearing = findLatestJudgmentHearing(hearings || []);
+  const direction = judgmentDirectionOf(judgmentHearing);
+  if (direction) {
+    // DEGREE is never stored — per the model correction it is derived from the
+    // case PATH (منظورة → ابتدائي, منظورة_استئناف → استئنافي). Any ONE of three
+    // signals settles it, so a stripped stageHistory (the list endpoint drops it)
+    // does not lose the degree: the appeal stage in the history, the case sitting
+    // on it now, or a SECOND judgment hearing — which only the appeal path can
+    // produce.
+    const judgmentCount = (hearings || []).filter((h) => h && h.result === "حكم").length;
+    const isAppealRuling =
+      stageWasReached(lawCase, "منظورة_استئناف") || judgmentCount >= 2;
+    const degree = isAppealRuling ? "استئنافي" : "ابتدائي";
+    // "انتهت" only when the case really ended; a live judged case "صدر بها حكم".
+    const lead = isClosed ? "انتهت بحكم" : "صدر بها حكم";
+    return {
+      kind: CaseOutcomeKind.JUDGMENT,
+      text: `${lead} ${degree} ${direction}`,
+      tone: direction === "لصالحنا" ? "success" : direction === "جزئي" ? "warning" : "danger",
+      concluded: isClosed,
+    };
+  }
+
+  // 2. SETTLEMENT SUCCESS — collection reached through the conciliation track.
+  const reachedCollection = stageWasReached(lawCase, "تحصيل");
+  const wentThroughConciliation = stageWasReached(lawCase, "مداولة_الصلح");
+  if ((reachedCollection && wentThroughConciliation) || lawCase.taradiStatus === "تم_الصلح") {
+    return {
+      kind: CaseOutcomeKind.SETTLEMENT_SUCCESS,
+      text: "انتهت بالصلح",
+      tone: "success",
+      concluded: isClosed || reachedCollection,
+    };
+  }
+
+  // 3. SETTLEMENT FAILED — an ENDING only; mid-case failure is just a step.
+  if (reason === ClosureReason.SETTLEMENT_FAILED
+    || (isClosed && stageWasReached(lawCase, "أغلق_طلب_الصلح"))) {
+    return {
+      kind: CaseOutcomeKind.SETTLEMENT_FAILED,
+      text: "انتهت دون صلح",
+      tone: "warning",
+      concluded: true,
+    };
+  }
+
+  // 4. STRUCK OFF.
+  if (stage === "مشطوبة" || reason === ClosureReason.STRUCK_OFF_EXPIRED) {
+    return {
+      kind: CaseOutcomeKind.STRUCK_OFF,
+      text: "شُطبت الدعوى",
+      tone: "danger",
+      concluded: isClosed || stage === "مشطوبة",
+    };
+  }
+
+  // 5. ADMINISTRATIVE — the closure reason IS the whole story.
+  const administrativeReasons: string[] = [
+    ClosureReason.CLIENT_WAIVER,
+    ClosureReason.CONTRACT_NOT_RENEWED,
+    ClosureReason.OPPONENT_PAID,
+  ];
+  if (isClosed && administrativeReasons.includes(reason)) {
+    return {
+      kind: CaseOutcomeKind.ADMINISTRATIVE,
+      text: `انتهت — ${ClosureReasonLabels[reason as ClosureReasonValue] ?? reason}`,
+      tone: reason === ClosureReason.OPPONENT_PAID ? "success" : "neutral",
+      concluded: true,
+    };
+  }
+
+  // 6. NONE — nothing to say. Never invent an outcome.
+  return {
+    kind: CaseOutcomeKind.NONE,
+    text: isClosed ? "أُغلقت دون نتيجة مسجلة" : "",
+    tone: "neutral",
+    concluded: isClosed,
+  };
+}
+
+// Closure reasons that would only REPEAT the outcome sentence, so the outcome line
+// must not append them. Everything else (تم_التحصيل, سداد_الخصم, أخرى → the free
+// text) genuinely adds "…and this is how it was wrapped up".
+const OUTCOME_REDUNDANT_CLOSURE_REASONS: string[] = [
+  ClosureReason.JUDGMENT_AGAINST,      // the direction is already in the sentence
+  ClosureReason.PRIMARY_NO_APPEAL,     // ditto — degree + direction already said it
+  ClosureReason.SETTLEMENT_FAILED,     // "انتهت دون صلح"
+  ClosureReason.STRUCK_OFF_EXPIRED,    // "شُطبت الدعوى"
+  ClosureReason.CLIENT_WAIVER,         // already the ADMINISTRATIVE sentence
+  ClosureReason.CONTRACT_NOT_RENEWED,  // ditto
+  ClosureReason.OPPONENT_PAID,         // ditto
+];
+
+/** The closure-reason suffix for the outcome line, or null when it would repeat it. */
+export function outcomeClosureSuffix(
+  outcome: CaseOutcome,
+  closureReason: string | null | undefined,
+  closureReasonOther: string | null | undefined,
+): string | null {
+  const raw = String(closureReason || "").trim();
+  if (!raw) return null;
+  if (outcome.kind === CaseOutcomeKind.ADMINISTRATIVE) return null;
+  if (OUTCOME_REDUNDANT_CLOSURE_REASONS.includes(raw)) return null;
+  if (raw === ClosureReason.OTHER) {
+    const detail = String(closureReasonOther || "").trim();
+    return detail || ClosureReasonLabels[ClosureReason.OTHER];
+  }
+  return ClosureReasonLabels[raw as ClosureReasonValue] ?? raw;
+}
+
 // POST /api/cases/:id/opponent-response — "تم استلام رد الخصم". Tolerant gate;
 // the handler requires needsOurResponse to be an explicit boolean.
 export const opponentResponseSchema = z.object({
