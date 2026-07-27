@@ -35,6 +35,7 @@ interface HearingsContextType {
   submitReport: (id: string, data: HearingReportData) => Promise<void>;
   closeHearing: (id: string) => Promise<void>;
   cancelHearing: (id: string) => Promise<void>;
+  setHearingFlag: (id: string, flagged: boolean, reason?: string) => Promise<void>;
   getHearingById: (id: string) => Hearing | undefined;
   getHearingsByCase: (caseId: string) => Hearing[];
   getUpcomingHearings: () => Hearing[];
@@ -186,6 +187,15 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     scheduleBackgroundRefetch();
   };
 
+  // "جلسة مُعلَّمة" — team attention flag. Server clears reason/by/at on unflag,
+  // so the response is upserted verbatim rather than patched field-by-field.
+  const setHearingFlag = async (id: string, flagged: boolean, reason?: string): Promise<void> => {
+    const res = await apiRequest("POST", `/api/hearings/${id}/flag`, { flagged, reason });
+    const updated = await res.json();
+    if (updated && updated.id) upsertLocal(updated);
+    scheduleBackgroundRefetch();
+  };
+
   const getHearingById = (id: string) => hearings.find((h) => h.id === id);
 
   const getHearingsByCase = (caseId: string) =>
@@ -219,6 +229,7 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
         submitReport,
         closeHearing,
         cancelHearing,
+        setHearingFlag,
         getHearingById,
         getHearingsByCase,
         getUpcomingHearings,
