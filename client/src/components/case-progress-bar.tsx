@@ -1,7 +1,7 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Loader2, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { type CaseStageValue, type CaseClassificationValue, type CaseStageTransition, canMoveToPreviousStage, canReviewCases, type UserRoleType, getStagesForClassification, getStageLabel, TerminalCaseStages } from "@shared/schema";
+import { type CaseStageValue, type CaseClassificationValue, type CaseStageTransition, canMoveToPreviousStage, canReviewCases, type UserRoleType, getStagesForClassification, getStageLabel, TerminalCaseStages, ClosureReason, ClosureReasonLabels, type ClosureReasonValue } from "@shared/schema";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,6 +52,52 @@ const TERMINAL_BADGES: Partial<Record<CaseStageValue, { text: string; tone: Term
   // after a final judgment in our favour), where "تم الصلح" would be false.
   "تحصيل": { text: getStageLabel("تحصيل"), tone: "success" },
 };
+
+// CLOSURE-REASON TONE. The مقفلة badge was ALWAYS red, so a case that closed
+// because the money was collected read exactly like a case we lost. Each reason is
+// classified explicitly and anything NOT listed — أخرى, the scheduler's free-text
+// reasons, and a closure with no reason at all — keeps the existing red. So this
+// only ever softens a reason we deliberately reviewed; it can never accidentally
+// de-escalate a bad outcome.
+//   success — the work finished and we got what we were owed
+//   warning — unresolved or ambiguous, but not a defeat (mirrors the judgment
+//             badge's use of amber for جزئي)
+//   neutral — administrative endings that are neither win nor loss
+//   danger  — an actual loss (the default)
+const CLOSURE_REASON_TONES: Partial<Record<ClosureReasonValue, TerminalTone>> = {
+  [ClosureReason.COLLECTION_COMPLETED]: "success", // تم التحصيل — collection done
+  [ClosureReason.OPPONENT_PAID]: "success",        // سداد الخصم — the opponent paid
+  [ClosureReason.SETTLEMENT_FAILED]: "warning",    // settlement lapsed; the case waits
+  [ClosureReason.PRIMARY_NO_APPEAL]: "warning",    // outcome depends on which way it went
+  [ClosureReason.CLIENT_WAIVER]: "neutral",        // the client withdrew
+  [ClosureReason.CONTRACT_NOT_RENEWED]: "neutral", // administrative
+  // NOT listed, so they stay red: حكم_نهائي_ضدنا, شطب_بدون_إعادة_قيد, أخرى.
+};
+
+// Keeps the badge glanceable. closureReasonOther is varchar(500) and the
+// scheduler writes a full free-text sentence ("لم نُزود برابط جلسة الصلح، ومر 15
+// يوم…"), either of which would swamp the badge. The untruncated text stays
+// visible in the سبب الإغلاق block in the case-details dialog.
+const CLOSURE_BADGE_MAX_CHARS = 40;
+
+// Label for the badge suffix, or null when there is nothing to show — an older
+// closure that never recorded a reason falls back to the plain badge with NO
+// dangling dash. Uses ClosureReasonLabels rather than hardcoded Arabic; an
+// unrecognised value (the scheduler's free text) is shown as-is.
+function closureReasonBadgeText(
+  reason: string | null | undefined,
+  reasonOther: string | null | undefined,
+): string | null {
+  const raw = (reason ?? "").trim();
+  if (!raw) return null;
+  const resolved = raw === ClosureReason.OTHER
+    ? ((reasonOther ?? "").trim() || ClosureReasonLabels[ClosureReason.OTHER])
+    : (ClosureReasonLabels[raw as ClosureReasonValue] ?? raw);
+  if (!resolved) return null;
+  return resolved.length > CLOSURE_BADGE_MAX_CHARS
+    ? `${resolved.slice(0, CLOSURE_BADGE_MAX_CHARS - 1)}…`
+    : resolved;
+}
 
 const TERMINAL_TONE_CLASSES: Record<TerminalTone, string> = {
   success: "border-green-600 bg-green-500/10 text-green-700 dark:text-green-300",
@@ -107,6 +153,11 @@ interface CaseProgressBarProps {
   // shared findLatestJudgmentHearing + judgmentDirectionOf; null when no judgment
   // hearing exists (the badge then falls back to the plain stage label).
   judgmentDirection?: string | null;
+  // The case's closureReason / closureReasonOther, for the مقفلة terminal badge.
+  // Plumbed from CaseStagePanel exactly like judgmentDirection above — the bar
+  // takes no contexts and reads only the props it is given.
+  closureReason?: string | null;
+  closureReasonOther?: string | null;
   reviewNotes?: string;
   reviewDecision?: string;
   eligibleInternalReviewers?: Array<{ id: string; name: string }>;
@@ -147,6 +198,8 @@ export function CaseProgressBar({
   isSettlementCase,
   stageHistory,
   judgmentDirection,
+  closureReason,
+  closureReasonOther,
   reviewNotes,
   reviewDecision,
   eligibleInternalReviewers = [],
@@ -293,6 +346,18 @@ export function CaseProgressBar({
         tone = judgmentDirection === "لصالحنا" ? "success"
           : judgmentDirection === "جزئي" ? "warning"
           : "danger";
+      }
+      // CLOSURE REASON. "القضية مقفلة" alone never said WHY, which is the same gap
+      // the judgment block above closes for a ruling — so it is solved the same way:
+      // append the reason and tone the badge to it. A closure with no recorded
+      // reason (older rows never set one) keeps the plain badge and its red, with no
+      // dash and no "undefined".
+      if (normalizedStage === "مقفلة") {
+        const closureText = closureReasonBadgeText(closureReason, closureReasonOther);
+        if (closureText) {
+          text = `${text} — ${closureText}`;
+          tone = CLOSURE_REASON_TONES[(closureReason ?? "").trim() as ClosureReasonValue] ?? tone;
+        }
       }
       terminalState = {
         reachedIndex: furthestReachedIndex >= 0 ? furthestReachedIndex : stagesOrder.length - 1,
