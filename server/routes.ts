@@ -1138,15 +1138,24 @@ const ACTIVE_MEMO_STATUSES = ["لم_تبدأ", "قيد_التحرير", "قيد_
 
 // Cancel a case's still-open memos. ONE implementation, two callers:
 //   • cancelOpenCaseChildrenOnClose — no exclusions; a closed case keeps nothing.
-//   • the JUDGMENT paths — excluding MemoType.OBJECTION, because pleadings are
-//     over once a ruling issues but the لائحة اعتراضية is the opposite: it is the
-//     work the ruling CREATES. It must survive if it already exists, and the صك
-//     receipt must still be able to create one AFTER the judgment.
+//   • the HEARING-RESULT path — excluding MemoType.OBJECTION, because pleadings
+//     are over once the session has happened but the لائحة اعتراضية is the
+//     opposite: it is the work a ruling CREATES. It must survive if it already
+//     exists, and the صك receipt must still be able to create one AFTER the
+//     judgment.
 // Returns the count so callers can log it. Does NOT recompute activeMemoCount —
 // each caller owns that (the close path already reconciles it at the end).
+//
+// `reason` routes the write through storage.cancelMemo instead of a bare status
+// update, which is what makes the cancellation EXPLAINED rather than silent: it
+// stamps memos.cancellation_reason on the row AND inserts the memo_activity_log
+// "cancelled" entry, in one transaction — the same mechanism the manual
+// "لا يحتاج مذكرة" flow uses, so the memo-detail cancellation banner
+// ("سبب الإلغاء: …", memos.tsx) renders these automatic cancellations too.
+// Callers with no reason (the close paths) keep the previous bare-status write.
 async function cancelActiveCaseMemos(
   caseId: string,
-  opts: { excludeTypes?: string[] } = {},
+  opts: { excludeTypes?: string[]; reason?: string; performedBy?: string } = {},
 ): Promise<number> {
   const exclude = new Set(opts.excludeTypes || []);
   const memos = await storage.getMemosByCase(caseId);
@@ -1154,7 +1163,14 @@ async function cancelActiveCaseMemos(
   for (const m of memos) {
     if (!ACTIVE_MEMO_STATUSES.includes(m.status)) continue;
     if (exclude.has(String(m.memoType))) continue;
-    await storage.updateMemo(m.id, { status: "ملغاة" });
+    if (opts.reason) {
+      await storage.cancelMemo(m.id, {
+        reason: opts.reason,
+        performedBy: opts.performedBy || "system",
+      });
+    } else {
+      await storage.updateMemo(m.id, { status: "ملغاة" });
+    }
     cancelled++;
   }
   return cancelled;
@@ -9187,6 +9203,72 @@ export async function registerRoutes(
       // (before any mutation) from the same case row so the judgment guard and
       // the branch below can never disagree about the degree.
 
+      // ==================== UNIVERSAL: PRIOR MEMOS ARE SPENT ====================
+      // RECORDING ANY HEARING RESULT cancels the case's still-open memos — not
+      // just a judgment. The session HAPPENED, so a memo prepared for it has
+      // served its purpose whatever the court did: postponed, ruled, struck off,
+      // declined jurisdiction, settled or not. Leaving them open is what kept a
+      // stale "مذكرة جارية" lit on the cases list.
+      //
+      // HOISTED out of PATH B (it used to live inside the judgment branch) so
+      // there is still exactly ONE implementation — cancelActiveCaseMemos — now
+      // reached by every result instead of one. PATH B no longer cancels anything
+      // itself, so there is no double-cancellation: a judgment passes through
+      // here once, and by the time the branch runs the memos are already ملغاة and
+      // outside ACTIVE_MEMO_STATUSES. (The ضدنا-final close further down calls
+      // cancelOpenCaseChildrenOnClose, which cancels again with no exclusion —
+      // also a no-op on already-cancelled rows, and correct for the objection,
+      // which a closed case does not keep.)
+      //
+      // OBJECTION IS EXCLUDED, ALWAYS — for every result, not just judgments. The
+      // لائحة اعتراضية is not a pleading a session ends; it is the work a ruling
+      // CREATES. An existing one must survive, and the صك-receipt flow must still
+      // be able to create one AFTER the judgment (ensureObjectionMemoForCase).
+      //
+      // ORDERING IS LOAD-BEARING — this runs BEFORE the result branches, so:
+      //   • موعد_جديد + مطلوب مذكرة: the new مذكرة جوابية is created AFTER this
+      //     (PATH A, createResponseMemoForCase) and can never be cancelled by its
+      //     own request. createResponseMemoForCase recomputes activeMemoCount
+      //     itself, so it also lands on top of the count written here.
+      //   • judgment: before the collection/execution field tasks (which this
+      //     does not touch anyway) and before the stage write.
+      //   • عدم_الاختصاص: before PATH H's early return, so a case leaving for
+      //     another department does not carry open memos with it.
+      let cancelledPriorMemos = 0;
+      if (effectiveCaseId && existingCase) {
+        const isJudgmentResult = data.result === HearingResult.JUDGMENT;
+        // Distinct wording per cause — both land on memos.cancellation_reason and
+        // in memo_activity_log, so the memo's own cancellation banner says WHY.
+        const cancelReason = isJudgmentResult
+          ? "أُلغيت تلقائياً بسبب صدور حكم في القضية"
+          : "أُلغيت تلقائياً بسبب تسجيل نتيجة جلسة جديدة";
+        cancelledPriorMemos = await cancelActiveCaseMemos(effectiveCaseId, {
+          excludeTypes: [MemoType.OBJECTION],
+          reason: cancelReason,
+          performedBy: reqUser.id,
+        });
+        if (cancelledPriorMemos > 0) {
+          const postCancelActiveCount = await getActiveMemoCount(effectiveCaseId);
+          await storage.updateCase(effectiveCaseId, { activeMemoCount: postCancelActiveCount });
+          await logCaseActivityActing(req, {
+            caseId: effectiveCaseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            // Kept distinct so the case timeline still reads differently for the
+            // two causes; both are free-text action types, no migration.
+            actionType: isJudgmentResult
+              ? "memos_cancelled_on_judgment"
+              : "memos_cancelled_on_hearing_result",
+            title: isJudgmentResult
+              ? `إلغاء ${cancelledPriorMemos} مذكرة بعد صدور الحكم`
+              : `إلغاء ${cancelledPriorMemos} مذكرة بعد تسجيل نتيجة الجلسة`,
+            details: `${cancelReason} — اللائحة الاعتراضية مستثناة`,
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        }
+      }
+
       if (effectiveCaseId && existingCase) {
         const caseUpdate: any = {
           lastHearingResult: data.result,
@@ -9325,34 +9407,11 @@ export async function registerRoutes(
           //                   appeal path.
           const isFinal = judgmentDerivedFinal;
 
-          // PLEADINGS ARE OVER once a ruling issues — cancel the case's still-open
-          // memos so a judged case stops showing "مذكرة جارية" (the owner saw this
-          // on the cases list). Runs BEFORE both branches so it applies to
-          // محكوم_حكم_ابتدائي and محكوم_حكم_نهائي identically, and — critically —
-          // before the collection/execution field tasks are created, which it does
-          // not touch anyway.
-          //
-          // OBJECTION IS EXCLUDED, ALWAYS. The لائحة اعتراضية is not a pleading the
-          // ruling ends; it is the work the ruling CREATES. An existing one must
-          // survive, and the صك-receipt flow must still be able to create one AFTER
-          // the judgment (ensureObjectionMemoForCase) — cancelling here would undo
-          // the whole objection path. Nothing retroactively touches a memo created
-          // later: this runs once, at judgment time.
-          const cancelledMemos = await cancelActiveCaseMemos(effectiveCaseId, {
-            excludeTypes: [MemoType.OBJECTION],
-          });
-          if (cancelledMemos > 0) {
-            const postJudgmentActiveCount = await getActiveMemoCount(effectiveCaseId);
-            await storage.updateCase(effectiveCaseId, { activeMemoCount: postJudgmentActiveCount });
-            await logCaseActivityActing(req, {
-              caseId: effectiveCaseId,
-              userId: reqUser.id,
-              userName: reqUser.name || reqUser.id,
-              actionType: "memos_cancelled_on_judgment",
-              title: `إلغاء ${cancelledMemos} مذكرة بعد صدور الحكم`,
-              details: "المرافعات انتهت بصدور الحكم — اللائحة الاعتراضية مستثناة",
-            });
-          }
+          // PLEADINGS ARE OVER once a ruling issues — the case's still-open memos
+          // were already cancelled by the UNIVERSAL block above (hoisted out of
+          // here so EVERY hearing result does it, not only a judgment), with the
+          // OBJECTION excluded and the "صدور حكم" wording on the reason. Nothing
+          // to do here; see that block for the ordering guarantees.
 
           if (isFinal) {
             // === FINAL JUDGMENTS — the case RESTS at محكوم_حكم_نهائي ===
@@ -9758,7 +9817,17 @@ export async function registerRoutes(
         ? ((await storage.getHearingById(hearingId)) || updatedHearing)
         : updatedHearing;
 
-      res.json({ hearing: finalHearing, createdTasks, createdMemos, clearedOpponentResponse });
+      // cancelledMemos is returned for the same reason clearedOpponentResponse is:
+      // the cancelled rows are NOT in this response, and the cases-list badge is
+      // derived from the client's memos cache — without an immediate invalidation
+      // "مذكرة جارية" would linger until the background refetch.
+      res.json({
+        hearing: finalHearing,
+        createdTasks,
+        createdMemos,
+        clearedOpponentResponse,
+        cancelledMemos: cancelledPriorMemos,
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });

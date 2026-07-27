@@ -94,6 +94,8 @@ import {
   findPrimaryJudgmentHearing,
   judgmentDirectionOf,
   weAreTheAppellant,
+  MemoType,
+  MemoTypeLabels,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -274,6 +276,23 @@ export function isAwaitingJudgmentDeed(c: {
   if (c.currentStage !== "محكوم_حكم_ابتدائي") return false;
   return !String(c.judgmentDeedReceivedDate || "").trim();
 }
+
+// What the per-case active-memo scan yields. ONE map, not two: the badge needs
+// the TYPE as well as the existence, and a second Map would mean a second pass
+// over the same memo list and a second dependency to keep in sync.
+// Still fully DERIVED from the memos query — no stored flag anywhere.
+type ActiveMemoInfo = {
+  // Drives the group-3 sort rule (unchanged semantics).
+  hasActive: boolean;
+  // Drives the badge LABEL: an active لائحة اعتراضية is the memo a judgment
+  // CREATES, not one it ends, so naming it precisely matters next to the
+  // "بانتظار استلام الصك" badge it sits beside on محكوم_حكم_ابتدائي.
+  hasObjection: boolean;
+  // True when something OTHER than the objection is also active. The label
+  // shows the objection (see the badge), so this only enriches the tooltip
+  // rather than silently hiding the rest.
+  hasOther: boolean;
+};
 
 // "Active" memo for the group-3 rule: not cancelled, not filed.
 function isActiveMemo(m: { status?: string | null; currentStage?: string | null }): boolean {
@@ -848,15 +867,25 @@ export default function CasesPage() {
     setCaseToDelete(null);
   };
 
-  // Per-case "has an active memo" lookup, precomputed once per
-  // memos/cases change so the sort comparator stays O(1) per call
-  // instead of scanning the memo list for every comparison.
+  // Per-case active-memo lookup, precomputed once per memos change so the sort
+  // comparator stays O(1) per call instead of scanning the memo list for every
+  // comparison. Now carries the memo TYPE too (see ActiveMemoInfo) so the row
+  // badge can name an objection precisely — the existing map was ENRICHED
+  // rather than joined by a second one, keeping a single pass and a single
+  // dependency. The early `continue` the boolean version used is gone on
+  // purpose: we must keep scanning a case's memos to learn whether an objection
+  // is among them.
   const caseHasActiveMemoMap = useMemo(() => {
-    const map = new Map<string, boolean>();
+    const map = new Map<string, ActiveMemoInfo>();
     for (const m of memos) {
       if (!m.caseId) continue;
-      if (map.get(m.caseId)) continue;
-      if (isActiveMemo(m as any)) map.set(m.caseId, true);
+      if (!isActiveMemo(m)) continue;
+      const info = map.get(m.caseId)
+        || { hasActive: false, hasObjection: false, hasOther: false };
+      info.hasActive = true;
+      if (m.memoType === MemoType.OBJECTION) info.hasObjection = true;
+      else info.hasOther = true;
+      map.set(m.caseId, info);
     }
     return map;
   }, [memos]);
@@ -922,8 +951,8 @@ export default function CasesPage() {
       return i === -1 ? 999 : i;
     };
     return matched.slice().sort((a, b) => {
-      const ga = getCasePriorityGroup(a, !!caseHasActiveMemoMap.get(a.id));
-      const gb = getCasePriorityGroup(b, !!caseHasActiveMemoMap.get(b.id));
+      const ga = getCasePriorityGroup(a, !!caseHasActiveMemoMap.get(a.id)?.hasActive);
+      const gb = getCasePriorityGroup(b, !!caseHasActiveMemoMap.get(b.id)?.hasActive);
       if (ga !== gb) return ga - gb;
       const sa = stageOrderIndex(a);
       const sb = stageOrderIndex(b);
@@ -1230,7 +1259,8 @@ export default function CasesPage() {
                   </TableCell>
                 </TableRow>
               ) : pagedCases.map((c, idx) => {
-                const hasActiveMemo = !!caseHasActiveMemoMap.get(c.id);
+                const activeMemoInfo = caseHasActiveMemoMap.get(c.id);
+                const hasActiveMemo = !!activeMemoInfo?.hasActive;
                 const priorityGroup = getCasePriorityGroup(c, hasActiveMemo);
                 // Row tinting: group 1 picks up an amber background to
                 // catch the eye, groups 4 + 5 dim so they read as
@@ -1364,24 +1394,42 @@ export default function CasesPage() {
                           تعديلات
                         </Badge>
                       )}
+                      {/* Same badge, same styling and placement — only the LABEL
+                          switches. An active لائحة اعتراضية wins the name over the
+                          generic "مذكرة جارية" because it is the memo the judgment
+                          CREATES (it is the one type cancellation always spares),
+                          and it sits directly beside "بانتظار استلام الصك" on a
+                          محكوم_حكم_ابتدائي case — the two describe one situation, so
+                          the vaguer word would read as a second, unrelated memo.
+                          BOTH present → the objection still wins the label and the
+                          tooltip says the others exist, so nothing is hidden. */}
                       {priorityGroup === 3 && (
                         <Badge
                           variant="outline"
                           className="border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px] px-1 py-0"
                           data-testid={`badge-active-memo-${c.id}`}
-                          title="القضية منظورة في المحكمة وفيها مذكرة جارية"
+                          title={
+                            activeMemoInfo?.hasObjection
+                              ? (activeMemoInfo.hasOther
+                                ? "القضية منظورة في المحكمة وفيها لائحة اعتراضية جارية — وتوجد مذكرات أخرى جارية أيضاً"
+                                : "القضية منظورة في المحكمة وفيها لائحة اعتراضية جارية")
+                              : "القضية منظورة في المحكمة وفيها مذكرة جارية"
+                          }
                         >
                           <RotateCcw className="w-2.5 h-2.5 ml-1" />
-                          مذكرة جارية
+                          {activeMemoInfo?.hasObjection
+                            ? MemoTypeLabels[MemoType.OBJECTION]
+                            : "مذكرة جارية"}
                         </Badge>
                       )}
                       {/* Judgment-lifecycle step 2 — DERIVED, exactly like
                           "مذكرة جارية" above: no stored flag, no clearing code.
                           Entering the receipt date makes the second term false and
-                          the badge disappears on the next render. Coexists with
-                          "مذكرة جارية" by design (محكوم_حكم_ابتدائي is in
+                          the badge disappears on the next render. Coexists with the
+                          active-memo badge by design (محكوم_حكم_ابتدائي is in
                           IN_COURT_STAGES_FOR_MEMO_GROUP, so a case with an
-                          objection memo shows both). */}
+                          objection memo shows both — and that neighbour is exactly
+                          why the other badge now reads "لائحة اعتراضية"). */}
                       {isAwaitingJudgmentDeed(c) && (
                         <Badge
                           variant="outline"
