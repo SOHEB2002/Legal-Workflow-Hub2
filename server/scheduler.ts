@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
+import { SettlementLinkMissingClosureReason } from "@shared/schema";
 
 export function startScheduler() {
   console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
@@ -807,8 +808,10 @@ async function checkStruckOffExpiry() {
 // SILENT — no notifications, per the owner's directive. Match key is the
 // exact pause_reason text written by the hearing-result handler.
 const SETTLEMENT_LINK_MISSING_PAUSE_REASON = "بانتظار رابط جلسة الصلح من العميل";
-const SETTLEMENT_LINK_MISSING_CLOSURE_REASON =
-  "لم نُزود برابط جلسة الصلح، ومر 15 يوم دون تحديث من العميل";
+// Lifted to shared/schema.ts so resolveCaseOutcome can recognise this exact
+// sentence and map the timeout close to "تعذّر الصلح" on the closed-case badge.
+// Aliased rather than inlined so every existing use site below stays untouched.
+const SETTLEMENT_LINK_MISSING_CLOSURE_REASON = SettlementLinkMissingClosureReason;
 
 async function checkSettlementLinkMissingTimeout() {
   try {

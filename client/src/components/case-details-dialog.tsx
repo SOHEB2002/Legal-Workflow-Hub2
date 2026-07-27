@@ -82,9 +82,6 @@ import {
   judgmentDirectionOf,
   weAreTheAppellant,
   ClosureReasonLabels,
-  resolveCaseOutcome,
-  outcomeClosureSuffix,
-  CaseOutcomeKind,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, Attachment, ClosureReasonValue } from "@shared/schema";
 
@@ -441,52 +438,6 @@ export function CaseDetailsDialog({
           </DialogHeader>
           {selectedCase && (
             <div className="space-y-6">
-              {/* ===== النتيجة — the case's SUBSTANTIVE outcome =====
-                  FIRST thing in the dialog body, above every banner and above the
-                  stage panel, because on opening a finished case "how did this end?"
-                  is the question being asked. The stage badge inside CaseStagePanel
-                  keeps its own form (d67af87) and says how the case CLOSED; this line
-                  says what it ENDED IN, which the badge cannot express — once a case
-                  is مقفلة its badge reads "القضية مقفلة — تم التحصيل" and the ruling
-                  is gone from view entirely.
-                  RENDERED ONLY FOR JUDGMENT AND SETTLEMENT_SUCCESS — the two kinds
-                  the badge genuinely cannot state. STRUCK_OFF / SETTLEMENT_FAILED /
-                  ADMINISTRATIVE / NONE are all already spelled out by the badge's
-                  closure-reason suffix, so rendering them here would print the same
-                  fact twice. */}
-              {(() => {
-                const outcome = resolveCaseOutcome(selectedCase, getHearingsByCase(selectedCase.id));
-                const isJudgment = outcome.kind === CaseOutcomeKind.JUDGMENT;
-                // SETTLEMENT_SUCCESS is shown only once the case has CLOSED. While it
-                // still sits on تحصيل the stage badge already reads "تم الصلح — تحصيل";
-                // the line only earns its place after مقفلة, where the badge switches
-                // to "القضية مقفلة — تم التحصيل" and the fact that it was a SETTLEMENT
-                // (not a judgment) disappears from view.
-                const isClosedSettlement =
-                  outcome.kind === CaseOutcomeKind.SETTLEMENT_SUCCESS
-                  && selectedCase.currentStage === "مقفلة";
-                if (!isJudgment && !isClosedSettlement) return null;
-                const suffix = outcomeClosureSuffix(
-                  outcome, selectedCase.closureReason, selectedCase.closureReasonOther);
-                const toneClass = {
-                  success: "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400",
-                  warning: "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-                  danger: "border-destructive/40 bg-destructive/10 text-destructive",
-                  neutral: "border-muted-foreground/30 bg-muted text-muted-foreground",
-                }[outcome.tone];
-                return (
-                  <div
-                    className={`rounded-md border px-3 py-2 ${toneClass}`}
-                    data-testid="banner-case-outcome"
-                  >
-                    <div className="text-xs opacity-80">النتيجة</div>
-                    <div className="font-semibold">
-                      <BidiText>{suffix ? `${outcome.text} — ${suffix}` : outcome.text}</BidiText>
-                    </div>
-                  </div>
-                );
-              })()}
-
               {/* Phase-8 — awaiting-completion banner. Surfaces savedStage
                   so the user knows where they'll return on resume. */}
               {selectedCase.awaitingCompletion && !isCasePaused(selectedCase) && (

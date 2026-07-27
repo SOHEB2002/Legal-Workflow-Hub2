@@ -9,7 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { caseHasReturnedFromReview } from "@/lib/case-stage-utils";
-import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf } from "@shared/schema";
+import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf, caseClosureBadgeSuffix } from "@shared/schema";
 import type { LawCase, CaseClassificationValue } from "@shared/schema";
 
 // SHARED case stage panel. Wraps the existing <CaseProgressBar> (the proven
@@ -68,13 +68,11 @@ export function CaseStagePanel({
       judgmentDirection={judgmentDirectionOf(
         findLatestJudgmentHearing(getHearingsByCase(caseItem.id)),
       )}
-      // WHY the case closed, for the مقفلة terminal badge. Read straight off the
-      // case row — unlike judgmentDirection above it needs no hearing lookup, but it
-      // is passed the same way because the bar takes no contexts and both list rows
-      // and the details dialog carry these two fields (the list endpoint strips only
-      // stageHistory).
-      closureReason={caseItem.closureReason}
-      closureReasonOther={caseItem.closureReasonOther}
+      // WHAT the case ended in, for the مقفلة terminal badge — resolved HERE because
+      // the composer needs the hearings (for the ruling) as well as the case row,
+      // and the bar takes no contexts. One call decides between the substantive
+      // outcome and the closure reason; the bar just renders the result.
+      closureBadge={caseClosureBadgeSuffix(caseItem, getHearingsByCase(caseItem.id))}
       departmentName={getDepartmentName(caseItem.departmentId || "")}
       disabled={
         stageTransitioning
