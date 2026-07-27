@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -2194,14 +2195,50 @@ export default function ConsultationsPage() {
               </Select>
             </div>
           </div>
-          <Table>
+          {/* This table had NO colgroup and no fixed layout — the browser sized
+              every column by content, which is exactly why العنوان was squeezed
+              to ~3 words a line while النوع (a one-word badge) claimed far more
+              than it needs. Now uses the SAME idiom as cases.tsx and
+              hearings.tsx: overflow wrapper + tableLayout:'fixed' + an explicit
+              colgroup. Widths sum to EXACTLY 100%, in header order:
+                 4  #
+                10  تاريخ الاستشارة
+                19  العنوان              ← widest, free text
+                13  العميل               ← free text
+                 7  النوع                ← badge only
+                12  الحالة               ← stage badge + status pills
+                 9  القسم
+                11  المحامي المسؤول
+                 7  التصنيف              ← badge only
+                 8  الإجراءات            ← 2 icon buttons
+                ---
+               100
+              (Labels live here rather than as inline JSX comments after each
+              <col />, which would leave whitespace text nodes inside <colgroup>
+              and trip React's DOM-nesting validation.) */}
+          <div className="overflow-x-auto">
+          <Table className="w-full" style={{ tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '4%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '19%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '8%' }} />
+            </colgroup>
             <TableHeader>
               <TableRow>
                 {/* Phase-5: all table cells (header + body) center-aligned. */}
-                <TableHead className="text-center w-[48px]">#</TableHead>
-                <TableHead className="text-center">رقم الاستشارة</TableHead>
-                {/* عنوان — same slot the contracts table uses (right after the
-                    number, before the client). */}
+                <TableHead className="text-center">#</TableHead>
+                {/* رقم الاستشارة REPLACED by the creation date — the number is
+                    still shown in the details dialog title and is still matched
+                    by the search box (see the haystack). Same position. */}
+                <TableHead className="text-center">تاريخ الاستشارة</TableHead>
+                {/* عنوان — same slot the contracts table uses. */}
                 <TableHead className="text-center">العنوان</TableHead>
                 <TableHead className="text-center">العميل</TableHead>
                 <TableHead className="text-center">النوع</TableHead>
@@ -2234,9 +2271,15 @@ export default function ConsultationsPage() {
                   <TableCell className="text-center text-xs text-muted-foreground" data-testid={`cell-index-${consultation.id}`}>
                     {(consultationPage - 1) * CONSULTATION_PAGE_SIZE + idx + 1}
                   </TableCell>
+                  {/* تاريخ الاستشارة — the creation date, replacing رقم الاستشارة.
+                      Uses the shared <DualDateDisplay> (Hijri on top, Gregorian
+                      below with "م"), the app's simple-date-cell component —
+                      already used in a TableCell on the delegations table and in
+                      the clients / activity-log views. The "غير مسندة" badge that
+                      lived in this cell STAYS: it flags the row, not the number. */}
                   <TableCell className="text-center font-medium">
                     <div className="flex flex-col items-center gap-1">
-                      <LtrInline>{consultation.consultationNumber}</LtrInline>
+                      <DualDateDisplay date={consultation.createdAt} />
                       {priorityGroup === 1 && (
                         <Badge
                           variant="outline"
@@ -2589,6 +2632,7 @@ export default function ConsultationsPage() {
               })}
             </TableBody>
           </Table>
+          </div>
           <PaginationControls
             currentPage={consultationPage}
             totalPages={consultationTotalPages}
