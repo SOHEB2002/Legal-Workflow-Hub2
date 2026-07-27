@@ -279,7 +279,7 @@ function caseActorIdentities(user: CaseActorIdentity, caseData: any, ctx?: Actin
 function canModifyCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return caseData.departmentId === u.departmentId;
+  if (u.role === "labor_review_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
   // !!u.departmentId — a department_head whose own departmentId is null/"" must
   // not match a row whose departmentId is also empty (legacy / "أخرى" rows).
   // Mirrors the guard canActOnMohrSettlement (:345) and the skip-committee gates
@@ -297,8 +297,8 @@ function canModifyCase(user: CaseActorIdentity, caseData: any, ctx?: ActingConte
 function canViewCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return caseData.departmentId === u.departmentId;
-  if (u.role === "department_head") return caseData.departmentId === u.departmentId;
+  if (u.role === "labor_review_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
+  if (u.role === "department_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
   if (u.role === "employee") {
     return caseData.primaryLawyerId === u.id ||
       caseData.responsibleLawyerId === u.id ||
@@ -357,7 +357,7 @@ function canActOnMohrSettlement(user: CaseActorIdentity, caseData: any, ctx?: Ac
 function canModifyConsultationIdentity(u: CaseActorIdentity, consultation: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return consultation.departmentId === u.departmentId;
+  if (u.role === "labor_review_head") return !!u.departmentId && consultation.departmentId === u.departmentId;
   // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
   if (u.role === "department_head" && !!u.departmentId && consultation.departmentId === u.departmentId) return true;
   if (consultation.assignedTo === u.id || consultation.createdBy === u.id) return true;
@@ -424,7 +424,7 @@ function canViewMemoActivitiesIdentity(u: CaseActorIdentity, memo: any, parentCa
     parentCase.responsibleLawyerId === u.id ||
     (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(u.id))
   )) return true;
-  if (u.role === "department_head" && !!parentCase && parentCase.departmentId === u.departmentId) return true;
+  if (u.role === "department_head" && !!u.departmentId && !!parentCase && parentCase.departmentId === u.departmentId) return true;
   return false;
 }
 
@@ -2771,7 +2771,7 @@ export async function registerRoutes(
           : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
         const transferAllowed = transferIdentities.some((i) =>
           i.role === "branch_manager" || i.role === "admin_support" ||
-          (i.role === "department_head" && existing.departmentId === i.departmentId) ||
+          (i.role === "department_head" && !!i.departmentId && existing.departmentId === i.departmentId) ||
           existing.primaryLawyerId === i.userId ||
           existing.responsibleLawyerId === i.userId ||
           (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(i.userId)));
@@ -4507,6 +4507,7 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, consultation);
       const isOwnDeptHead =
         reqUser.role === "department_head"
+        && !!reqUser.departmentId
         && consultation.departmentId === reqUser.departmentId;
       const allowed =
         reqUser.role === "branch_manager"
@@ -4836,7 +4837,7 @@ export async function registerRoutes(
       // their own department, mirroring assign / early-close.
       if (reqUser.role === "branch_manager") {
         // ok
-      } else if (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) {
+      } else if (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) {
         // ok
       } else {
         return res.status(403).json({ error: "ليس لديك صلاحية لتمديد التسليم" });
@@ -5005,7 +5006,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه الاستشارة" });
 
@@ -5260,6 +5261,7 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, lawCase);
       const isOwnDeptHead =
         reqUser.role === "department_head"
+        && !!reqUser.departmentId
         && lawCase.departmentId === reqUser.departmentId;
       const allowed =
         reqUser.role === "branch_manager"
@@ -5868,7 +5870,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssignedLawyer;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه القضية" });
 
@@ -6038,7 +6040,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
 
@@ -6088,7 +6090,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
 
@@ -6130,7 +6132,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز هذه المرحلة" });
 
@@ -7089,6 +7091,7 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, contract);
       const isOwnDeptHead =
         reqUser.role === "department_head"
+        && !!reqUser.departmentId
         && contract.departmentId === reqUser.departmentId;
       const isBranchManager = reqUser.role === "branch_manager";
       if (!isLawyer && !isOwnDeptHead && !isBranchManager) {
@@ -7316,7 +7319,7 @@ export async function registerRoutes(
   const allowContractPauseLike = (reqUser: any, contract: any): boolean =>
     reqUser.role === "branch_manager"
     || reqUser.role === "admin_support"
-    || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId)
+    || (reqUser.role === "department_head" && !!reqUser.departmentId && contract.departmentId === reqUser.departmentId)
     || contract.assignedTo === reqUser.id;
 
   app.post("/api/contracts/:id/pause", requireAuth, async (req: AuthRequest, res) => {
@@ -7870,7 +7873,7 @@ export async function registerRoutes(
             att.uploadedBy === reqUser.id
             || reqUser.role === "branch_manager"
             || reqUser.role === "admin_support"
-            || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId)
+            || (reqUser.role === "department_head" && !!reqUser.departmentId && contract.departmentId === reqUser.departmentId)
           );
       if (!allowed) {
         return res.status(403).json({
@@ -7927,7 +7930,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssigned;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
 
@@ -7989,7 +7992,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssigned;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
 
@@ -10794,7 +10797,9 @@ export async function registerRoutes(
         : user.role === "branch_manager";
       const isRoutedHead = ctx
         ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
-        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+        // !!user.departmentId — routedDepartmentId is nullable, so an unrouted task
+        // must not be claimable by a department_head with no department of their own.
+        : (user.role === "department_head" && !!user.departmentId && user.departmentId === task.routedDepartmentId);
       if (!isManager && !isRoutedHead) {
         return res.status(403).json({ error: "لا تملك صلاحية إسناد هذه المهمة" });
       }
@@ -10882,7 +10887,9 @@ export async function registerRoutes(
         : user.role === "branch_manager";
       const isRoutedHead = ctx
         ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
-        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+        // !!user.departmentId — routedDepartmentId is nullable, so an unrouted task
+        // must not be claimable by a department_head with no department of their own.
+        : (user.role === "department_head" && !!user.departmentId && user.departmentId === task.routedDepartmentId);
       if (!isManager && !isRoutedHead) {
         return res.status(403).json({ error: "لا تملك صلاحية اعتماد هذه المهمة" });
       }
