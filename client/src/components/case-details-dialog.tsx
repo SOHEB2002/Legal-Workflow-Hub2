@@ -205,6 +205,7 @@ export function CaseDetailsDialog({
   actions,
   onHearingPrompt,
   onClosed,
+  initialTab,
 }: {
   caseItem: LawCase | null;
   open: boolean;
@@ -212,6 +213,11 @@ export function CaseDetailsDialog({
   actions?: CaseDetailsActions;
   onHearingPrompt?: (prompt: { caseId: string; hearingType: "تراضي" | "محكمة"; title: string; description: string }) => void;
   onClosed?: () => void;
+  // Which tab to land on when the dialog opens. Omitted / null keeps the
+  // existing default ("info"), so every current caller is unaffected. Used by
+  // the مهامي follow-up deep-links whose action is a ROW in the الإجراءات tab
+  // rather than a dialog of its own.
+  initialTab?: string | null;
 }) {
   const { updateCase, moveToNextStage, addComment, fetchComments, getCommentsByCaseId, refreshCases } = useCases();
   const { getClientName } = useClients();
@@ -268,6 +274,13 @@ export function CaseDetailsDialog({
   };
 
   const [activeTab, setActiveTab] = useState("info");
+  // Honour a caller-supplied landing tab on each OPEN (not on every render, so
+  // the user can still switch tabs freely once inside). Falls back to "info"
+  // when no tab was requested, which is what every non-deep-link caller gets.
+  useEffect(() => {
+    if (!open) return;
+    setActiveTab(initialTab || "info");
+  }, [open, initialTab]);
   const [newComment, setNewComment] = useState("");
   const [stageTransitioning, setStageTransitioning] = useState(false);
   const [inlineEditField, setInlineEditField] = useState<string | null>(null);

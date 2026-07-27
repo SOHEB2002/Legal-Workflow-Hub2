@@ -852,6 +852,22 @@ export default function MyTasksPage() {
       setLocation(`/cases?openCase=${task.caseId || task.entityId}&action=judgment-deed`);
       return;
     }
+    // Same reasoning as the صك task above, same mechanism, different action:
+    // both of these live at terminal / non-advancing states where the stage
+    // panel has nothing to offer, so they deep-link to the case with the ACTION
+    // named. cases.tsx re-checks stage + permission on arrival and degrades to
+    // "just open the case" if the condition has since cleared.
+    //   appeal_window:      → the نتيجة مهلة الاعتراض row (الخصم استأنف / لم يستأنف)
+    //   opponent_response:  → the تم استلام رد الخصم row
+    // Both rows live in the الإجراءات tab, so the deep-link also selects it.
+    if (task.id.startsWith("appeal_window:")) {
+      setLocation(`/cases?openCase=${task.caseId || task.entityId}&action=appeal-outcome`);
+      return;
+    }
+    if (task.id.startsWith("opponent_response:")) {
+      setLocation(`/cases?openCase=${task.caseId || task.entityId}&action=opponent-response`);
+      return;
+    }
     if (isCaseStageKind(task)) {
       // case_work / case review_pending → fetch the full case and open the
       // SHARED CaseStagePanel (the feed item carries only the case id).
