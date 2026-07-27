@@ -307,7 +307,21 @@ export function CaseProgressBar({
   // canGoPrev needs no equivalent guard: currentIndex is 0 whenever rawIndex < 0,
   // so `currentIndex > 0` already keeps the rollback button hidden.
   const canGoNext = currentIndex < stagesOrder.length - 1 && !disabled && !terminalState;
-  const canGoPrev = currentIndex > 0 && canMoveToPreviousStage(userRole) && !disabled;
+  // FREE WIN (widened model) — canMoveToPreviousStage is branch_manager-ONLY, so
+  // the rollback button was invisible to everyone else even though the SERVER has
+  // always allowed an own-dept department_head to return to ANY prior stage and the
+  // assigned lawyer to return ONE step (validateStageTransition's rollback block).
+  // The button moves exactly one step (prevStage = stagesOrder[currentIndex - 1]),
+  // so the assignee is inside their server allowance and this can never 403.
+  // department_head is scoped by VISIBILITY rather than re-checked here — the page
+  // only surfaces own-department cases to a head (canViewCase) — which is the same
+  // convention isHeadOrManagerRole already uses below for committee-notes,
+  // platform-review and settlement actions.
+  const canRollBackStage =
+    canMoveToPreviousStage(userRole)
+    || userRole === "department_head"
+    || isCaseAssignee;
+  const canGoPrev = currentIndex > 0 && canRollBackStage && !disabled;
 
   const isAtReception = normalizedStage === "استلام";
   const nextStageIsDataCompletion = stagesOrder[currentIndex + 1] === "استكمال_البيانات";

@@ -93,6 +93,15 @@ function getAdvanceTarget(
   if (!rule) return null;
   if (userRole === "department_head" && c.departmentId !== userDeptId) return null;
   const isAssigned = !!c.assignedTo && c.assignedTo === userId;
+  // WIDENED MODEL — mirrors the tier bypass added to validateStageTransition:
+  // own-dept department_head and the assigned lawyer may traverse any edge that is
+  // NOT a committee decision. LINEAR_ADVANCE / LINEAR_ADVANCE_CYCLE contain no
+  // committee edge (those run through the dedicated committee dialog), so the tier
+  // applies to every rule reachable here. Chiefly this unblocks READY → CLOSED,
+  // which was admin_support | branch_manager.
+  if (userRole === "branch_manager" || userRole === "department_head" || isAssigned) {
+    return rule.target;
+  }
   const effectiveRoles = isAssigned ? [userRole, "assigned_lawyer"] : [userRole];
   if (!effectiveRoles.some((r) => rule.roles.includes(r))) return null;
   return rule.target;
@@ -148,12 +157,26 @@ function canPause(c: Contract, user: { id: string; role: string; departmentId: s
   return c.assignedTo === user.id;
 }
 
+// MISMATCH FIX — this gate showed the button to ANY own-dept department_head,
+// but the server (POST /api/contracts/:id/internal-review) accepted only the
+// designated reviewer or branch_manager, so a dept_head got a guaranteed 403.
+// The server now admits an own-dept department_head too, with ONE extra condition
+// that has to be mirrored here or the mismatch just moves: FOUR-EYES — a head who
+// is the contract's own assignee may not clear its review, because the reviewer
+// must never be the author (carve-out 2).
 function canDoInternalReview(c: Contract, user: { id: string; role: string; departmentId: string | null } | null): boolean {
   if (!user) return false;
   if (c.status !== "active") return false;
   if (c.currentStage !== ContractStage.INTERNAL_REVIEW) return false;
-  if (user.role === "department_head" && c.departmentId !== user.departmentId) return false;
-  if (["department_head", "branch_manager"].includes(user.role)) return true;
+  if (user.role === "branch_manager") return true;
+  if (
+    user.role === "department_head"
+    && !!user.departmentId
+    && !!c.departmentId
+    && c.departmentId === user.departmentId
+  ) {
+    return c.assignedTo !== user.id;
+  }
   return c.internalReviewerId === user.id;
 }
 
@@ -915,7 +938,17 @@ export default function ContractsPage() {
   // admin_support | own-dept department_head) — the page's own convention for
   // record administration, and a strict SUBSET of the server's
   // canModifyContract gate on PATCH, so nothing rendered can ever 403.
-  const canEditContract = (c: Contract): boolean => canTransferContract(c);
+  // FREE WIN (widened model) — was canTransferContract (bm | admin_support |
+  // own-dept head), which excluded the assigned lawyer and the creator even though
+  // the SERVER's canModifyContract has always allowed both to PATCH these fields.
+  // Now mirrors the server. NOTE this deliberately no longer tracks
+  // canTransferContract: transfer is a carve-out (department tier and above) while
+  // a plain record edit is not, so the two rules have genuinely diverged.
+  const canEditContract = (c: Contract): boolean => {
+    if (!user) return false;
+    if (canTransferContract(c)) return true;
+    return (!!c.assignedTo && c.assignedTo === user.id) || c.createdBy === user.id;
+  };
 
   const [editContract, setEditContract] = useState<Contract | null>(null);
   const [editForm, setEditForm] = useState({

@@ -1152,6 +1152,23 @@ export default function CasesPage() {
     permissions.canReviewCases && 
     c.currentStage === CaseStage.REVIEW_COMMITTEE;
 
+  // WIDENED MODEL — case DATA editing was branch_manager | admin_support only.
+  // Own-dept department_head and the assigned lawyer may now correct the record,
+  // mirroring the server gate on PATCH /api/cases/:id (canEditCaseData OR the
+  // department/assignee tiers).
+  const canEditCaseRecord = (c: LawCase): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    return canActOnCaseWorkflow(c);
+  };
+
+  // WIDENED MODEL — a department_head may open a case in THEIR OWN department.
+  // Mirrors POST /api/cases, which scopes on the body's target department; the
+  // add-case dialog defaults the department for a head, so the two agree.
+  const canCreateCase =
+    !!permissions.canAddCasesAndConsultations
+    || (user?.role === "department_head" && !!user.departmentId);
+
   const canClose = (c: LawCase) =>
     permissions.canCloseCases &&
     c.currentStage !== CaseStage.CLOSED &&
@@ -1165,7 +1182,7 @@ export default function CasesPage() {
           <h1 className="text-2xl font-bold text-foreground">إدارة القضايا</h1>
           <p className="text-muted-foreground">متابعة وإدارة جميع القضايا</p>
         </div>
-        {permissions.canAddCasesAndConsultations && (
+        {canCreateCase && (
           <Button data-testid="button-add-case" onClick={() => { resetForm(); setClassificationGroup(""); setShowAddDialog(true); }}>
             <Plus className="w-4 h-4 ml-2" />
             قضية جديدة
@@ -1487,7 +1504,7 @@ export default function CasesPage() {
                         only ever see the actions they're actually
                         allowed to perform. */}
                     {(() => {
-                      const canEdit = user?.role === "branch_manager" || user?.role === "admin_support";
+                      const canEdit = canEditCaseRecord(c);
                       const canReassign = user?.role === "department_head" && c.currentStage !== "مقفلة" && !c.isArchived;
                       const canResumeAwait = !isCasePaused(c) && c.awaitingCompletion && canPauseCase(c);
                       const canMarkAwait = !isCasePaused(c)
@@ -2105,7 +2122,7 @@ export default function CasesPage() {
         actions={selectedCase ? {
           // Each can* is this page's OWN permission helper, unchanged and still
           // defined here — no permission logic moved out with the dialog.
-          canEdit: user?.role === "branch_manager" || user?.role === "admin_support",
+          canEdit: canEditCaseRecord(selectedCase),
           onEdit: () => openEditDialog(selectedCase),
           canAssign: canAssign(selectedCase),
           onAssign: () => openAssignDialog(selectedCase),

@@ -78,6 +78,7 @@ import {
   findPrimaryJudgmentHearing,
   judgmentDirectionOf,
   weAreTheAppellant,
+  canAddCasesAndConsultations,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -278,8 +279,12 @@ function caseActorIdentities(user: CaseActorIdentity, caseData: any, ctx?: Actin
 function canModifyCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return caseData.departmentId === u.departmentId;
-  if (u.role === "department_head" && caseData.departmentId === u.departmentId) return true;
+  if (u.role === "labor_review_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
+  // !!u.departmentId — a department_head whose own departmentId is null/"" must
+  // not match a row whose departmentId is also empty (legacy / "أخرى" rows).
+  // Mirrors the guard canActOnMohrSettlement (:345) and the skip-committee gates
+  // already carry. Same fix applied to the consultation + contract twins below.
+  if (u.role === "department_head" && !!u.departmentId && caseData.departmentId === u.departmentId) return true;
   if (caseData.primaryLawyerId === u.id || caseData.responsibleLawyerId === u.id) return true;
   if (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) return true;
   if (caseData.internalReviewerId && caseData.internalReviewerId === u.id) return true;
@@ -292,8 +297,8 @@ function canModifyCase(user: CaseActorIdentity, caseData: any, ctx?: ActingConte
 function canViewCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return caseData.departmentId === u.departmentId;
-  if (u.role === "department_head") return caseData.departmentId === u.departmentId;
+  if (u.role === "labor_review_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
+  if (u.role === "department_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
   if (u.role === "employee") {
     return caseData.primaryLawyerId === u.id ||
       caseData.responsibleLawyerId === u.id ||
@@ -352,8 +357,9 @@ function canActOnMohrSettlement(user: CaseActorIdentity, caseData: any, ctx?: Ac
 function canModifyConsultationIdentity(u: CaseActorIdentity, consultation: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return consultation.departmentId === u.departmentId;
-  if (u.role === "department_head" && consultation.departmentId === u.departmentId) return true;
+  if (u.role === "labor_review_head") return !!u.departmentId && consultation.departmentId === u.departmentId;
+  // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+  if (u.role === "department_head" && !!u.departmentId && consultation.departmentId === u.departmentId) return true;
   if (consultation.assignedTo === u.id || consultation.createdBy === u.id) return true;
   return false;
 }
@@ -418,7 +424,7 @@ function canViewMemoActivitiesIdentity(u: CaseActorIdentity, memo: any, parentCa
     parentCase.responsibleLawyerId === u.id ||
     (Array.isArray(parentCase.assignedLawyers) && parentCase.assignedLawyers.includes(u.id))
   )) return true;
-  if (u.role === "department_head" && !!parentCase && parentCase.departmentId === u.departmentId) return true;
+  if (u.role === "department_head" && !!u.departmentId && !!parentCase && parentCase.departmentId === u.departmentId) return true;
   return false;
 }
 
@@ -755,7 +761,8 @@ function getContractCycleTransitionsForType(_type: string): StageTransitionRule[
 function canModifyContractIdentity(u: CaseActorIdentity, contract: any): boolean {
   const adminRoles = ["branch_manager", "admin_support", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "department_head" && contract.departmentId === u.departmentId) return true;
+  // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+  if (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId) return true;
   if (contract.assignedTo === u.id || contract.createdBy === u.id) return true;
   if (contract.internalReviewerId === u.id) return true;
   return false;
@@ -802,6 +809,140 @@ function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   if (entityData.primaryLawyerId === user.id || entityData.responsibleLawyerId === user.id) return true;
   if (entityData.assignedTo === user.id) return true;
   if (Array.isArray(entityData.assignedLawyers) && entityData.assignedLawyers.includes(user.id)) return true;
+  return false;
+}
+
+// ==================== WIDENED AUTHORITY MODEL (owner-approved 2026-07-27) ====================
+//
+// THE MODEL
+//   branch_manager   → everything
+//   department_head  → the SAME abilities, scoped to their OWN department
+//   employee         → the SAME abilities, scoped to items ASSIGNED to them
+//
+// ⚠ PURELY ADDITIVE. entityActorTier is always OR-ed onto a gate's EXISTING role
+// list — it never replaces one — so admin_support / cases_review_head /
+// consultations_review_head / labor_review_head keep every grant they hold today
+// and no current actor loses access. The only NARROWINGS in this batch are the two
+// the owner explicitly asked for (assignment + department transfer); each is done
+// at its own call site, not here.
+//
+// ⚠ DELIBERATELY NOT BUILT BY RELAXING canModifyCase (audit finding R7). That
+// helper's flat adminRoles list passes cases_review_head, consultations_review_head
+// and viewer UNCONDITIONALLY with no department scope, so widening it would widen
+// those three firm-wide as a side effect. This is a separate, tighter helper.
+//
+// CARVE-OUTS — enforced by the CALLER picking the tier, not by this helper:
+//   • DELETE                    — branch_manager only; never calls this.
+//   • ASSIGNMENT / REASSIGNMENT — DEPARTMENT tier (see canActAtDepartmentTier).
+//   • DEPARTMENT TRANSFER       — DEPARTMENT tier.
+//   • INTERNAL REVIEW           — the four-eyes locks in validateStageTransition and
+//                                 the dedicated /internal-review endpoints stay
+//                                 HUMAN-only and are NOT routed through here.
+//   • COMMITTEE DECISIONS       — untouched; skip-committee remains the reasoned,
+//                                 logged override for bm | own-dept head | assignee.
+//
+// "ASSIGNED TO ME" always resolves through isAssignedLawyer — never hand-rolled.
+// Cases carry FOUR assignment fields (primaryLawyerId / responsibleLawyerId /
+// assignedLawyers[]); memos / consultations / contracts carry assignedTo.
+//
+// createdBy IS NOT AN ASSIGNMENT (deliberate, and the one place this helper is
+// narrower than canModifyConsultation / canModifyContract, which do honour it):
+//   1. the model says "items ASSIGNED to them" — creating is not being assigned;
+//   2. cases and memos never honoured createdBy, consultations and contracts do —
+//      one rule across four entities is the whole point of a shared helper;
+//   3. admin_support creates most consultations and contracts, so treating
+//      createdBy as an assignment would hand them permanent assignee-tier authority
+//      over every record they ever opened — even after it is reassigned and
+//      transferred to another department. That is a firm-wide grant hiding inside a
+//      tier whose entire premise is that it is scoped.
+// Nothing is lost: canModifyConsultation / canModifyContract still honour createdBy
+// and this helper is OR-ed onto them, so creators keep exactly what they have today.
+//
+// DELEGATION: resolved through actingIdentitiesFor like every sibling gate, so a
+// delegate inherits the delegator's tier. scopeCaseId honours specific_cases
+// delegations — cases pass their own id, memos their parent case id, consultations
+// and contracts pass null (no case id ⇒ all_cases delegations only).
+type EntityTier = "manager" | "department" | "assignee";
+
+const ENTITY_TIER_RANK: Record<EntityTier, number> = { manager: 3, department: 2, assignee: 1 };
+
+// Highest tier the actor holds on this entity, or null for none.
+// departmentId is passed EXPLICITLY rather than read off the entity because memos
+// carry no department of their own — their callers resolve the PARENT CASE's.
+function entityActorTier(
+  user: CaseActorIdentity,
+  entity: any,
+  departmentId: string | null | undefined,
+  ctx?: ActingContext,
+  scopeCaseId?: string | null,
+): EntityTier | null {
+  const identities: CaseActorIdentity[] = ctx
+    ? actingIdentitiesFor(ctx, scopeCaseId ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  let best: EntityTier | null = null;
+  let bestRank = 0;
+  for (const u of identities) {
+    let tier: EntityTier | null = null;
+    if (u.role === "branch_manager") {
+      tier = "manager";
+    } else if (
+      u.role === "department_head"
+      && !!u.departmentId
+      && !!departmentId
+      && departmentId === u.departmentId
+    ) {
+      tier = "department";
+    } else if (!!entity && isAssignedLawyer({ id: u.id }, entity)) {
+      // Reached by ANY role that happens to be assigned — including a
+      // department_head of a DIFFERENT department, who correctly drops to the
+      // assignee tier rather than the department one.
+      tier = "assignee";
+    }
+    if (tier && ENTITY_TIER_RANK[tier] > bestRank) {
+      best = tier;
+      bestRank = ENTITY_TIER_RANK[tier];
+    }
+  }
+  return best;
+}
+
+// Any tier — the default for widened workflow actions.
+function canActOnEntityTiered(
+  user: CaseActorIdentity,
+  entity: any,
+  departmentId: string | null | undefined,
+  ctx?: ActingContext,
+  scopeCaseId?: string | null,
+): boolean {
+  return entityActorTier(user, entity, departmentId, ctx, scopeCaseId) !== null;
+}
+
+// DEPARTMENT tier and above — the carve-out set: assignment / reassignment and
+// department transfer. Excludes the assignee on purpose (self-reassignment is a
+// privilege-escalation loop: assign it to yourself, then hold assignee-tier
+// authority over it).
+function canActAtDepartmentTier(
+  user: CaseActorIdentity,
+  entity: any,
+  departmentId: string | null | undefined,
+  ctx?: ActingContext,
+  scopeCaseId?: string | null,
+): boolean {
+  const tier = entityActorTier(user, entity, departmentId, ctx, scopeCaseId);
+  return tier === "manager" || tier === "department";
+}
+
+// Committee-decision edges — the ONE class of forward transition the widened
+// department/assignee tiers may NOT traverse (carve-out 3). Leaving the committee
+// stage is a chair's ruling; the sanctioned override for everyone else is
+// POST /:id/skip-committee, which bypasses validateStageTransition entirely and
+// records a mandatory reason. Keyed on the FROM stage, so every exit edge is
+// covered (approve, add-notes, and the send-back-to-drafting variants).
+function isCommitteeDecisionEdge(entityType: string, currentStage: string): boolean {
+  if (entityType === "case") return currentStage === "إحالة_للجنة_المراجعة";
+  if (entityType === "memo") return currentStage === MemoStage.COMMITTEE;
+  if (entityType === "consultation") return currentStage === ConsultationStage.COMMITTEE;
+  if (entityType === "contract") return currentStage === ContractStage.COMMITTEE;
   return false;
 }
 
@@ -877,6 +1018,24 @@ function validateStageTransition(
     (entityType === "case" || entityType === "memo" || entityType === "contract")
     && !!user && !!entityData && entityData.internalReviewerId === user.id;
 
+  // WIDENED MODEL (owner-approved 2026-07-27) — an own-department department_head
+  // may act at internal review, because branch_manager can and a head is
+  // "branch_manager scoped to their own department".
+  // ⚠ FOUR-EYES IS PRESERVED (carve-out 2): they must NOT be the assigned lawyer of
+  // the entity under review, so the reviewer can still never be the author.
+  // HUMAN-ONLY like the rest of this block — deliberately NOT delegation-expanded,
+  // so a delegation can never manufacture a second pair of eyes.
+  // (memos carry no departmentId of their own; their callers thread the PARENT
+  // CASE's onto entityData before calling — see POST /api/memos/:id/advance-stage.)
+  const isOwnDeptHeadNonAuthorHuman =
+    userRole === "department_head"
+    && !!user
+    && !!user.departmentId
+    && !!entityData
+    && !!entityData.departmentId
+    && entityData.departmentId === user.departmentId
+    && !isAssignedLawyer({ id: user.id }, entityData);
+
   // Internal review stages are locked: only the designated internal reviewer
   // or the branch manager can transition out of them. HUMAN-ONLY (four-eyes) —
   // intentionally NOT delegation-expanded.
@@ -884,10 +1043,10 @@ function validateStageTransition(
     entityType === "case" &&
     (currentStage === "مراجعة_داخلية" || currentStage === "مراجعة_داخلية_للتظلم")
   ) {
-    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && !isOwnDeptHeadNonAuthorHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
-        reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
+        reason: "فقط المراجع الداخلي المعين أو رئيس القسم أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
       };
     }
   }
@@ -898,10 +1057,10 @@ function validateStageTransition(
   // endpoint already enforces this; this is belt-and-braces for the
   // generic stage-transition routes.
   if (entityType === "memo" && currentStage === "مراجعة_داخلية") {
-    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && !isOwnDeptHeadNonAuthorHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
-        reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
+        reason: "فقط المراجع الداخلي المعين أو رئيس القسم أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
       };
     }
   }
@@ -912,10 +1071,10 @@ function validateStageTransition(
   // non-reviewer employee can't approve their own draft by calling the
   // generic endpoint directly.
   if (entityType === "contract" && currentStage === ContractStage.INTERNAL_REVIEW) {
-    if (!isInternalReviewerHuman && userRole !== "branch_manager") {
+    if (!isInternalReviewerHuman && !isOwnDeptHeadNonAuthorHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
-        reason: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
+        reason: "فقط المراجع الداخلي المعين أو رئيس القسم أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية",
       };
     }
   }
@@ -1106,6 +1265,35 @@ function validateStageTransition(
   // pre-existing and intentional in every table.
   if (grantRoles("branch_manager")) {
     return { allowed: true };
+  }
+
+  // WIDENED MODEL (owner-approved 2026-07-27) — the department/assignee tiers get
+  // the SAME traversal branch_manager has above, because "same abilities, scoped"
+  // is exactly what the model says. Placed AFTER the `rule` lookup, so like the
+  // branch_manager bypass it can only traverse edges that already EXIST in the
+  // table — never an arbitrary jump. This replaces what would otherwise be ~20
+  // separate role-list edits across the four transition tables (102 rules).
+  //
+  // TWO THINGS IT CANNOT DO, by construction:
+  //   • COMMITTEE DECISIONS (carve-out 3) — isCommitteeDecisionEdge keys on the FROM
+  //     stage, so no exit edge out of the committee stage is bypassable. The
+  //     sanctioned override stays POST /:id/skip-committee, which bypasses this
+  //     function entirely and records a mandatory reason.
+  //   • INTERNAL REVIEW (carve-out 2) — the four-eyes locks run far above this point
+  //     and RETURN EARLY, so an actor who fails them never reaches here. The
+  //     assignee can therefore never approve their own draft, and the own-dept head
+  //     admitted up there is admitted only when they are NOT the author.
+  //
+  // Delegation-aware through the same grant* helpers the rest of this function uses
+  // (grantDeptHeadDept honours effectiveDeptHeadDepts; grantAssignedLawyer honours
+  // effectiveIdsFor), so a delegate inherits the delegator's traversal.
+  if (!isCommitteeDecisionEdge(entityType, currentStage)) {
+    if (grantDeptHeadDept(entityData?.departmentId)) {
+      return { allowed: true };
+    }
+    if (grantAssignedLawyer()) {
+      return { allowed: true };
+    }
   }
 
   if (!effectiveRoles.some(role => rule.allowedRoles.includes(role))) {
@@ -2146,8 +2334,17 @@ export async function registerRoutes(
   app.post("/api/cases", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
-      if (!["branch_manager", "admin_support"].includes(user.role)) {
-        return res.status(403).json({ error: "إنشاء القضايا متاح فقط لمدير الفرع والدعم الإداري" });
+      // WIDENED MODEL — a department_head may now open a case IN THEIR OWN
+      // DEPARTMENT (branch_manager / admin_support stay global). Creation cannot
+      // reach the assignee tier: a case that does not exist yet is assigned to
+      // nobody, so there is no "assigned to me" to scope by. Scoped on the TARGET
+      // department from the body, since there is no entity to read it from.
+      const createDeptId = typeof req.body?.departmentId === "string" ? req.body.departmentId : "";
+      const canCreateCase =
+        ["branch_manager", "admin_support"].includes(user.role)
+        || (user.role === "department_head" && !!user.departmentId && createDeptId === user.departmentId);
+      if (!canCreateCase) {
+        return res.status(403).json({ error: "إنشاء القضايا متاح لمدير الفرع والدعم الإداري ورئيس القسم في قسمه" });
       }
       const validatedData = insertCaseSchema.parse(req.body);
       // Carry clientRole forward explicitly — earlier the field wasn't in the
@@ -2744,8 +2941,53 @@ export async function registerRoutes(
       }
       const hasDataFields = Object.keys(req.body).some((k) => effectiveDataFields.includes(k));
 
-      if (hasDataFields && !canEditCaseData(user, existing, req.actingContext)) {
-        return res.status(403).json({ error: "تعديل بيانات القضية متاح فقط لمدير الفرع والدعم الإداري" });
+      // WIDENED MODEL — case DATA editing was branch_manager | admin_support only
+      // (canEditCaseData). Own-dept department_head and the assigned lawyer may now
+      // correct the record too; canEditCaseData is kept and OR-ed so no existing
+      // actor loses access.
+      if (
+        hasDataFields
+        && !canEditCaseData(user, existing, req.actingContext)
+        && !canActOnEntityTiered(user, existing, existing.departmentId, req.actingContext, existing.id ?? null)
+      ) {
+        return res.status(403).json({ error: "لا تملك صلاحية تعديل بيانات هذه القضية" });
+      }
+
+      // CARVE-OUT 4 — ASSIGNMENT / REASSIGNMENT is DEPARTMENT tier and above.
+      // ⚠ Checked here, INDEPENDENTLY of the isAssignmentOp branch below, and
+      // BEFORE it. isAssignmentOp requires !hasDataFields, so now that the data gate
+      // above admits the assignee, an assignee could otherwise smuggle a
+      // reassignment through by sending primaryLawyerId ALONGSIDE a data field —
+      // isAssignmentOp would be false and the assignment would ride the data gate.
+      // This guard fires on the presence of ANY assignment field, whatever else is
+      // in the body.
+      //
+      // This also CLOSES THE PRE-EXISTING HOLE the audit found: an assignment op by
+      // a non-dept_head used to fall through to canModifyCase, which grants the
+      // assigned lawyer — so an assigned lawyer could reassign their own case via
+      // the API (the UI merely hid it). Self-assignment is a privilege-escalation
+      // loop: assign it to yourself, then hold assignee-tier authority over it.
+      //
+      // Scoped on the TARGET department (body ?? current), so a head cannot assign a
+      // case INTO or OUT OF a department they do not run. Pure "drop the assignee"
+      // narrowing — admin_support and the review heads could assign before and still
+      // can, because neither is the actor this carve-out is aimed at.
+      const touchesAssignment =
+        req.body.primaryLawyerId !== undefined
+        || req.body.responsibleLawyerId !== undefined
+        || req.body.assignedLawyers !== undefined;
+      if (touchesAssignment) {
+        const assignTargetDeptId = ("departmentId" in req.body ? req.body.departmentId : existing.departmentId);
+        const adminAssignRoles = ["admin_support", "cases_review_head", "consultations_review_head"];
+        const assignRoles = req.actingContext
+          ? actingIdentitiesFor(req.actingContext, existing.id ?? null).map((i) => i.role)
+          : [user.role];
+        const assignAllowed =
+          canActAtDepartmentTier(user, existing, assignTargetDeptId, req.actingContext, existing.id ?? null)
+          || assignRoles.some((r) => adminAssignRoles.includes(r));
+        if (!assignAllowed) {
+          return res.status(403).json({ error: "يمكنك فقط إسناد قضايا قسمك" });
+        }
       }
 
       // Guard departmentId changes – use explicit presence check to catch null/empty string too.
@@ -2762,36 +3004,27 @@ export async function registerRoutes(
         const transferIdentities = req.actingContext
           ? actingIdentitiesFor(req.actingContext, existing.id ?? null)
           : [{ userId: user.id, role: user.role, departmentId: user.departmentId }];
+        // CARVE-OUT 5 — DEPARTMENT TRANSFER is DEPARTMENT tier and above. The three
+        // assigned-lawyer clauses that used to sit here are REMOVED: transfer is
+        // destructive (it resets currentStage to استلام and clears the assignment,
+        // the internal reviewer and the priority), so it is not an action the
+        // assignee should be able to take on themselves. admin_support is KEPT —
+        // routing files between departments is intake work and the owner's carve-out
+        // named only the assignee.
         const transferAllowed = transferIdentities.some((i) =>
           i.role === "branch_manager" || i.role === "admin_support" ||
-          (i.role === "department_head" && existing.departmentId === i.departmentId) ||
-          existing.primaryLawyerId === i.userId ||
-          existing.responsibleLawyerId === i.userId ||
-          (Array.isArray(existing.assignedLawyers) && existing.assignedLawyers.includes(i.userId)));
+          (i.role === "department_head" && !!i.departmentId && existing.departmentId === i.departmentId));
         if (!transferAllowed) {
           return res.status(403).json({ error: "لا تملك صلاحية تغيير قسم هذه القضية" });
         }
       }
 
-      // Check if this is an assignment operation (primaryLawyerId / assignedLawyers)
-      const isAssignmentOp = !hasDataFields && (req.body.primaryLawyerId || req.body.assignedLawyers !== undefined);
-
-      // 4c-1: a department_head assignment is dept-scoped — own role OR an
-      // inherited department_head (via delegation). The target dept must be one
-      // of the actor's effective department_head departments. No ctx →
-      // {own dept if dept_head} → byte-identical to the original own-dept check.
-      const actsAsDeptHead =
-        user.role === "department_head" ||
-        (!!req.actingContext && actingIdentitiesFor(req.actingContext, existing.id ?? null).some((i) => i.role === "department_head"));
-      if (isAssignmentOp && actsAsDeptHead) {
-        const targetDeptId = ("departmentId" in req.body ? req.body.departmentId : existing.departmentId);
-        const allowedDeptHeadDepts = req.actingContext
-          ? effectiveDeptHeadDepts(req.actingContext, existing.id ?? null)
-          : new Set<string>(user.role === "department_head" && user.departmentId ? [user.departmentId] : []);
-        if (!targetDeptId || !allowedDeptHeadDepts.has(targetDeptId)) {
-          return res.status(403).json({ error: "يمكنك فقط إسناد قضايا قسمك" });
-        }
-      } else if (!hasDataFields && !canModifyCase(user, existing, req.actingContext)) {
+      // The old `isAssignmentOp && actsAsDeptHead` dept-scope branch that used to sit
+      // here is GONE — the touchesAssignment guard above now authorises every
+      // assignment write (and does it on the same TARGET department, for ANY body
+      // shape, not just an assignment-only one). What remains is the generic
+      // modify gate for everything that is neither a data edit nor an assignment.
+      if (!hasDataFields && !canModifyCase(user, existing, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تعديل هذه القضية" });
       }
 
@@ -3672,8 +3905,28 @@ export async function registerRoutes(
 
   app.post("/api/consultations", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const validatedData = insertConsultationSchema.parse(req.body);
       const reqUser = req.user!;
+      // SECURITY (audit R8) — this route was requireAuth-ONLY: any authenticated
+      // user could create a consultation with a hand-rolled POST. The UI has
+      // always gated the "استشارة جديدة" button on
+      // permissions.canAddCasesAndConsultations, so the server now enforces the
+      // SAME shared predicate the FE reads (branch_manager | admin_support)
+      // rather than an inline copy — the two can no longer drift apart.
+      // POST /api/cases enforces the identical set (inline, :2149).
+      // department_head is deliberately NOT added: widening creation rights is
+      // permissions work, not a security fix.
+      // WIDENED MODEL — a department_head may now open a consultation IN THEIR OWN
+      // DEPARTMENT. Creation cannot reach the assignee tier (nothing is assigned yet),
+      // so it is scoped on the TARGET department from the body, exactly like
+      // POST /api/cases.
+      const createConsultDeptId = typeof req.body?.departmentId === "string" ? req.body.departmentId : "";
+      if (
+        !canAddCasesAndConsultations(reqUser.role)
+        && !(reqUser.role === "department_head" && !!reqUser.departmentId && createConsultDeptId === reqUser.departmentId)
+      ) {
+        return res.status(403).json({ error: "إنشاء الاستشارات متاح لمدير الفرع والدعم الإداري ورئيس القسم في قسمه" });
+      }
+      const validatedData = insertConsultationSchema.parse(req.body);
       // Phase-6: prefer the authenticated user id over the body-provided
       // createdBy so the activity log's performedBy is always the real
       // actor. Fall back for legacy clients that still pass it explicitly.
@@ -4148,8 +4401,19 @@ export async function registerRoutes(
       // reviewer stays actionable by branch_manager (who can also re-route it).
       const isDesignatedReviewer =
         !!consultation.internalReviewerId && consultation.internalReviewerId === reqUser.id;
-      if (!isDesignatedReviewer && reqUser.role !== "branch_manager") {
-        return res.status(403).json({ error: "فقط المراجع الداخلي المعيَّن أو مدير الفرع يمكنه اعتماد المراجعة الداخلية لهذه الاستشارة" });
+      // WIDENED MODEL — an own-department department_head may also record the
+      // decision, because branch_manager can and a head is "branch_manager scoped to
+      // their department". FOUR-EYES HOLDS (carve-out 2): the assignee check above
+      // already returned 403, so a head who is themselves the answering lawyer never
+      // reaches this line. HUMAN role only — not delegation-expanded, so a delegation
+      // can never manufacture the second pair of eyes.
+      const isOwnDeptHeadReviewer =
+        reqUser.role === "department_head"
+        && !!reqUser.departmentId
+        && !!consultation.departmentId
+        && consultation.departmentId === reqUser.departmentId;
+      if (!isDesignatedReviewer && !isOwnDeptHeadReviewer && reqUser.role !== "branch_manager") {
+        return res.status(403).json({ error: "فقط المراجع الداخلي المعيَّن أو رئيس القسم أو مدير الفرع يمكنه اعتماد المراجعة الداخلية لهذه الاستشارة" });
       }
 
       const nextStage = decision === InternalReviewDecision.PASSED
@@ -4488,6 +4752,7 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, consultation);
       const isOwnDeptHead =
         reqUser.role === "department_head"
+        && !!reqUser.departmentId
         && consultation.departmentId === reqUser.departmentId;
       const allowed =
         reqUser.role === "branch_manager"
@@ -4610,12 +4875,23 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-      if (!["admin_support", "branch_manager"].includes(reqUser.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لبدء استشارة تعقيبية" });
-      }
 
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      // WIDENED MODEL — was admin_support | branch_manager only. Own-dept
+      // department_head and the assigned lawyer may now open a follow-up cycle,
+      // which also RESOLVES the divergence the audit flagged: the CONTRACTS twin
+      // (/api/contracts/:id/start-follow-up) already used exactly this wider set,
+      // and the two modules had no reason to differ. Gate moved below the fetch so
+      // it can be scoped to the consultation.
+      if (
+        !["admin_support", "branch_manager"].includes(reqUser.role)
+        && !canActOnEntityTiered(reqUser, consultation, consultation.departmentId, req.actingContext, null)
+      ) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لبدء استشارة تعقيبية" });
+      }
+
       if (consultation.status !== "closed") {
         return res.status(400).json({ error: "يمكن بدء التعقيبية فقط من استشارة مقفلة" });
       }
@@ -4700,13 +4976,21 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
-      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لتحويل الاستشارة لقضية" });
-      }
-
       // Pre-validate (storage re-checks inside the transaction for race-safety).
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      // WIDENED MODEL — the assigned lawyer may now convert their own consultation
+      // into a case; the role list is kept and OR-ed so admin_support / dept_head /
+      // branch_manager are unchanged. Moved below the fetch so the tier can be
+      // scoped to the consultation. (The dept_head own-department check further
+      // down still applies and is what scopes the head.)
+      if (
+        !["admin_support", "department_head", "branch_manager"].includes(reqUser.role)
+        && !canActOnEntityTiered(reqUser, consultation, consultation.departmentId, req.actingContext, null)
+      ) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتحويل الاستشارة لقضية" });
+      }
       if (consultation.status !== "active") {
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
       }
@@ -4815,11 +5099,10 @@ export async function registerRoutes(
 
       // Role gate. branch_manager is global; department_head is scoped to
       // their own department, mirroring assign / early-close.
-      if (reqUser.role === "branch_manager") {
-        // ok
-      } else if (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) {
-        // ok
-      } else {
+      // WIDENED MODEL — the assigned lawyer may now extend their own consultation's
+      // delivery date. Every extension is still recorded with a mandatory reason in
+      // consultation_delivery_extensions, so the audit trail is unchanged.
+      if (!canActOnEntityTiered(reqUser, consultation, consultation.departmentId, req.actingContext, null)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتمديد التسليم" });
       }
 
@@ -4942,7 +5225,8 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه الاستشارة" });
 
@@ -4985,7 +5269,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه الاستشارة" });
 
@@ -5240,6 +5524,7 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, lawCase);
       const isOwnDeptHead =
         reqUser.role === "department_head"
+        && !!reqUser.departmentId
         && lawCase.departmentId === reqUser.departmentId;
       const allowed =
         reqUser.role === "branch_manager"
@@ -5796,7 +6081,8 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssignedLawyer;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه القضية" });
 
@@ -5847,7 +6133,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssignedLawyer;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه القضية" });
 
@@ -6017,7 +6303,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
 
@@ -6067,7 +6353,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
 
@@ -6109,7 +6395,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && consultation.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
         consultation.assignedTo === reqUser.id;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز هذه المرحلة" });
 
@@ -6802,8 +7088,22 @@ export async function registerRoutes(
       // Locked: only the designated internal reviewer or branch_manager
       // can act. Same shape as the cases internal-review gate.
       const isReviewer = contract.internalReviewerId === reqUser.id;
-      if (!isReviewer && reqUser.role !== "branch_manager") {
-        return res.status(403).json({ error: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية" });
+      // WIDENED MODEL — own-department department_head may act too (see the
+      // consultations twin). FOUR-EYES (carve-out 2) is enforced HERE rather than by
+      // an earlier guard, because this endpoint has no assignee pre-check: a head who
+      // is the contract's own assignedTo is excluded, so the reviewer can never be
+      // the author. HUMAN role only — not delegation-expanded.
+      // This also RESOLVES the FE/server mismatch the audit found: contracts.tsx
+      // canDoInternalReview already showed this button to an own-dept head, and the
+      // server used to 403 them.
+      const isOwnDeptHeadReviewer =
+        reqUser.role === "department_head"
+        && !!reqUser.departmentId
+        && !!contract.departmentId
+        && contract.departmentId === reqUser.departmentId
+        && !isAssignedLawyer(reqUser, contract);
+      if (!isReviewer && !isOwnDeptHeadReviewer && reqUser.role !== "branch_manager") {
+        return res.status(403).json({ error: "فقط المراجع الداخلي المعين أو رئيس القسم أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية" });
       }
       const nextStage = decision === InternalReviewDecision.PASSED
         ? ContractStage.COMMITTEE
@@ -7068,6 +7368,7 @@ export async function registerRoutes(
       const isLawyer = isAssignedLawyer(reqUser, contract);
       const isOwnDeptHead =
         reqUser.role === "department_head"
+        && !!reqUser.departmentId
         && contract.departmentId === reqUser.departmentId;
       const isBranchManager = reqUser.role === "branch_manager";
       if (!isLawyer && !isOwnDeptHead && !isBranchManager) {
@@ -7258,11 +7559,19 @@ export async function registerRoutes(
   app.post("/api/contracts/:id/mark-sent", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
-      if (!["admin_support", "branch_manager"].includes(reqUser.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لإرسال العقد" });
-      }
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+      // WIDENED MODEL — was admin_support | branch_manager. Own-dept department_head
+      // and the assigned lawyer may now confirm the send. Gate moved below the fetch
+      // so it can be scoped to the contract. (This endpoint currently has NO frontend
+      // caller — see the report — so the widening is forward-looking, not a live
+      // behaviour change.)
+      if (
+        !["admin_support", "branch_manager"].includes(reqUser.role)
+        && !canActOnEntityTiered(reqUser, contract, contract.departmentId, req.actingContext, null)
+      ) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإرسال العقد" });
+      }
       if (contract.status !== "active") {
         return res.status(400).json({ error: "العقد ليس نشطاً" });
       }
@@ -7295,7 +7604,7 @@ export async function registerRoutes(
   const allowContractPauseLike = (reqUser: any, contract: any): boolean =>
     reqUser.role === "branch_manager"
     || reqUser.role === "admin_support"
-    || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId)
+    || (reqUser.role === "department_head" && !!reqUser.departmentId && contract.departmentId === reqUser.departmentId)
     || contract.assignedTo === reqUser.id;
 
   app.post("/api/contracts/:id/pause", requireAuth, async (req: AuthRequest, res) => {
@@ -7849,7 +8158,7 @@ export async function registerRoutes(
             att.uploadedBy === reqUser.id
             || reqUser.role === "branch_manager"
             || reqUser.role === "admin_support"
-            || (reqUser.role === "department_head" && contract.departmentId === reqUser.departmentId)
+            || (reqUser.role === "department_head" && !!reqUser.departmentId && contract.departmentId === reqUser.departmentId)
           );
       if (!allowed) {
         return res.status(403).json({
@@ -7906,7 +8215,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssigned;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
 
@@ -7968,7 +8277,7 @@ export async function registerRoutes(
       const allowed =
         reqUser.role === "branch_manager" ||
         reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && lawCase.departmentId === reqUser.departmentId) ||
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
         isAssigned;
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
 
@@ -8338,9 +8647,21 @@ export async function registerRoutes(
       const isAssignedReviewer =
         !!memo.internalReviewerId && memo.internalReviewerId === reqUser.id;
       const isBranchManager = reqUser.role === "branch_manager";
-      if (!isAssignedReviewer && !isBranchManager) {
+      // WIDENED MODEL — own-department department_head may act too (see the
+      // consultations/contracts twins). Memos carry no departmentId, so the scope is
+      // resolved through the PARENT CASE, the memo module's standard rule.
+      // FOUR-EYES (carve-out 2): a head who is the memo's own assignee is excluded,
+      // so the reviewer can never be the author. HUMAN role only.
+      const memoReviewParentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+      const isOwnDeptHeadReviewer =
+        reqUser.role === "department_head"
+        && !!reqUser.departmentId
+        && !!memoReviewParentCase?.departmentId
+        && memoReviewParentCase.departmentId === reqUser.departmentId
+        && !isAssignedLawyer(reqUser, memo);
+      if (!isAssignedReviewer && !isBranchManager && !isOwnDeptHeadReviewer) {
         return res.status(403).json({
-          error: "فقط المراجع الداخلي المعين أو مدير الفرع يمكنهم تسجيل قرار المراجعة الداخلية",
+          error: "فقط المراجع الداخلي المعين أو رئيس القسم أو مدير الفرع يمكنهم تسجيل قرار المراجعة الداخلية",
         });
       }
 
@@ -10773,7 +11094,9 @@ export async function registerRoutes(
         : user.role === "branch_manager";
       const isRoutedHead = ctx
         ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
-        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+        // !!user.departmentId — routedDepartmentId is nullable, so an unrouted task
+        // must not be claimable by a department_head with no department of their own.
+        : (user.role === "department_head" && !!user.departmentId && user.departmentId === task.routedDepartmentId);
       if (!isManager && !isRoutedHead) {
         return res.status(403).json({ error: "لا تملك صلاحية إسناد هذه المهمة" });
       }
@@ -10861,7 +11184,9 @@ export async function registerRoutes(
         : user.role === "branch_manager";
       const isRoutedHead = ctx
         ? effectiveDeptHeadDepts(ctx, scopeCaseId).has(task.routedDepartmentId)
-        : (user.role === "department_head" && user.departmentId === task.routedDepartmentId);
+        // !!user.departmentId — routedDepartmentId is nullable, so an unrouted task
+        // must not be claimable by a department_head with no department of their own.
+        : (user.role === "department_head" && !!user.departmentId && user.departmentId === task.routedDepartmentId);
       if (!isManager && !isRoutedHead) {
         return res.status(403).json({ error: "لا تملك صلاحية اعتماد هذه المهمة" });
       }
@@ -11088,10 +11413,6 @@ export async function registerRoutes(
     try {
       const user = req.user!;
       if (!user) return res.status(401).json({ error: "يجب تسجيل الدخول" });
-      if (!canCreateMemos(user.role)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء المذكرات" });
-      }
-
       const validatedData = insertMemoSchema.parse(req.body);
 
       // Memo assignment rule: ALWAYS resolve from the case. The memo lawyer
@@ -11099,8 +11420,24 @@ export async function registerRoutes(
       // so admin_support creating a memo doesn't get auto-assigned. If the
       // case has no lawyer, leave it empty.
       let resolvedAssignedTo = "";
+      const relatedCase = validatedData.caseId ? await storage.getCaseById(validatedData.caseId) : null;
+
+      // WIDENED MODEL — creation was canCreateMemos only (branch_manager |
+      // cases_review_head | department_head | admin_support, all firm-wide). A lawyer
+      // ASSIGNED TO THE PARENT CASE may now raise a memo on it: the memo hangs off an
+      // item already assigned to them. Evaluated against the PARENT CASE because a
+      // memo has no department and no assignee of its own until it exists.
+      // canCreateMemos is kept and OR-ed, so nobody loses access. A memo with no
+      // caseId keeps the original rule — there is no parent to scope by.
+      if (
+        !canCreateMemos(user.role)
+        && !(!!relatedCase && canActOnEntityTiered(
+          user, relatedCase, relatedCase.departmentId, req.actingContext, relatedCase.id ?? null))
+      ) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء المذكرات" });
+      }
+
       if (validatedData.caseId) {
-        const relatedCase = await storage.getCaseById(validatedData.caseId);
         if (relatedCase && (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived)) {
           return res.status(400).json({ error: "لا يمكن إضافة مذكرات لقضية مغلقة أو مؤرشفة" });
         }
@@ -11216,6 +11553,70 @@ export async function registerRoutes(
 
       if (updateData.status && !canChangeStatus) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
+      }
+
+      // SECURITY (audit R8) — the NON-status fields were completely UNGATED.
+      // Only `status` was ever checked above, so title / description / priority /
+      // assignedTo / deadline / content / fileLink / reviewNotes / reviewerId were
+      // writable by ANY authenticated non-viewer on ANY memo in the firm (a live
+      // IDOR; only the viewerWriteGuard in server/index.ts stopped viewers).
+      //
+      // Gated with canActOnMemo — the memo module's central authority helper —
+      // rather than a new hand-rolled rule. It already does the two things this
+      // route needs and gets wrong when hand-rolled: it resolves department_head
+      // through the PARENT CASE (memos carry no departmentId of their own) and it
+      // guards memo.assignedTo's "" unassigned sentinel (assigned_to is NOT NULL).
+      //
+      // ADMIN SET = the widest existing memo-action set — POST /api/memos/:id/cancel's
+      // ["branch_manager","admin_support","cases_review_head"] — PLUS labor_review_head
+      // so BOTH committee chairs match. A memo's committee is chaired by
+      // cases_review_head, or by labor_review_head for a labor-department memo
+      // (ALLOWED_MEMO_TRANSITIONS + the dept-routing guard in /advance-stage), and the
+      // update schema exposes the committee's own reviewNotes / reviewerId fields.
+      // Without labor_review_head the labor chair could APPROVE a labor memo through
+      // the status gate above (canReviewMemos includes it) but not annotate it.
+      //
+      // Parent-case lawyers who are NOT the memo assignee are deliberately NOT
+      // admitted: canActOnMemo excludes them, and memos.tsx canCancelMemo documents
+      // that exclusion as a deliberate fix (the old gate showed them a button the
+      // server 403'd). The status gate above keeps its own, wider rule untouched.
+      //
+      // Evaluated on the ZOD-VALIDATED keys only, before the handler adds its own
+      // server-side fields (startedAt / completedAt / submittedAt / reviewerId below),
+      // so those never trip this gate.
+      const nonStatusFields = Object.keys(updateData).filter((k) => k !== "status");
+      if (nonStatusFields.length > 0) {
+        const canEditMemoFields = await canActOnMemo(user, memo, req.actingContext, [
+          "branch_manager",
+          "admin_support",
+          "cases_review_head",
+          "labor_review_head",
+        ]);
+        if (!canEditMemoFields) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لتعديل هذه المذكرة" });
+        }
+      }
+
+      // CARVE-OUT 4 — REASSIGNMENT is DEPARTMENT tier and above, so it needs a
+      // check of its own on top of the field gate above. That gate admits the memo
+      // ASSIGNEE, which for assignedTo would be the same privilege-escalation loop
+      // the cases side has: the assignee hands the memo to themselves (or away) and
+      // keeps assignee-tier authority over it. Scoped through the PARENT CASE's
+      // department, the memo module's standard dept resolution. admin_support and
+      // cases_review_head keep the grant they already had via the field gate.
+      if (updateData.assignedTo !== undefined) {
+        const reassignParentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+        const reassignAdminRoles = ["admin_support", "cases_review_head", "labor_review_head"];
+        const reassignRoles = req.actingContext
+          ? actingIdentitiesFor(req.actingContext, memo.caseId ?? null).map((i) => i.role)
+          : [user.role];
+        const reassignAllowed =
+          canActAtDepartmentTier(
+            user, memo, reassignParentCase?.departmentId ?? null, req.actingContext, memo.caseId ?? null)
+          || reassignRoles.some((r) => reassignAdminRoles.includes(r));
+        if (!reassignAllowed) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لإسناد هذه المذكرة" });
+        }
       }
 
       // Validate assignedTo user is active if being changed
