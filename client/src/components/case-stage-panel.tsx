@@ -68,6 +68,13 @@ export function CaseStagePanel({
       judgmentDirection={judgmentDirectionOf(
         findLatestJudgmentHearing(getHearingsByCase(caseItem.id)),
       )}
+      // WHY the case closed, for the مقفلة terminal badge. Read straight off the
+      // case row — unlike judgmentDirection above it needs no hearing lookup, but it
+      // is passed the same way because the bar takes no contexts and both list rows
+      // and the details dialog carry these two fields (the list endpoint strips only
+      // stageHistory).
+      closureReason={caseItem.closureReason}
+      closureReasonOther={caseItem.closureReasonOther}
       departmentName={getDepartmentName(caseItem.departmentId || "")}
       disabled={
         stageTransitioning

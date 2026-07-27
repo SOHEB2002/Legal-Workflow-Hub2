@@ -80,8 +80,9 @@ import {
   findPrimaryJudgmentHearing,
   judgmentDirectionOf,
   weAreTheAppellant,
+  ClosureReasonLabels,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, PriorityType, Attachment } from "@shared/schema";
+import type { LawCase, CaseStageValue, PriorityType, Attachment, ClosureReasonValue } from "@shared/schema";
 
 // Stages that mark a REAL trip through internal review. Moved here verbatim with
 // the dialog — the actions tab's "إرجاع من المراجعة الداخلية" block is its only
@@ -795,7 +796,16 @@ export function CaseDetailsDialog({
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                         <div>
                           <Label className="text-muted-foreground">السبب</Label>
-                          <p className="font-medium">{selectedCase.closureReason === "أخرى" ? selectedCase.closureReasonOther || "أخرى" : selectedCase.closureReason?.replace(/_/g, " ")}</p>
+                          {/* KEPT — this is the DETAIL view; the stage badge is the
+                              at-a-glance version and shows a truncated form of the
+                              same thing. Label source switched from a naive
+                              underscore-replace to the shared ClosureReasonLabels so
+                              the two can never drift; an unrecognised value (the
+                              scheduler writes a free-text sentence) still falls back
+                              to the raw string, untruncated here. */}
+                          <p className="font-medium">{selectedCase.closureReason === "أخرى"
+                            ? selectedCase.closureReasonOther || ClosureReasonLabels["أخرى"]
+                            : (ClosureReasonLabels[selectedCase.closureReason as ClosureReasonValue] ?? selectedCase.closureReason)}</p>
                         </div>
                       </div>
                     </div>
