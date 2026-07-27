@@ -1047,13 +1047,43 @@ export default function HearingsPage() {
                       const caseInfo = getCaseInfo(hearing.caseId);
                       const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
                       const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
+                      // FREE WIN — PATCH /api/hearings/:id is gated by canModifyCase
+                      // on the PARENT CASE, which has always admitted the own-dept
+                      // department_head and the case's assigned lawyers; the UI hid
+                      // the button from both. The hearings list is already scoped to
+                      // cases the user can see, so surfacing it here matches the
+                      // server. NOTE: hearing ACTIONS (result / report / close /
+                      // cancel) are NOT touched — canActOnHearing has no department
+                      // logic at all and is a separate batch.
+                      // getCaseInfo returns a display projection with no department or
+                      // lawyer fields — read the raw case for the permission check.
+                      const parentCaseForHearing = getCaseById(hearing.caseId);
+                      const isCaseLawyerForHearing =
+                        !!user && !!parentCaseForHearing && (
+                          parentCaseForHearing.primaryLawyerId === user.id ||
+                          parentCaseForHearing.responsibleLawyerId === user.id ||
+                          (Array.isArray(parentCaseForHearing.assignedLawyers)
+                            && parentCaseForHearing.assignedLawyers.includes(user.id))
+                        );
+                      const isOwnDeptHeadForHearing =
+                        user?.role === "department_head" &&
+                        !!user.departmentId &&
+                        !!parentCaseForHearing?.departmentId &&
+                        parentCaseForHearing.departmentId === user.departmentId;
                       const canEditHearing =
                         user?.role === "branch_manager" ||
-                        user?.role === "admin_support";
+                        user?.role === "admin_support" ||
+                        isOwnDeptHeadForHearing ||
+                        isCaseLawyerForHearing;
                       const canDeleteHearing =
                         user?.role === "branch_manager" ||
                         user?.role === "admin_support";
-                      const canReassignAttendingLawyer = user?.role === "department_head";
+                      // MISMATCH FIX — was department_head ONLY, so a branch_manager
+                      // could not reassign the attending lawyer from the UI even
+                      // though PATCH /api/hearings/:id (canModifyCase) accepts them.
+                      // Scoped the head to the parent case's department while here.
+                      const canReassignAttendingLawyer =
+                        user?.role === "branch_manager" || isOwnDeptHeadForHearing;
                       // "جلسة مُعلَّمة" — the SAME two roles the server's
                       // requireRole gate enforces, so visibility === authorization.
                       // Everyone else still SEES the flag (tint + badge); only

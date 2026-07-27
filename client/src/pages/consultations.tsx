@@ -208,6 +208,13 @@ function getAdvanceTarget(
   // Department head can only act inside their own department
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return null;
   const isAssignedLawyer = !!consultation.assignedTo && consultation.assignedTo === userId;
+  // WIDENED MODEL — mirrors the tier bypass added to validateStageTransition:
+  // own-dept department_head and the assigned lawyer may traverse any edge that is
+  // NOT a committee decision. None of the LINEAR_ADVANCE_* tables contains a
+  // committee edge (those run through the dedicated committee dialog), so the tier
+  // applies to every rule reachable here. Chiefly this unblocks READY →
+  // CLOSED_FINAL / COMPLETED → CLOSED_FINAL, which were admin_support|branch_manager.
+  if (consultationActorTier(consultation, userRole, userId, userDeptId)) return rule.target;
   const effectiveRoles = isAssignedLawyer ? [userRole, "assigned_lawyer"] : [userRole];
   if (!effectiveRoles.some(r => rule.roles.includes(r))) return null;
   return rule.target;
@@ -337,9 +344,30 @@ function canDoTakeNotesOutcome(
 // Dept_head additionally scoped to their own department here. The endpoint
 // also rejects non-active or COMPLETED consultations; we mirror that here
 // so the dropdown doesn't show a doomed action.
+// FE mirror of the server's entityActorTier (routes.ts, "widened authority model").
+// Same three tiers, same non-empty-department guard, and the same decision that
+// createdBy is NOT an assignment. Every widened consultation gate routes through
+// this so the page cannot drift from the server.
+function consultationActorTier(
+  c: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (userRole === "branch_manager") return true;
+  if (
+    userRole === "department_head"
+    && !!userDeptId
+    && !!c.departmentId
+    && c.departmentId === userDeptId
+  ) return true;
+  return !!c.assignedTo && c.assignedTo === userId;
+}
+
 function canConvertToCase(
   consultation: Consultation,
   userRole: string,
+  userId: string,
   userDeptId: string | null,
 ): boolean {
   if (consultation.status !== "active") return false;
@@ -348,9 +376,10 @@ function canConvertToCase(
   // original consultation is already done; cycles are post-closure
   // follow-ups, not new-case material).
   if ((consultation.followUpCount ?? 0) > 0) return false;
-  if (userRole === "branch_manager" || userRole === "admin_support") return true;
-  if (userRole === "department_head" && consultation.departmentId === userDeptId) return true;
-  return false;
+  if (userRole === "admin_support") return true;
+  // WIDENED MODEL — + the assigned lawyer; branch_manager and own-dept
+  // department_head come through the tier helper unchanged.
+  return consultationActorTier(consultation, userRole, userId, userDeptId);
 }
 
 // Arabic display labels for ConsultationClosureReason. Schema keeps the
@@ -544,14 +573,18 @@ function canEarlyClose(
 }
 
 // FE permission gate mirroring POST /api/consultations/:id/start-follow-up.
-// Admin-only by design — opening a new cycle is an administrative action,
-// matching the gating on the WRITTEN closure step.
+// WIDENED MODEL — was admin-only. Own-dept department_head and the assigned
+// lawyer may now open a cycle, which also aligns this with the CONTRACTS twin
+// (contracts.tsx canStartFollowUp), which already used the wider set.
 function canStartFollowUp(
   consultation: Consultation,
   userRole: string,
+  userId: string,
+  userDeptId: string | null,
 ): boolean {
   if (consultation.status !== "closed") return false;
-  return userRole === "admin_support" || userRole === "branch_manager";
+  if (userRole === "admin_support") return true;
+  return consultationActorTier(consultation, userRole, userId, userDeptId);
 }
 
 // Mirrors the role gate on PATCH /api/consultations/:id for the
@@ -1263,12 +1296,12 @@ export default function ConsultationsPage() {
 
   // Phase-5: matches the server gate on POST /extend-delivery —
   // department_head (own dept) and branch_manager only.
+  // WIDENED MODEL — + the assigned lawyer (mirrors POST /:id/extend-delivery).
+  // Every extension still records a mandatory reason, so the audit trail is intact.
   const canExtendDelivery = (c: Consultation): boolean => {
     if (!user) return false;
     if (c.status !== "active") return false;
-    if (user.role === "branch_manager") return true;
-    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
-    return false;
+    return consultationActorTier(c, user.role, user.id, user.departmentId);
   };
 
   const openExtendDialog = (c: Consultation) => {
@@ -1456,11 +1489,13 @@ export default function ConsultationsPage() {
   // dialog — record administration is the same audience as assign/transfer.)
   // Deliberately NOT stage- or status-gated: correcting a mistyped client on a
   // closed consultation is legitimate, and none of these fields is workflow.
+  // FREE WIN (widened model) — the assigned lawyer was excluded here even though
+  // the SERVER's canModifyConsultation has always allowed them (and the creator) to
+  // PATCH these exact fields. Now mirrors the server.
   const canEditConsultation = (c: Consultation) => {
     if (!user) return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
-    return false;
+    return consultationActorTier(c, user.role, user.id, user.departmentId);
   };
 
   const [editConsultation, setEditConsultation] = useState<Consultation | null>(null);
@@ -1937,7 +1972,11 @@ export default function ConsultationsPage() {
           <h1 className="text-2xl font-bold text-foreground">إدارة الاستشارات</h1>
           <p className="text-muted-foreground">متابعة الاستشارات القانونية</p>
         </div>
-        {permissions.canAddCasesAndConsultations && (
+        {/* WIDENED MODEL — a department_head may open a consultation in THEIR OWN
+            department (mirrors POST /api/consultations, which scopes on the body's
+            target department). */}
+        {(permissions.canAddCasesAndConsultations
+          || (user?.role === "department_head" && !!user.departmentId)) && (
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-add-consultation" onClick={resetForm}>
@@ -2536,7 +2575,7 @@ export default function ConsultationsPage() {
                               تسجيل نتيجة الأخذ بالملاحظات
                             </DropdownMenuItem>
                           )}
-                          {user && canConvertToCase(consultation, user.role, user.departmentId) && (
+                          {user && canConvertToCase(consultation, user.role, user.id, user.departmentId) && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
@@ -2864,7 +2903,7 @@ export default function ConsultationsPage() {
                         نتيجة الأخذ بالملاحظات
                       </Button>
                     )}
-                    {canConvertToCase(selectedConsultation, user.role, user.departmentId) && (
+                    {canConvertToCase(selectedConsultation, user.role, user.id, user.departmentId) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -2887,7 +2926,7 @@ export default function ConsultationsPage() {
                         إغلاق مبكر
                       </Button>
                     )}
-                    {canStartFollowUp(selectedConsultation, user.role) && (
+                    {canStartFollowUp(selectedConsultation, user.role, user.id, user.departmentId) && (
                       <Button
                         size="sm"
                         variant="outline"

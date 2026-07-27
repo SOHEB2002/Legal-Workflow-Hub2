@@ -643,6 +643,37 @@ export default function MemosPage() {
   // dept_head (own dept, resolved via parent case) / assigned lawyer.
   // Memos don't carry departmentId directly, so dept_head needs the
   // parent case lookup.
+  // WIDENED MODEL — memo creation was canCreateMemos only. A lawyer assigned to
+  // ANY case may now raise a memo on it (the server scopes the check to the PARENT
+  // CASE chosen in the dialog; the button just needs to know whether the user has
+  // at least one case to raise one against, otherwise the dialog would be empty).
+  const canCreateMemosWidened =
+    !!user && (
+      canCreateMemos(user.role)
+      || cases.some((c) =>
+        c.primaryLawyerId === user.id
+        || c.responsibleLawyerId === user.id
+        || (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id)))
+    );
+
+  // MISMATCH FIX — memo reassign was department_head ONLY, so a branch_manager
+  // could not reassign a memo from the UI at all, and admin_support / the review
+  // heads could not either, though every one of them is accepted by the server.
+  // Mirrors the server's carve-out-4 gate on PATCH /api/memos/:id assignedTo:
+  // department tier (branch_manager | own-dept head, resolved through the parent
+  // case) plus the admin roles. The memo ASSIGNEE is deliberately excluded — that
+  // is the self-reassignment loop the carve-out exists to close.
+  const canReassignMemo = (memo: Memo): boolean => {
+    if (!user) return false;
+    if (user.role === "branch_manager") return true;
+    if (["admin_support", "cases_review_head", "labor_review_head"].includes(user.role)) return true;
+    if (user.role === "department_head") {
+      const parent = cases.find((c) => c.id === memo.caseId);
+      return !!parent && !!user.departmentId && parent.departmentId === user.departmentId;
+    }
+    return false;
+  };
+
   const canPauseMemo = (memo: Memo): boolean => {
     if (!user) return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
@@ -1133,7 +1164,7 @@ export default function MemosPage() {
           <Badge variant="outline" className="border-destructive/30 text-destructive" data-testid="badge-overdue-count">
             متأخرة: {overdueMemos.length}
           </Badge>
-          {user && canCreateMemos(user.role) && (
+          {user && canCreateMemosWidened && (
             <Button data-testid="button-add-memo" onClick={() => { resetForm(); setIsAddDialogOpen(true); }}>
               <Plus className="w-4 h-4 ml-2" />
               إضافة مذكرة
@@ -1402,7 +1433,7 @@ export default function MemosPage() {
                                 <Eye className="w-4 h-4 ml-2" />
                                 عرض التفاصيل
                               </DropdownMenuItem>
-                              {user?.role === "department_head" && !["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && (
+                              {canReassignMemo(memo) && !["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && (
                                 <DropdownMenuItem
                                   data-testid={`button-reassign-memo-${memo.id}`}
                                   onClick={() => openReassignMemoDialog(memo)}
