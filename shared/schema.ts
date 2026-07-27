@@ -1677,6 +1677,14 @@ export const ClosureReason = {
   OTHER: "أخرى",
 } as const;
 
+// The settlement-link timeout close (server/scheduler.ts) writes this free-text
+// sentence into closure_reason — the column is varchar(255) free text, and this
+// value is deliberately NOT a ClosureReason enum member. Lifted here so
+// resolveCaseOutcome can recognise it (it maps to تعذّر الصلح) and so the scheduler
+// and the resolver can never drift on a hand-copied Arabic string.
+export const SettlementLinkMissingClosureReason =
+  "لم نُزود برابط جلسة الصلح، ومر 15 يوم دون تحديث من العميل";
+
 export type ClosureReasonValue = typeof ClosureReason[keyof typeof ClosureReason];
 
 export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
@@ -4646,11 +4654,11 @@ export type CaseOutcomeTone = "success" | "warning" | "danger" | "neutral";
 
 export interface CaseOutcome {
   kind: CaseOutcomeKindValue;
-  /** Plain Arabic sentence, outcome first. Empty for NONE-with-nothing-to-say. */
-  text: string;
+  /** SHORT badge label — the RESULT only, no degree, no finality, no parentheses.
+      null when there is no substantive outcome and the CLOSURE REASON should be
+      shown instead (see caseClosureBadgeSuffix). */
+  label: string | null;
   tone: CaseOutcomeTone;
-  /** Whether the case has actually ENDED (vs a live case that already has a ruling). */
-  concluded: boolean;
 }
 
 type OutcomeCaseInput = {
@@ -4681,43 +4689,18 @@ export function resolveCaseOutcome(
   const reason = String(lawCase.closureReason || "").trim();
   const isClosed = stage === "مقفلة";
 
-  // 1. JUDGMENT — the ruling is the result, whether or not the case has closed yet.
-  const judgmentHearing = findLatestJudgmentHearing(hearings || []);
-  const direction = judgmentDirectionOf(judgmentHearing);
+  // 1. JUDGMENT — the ruling is the result. DEGREE AND FINALITY ARE DELIBERATELY
+  // NOT REPORTED: once a case is over, "ابتدائي / استئنافي / نهائي" is procedural
+  // detail nobody reading a closed file needs, and spelling it out produced
+  // unusable Arabic ("صدر بها حكم ابتدائي (نهائي) لصالحنا"). The direction is the
+  // whole answer. The OPEN judgment stage badges still name the stage the case is
+  // in — a different question, deliberately untouched.
+  const direction = judgmentDirectionOf(findLatestJudgmentHearing(hearings || []));
   if (direction) {
-    // DEGREE is never stored — per the model correction it is derived from the
-    // case PATH (منظورة → ابتدائي, منظورة_استئناف → استئنافي). Any ONE of three
-    // signals settles it, so a stripped stageHistory (the list endpoint drops it)
-    // does not lose the degree: the appeal stage in the history, the case sitting
-    // on it now, or a SECOND judgment hearing — which only the appeal path can
-    // produce.
-    const judgmentCount = (hearings || []).filter((h) => h && h.result === "حكم").length;
-    const isAppealRuling =
-      stageWasReached(lawCase, "منظورة_استئناف") || judgmentCount >= 2;
-    const degree = isAppealRuling ? "استئنافي" : "ابتدائي";
-    // FINALITY is a SEPARATE property from degree (a3f7897): the opposite of
-    // ابتدائي is استئنافي, while نهائي answers "can this still be objected to?".
-    // Stating only the degree made this line look like it contradicted the stage
-    // badge ("محكوم حكم نهائي") and the hearing's own finality field — both of which
-    // say نهائي — for the perfectly ordinary case of a FIRST-INSTANCE ruling that is
-    // ALSO final (منظورة + غير قابل للاعتراض → محكوم_حكم_نهائي directly). Both
-    // properties are now stated, so the surfaces agree instead of appearing to
-    // disagree. An APPEAL ruling is final by nature, so the qualifier is redundant
-    // there and suppressed; an unknown judgmentFinal adds nothing.
-    const finalityNote = isAppealRuling
-      ? ""
-      : judgmentHearing?.judgmentFinal === true
-        ? " (نهائي)"
-        : judgmentHearing?.judgmentFinal === false
-          ? " (قابل للاعتراض)"
-          : "";
-    // "انتهت" only when the case really ended; a live judged case "صدر بها حكم".
-    const lead = isClosed ? "انتهت بحكم" : "صدر بها حكم";
     return {
       kind: CaseOutcomeKind.JUDGMENT,
-      text: `${lead} ${degree}${finalityNote} ${direction}`,
+      label: `حكم ${direction}`,
       tone: direction === "لصالحنا" ? "success" : direction === "جزئي" ? "warning" : "danger",
-      concluded: isClosed,
     };
   }
 
@@ -4725,87 +4708,79 @@ export function resolveCaseOutcome(
   const reachedCollection = stageWasReached(lawCase, "تحصيل");
   const wentThroughConciliation = stageWasReached(lawCase, "مداولة_الصلح");
   if ((reachedCollection && wentThroughConciliation) || lawCase.taradiStatus === "تم_الصلح") {
-    return {
-      kind: CaseOutcomeKind.SETTLEMENT_SUCCESS,
-      text: "انتهت بالصلح",
-      tone: "success",
-      concluded: isClosed || reachedCollection,
-    };
+    return { kind: CaseOutcomeKind.SETTLEMENT_SUCCESS, label: "صلح", tone: "success" };
   }
 
   // 3. SETTLEMENT FAILED — an ENDING only; mid-case failure is just a step.
+  // The SETTLEMENT-LINK TIMEOUT belongs here: the scheduler closes a settlement-only
+  // case after 15 days when the client never sent the conciliation-session link, and
+  // its closureReason is a free-text SENTENCE, not an enum member. Substantively the
+  // settlement never happened, so it reads "تعذّر الصلح" like any other failed
+  // settlement — and, just as important, matching it here is what keeps that whole
+  // sentence off the badge. The full text stays in the سبب الإغلاق detail block.
   if (reason === ClosureReason.SETTLEMENT_FAILED
+    || reason === SettlementLinkMissingClosureReason
     || (isClosed && stageWasReached(lawCase, "أغلق_طلب_الصلح"))) {
-    return {
-      kind: CaseOutcomeKind.SETTLEMENT_FAILED,
-      text: "انتهت دون صلح",
-      tone: "warning",
-      concluded: true,
-    };
+    return { kind: CaseOutcomeKind.SETTLEMENT_FAILED, label: "تعذّر الصلح", tone: "warning" };
   }
 
-  // 4. STRUCK OFF.
+  // 4. STRUCK OFF — covers the scheduler's post-deadline close, whose
+  // closureReason IS the enum member شطب_بدون_إعادة_قيد.
   if (stage === "مشطوبة" || reason === ClosureReason.STRUCK_OFF_EXPIRED) {
-    return {
-      kind: CaseOutcomeKind.STRUCK_OFF,
-      text: "شُطبت الدعوى",
-      tone: "danger",
-      concluded: isClosed || stage === "مشطوبة",
-    };
+    return { kind: CaseOutcomeKind.STRUCK_OFF, label: "شطب", tone: "danger" };
   }
 
-  // 5. ADMINISTRATIVE — the closure reason IS the whole story.
+  // 5. ADMINISTRATIVE — no substantive result; the closure REASON is the whole
+  // story, so the label is null and the badge composer falls back to it.
   const administrativeReasons: string[] = [
     ClosureReason.CLIENT_WAIVER,
     ClosureReason.CONTRACT_NOT_RENEWED,
     ClosureReason.OPPONENT_PAID,
   ];
   if (isClosed && administrativeReasons.includes(reason)) {
-    return {
-      kind: CaseOutcomeKind.ADMINISTRATIVE,
-      text: `انتهت — ${ClosureReasonLabels[reason as ClosureReasonValue] ?? reason}`,
-      tone: reason === ClosureReason.OPPONENT_PAID ? "success" : "neutral",
-      concluded: true,
-    };
+    return { kind: CaseOutcomeKind.ADMINISTRATIVE, label: null, tone: "neutral" };
   }
 
-  // 6. NONE — nothing to say. Never invent an outcome.
-  return {
-    kind: CaseOutcomeKind.NONE,
-    text: isClosed ? "أُغلقت دون نتيجة مسجلة" : "",
-    tone: "neutral",
-    concluded: isClosed,
-  };
+  // 6. NONE — nothing substantive. Never invent an outcome.
+  return { kind: CaseOutcomeKind.NONE, label: null, tone: "neutral" };
 }
 
-// Closure reasons that would only REPEAT the outcome sentence, so the outcome line
-// must not append them. Everything else (تم_التحصيل, سداد_الخصم, أخرى → the free
-// text) genuinely adds "…and this is how it was wrapped up".
-const OUTCOME_REDUNDANT_CLOSURE_REASONS: string[] = [
-  ClosureReason.JUDGMENT_AGAINST,      // the direction is already in the sentence
-  ClosureReason.PRIMARY_NO_APPEAL,     // ditto — degree + direction already said it
-  ClosureReason.SETTLEMENT_FAILED,     // "انتهت دون صلح"
-  ClosureReason.STRUCK_OFF_EXPIRED,    // "شُطبت الدعوى"
-  ClosureReason.CLIENT_WAIVER,         // already the ADMINISTRATIVE sentence
-  ClosureReason.CONTRACT_NOT_RENEWED,  // ditto
-  ClosureReason.OPPONENT_PAID,         // ditto
-];
+// Keeps the badge glanceable: closureReasonOther is varchar(500).
+const CLOSURE_BADGE_MAX_CHARS = 40;
 
-/** The closure-reason suffix for the outcome line, or null when it would repeat it. */
-export function outcomeClosureSuffix(
-  outcome: CaseOutcome,
-  closureReason: string | null | undefined,
-  closureReasonOther: string | null | undefined,
-): string | null {
-  const raw = String(closureReason || "").trim();
+// THE ONE COMPOSER for the مقفلة badge suffix: the substantive OUTCOME when the
+// case has one, otherwise the CLOSURE REASON — never both, never neither-labelled.
+// Returns null when there is nothing to say, so the badge stays a bare
+// "القضية مقفلة" with no dangling dash (older rows recorded no reason at all).
+//
+// ⚠ تم_التحصيل CAN NEVER REACH THIS BADGE. Collection is an ordinary procedural
+// step, not an outcome — a collected win reads "القضية مقفلة — حكم لصالحنا". It is
+// unreachable by construction, not by a filter: a case closed on تم_التحصيل got
+// there through a judgment or a settlement, so branch 1 or 2 returns a label first
+// and the closure-reason fallback below is never consulted. The one path that could
+// close on تم_التحصيل with NEITHER — the grievance track انتظار_رد_التظلم → تحصيل —
+// is caught by the explicit guard below.
+export function caseClosureBadgeSuffix(
+  lawCase: OutcomeCaseInput,
+  hearings: OutcomeHearingInput[],
+): { text: string; tone: CaseOutcomeTone } | null {
+  const outcome = resolveCaseOutcome(lawCase, hearings);
+  if (outcome.label) return { text: outcome.label, tone: outcome.tone };
+
+  const raw = String(lawCase.closureReason || "").trim();
   if (!raw) return null;
-  if (outcome.kind === CaseOutcomeKind.ADMINISTRATIVE) return null;
-  if (OUTCOME_REDUNDANT_CLOSURE_REASONS.includes(raw)) return null;
-  if (raw === ClosureReason.OTHER) {
-    const detail = String(closureReasonOther || "").trim();
-    return detail || ClosureReasonLabels[ClosureReason.OTHER];
-  }
-  return ClosureReasonLabels[raw as ClosureReasonValue] ?? raw;
+  // Belt-and-braces for the grievance track, which collects without ever holding a
+  // judgment or passing through مداولة_الصلح: تم_التحصيل must not surface here.
+  if (raw === ClosureReason.COLLECTION_COMPLETED) return null;
+
+  const resolved = raw === ClosureReason.OTHER
+    ? ((String(lawCase.closureReasonOther || "").trim()) || ClosureReasonLabels[ClosureReason.OTHER])
+    : (ClosureReasonLabels[raw as ClosureReasonValue] ?? raw);
+  if (!resolved) return null;
+  const text = resolved.length > CLOSURE_BADGE_MAX_CHARS
+    ? `${resolved.slice(0, CLOSURE_BADGE_MAX_CHARS - 1)}…`
+    : resolved;
+  return { text, tone: outcome.tone };
 }
 
 // POST /api/cases/:id/opponent-response — "تم استلام رد الخصم". Tolerant gate;
