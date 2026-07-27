@@ -135,7 +135,14 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     // Invalidate memos immediately if the result handler auto-created any
     // (NEW_SESSION + memoRequired path), so memos.tsx reflects them now
     // instead of after the 5s background refetch.
-    if (Array.isArray(result?.createdMemos) && result.createdMemos.length > 0) {
+    // ...or if it CANCELLED any. Recording any result cancels the case's prior
+    // active memos (the session happened, so they're spent — the objection is
+    // excluded server-side). Those rows aren't in this response either, and the
+    // cases-list "مذكرة جارية" / "لائحة اعتراضية" badge derives from the memos
+    // cache, so it would stay lit until the background refetch.
+    const createdAnyMemo = Array.isArray(result?.createdMemos) && result.createdMemos.length > 0;
+    const cancelledAnyMemo = typeof result?.cancelledMemos === "number" && result.cancelledMemos > 0;
+    if (createdAnyMemo || cancelledAnyMemo) {
       queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
     }
     // Recording a result clears "مطلوب رد من الخصم" on the case's OTHER hearings
