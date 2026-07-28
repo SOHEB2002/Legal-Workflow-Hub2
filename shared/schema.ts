@@ -3113,33 +3113,56 @@ export interface ContractSlotRule {
   // When set, the route handler rejects an advance/skip transition
   // FROM `requiredBeforeLeavingStage` until a row exists in this slot.
   // null means "optional, no transition gate".
+  //
+  // ⚠ CURRENTLY null ON EVERY RULE, BY OWNER POLICY — no attachment gates a
+  // contract stage transition. The field is retained so a slot can be re-armed
+  // as a one-line data change; do not set one without the owner. See the note
+  // above ContractSlotsByType.
   requiredBeforeLeavingStage: ContractStageValue | null;
 }
 
+// 🔴 NO ATTACHMENT GATES A STAGE TRANSITION ON CONTRACTS. Owner decision — every
+// requiredBeforeLeavingStage in this table is null, on every type, permanently.
+//
+// The rules used to be:
+//   مراجعة_عقد  العقد محل المراجعة  → blocked leaving استلام   (cleared 8f106b2)
+//   مراجعة_عقد  دراسة المراجعة      → blocked leaving تحرير     (cleared here)
+//   صياغة_عقد   مذكرة تفاهم         → never gated
+//   صياغة_عقد   العقد المُصاغ        → blocked leaving تحرير     (cleared here)
+//   مشروع       (no slots at all)
+//
+// 8f106b2 cleared only the first and reasoned that a create-time gate plus a
+// transition gate is not "optional" but "deferred mandatory". That reasoning was
+// right and INCOMPLETE: the remaining two both fired on the SAME EDGE —
+// تحرير → مراجعة داخلية, the very next transition — so the wall simply moved one
+// stage later and the owner hit it there. Clearing them piecemeal reproduces the
+// problem each time; the policy is what changed, so all of them go.
+//
+// ⚠ WHAT STAYS, deliberately — this removes ENFORCEMENT, not information:
+//   • every slot is still declared here, so the المرفقات tab still renders its
+//     per-type slot cards in order;
+//   • the per-slot "لم يتم رفع الملف بعد" and "هذا المرفق مفقود" indicators still
+//     show, so a missing file is still visible at a glance;
+//   • upload / replace / delete semantics and permissions are untouched.
+// The team is told what is missing; they are no longer stopped by it.
+//
+// The requiredBeforeLeavingStage FIELD and checkRequiredSlotsForTransition are
+// kept rather than deleted: the mechanism is sound and data-driven, so re-arming
+// one slot is a one-line change here if the owner ever wants it back. With every
+// rule null the validator is a permanent no-op — it filters on
+// `r.requiredBeforeLeavingStage === fromStage`, and fromStage is always a
+// non-null stage string, so nothing can ever match.
 export const ContractSlotsByType: Record<ContractTypeValue, ContractSlotRule[]> = {
   "مراجعة_عقد": [
     {
       slotKey: ContractAttachmentSlot.CONTRACT_UNDER_REVIEW,
       label: ContractAttachmentSlotLabels.contract_under_review,
-      // OPTIONAL (owner decision). Was ContractStage.RECEIVED, which blocked the
-      // contract from leaving استلام until the file was uploaded.
-      //
-      // ⚠ RELAXED TOGETHER WITH THE CREATE-FORM GATE, deliberately. Making the
-      // upload optional at creation while leaving this gate armed would not have
-      // made the attachment optional — it would only have MOVED THE WALL from
-      // "can't create" to "can't advance", stranding every contract created
-      // without the file at استلام with no way forward. Both had to go, or
-      // neither.
-      //
-      // The slot itself is untouched: it is still offered on the create form,
-      // still uploadable from the المرفقات tab, still the same immutable-once-set
-      // slot with the same delete permissions. Only the two BLOCKS are gone.
       requiredBeforeLeavingStage: null,
     },
     {
       slotKey: ContractAttachmentSlot.REVIEW_STUDY,
       label: ContractAttachmentSlotLabels.review_study,
-      requiredBeforeLeavingStage: ContractStage.DRAFTING,
+      requiredBeforeLeavingStage: null,
     },
   ],
   "صياغة_عقد": [
@@ -3151,7 +3174,7 @@ export const ContractSlotsByType: Record<ContractTypeValue, ContractSlotRule[]> 
     {
       slotKey: ContractAttachmentSlot.DRAFTED_CONTRACT,
       label: ContractAttachmentSlotLabels.drafted_contract,
-      requiredBeforeLeavingStage: ContractStage.DRAFTING,
+      requiredBeforeLeavingStage: null,
     },
   ],
   "مشروع": [],

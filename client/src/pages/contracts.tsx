@@ -215,11 +215,22 @@ function canDoCommitteeDecision(c: Contract, userRole: string, isLaborEntity: bo
 // POST /api/contracts/:id/skip-internal-review verbatim → visibility ==
 // authorization.
 //
-// 🔴 NARROWER THAN canSkipCommittee ON PURPOSE — the assignee is EXCLUDED, and
-// so is a department_head who is themself the contract's assignedTo. Four-eyes
-// exists so a drafter cannot approve their own work; letting the drafter DELETE
-// the review instead of passing it reaches the same end state by a shorter road.
-// Department tier and above only. See the server comment for the full argument.
+// ACTOR SET IS NOW IDENTICAL TO canSkipCommittee below — branch_manager |
+// department_head of the contract's own dept | the assigned lawyer. Only the
+// stage differs (مراجعة_داخلية vs لجنة_مراجعة).
+//
+// ⚠ OWNER OVERRIDE (supersedes the narrower gate this shipped with in 4970876).
+// It first excluded the assignee — and a head who was themself the assignee — on
+// a four-eyes argument: a drafter who can DELETE the review of their own draft
+// reaches the same place as one who approves it. The owner has aligned this with
+// the skip-committee precedent instead: a reasoned override answers to the same
+// wider authority as its sibling, and the MANDATORY REASON plus the activity row
+// are the control. Do not re-narrow this without the owner — the divergence was
+// considered and rejected.
+//
+// NOTE the internal-review DECISION endpoint is untouched: four-eyes still
+// applies there (the designated reviewer, or an own-dept head who is NOT the
+// assignee). Skipping and deciding remain different acts with different gates.
 function canSkipInternalReview(
   c: Contract,
   userRole: string,
@@ -230,12 +241,8 @@ function canSkipInternalReview(
   if (c.pausedAt || c.awaitingCompletion) return false;
   if (c.currentStage !== ContractStage.INTERNAL_REVIEW) return false;
   if (userRole === "branch_manager") return true;
-  const isAssignee = !!c.assignedTo && c.assignedTo === userId;
-  return userRole === "department_head"
-    && !!userDeptId
-    && !!c.departmentId
-    && c.departmentId === userDeptId
-    && !isAssignee;
+  if (userRole === "department_head") return c.departmentId === userDeptId;
+  return !!c.assignedTo && c.assignedTo === userId;
 }
 
 function canSkipCommittee(
@@ -1941,9 +1948,10 @@ export default function ContractsPage() {
                     rather than recording its decision. The gate restates the
                     server's rule verbatim → visibility == authorization. */}
                 {/* Reasoned override — "تجاوز المراجعة الداخلية". Same
-                    destructive framing as the committee skip, but a NARROWER
-                    actor set: department tier and above, author excluded, so a
-                    drafter can never dispose of the review of their own draft. */}
+                    destructive framing AND the same actor set as the committee
+                    skip below (branch_manager / own-dept head / assigned lawyer);
+                    only the stage differs. The mandatory reason + the activity
+                    row are the control. */}
                 {user && canSkipInternalReview(selected, user.role, user.id, user.departmentId) && (
                   <Button size="sm" variant="outline"
                     data-testid={`dialog-button-skip-internal-review-${selected.id}`}
@@ -2955,8 +2963,8 @@ export default function ContractsPage() {
               داخلية. يُسجَّل هذا الإجراء في سجل نشاط العقد مع اسمك والسبب. السبب إلزامي.
             </p>
             <p className="text-xs text-muted-foreground">
-              هذا الإجراء متاح لرئيس القسم أو مدير الفرع فقط، ولا يجوز لمن حرّر العقد تجاوز
-              مراجعته.
+              يبقى قرار المراجعة الداخلية — عند عدم التجاوز — محصوراً بالمراجع الداخلي
+              المعيَّن أو رئيس القسم أو مدير الفرع.
             </p>
             <div>
               <Label>سبب التجاوز <span className="text-red-500">*</span></Label>

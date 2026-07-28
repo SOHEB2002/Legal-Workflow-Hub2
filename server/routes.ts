@@ -7381,13 +7381,11 @@ export async function registerRoutes(
         req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
-      // Slot-validation gate per ContractSlotsByType. Required slots
-      // are checked at the moment the contract LEAVES their gating
-      // stage — e.g. مراجعة_عقد cannot leave RECEIVED without an
-      // uploaded "العقد محل المراجعة", and cannot leave DRAFTING
-      // without "دراسة المراجعة". Slots whose
-      // requiredBeforeLeavingStage doesn't match the from-stage are
-      // ignored for this transition.
+      // Slot-validation gate per ContractSlotsByType.
+      // ⚠ CURRENTLY A NO-OP by owner policy — every requiredBeforeLeavingStage in
+      // that table is null, so no attachment blocks a contract transition. Kept
+      // wired so re-arming a slot is a one-line data change in schema.ts rather
+      // than re-plumbing the route. See the note above ContractSlotsByType.
       const slotCheckErr = await checkRequiredSlotsForTransition(
         contract,
         contract.currentStage,
@@ -7803,24 +7801,25 @@ export async function registerRoutes(
   //
   // CONTRACTS ONLY, per owner scope. The other three entities are untouched.
   //
-  // 🔴 ROLE SET IS DELIBERATELY NARROWER THAN /skip-committee — THE ASSIGNEE IS
-  // EXCLUDED. This is the one place the two skips must NOT match, and the reason
-  // is written into the skip-committee comment itself: that endpoint restricted
-  // its ORIGIN to the committee stage "so the four-eyes internal-review lock is
-  // untouched", and justified including the author by noting four-eyes "does not
-  // apply here". An override that ORIGINATES at مراجعة_داخلية is the opposite
-  // case — it disposes of the review of the actor's own draft.
+  // AUTHORIZED ROLES — IDENTICAL TO /skip-committee: branch_manager +
+  // department_head (of the contract's OWN department) + the assigned lawyer,
+  // delegation-aware. Only the stage differs.
   //
-  // Four-eyes exists so a drafter cannot approve their own work. Letting the
-  // drafter DELETE the review instead of passing it reaches the same end state
-  // by a shorter road, so the exclusion has to hold for the skip as well:
-  //   ALLOWED: branch_manager | department_head of the contract's OWN department
-  //            — and, exactly like the internal-review endpoint's
-  //            isOwnDeptHeadReviewer (:7476), a head who is themself the
-  //            contract's assignedTo is excluded too.
-  //   NOT ALLOWED: the assigned lawyer.
-  // DEPARTMENT TIER AND ABOVE, in the owner's terms. The mandatory reason and
-  // the audit row remain the control on top of that.
+  // ⚠ OWNER OVERRIDE (supersedes the narrower gate this shipped with in 4970876).
+  // It first EXCLUDED the assignee — and a head who was themself the assignee —
+  // arguing that since this override originates AT مراجعة_داخلية (unlike
+  // skip-committee, which was deliberately scoped away from it), letting the
+  // drafter DELETE the review of their own draft reaches the same end state as
+  // letting them approve it. The owner has aligned this with the skip-committee
+  // precedent instead: a reasoned override answers to the same wider authority as
+  // its sibling, and the MANDATORY REASON + the activity row are the control.
+  // Do not re-narrow this without the owner — the divergence was considered and
+  // explicitly rejected.
+  //
+  // The internal-review DECISION endpoint (:7439) is UNTOUCHED and still enforces
+  // four-eyes: only the designated reviewer, an own-dept head who is NOT the
+  // assignee, or branch_manager may record a decision. Skipping the stage and
+  // deciding it remain different acts with different gates.
   //
   // Deliberately bypasses validateStageTransition — the precedent skip-committee
   // and reopen already set. No transition-table entry is added, so this override
@@ -7851,18 +7850,22 @@ export async function registerRoutes(
         return res.status(400).json({ error: "العقد ليس في مرحلة المراجعة الداخلية" });
       }
 
-      // HUMAN role only — NOT delegation-expanded, matching the internal-review
-      // endpoint it protects (:7472 "HUMAN role only — not delegation-expanded").
-      // Delegation must not become a route around four-eyes.
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!reqUser.departmentId
-        && !!contract.departmentId
-        && contract.departmentId === reqUser.departmentId
-        && !isAssignedLawyer(reqUser, contract);
-      const allowed = reqUser.role === "branch_manager" || isOwnDeptHead;
+      // Delegation-aware, copied verbatim from /skip-committee: evaluate the rule
+      // against every acting identity (self + any delegator this user currently
+      // stands in for). Scope is null — contracts carry no caseId, so only
+      // all_cases delegations apply. With no delegation this resolves to exactly
+      // the actor → byte-identical to a plain self-check.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, null).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId)
+        || isAssignedLawyer({ id: u.id }, contract));
       if (!allowed) {
-        return res.status(403).json({ error: "تجاوز المراجعة الداخلية متاح لرئيس القسم أو مدير الفرع فقط، ولا يجوز لمن حرّر العقد تجاوز مراجعته" });
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز المراجعة الداخلية" });
       }
 
       const performer = await storage.getUser(reqUser.id);
@@ -8512,15 +8515,13 @@ export async function registerRoutes(
         return res.status(400).json({ error: "استخدم العودة من الاستكمال بدلاً من التجاوز" });
       }
       // Skip respects the same slot rules as a normal advance from
-      // PENDING_COMPLETION — e.g. مراجعة_عقد still needs the intake
-      // file (contract_under_review) on the row. The skip lands on
-      // DRAFTING just like advance from PENDING_COMPLETION; we use
-      // the from-stage RECEIVED_PENDING_COMPLETION here, which has
-      // no required slots itself, but the RECEIVED slot rule applies
-      // because it requires the file before LEAVING RECEIVED — which
-      // already happened to reach this stage. So the gate effectively
-      // covers the RECEIVED→PENDING transition, not the skip itself.
-      // We keep the call for symmetry / future-proofing.
+      // ⚠ CURRENTLY A NO-OP by owner policy — every requiredBeforeLeavingStage
+      // in ContractSlotsByType is null, so no attachment blocks a contract
+      // transition. (This call was already the weaker of the two: it passes the
+      // from-stage RECEIVED_PENDING_COMPLETION, which never carried a rule of its
+      // own, so it only ever fired on rules inherited from the RECEIVED edge.)
+      // Kept wired for symmetry with /advance-stage so re-arming a slot is a
+      // one-line data change in schema.ts. See the note above ContractSlotsByType.
       const slotCheckErr = await checkRequiredSlotsForTransition(
         contract,
         contract.currentStage,
@@ -8597,6 +8598,19 @@ export async function registerRoutes(
   // the current stage is missing its row in contract_attachments.
   // Returns an Arabic error string when something's missing, or null
   // when the gate passes (or there are no rules for this type/stage).
+  //
+  // ⚠ CURRENTLY UNREACHABLE-BY-DATA, not dead code. Owner policy is that NO
+  // attachment gates a contract stage transition, so every
+  // requiredBeforeLeavingStage in the table is null. `gating` therefore always
+  // comes back empty and this returns null immediately: the filter compares
+  // `r.requiredBeforeLeavingStage === fromStage`, and fromStage is always a
+  // non-null stage string (contracts.current_stage is NOT NULL with a default),
+  // so a null rule can never match it.
+  //
+  // Deliberately KEPT rather than deleted, unlike the truly-dead paths this
+  // audit removed (court-register, the localStorage delegation dialog): those
+  // could never succeed, whereas this mechanism works and is disarmed only by
+  // its data. Re-arming one slot stays a one-line change in schema.ts.
   async function checkRequiredSlotsForTransition(
     contract: any,
     fromStage: string,
