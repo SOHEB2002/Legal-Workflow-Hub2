@@ -1283,15 +1283,38 @@ export default function CasesPage() {
         <CardContent>
           <div className="overflow-x-auto">
           <Table className="w-full" style={{ tableLayout: 'fixed' }}>
+            {/* Widths sum to EXACTLY 100%, in header order:
+                   4  #
+                  10  رقم القضية
+                  12  العميل                ← free text (+ sub-line)
+                  11  الخصم                 ← free text
+                   8  صفة العميل            ← ONE short badge (مدعي / مدعى عليه)
+                  16  الحالة                ← stage badge + up to 2 status pills
+                                              on one line, then derived pills
+                  13  المحامي المسؤول       ← long Arabic names
+                  10  المراجع الداخلي       ← usually "—"
+                   8  القسم
+                   8  الإجراءات
+                  ---
+                 100
+                الحالة was 12% and its badge row was a non-wrapping inline-flex,
+                so a stage badge + a معلقة/بانتظار pill overflowed the cell and
+                painted over المحامي المسؤول. The 4 points come from صفة العميل
+                (a single short badge never needed 12) and 2 more for the lawyer
+                column from المراجع الداخلي. The row itself now wraps — see the
+                badge container below. Labels live here rather than as inline JSX
+                comments after each <col />, which would leave whitespace text
+                nodes inside <colgroup> and trip React's DOM-nesting validation.
+                Same idiom as consultations.tsx / hearings.tsx. */}
             <colgroup>
               <col style={{ width: '4%' }} />
               <col style={{ width: '10%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '11%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
             </colgroup>
@@ -1366,7 +1389,12 @@ export default function CasesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-center">
+                  {/* break-words on every free-text cell: table-layout is fixed,
+                      so ordinary Arabic names already wrap at their spaces and
+                      never widen a column — but a single long unbroken token (a
+                      pasted ID, a URL-ish opponent name) would still spill out of
+                      its cell. break-words confines it. */}
+                  <TableCell className="text-center break-words">
                     <div>
                       <div className="font-medium text-sm leading-snug">{c.plaintiffName || getClientName(c.clientId)}</div>
                       {c.plaintiffName && getClientName(c.clientId) && (
@@ -1374,7 +1402,7 @@ export default function CasesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-center text-sm">{c.opponentName || "-"}</TableCell>
+                  <TableCell className="text-center text-sm break-words">{c.opponentName || "-"}</TableCell>
                   <TableCell className="text-center">
                     {(() => {
                       const role = getClientRoleLabel(c.caseClassification, c.clientRole);
@@ -1399,8 +1427,16 @@ export default function CasesPage() {
                         its own row below — keeps the cell from overflowing
                         when both the stage label and the loop marker are
                         present. */}
-                    <div className="flex flex-col items-center gap-1">
-                      <div className="inline-flex items-center gap-1">
+                    <div className="flex flex-col items-center gap-1 min-w-0">
+                      {/* flex-wrap + max-w-full: Badge is whitespace-nowrap by
+                          design (ui/badge.tsx), and a flex item's min-width
+                          defaults to auto — so the old non-wrapping inline-flex
+                          could not shrink and bled sideways over the neighbouring
+                          column whenever a status pill joined the stage badge.
+                          Wrapping drops the extra pill onto a second line inside
+                          the cell instead. Same container shape consultations.tsx
+                          already uses (:2376). */}
+                      <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
                         {/* displayStage groups paused → استكمال_البيانات
                             and closed/archived → مقفلة so the badge
                             matches what the stage filter returns. */}
@@ -1510,13 +1546,13 @@ export default function CasesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
-                  <TableCell className="text-center text-sm">
+                  <TableCell className="text-center text-sm break-words">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
+                  <TableCell className="text-center text-sm break-words">
                     {c.internalReviewerId
                       ? (users.find(u => u.id === c.internalReviewerId)?.name || "—")
                       : "—"}
                   </TableCell>
-                  <TableCell className="text-center text-sm">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
+                  <TableCell className="text-center text-sm break-words">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell className="text-center">
                     {/* Row actions — Eye stays inline for the common
                         "open details" path; everything else moves into a

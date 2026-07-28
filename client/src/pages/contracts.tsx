@@ -1456,17 +1456,26 @@ export default function ContractsPage() {
                       {ContractTypeLabels[c.contractType as keyof typeof ContractTypeLabels] || c.contractType}
                     </Badge>
                   </TableCell>
+                  {/* Badges were bare siblings of the cell with mr-1 spacing. JSX
+                      strips the newline-only text nodes between them, so the run
+                      had NO break opportunity and could only grow sideways. This
+                      table is auto-layout (no colgroup), so it never painted over
+                      a neighbour the way the fixed-layout cases table did — it
+                      just widened المرحلة at the expense of العنوان/العميل. Same
+                      wrapping container as cases.tsx / consultations.tsx; gap-1
+                      replaces the per-badge mr-1 for identical spacing. */}
                   <TableCell className="text-center">
+                    <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
                     <Badge className={getStageBadgeColor(c.currentStage)}>
                       {ContractStageLabels[c.currentStage] || c.currentStage}
                     </Badge>
                     {c.status === "paused" && (
-                      <Badge variant="outline" className="mr-1 border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
+                      <Badge variant="outline" className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
                         <Pause className="w-2.5 h-2.5 ml-1" /> معلّق
                       </Badge>
                     )}
                     {c.awaitingCompletion && c.status === "active" && (
-                      <Badge variant="outline" className="mr-1 border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
+                      <Badge variant="outline" className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
                         <AlertTriangle className="w-2.5 h-2.5 ml-1" /> بانتظار
                       </Badge>
                     )}
@@ -1480,7 +1489,7 @@ export default function ContractsPage() {
                     {isContractInFollowUpCycle(c) && (
                       <Badge
                         variant="outline"
-                        className="mr-1 border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px] px-1 py-0"
+                        className="border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px] px-1 py-0"
                         data-testid={`badge-contract-follow-up-${c.id}`}
                         title="العقد في جولة استشارة تعقيبية"
                       >
@@ -1488,6 +1497,7 @@ export default function ContractsPage() {
                         تعقيبية #{c.followUpCount}
                       </Badge>
                     )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-center">{getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell className="text-center">
