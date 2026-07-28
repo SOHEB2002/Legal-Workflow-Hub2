@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
-import { usePersistedFilter, oneOf } from "@/hooks/use-persisted-state";
+import { usePersistedFilter, oneOf, anyString } from "@/hooks/use-persisted-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -359,18 +359,28 @@ export default function ContractsPage() {
   const [typeFilter, setTypeFilter] = usePersistedFilter<string>(
     "contracts", "type", "all", oneOf(Object.values(ContractType) as readonly string[], "all"),
   );
-  // ⚠ deptFilter / assignedToFilter are NOT persisted and get NO department
-  // default — deliberately, and this is the one page that diverges.
+  // DEPARTMENT — now has a real dropdown in the filter bar below, which is what
+  // makes it eligible for the default + persistence the other four pages got in
+  // 6f894f6 (that commit deliberately excluded it precisely BECAUSE there was no
+  // control to widen a pinned value; adding the control removes the objection).
   //
-  // CONTRACTS HAVE NO DEPARTMENT OR ASSIGNEE DROPDOWN. Both are set ONLY by the
-  // dashboard "بانتظار المراجعة" deep-link (?dept= / ?assignedTo=) and there is
-  // no UI anywhere to change or clear them. Persisting one — or seeding it with
-  // the user's own department — would pin the list to a single department with
-  // no control to widen it, turning a DEFAULT into a permanent RESTRICTION,
-  // which is exactly what this feature must not do. They stay per-visit state
-  // owned by the deep-link. Adding the two dropdowns would make them eligible;
-  // that is a separate UI change, not this one.
-  const [deptFilter, setDeptFilter] = useState<string>("");
+  // "" IS THIS PAGE'S "ANY" SENTINEL, not "all" — the filter predicate below is
+  // `if (deptFilter && …)`. The Select maps its "all" item to "" on change, the
+  // same shape consultations uses. Kept rather than migrating to "all" so the
+  // predicate and the deep-link stay untouched.
+  //
+  // DEFAULT = the user's own department when they have one; "" (كل الأقسام) for
+  // users with none. A DEFAULT, not a restriction — every department is
+  // selectable and a saved choice always wins.
+  const [deptFilter, setDeptFilter] = usePersistedFilter<string>(
+    "contracts", "dept", user?.departmentId || "", anyString,
+  );
+  // ⚠ assignedToFilter STAYS deep-link-only and UNPERSISTED — the owner scoped
+  // this change to the department dropdown, so no lawyer dropdown was added.
+  // Because it is not persisted it cannot become sticky, but WITHIN a
+  // deep-linked visit it would otherwise be an invisible filter with no way to
+  // clear it. The dismissible chip in the filter bar below is that affordance:
+  // it renders only while the filter is set, names the lawyer, and clears it.
   const [assignedToFilter, setAssignedToFilter] = useState<string>("");
 
   // Dashboard "بانتظار المراجعة" deep-link. Pre-selects the COMMITTEE
@@ -384,7 +394,30 @@ export default function ContractsPage() {
     if (status === "pending_review") setStageFilter(ContractStage.COMMITTEE);
     if (dept) setDeptFilter(dept);
     if (assignedTo) setAssignedToFilter(assignedTo);
+    // THE DEEP LINK STILL WINS over a restored/defaulted value. Two reasons:
+    //   1. ORDER — usePersistedFilter seeds its value in the useState
+    //      initializer (during render), so this mount effect runs AFTER and
+    //      overwrites it.
+    //   2. NO CLOBBER-BACK — calling the persisted setter flips the hook's
+    //      `touched` ref, so the re-read that fires when the user id resolves
+    //      skips instead of restoring the stored value over the deep-link.
+    // Note the deep-linked department is also PERSISTED by that setter, which is
+    // intended: arriving via the dashboard is an explicit filter choice, and it
+    // is now visible and clearable in the dropdown like any other.
   }, []);
+
+  // STALE-VALUE GUARD for the async department list — the twin of the cases /
+  // consultations / hearings / memos guards. A saved (or defaulted) department
+  // that no longer exists must not leave the list mysteriously empty. The
+  // `length === 0` bail is load-bearing: without it this fires before
+  // departments land and wipes a perfectly valid saved value on every mount.
+  // "" is the any-sentinel and is always valid.
+  useEffect(() => {
+    if (departments.length === 0) return;
+    if (deptFilter && !departments.some((d) => String(d.id) === deptFilter)) {
+      setDeptFilter("");
+    }
+  }, [departments, deptFilter, setDeptFilter]);
 
   const filteredContracts = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
@@ -1532,6 +1565,48 @@ export default function ContractsPage() {
                 </SelectContent>
               </Select>
             </div>
+            {/* DEPARTMENT — new. Same shape and placement as the other four
+                pages: last in the filter row, "كل الأقسام" first, then the
+                department list. "" is this page's any-sentinel, so the "all"
+                item maps to "" on change (the consultations idiom). */}
+            <div className="min-w-[180px]">
+              <Label className="text-xs text-muted-foreground mb-1 block">القسم</Label>
+              <Select
+                value={deptFilter || "all"}
+                onValueChange={(v) => setDeptFilter(v === "all" ? "" : v)}
+              >
+                <SelectTrigger data-testid="filter-contract-department"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل الأقسام</SelectItem>
+                  {departments.map((d) => (
+                    <SelectItem key={String(d.id)} value={String(d.id)}>{d.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {/* CLEAR AFFORDANCE for the deep-link-only lawyer filter. Renders
+                ONLY while assignedToFilter is set — i.e. only after arriving
+                from the dashboard "بانتظار المراجعة" popup — so the ordinary
+                filter bar is unchanged. Without it that filter is invisible and
+                unclearable for the rest of the visit. This is not a new filter
+                CONTROL (no lawyer dropdown was added, per scope); it just makes
+                an already-applied filter visible and removable. */}
+            {assignedToFilter && (
+              <div className="min-w-[180px]">
+                <Label className="text-xs text-muted-foreground mb-1 block">المحامي</Label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-between gap-2"
+                  data-testid="clear-contract-assigned-filter"
+                  onClick={() => setAssignedToFilter("")}
+                  title="إزالة تصفية المحامي"
+                >
+                  <BidiText>{getLawyerName(assignedToFilter)}</BidiText>
+                  <XCircle className="w-4 h-4 shrink-0" />
+                </Button>
+              </div>
+            )}
           </div>
         </CardHeader>
         <CardContent>
