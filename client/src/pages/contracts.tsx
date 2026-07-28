@@ -27,7 +27,7 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
-  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, Pencil,
+  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, Pencil, Archive,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -931,6 +931,10 @@ export default function ContractsPage() {
   const [earlyCloseTarget, setEarlyCloseTarget] = useState<Contract | null>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
 
+  const [closeNoResponseTarget, setCloseNoResponseTarget] = useState<Contract | null>(null);
+  const [closeNoResponseNotes, setCloseNoResponseNotes] = useState("");
+  const [closeNoResponseSaving, setCloseNoResponseSaving] = useState(false);
+
   const [showPause, setShowPause] = useState(false);
   const [pauseTarget, setPauseTarget] = useState<Contract | null>(null);
   const [pauseReason, setPauseReason] = useState("");
@@ -1034,6 +1038,43 @@ export default function ContractsPage() {
   // admin_support (global), department_head (own dept), assigned lawyer.
   // Dept-scope check requires both departmentIds non-empty so a null
   // dept_head can't match a legacy/"أخرى" contract that is also null.
+  // "إغلاق لعدم استكمال البيانات" gate — restates POST
+  // /api/contracts/:id/close-no-response so visibility === authorization.
+  // ROLE tier is canEarlyClose verbatim (this IS a close, and the endpoint
+  // copies the early-close gate), plus the endpoint's own state conditions.
+  //
+  // Keyed on the STAGE, not on awaitingCompletion: a contract reaches
+  // RECEIVED_PENDING_COMPLETION both by the ordinary advance (latch false) and
+  // via /await-completion (latch true), and the button must appear for both.
+  const canCloseForNoResponse = (c: Contract): boolean => {
+    if (c.currentStage !== ContractStage.RECEIVED_PENDING_COMPLETION) return false;
+    if (c.pausedAt) return false;
+    return canEarlyClose(c);
+  };
+
+  // "إغلاق لعدم استكمال البيانات" — no reason textarea: the missing-data text is
+  // resolved SERVER-side from contract_activity_log's metadata.reason.
+  const handleCloseNoResponse = async () => {
+    if (!closeNoResponseTarget) return;
+    setCloseNoResponseSaving(true);
+    try {
+      const notes = closeNoResponseNotes.trim();
+      await apiRequest(
+        "POST",
+        `/api/contracts/${closeNoResponseTarget.id}/close-no-response`,
+        notes ? { notes } : {},
+      );
+      await refreshContracts();
+      toast({ title: "تم إغلاق العقد لعدم استكمال البيانات" });
+      setCloseNoResponseTarget(null);
+      setCloseNoResponseNotes("");
+    } catch (err) {
+      toast({ title: "فشل الإغلاق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setCloseNoResponseSaving(false);
+    }
+  };
+
   const canEarlyClose = (c: Contract): boolean => {
     if (!user) return false;
     if (c.status !== "active") return false;
@@ -1624,7 +1665,20 @@ export default function ContractsPage() {
                               إلغاء التعليق
                             </DropdownMenuItem>
                           )}
-                          {(canEarlyClose(c) || canDeleteContract()) && <DropdownMenuSeparator />}
+                          {(canEarlyClose(c) || canCloseForNoResponse(c) || canDeleteContract()) && <DropdownMenuSeparator />}
+                          {/* Sits ABOVE the generic إغلاق مبكر so the specific
+                              action is the first close a user sees on a
+                              data-completion contract. */}
+                          {canCloseForNoResponse(c) && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-close-no-response-${c.id}`}
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => { setCloseNoResponseTarget(c); setCloseNoResponseNotes(""); }}
+                            >
+                              <Archive className="w-4 h-4 ml-2" />
+                              إغلاق لعدم استكمال البيانات
+                            </DropdownMenuItem>
+                          )}
                           {canEarlyClose(c) && (
                             <DropdownMenuItem
                               data-testid={`row-action-early-close-${c.id}`}
@@ -1823,6 +1877,19 @@ export default function ContractsPage() {
                   <Button size="sm" variant="outline"
                     onClick={() => { setTakeNotesTarget(selected); setTakeNotesNotes(""); setShowTakeNotes(true); }}>
                     نتيجة الأخذ بالملاحظات
+                  </Button>
+                )}
+                {/* CONTRACTS HAVE NO BANNER — no paused banner, no awaiting
+                    banner; this action row IS where every contract lifecycle
+                    action lives. So the "close for no response" button goes
+                    here, immediately before the generic إغلاق مبكر, rather than
+                    inside a banner like its three siblings. */}
+                {canCloseForNoResponse(selected) && (
+                  <Button size="sm" variant="destructive"
+                    data-testid="button-close-no-response-detail"
+                    onClick={() => { setCloseNoResponseTarget(selected); setCloseNoResponseNotes(""); }}>
+                    <Archive className="w-4 h-4 ml-1" />
+                    إغلاق لعدم استكمال البيانات
                   </Button>
                 )}
                 {selected.status === "active" && (
@@ -2826,6 +2893,51 @@ export default function ContractsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ============ Close-for-no-response dialog ============ */}
+      {/* No reason textarea, unlike the early-close dialog below: the reason is
+          fixed and the missing-data text comes from the server. Optional notes. */}
+      <AlertDialog
+        open={!!closeNoResponseTarget}
+        onOpenChange={(open) => { if (!open) { setCloseNoResponseTarget(null); setCloseNoResponseNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Archive className="w-5 h-5 text-destructive" />
+              إغلاق لعدم استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إغلاق العقد بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
+              البيانات والمرفقات الناقصة ضمن سبب الإغلاق.
+              <br />
+              يمكن إعادة فتحه لاحقاً كاستشارة تعقيبية إذا تجاوب العميل.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-contract-close-no-response-notes"
+              value={closeNoResponseNotes}
+              onChange={(e) => setCloseNoResponseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول الإغلاق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-close-no-response"
+              disabled={closeNoResponseSaving}
+              className="bg-destructive hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); handleCloseNoResponse(); }}
+            >
+              <Archive className="w-4 h-4 ml-2" />
+              تأكيد الإغلاق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ============ Early-close dialog ============ */}
       <Dialog open={showEarlyClose} onOpenChange={setShowEarlyClose}>

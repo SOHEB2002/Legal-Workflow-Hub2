@@ -64,6 +64,7 @@ import {
   Pause,
   Play,
   MoreVertical,
+  Archive,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -410,6 +411,9 @@ export default function MemosPage() {
   // OPTIONAL auto-lift date. "" = open-ended pause, the default and the
   // pre-feature behaviour.
   const [pauseMemoUntil, setPauseMemoUntil] = useState("");
+  const [cancelNoResponseTarget, setCancelNoResponseTarget] = useState<Memo | null>(null);
+  const [cancelNoResponseNotes, setCancelNoResponseNotes] = useState("");
+  const [cancelNoResponseSaving, setCancelNoResponseSaving] = useState(false);
   const [showUnpauseMemoDialog, setShowUnpauseMemoDialog] = useState(false);
   const [unpauseMemoTarget, setUnpauseMemoTarget] = useState<Memo | null>(null);
   const [unpauseMemoNotes, setUnpauseMemoNotes] = useState("");
@@ -706,6 +710,25 @@ export default function MemosPage() {
 
   const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
 
+  // "إلغاء لعدم استكمال البيانات" gate — restates POST
+  // /api/memos/:id/cancel-no-response so visibility === authorization.
+  //
+  // ⚠ Keyed on awaitingCompletion, NOT on a stage — and that is CORRECT here,
+  // unlike its cases/consultations/contracts twins. Memos have no
+  // data-completion stage at all (see the schema note on
+  // memos.dataCompletionLastAckAt: "memos have no data-completion STAGE; the
+  // button is the trigger"), so the latch IS the state.
+  //
+  // ROLE tier is canCancelMemo — this entity's own terminal-action gate, which
+  // already mirrors the server's cancel role set (it adds cases_review_head,
+  // the memo committee chair).
+  const canCancelMemoForNoResponse = (memo: Memo): boolean => {
+    if (!memo.awaitingCompletion) return false;
+    if (TERMINAL_MEMO_STATUSES.has(memo.status)) return false;
+    if (isMemoPaused(memo)) return false;
+    return canCancelMemo(memo);
+  };
+
 
   const openPauseMemoDialog = (memo: Memo) => {
     setPauseMemoTarget(memo);
@@ -728,6 +751,29 @@ export default function MemosPage() {
     setShowUnpauseMemoDialog(false);
     setUnpauseMemoTarget(null);
     setUnpauseMemoNotes("");
+  };
+
+  // "إلغاء لعدم استكمال البيانات" — no required text: the missing-data text is
+  // resolved SERVER-side from memo_activity_log's metadata.reason.
+  const handleCancelNoResponse = async () => {
+    if (!cancelNoResponseTarget) return;
+    setCancelNoResponseSaving(true);
+    try {
+      const notes = cancelNoResponseNotes.trim();
+      await apiRequest(
+        "POST",
+        `/api/memos/${cancelNoResponseTarget.id}/cancel-no-response`,
+        notes ? { notes } : {},
+      );
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم إلغاء المذكرة لعدم استكمال البيانات" });
+      setCancelNoResponseTarget(null);
+      setCancelNoResponseNotes("");
+    } catch (err) {
+      toast({ title: "فشل الإلغاء", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setCancelNoResponseSaving(false);
+    }
   };
 
   const handlePauseMemo = async () => {
@@ -1496,6 +1542,22 @@ export default function MemosPage() {
                                       تم الاستكمال
                                     </DropdownMenuItem>
                                   )
+                                : null}
+                              {/* The client never responded → cancel. Sits beside
+                                  "تم الاستكمال" because they are the two exits
+                                  from the same awaiting state. */}
+                              {canCancelMemoForNoResponse(memo) && (
+                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
+                                  data-testid={`button-cancel-no-response-${memo.id}`}
+                                  onClick={() => { setCancelNoResponseTarget(memo); setCancelNoResponseNotes(""); }}
+                                >
+                                  <Archive className="w-4 h-4 ml-2" />
+                                  إلغاء لعدم استكمال البيانات
+                                </DropdownMenuItem>
+                              )}
+                              {!isMemoPaused(memo) && memo.awaitingCompletion
+                                ? null
                                 : !isMemoPaused(memo)
                                   && !TERMINAL_MEMO_STATUSES.has(memo.status)
                                   && canPauseMemo(memo) && (
@@ -1812,6 +1874,24 @@ export default function MemosPage() {
                     {detailMemo.savedStage && (
                       <div className="mt-1 text-xs">
                         الحالة المحفوظة: <BidiText>{MemoStatusLabels[detailMemo.savedStage as MemoStatusValue] || detailMemo.savedStage}</BidiText>
+                      </div>
+                    )}
+                    {/* The client never responded → cancel. Lives INSIDE the
+                        banner so the escape hatch sits with the state it escapes
+                        from. Memos need no Path-A counterpart: the latch IS the
+                        state (no data-completion stage exists), so whenever this
+                        action applies, this banner is showing. */}
+                    {canCancelMemoForNoResponse(detailMemo) && (
+                      <div className="mt-2 pt-2 border-t border-amber-500/30">
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          data-testid="button-cancel-no-response-banner"
+                          onClick={() => { setCancelNoResponseTarget(detailMemo); setCancelNoResponseNotes(""); }}
+                        >
+                          <Archive className="w-4 h-4 ml-2" />
+                          إلغاء لعدم استكمال البيانات
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -2286,6 +2366,50 @@ export default function MemosPage() {
       </AlertDialog>
 
       {/* Phase-8 — pause memo dialog */}
+      {/* "إلغاء لعدم استكمال البيانات". Memos have NO closure model — no
+          closure_reason column, no "closed" status — so their terminal state is
+          CANCELLED (ملغاة + cancellation_reason). That is where the missing-data
+          text goes. The dialog says "إلغاء" rather than "إغلاق" for that reason. */}
+      <AlertDialog
+        open={!!cancelNoResponseTarget}
+        onOpenChange={(open) => { if (!open) { setCancelNoResponseTarget(null); setCancelNoResponseNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Archive className="w-5 h-5 text-destructive" />
+              إلغاء لعدم استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إلغاء المذكرة بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
+              البيانات والمرفقات الناقصة ضمن سبب الإلغاء.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-memo-cancel-no-response-notes"
+              value={cancelNoResponseNotes}
+              onChange={(e) => setCancelNoResponseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول الإلغاء..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-cancel-no-response"
+              disabled={cancelNoResponseSaving}
+              className="bg-destructive hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); handleCancelNoResponse(); }}
+            >
+              <Archive className="w-4 h-4 ml-2" />
+              تأكيد الإلغاء
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={showPauseMemoDialog} onOpenChange={(open) => { if (!open) closePauseMemoDialog(); }}>
         <AlertDialogContent dir="rtl">
           <AlertDialogHeader>
