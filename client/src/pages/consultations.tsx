@@ -108,9 +108,9 @@ import {
 } from "@/components/consultations-advanced-filters";
 import { DialogFooter } from "@/components/ui/dialog";
 import { apiRequest } from "@/lib/queryClient";
-import { extractApiError } from "@/lib/utils";
+import { extractApiError, cn } from "@/lib/utils";
 import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
-import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
+import { pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { sendConsultationReminder, requestConsultationTransfer } from "@/lib/notification-triggers";
 
 // Lawyer-filter source: role-based exclusion. Wider than the
@@ -2287,17 +2287,25 @@ export default function ConsultationsPage() {
               hearings.tsx: overflow wrapper + tableLayout:'fixed' + an explicit
               colgroup. Widths sum to EXACTLY 100%, in header order:
                  4  #
-                10  تاريخ الاستشارة
-                19  العنوان              ← widest, free text
+                 9  تاريخ الاستشارة      ← fixed-width date
+                17  العنوان              ← widest, free text (wraps fine)
                 13  العميل               ← free text
-                 7  النوع                ← badge only
-                12  الحالة               ← stage badge + status pills
-                 9  القسم
+                 6  النوع                ← ONE short badge
+                18  الحالة               ← stage badge + up to 2 status pills
+                 8  القسم
                 11  المحامي المسؤول
-                 7  التصنيف              ← badge only
+                 6  التصنيف              ← ONE short badge, shorter since abb8104
+                                            dropped the "(3 أيام)" day-counts
                  8  الإجراءات            ← 2 icon buttons
                 ---
                100
+              الحالة was 12% and OVERFLOWED: the stage badge alone can be
+              "استكمال المرفقات والبيانات" (26 chars) and Badge is
+              whitespace-nowrap, so it spilled leftward over النوع while the
+              second pill sat below it misaligned. +6 points here, taken from the
+              five columns that hold fixed-width or single-short-badge content.
+              WIDTH ALONE IS NOT THE FIX — see STAGE_BADGE_WRAP_CLASS on the
+              stage badge below, without which a nowrap badge overflows any width.
               (Labels live here rather than as inline JSX comments after each
               <col />, which would leave whitespace text nodes inside <colgroup>
               and trip React's DOM-nesting validation.) */}
@@ -2305,14 +2313,14 @@ export default function ConsultationsPage() {
           <Table className="w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '4%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '19%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '12%' }} />
               <col style={{ width: '9%' }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '8%' }} />
               <col style={{ width: '11%' }} />
-              <col style={{ width: '7%' }} />
+              <col style={{ width: '6%' }} />
               <col style={{ width: '8%' }} />
             </colgroup>
             <TableHeader>
@@ -2404,7 +2412,13 @@ export default function ConsultationsPage() {
                           the stage filter axis still groups these rows. */}
                       {consultation.status === "active" && (() => {
                         const b = getConsultationDisplayBadge(consultation);
-                        return <Badge className={b.className}>{b.label}</Badge>;
+                        // STAGE_BADGE_WRAP_CLASS: the 26-char
+                        // "استكمال المرفقات والبيانات" cannot fit any column
+                        // share while Badge stays whitespace-nowrap. Letting
+                        // THIS badge wrap its text is what actually stops the
+                        // overflow; the widened column just keeps the common
+                        // case on one line.
+                        return <Badge className={cn(b.className, STAGE_BADGE_WRAP_CLASS)}>{b.label}</Badge>;
                       })()}
                       {/* Status pills — orthogonal to the stage badge so the
                           stage stays visible no matter the lifecycle state.

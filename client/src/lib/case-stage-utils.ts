@@ -20,6 +20,30 @@ export function isCasePaused(c: { pausedAt?: string | null }): boolean {
   return !!c.pausedAt;
 }
 
+// Applied to the STAGE badge in every list table.
+//
+// 🔴 WHY THIS IS NEEDED AND flex-wrap IS NOT ENOUGH — the lesson from getting
+// this wrong once (7e48109 widened the cases column and wrapped the container,
+// and concluded consultations "already wraps"; it does not, in practice):
+//   flex-wrap creates break opportunities BETWEEN flex items. It does nothing
+//   INSIDE one. Badge is `whitespace-nowrap` by design (ui/badge.tsx), so a
+//   SINGLE badge whose own text is wider than the column cannot shrink and
+//   cannot break — it overflows no matter how the container is configured, and
+//   no column width short of the full label fixes it.
+// The longest stage labels are 26 characters — "استكمال المرفقات والبيانات" on
+// BOTH cases and consultations, "بانتظار رفع العميل للتسوية" on cases — which
+// exceeds any sane column share once TableCell's p-4 is subtracted.
+//
+// So the stage badge (and only the stage badge) is allowed to wrap its text.
+// The short status pills — معلّقة / بانتظار / تعقيبية #1 / رد خصم — stay nowrap;
+// they fit, and wrapping them would look ragged.
+//
+// Chosen over SHORTENING the label in the table: a table-only short name would
+// be a SECOND vocabulary for one stage — the filter dropdown, the stage bar and
+// the details dialog all show the full label — and this codebase has been bitten
+// repeatedly by one user-visible string having two forms. The label is the label.
+export const STAGE_BADGE_WRAP_CLASS = "whitespace-normal break-words leading-tight text-center";
+
 // Tooltip text for the "معلّقة" row badge, shared by all four pausable entities
 // (cases / consultations / contracts / memos) so the auto-lift date is surfaced
 // identically everywhere. A `title` attribute takes a plain string, so this

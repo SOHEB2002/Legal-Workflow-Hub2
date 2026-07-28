@@ -50,9 +50,9 @@ import { useAuth } from "@/lib/auth-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest, refreshAuthToken } from "@/lib/queryClient";
-import { extractApiError } from "@/lib/utils";
+import { extractApiError, cn } from "@/lib/utils";
 import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
-import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
+import { pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 
 // FE mirror of ALLOWED_CONTRACT_TRANSITIONS for the linear-forward
 // path. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES exits are handled
@@ -1581,7 +1581,14 @@ export default function ContractsPage() {
                       replaces the per-badge mr-1 for identical spacing. */}
                   <TableCell className="text-center">
                     <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
-                    <Badge className={getStageBadgeColor(c.currentStage)}>
+                    {/* STAGE_BADGE_WRAP_CLASS — ContractStageLabels also carries
+                        the 26-char "استكمال المرفقات والبيانات". This table is
+                        AUTO-layout (no colgroup), so a nowrap badge does not
+                        paint over a neighbour — instead it forces a hard minimum
+                        width on المرحلة, squeezing العنوان/العميل and pushing the
+                        whole table wider than its card (CardContent here has no
+                        overflow-x wrapper). Wrapping removes that floor. */}
+                    <Badge className={cn(getStageBadgeColor(c.currentStage), STAGE_BADGE_WRAP_CLASS)}>
                       {ContractStageLabels[c.currentStage] || c.currentStage}
                     </Badge>
                     {c.status === "paused" && (

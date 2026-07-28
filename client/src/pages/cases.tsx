@@ -101,10 +101,10 @@ import {
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { extractApiError } from "@/lib/utils";
+import { extractApiError, cn } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseDetailsDialog } from "@/components/case-details-dialog";
-import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip } from "@/lib/case-stage-utils";
+import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
@@ -1469,7 +1469,14 @@ export default function CasesPage() {
                         {/* displayStage groups paused → استكمال_البيانات
                             and closed/archived → مقفلة so the badge
                             matches what the stage filter returns. */}
-                        <Badge className={`${getStageColor(getCaseDisplayStage(c))} inline-flex justify-center`}>
+                        {/* STAGE_BADGE_WRAP_CLASS — 7e48109 widened this column
+                            to 16% and wrapped the container, which was necessary
+                            but NOT sufficient: CaseStageLabels carries two
+                            26-char labels ("استكمال المرفقات والبيانات" and
+                            "بانتظار رفع العميل للتسوية") and Badge is
+                            whitespace-nowrap, so on a narrow viewport the badge
+                            still overflows 16%. Letting it wrap closes that. */}
+                        <Badge className={cn(getStageColor(getCaseDisplayStage(c)), "inline-flex justify-center", STAGE_BADGE_WRAP_CLASS)}>
                           {getStageLabel(getCaseDisplayStage(c))}
                         </Badge>
                         {/* Phase-8 — paused indicator. */}
