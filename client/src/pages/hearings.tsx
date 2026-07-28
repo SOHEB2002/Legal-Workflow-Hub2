@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
+import { usePersistedFilter, oneOf, anyString, objectLike } from "@/hooks/use-persisted-state";
 import { HearingResultDialog } from "@/components/hearing-result-dialog";
 import { HearingDetailsDialog, getStatusBadge } from "@/components/hearing-details-dialog";
 import { getClientRoleLabel } from "@/lib/client-role";
@@ -159,10 +160,38 @@ export default function HearingsPage() {
   const [reportDialogHearing, setReportDialogHearing] = useState<Hearing | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [basicSearch, setBasicSearch] = useState<string>("");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
-  const [filterDepartment, setFilterDepartment] = useState<string>("all");
-  const [filterLawyer, setFilterLawyer] = useState<string>("all");
-  const [advFilters, setAdvFilters] = useState<AdvancedHearingsFilters>(EMPTY_HEARINGS_ADV_FILTERS);
+  const [filterStatus, setFilterStatus] = usePersistedFilter<string>(
+    "hearings", "status", "all", oneOf(Object.values(HearingStatus) as readonly string[], "all"),
+  );
+  // DEFAULT = the user's OWN department when they have one; "all" otherwise.
+  // A default, not a restriction — the dropdown still offers every department,
+  // and a saved choice always wins over the default.
+  const [filterDepartment, setFilterDepartment] = usePersistedFilter<string>(
+    "hearings", "dept", user?.departmentId || "all", anyString,
+  );
+  const [filterLawyer, setFilterLawyer] = usePersistedFilter<string>(
+    "hearings", "lawyer", "all", anyString,
+  );
+  const [advFilters, setAdvFilters] = usePersistedFilter<AdvancedHearingsFilters>(
+    "hearings", "adv", EMPTY_HEARINGS_ADV_FILTERS,
+    objectLike(EMPTY_HEARINGS_ADV_FILTERS, {
+      statuses: Object.values(HearingStatus) as readonly string[],
+      hearingTypes: Object.values(HearingType) as readonly string[],
+      results: Object.values(HearingResult) as readonly string[],
+    }),
+  );
+
+  // STALE-VALUE GUARD for the async department list. A saved (or defaulted)
+  // department that no longer exists — deleted, or the user moved out of it —
+  // must not leave the list mysteriously empty. The `length === 0` bail is
+  // load-bearing: without it this fires before departments land and wipes a
+  // perfectly valid saved value on every mount.
+  useEffect(() => {
+    if (departments.length === 0) return;
+    if (filterDepartment !== "all" && !departments.some((d) => String(d.id) === filterDepartment)) {
+      setFilterDepartment("all");
+    }
+  }, [departments, filterDepartment, setFilterDepartment]);
   const [deletingHearingId, setDeletingHearingId] = useState<string | null>(null);
   // "جلسة مُعلَّمة" — flag dialog. Flagging opens this to capture the mandatory
   // reason; UNflagging is immediate (nothing to ask, and the server clears the

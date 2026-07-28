@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
+import { usePersistedFilter, objectLike } from "@/hooks/use-persisted-state";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -806,7 +807,39 @@ export default function ConsultationsPage() {
   };
 
   const [, setLocation] = useLocation();
-  const [advFilters, setAdvFilters] = useState<AdvancedConsultationsFilters>(EMPTY_CONSULTATIONS_FILTERS);
+  // CONSULTATIONS KEEP EVERY FILTER IN ONE OBJECT — including the search box and
+  // the department, which the other pages hold as separate top-level state. So a
+  // single persisted entry covers this page's whole filter bar.
+  //
+  // DEFAULT DEPARTMENT: departmentId is this page's dept filter ("" = any), so
+  // the user's own department seeds it. A DEFAULT, not a restriction — every
+  // department stays selectable, and a saved value always wins.
+  //
+  // SEARCH IS FORCED BACK TO "" ON READ, so it stays transient like the other
+  // four pages even though it lives inside the persisted object. Restoring a
+  // search string is the one filter users don't expect to come back, and it is
+  // the hardest to spot: an invisible substring silently emptying the list.
+  const [advFilters, setAdvFilters] = usePersistedFilter<AdvancedConsultationsFilters>(
+    "consultations", "adv",
+    { ...EMPTY_CONSULTATIONS_FILTERS, departmentId: user?.departmentId || "" },
+    (raw) => {
+      const shaped = objectLike(EMPTY_CONSULTATIONS_FILTERS, {
+        stages: ConsultationStagesAll as readonly string[],
+        consultationTypes: Object.values(ConsultationType) as readonly string[],
+      })(raw);
+      return shaped === undefined ? undefined : { ...shaped, search: "" };
+    },
+  );
+
+  // STALE-VALUE GUARD for the async department list — see the hearings/memos
+  // twins. "" is this page's "any department" sentinel. The `length === 0` bail
+  // keeps it from wiping a valid saved value before departments have loaded.
+  useEffect(() => {
+    if (departments.length === 0) return;
+    if (advFilters.departmentId && !departments.some((d) => String(d.id) === advFilters.departmentId)) {
+      setAdvFilters((prev) => ({ ...prev, departmentId: "" }));
+    }
+  }, [departments, advFilters.departmentId, setAdvFilters]);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
 
   // Cross-module deep-link: /consultations?openConsultation=<id> opens the
