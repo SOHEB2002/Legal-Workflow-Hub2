@@ -27,7 +27,7 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
-  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, Pencil, Archive,
+  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, RotateCcw, Pencil, Archive,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -41,6 +41,7 @@ import {
   ContractAttachmentSlot, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
   ContractActivityType, isContractInFollowUpCycle, getStagesForContractCycle,
+  getContractReopenTargetStages,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
 import { useClients } from "@/lib/clients-context";
@@ -49,9 +50,9 @@ import { useAuth } from "@/lib/auth-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest, refreshAuthToken } from "@/lib/queryClient";
-import { extractApiError } from "@/lib/utils";
+import { extractApiError, cn } from "@/lib/utils";
 import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
-import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
+import { pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 
 // FE mirror of ALLOWED_CONTRACT_TRANSITIONS for the linear-forward
 // path. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES exits are handled
@@ -210,6 +211,33 @@ function canDoCommitteeDecision(c: Contract, userRole: string, isLaborEntity: bo
 // The actor set is intentionally WIDER than canDoCommitteeDecision
 // (consultations_review_head / branch_manager) — a skip is an owner-approved
 // override, not a committee ruling. Entity 4 of 4; mirrors cases/memos/consultations.
+// Reasoned override — "تجاوز المراجعة الداخلية". Restates the SERVER rule on
+// POST /api/contracts/:id/skip-internal-review verbatim → visibility ==
+// authorization.
+//
+// 🔴 NARROWER THAN canSkipCommittee ON PURPOSE — the assignee is EXCLUDED, and
+// so is a department_head who is themself the contract's assignedTo. Four-eyes
+// exists so a drafter cannot approve their own work; letting the drafter DELETE
+// the review instead of passing it reaches the same end state by a shorter road.
+// Department tier and above only. See the server comment for the full argument.
+function canSkipInternalReview(
+  c: Contract,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (c.status !== "active") return false;
+  if (c.pausedAt || c.awaitingCompletion) return false;
+  if (c.currentStage !== ContractStage.INTERNAL_REVIEW) return false;
+  if (userRole === "branch_manager") return true;
+  const isAssignee = !!c.assignedTo && c.assignedTo === userId;
+  return userRole === "department_head"
+    && !!userDeptId
+    && !!c.departmentId
+    && c.departmentId === userDeptId
+    && !isAssignee;
+}
+
 function canSkipCommittee(
   c: Contract,
   userRole: string,
@@ -299,7 +327,7 @@ export default function ContractsPage() {
   const {
     contracts, addContract, updateContract, deleteContract,
     assignContract, advanceStage, returnStage,
-    submitInternalReview, submitCommitteeDecision, skipCommittee, recordTakeNotesOutcome,
+    submitInternalReview, submitCommitteeDecision, skipCommittee, skipInternalReview, recordTakeNotesOutcome,
     earlyCloseContract, startContractFollowUp, pauseContract, unpauseContract,
     awaitCompletion, resumeFromCompletion, skipCompletion,
     refreshContracts,
@@ -477,7 +505,9 @@ export default function ContractsPage() {
 
   const handleAdd = async () => {
     if (!formData.title.trim() || !formData.clientId || !formData.departmentId) return;
-    if (requiresIntakeFile && !intakeFile) return;
+    // The intake-file early return is GONE — the attachment is optional at
+    // creation (owner decision). It still uploads when supplied; see the
+    // uploads list below, which already guards on `intakeFile` being present.
     setCreating(true);
     let created: Contract | null = null;
     try {
@@ -923,6 +953,11 @@ export default function ContractsPage() {
   const [skipCommitteeTarget, setSkipCommitteeTarget] = useState<Contract | null>(null);
   const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
 
+  // Reasoned override — "تجاوز المراجعة الداخلية" (skip straight to لجنة_مراجعة).
+  const [showSkipInternalReview, setShowSkipInternalReview] = useState(false);
+  const [skipInternalReviewTarget, setSkipInternalReviewTarget] = useState<Contract | null>(null);
+  const [skipInternalReviewReason, setSkipInternalReviewReason] = useState("");
+
   const [showTakeNotes, setShowTakeNotes] = useState(false);
   const [takeNotesTarget, setTakeNotesTarget] = useState<Contract | null>(null);
   const [takeNotesNotes, setTakeNotesNotes] = useState("");
@@ -1106,6 +1141,39 @@ export default function ContractsPage() {
     return false;
   };
 
+  // Reopen — resume the ORIGINAL work at a chosen stage. Same actor set as
+  // canStartFollowUp (both are "the close tier on a closed row"), but a
+  // different ACT: تعقيبية starts a NEW 3-stage cycle on a finished contract,
+  // إعادة فتح says the closure itself was wrong. Kept as its own helper so the
+  // two can diverge without one silently dragging the other.
+  const canReopenContract = (c: Contract): boolean => canStartFollowUp(c);
+
+  const [reopenTarget, setReopenTarget] = useState<Contract | null>(null);
+  const [reopenStage, setReopenStage] = useState("");
+  const [reopenNotes, setReopenNotes] = useState("");
+  const [reopenSaving, setReopenSaving] = useState(false);
+
+  const handleReopenContract = async () => {
+    if (!reopenTarget || !reopenStage) return;
+    setReopenSaving(true);
+    try {
+      const notes = reopenNotes.trim();
+      await apiRequest("POST", `/api/contracts/${reopenTarget.id}/reopen`, {
+        targetStage: reopenStage,
+        ...(notes ? { notes } : {}),
+      });
+      await refreshContracts();
+      toast({ title: "تم إعادة فتح العقد" });
+      setReopenTarget(null);
+      setReopenStage("");
+      setReopenNotes("");
+    } catch (err) {
+      toast({ title: "فشل إعادة الفتح", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReopenSaving(false);
+    }
+  };
+
   const [showFollowUp, setShowFollowUp] = useState(false);
   const [followUpTarget, setFollowUpTarget] = useState<Contract | null>(null);
   const [followUpQuestion, setFollowUpQuestion] = useState("");
@@ -1272,16 +1340,17 @@ export default function ContractsPage() {
                   rows={4}
                 />
               </div>
-              {/* مراجعة_عقد intake file — required at create time. The
-                  picker is hidden for the other two contract types since
-                  they have no required intake slot. The file is uploaded
-                  in a second request after the contract is committed
-                  (see handleAdd) so a failed upload doesn't lose the
-                  contract row. */}
+              {/* مراجعة_عقد intake file — OPTIONAL at create time (owner
+                  decision; it used to be mandatory and blocked submit). The
+                  picker is still shown for مراجعة_عقد only, since the other two
+                  types have no such slot. The file is uploaded in a second
+                  request after the contract is committed (see handleAdd) so a
+                  failed upload doesn't lose the contract row, and it can equally
+                  be added later from the المرفقات tab. */}
               {requiresIntakeFile && (
                 <div>
                   <Label>
-                    العقد محل المراجعة <span className="text-destructive">*</span>
+                    العقد محل المراجعة <span className="text-muted-foreground text-xs">(اختياري)</span>
                   </Label>
                   <Input
                     type="file"
@@ -1295,7 +1364,8 @@ export default function ContractsPage() {
                     </p>
                   )}
                   <p className="text-xs text-muted-foreground mt-1">
-                    يلزم رفع نسخة العقد قبل إنشاء طلب المراجعة. يمكن استبداله لاحقاً من تبويب المرفقات.
+                    يمكنك رفع نسخة العقد الآن أو لاحقاً من تبويب المرفقات. لن يمنع غيابه إنشاء
+                    الطلب أو تقدّمه بين المراحل.
                   </p>
                 </div>
               )}
@@ -1387,7 +1457,6 @@ export default function ContractsPage() {
                 || !formData.title.trim()
                 || !formData.clientId
                 || !formData.departmentId
-                || (requiresIntakeFile && !intakeFile)
               }
             >
               {creating
@@ -1512,7 +1581,14 @@ export default function ContractsPage() {
                       replaces the per-badge mr-1 for identical spacing. */}
                   <TableCell className="text-center">
                     <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
-                    <Badge className={getStageBadgeColor(c.currentStage)}>
+                    {/* STAGE_BADGE_WRAP_CLASS — ContractStageLabels also carries
+                        the 26-char "استكمال المرفقات والبيانات". This table is
+                        AUTO-layout (no colgroup), so a nowrap badge does not
+                        paint over a neighbour — instead it forces a hard minimum
+                        width on المرحلة, squeezing العنوان/العميل and pushing the
+                        whole table wider than its card (CardContent here has no
+                        overflow-x wrapper). Wrapping removes that floor. */}
+                    <Badge className={cn(getStageBadgeColor(c.currentStage), STAGE_BADGE_WRAP_CLASS)}>
                       {ContractStageLabels[c.currentStage] || c.currentStage}
                     </Badge>
                     {c.status === "paused" && (
@@ -1864,6 +1940,19 @@ export default function ContractsPage() {
                     / own-dept head / assigned lawyer), and it skips the committee
                     rather than recording its decision. The gate restates the
                     server's rule verbatim → visibility == authorization. */}
+                {/* Reasoned override — "تجاوز المراجعة الداخلية". Same
+                    destructive framing as the committee skip, but a NARROWER
+                    actor set: department tier and above, author excluded, so a
+                    drafter can never dispose of the review of their own draft. */}
+                {user && canSkipInternalReview(selected, user.role, user.id, user.departmentId) && (
+                  <Button size="sm" variant="outline"
+                    data-testid={`dialog-button-skip-internal-review-${selected.id}`}
+                    onClick={() => { setSkipInternalReviewTarget(selected); setSkipInternalReviewReason(""); setShowSkipInternalReview(true); }}
+                    className="border-destructive/60 text-destructive hover:bg-destructive/10">
+                    <AlertTriangle className="w-4 h-4 ml-1" />
+                    تجاوز المراجعة الداخلية
+                  </Button>
+                )}
                 {user && canSkipCommittee(selected, user.role, user.id, user.departmentId) && (
                   <Button size="sm" variant="outline"
                     data-testid={`dialog-button-skip-committee-${selected.id}`}
@@ -1897,6 +1986,22 @@ export default function ContractsPage() {
                     onClick={() => { setEarlyCloseTarget(selected); setEarlyCloseReason(""); setShowEarlyClose(true); }}>
                     <XCircle className="w-4 h-4 ml-1" />
                     إغلاق مبكر
+                  </Button>
+                )}
+                {/* REOPEN — resume the ORIGINAL work. Sits beside استشارة تعقيبية
+                    because both act on a closed contract, but the labels keep the
+                    two acts apart: تعقيبية = a NEW question on a finished
+                    contract (3-stage cycle); إعادة فتح = the closure was wrong. */}
+                {canReopenContract(selected) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-green-600 text-green-700 hover:bg-green-50"
+                    data-testid={`dialog-button-reopen-${selected.id}`}
+                    onClick={() => { setReopenTarget(selected); setReopenStage(""); setReopenNotes(""); }}
+                  >
+                    <RotateCcw className="w-4 h-4 ml-1" />
+                    إعادة فتح
                   </Button>
                 )}
                 {/* Re-open a closed contract for a client follow-up question.
@@ -2020,7 +2125,13 @@ export default function ContractsPage() {
                   }
                   return (
                     <div className="space-y-3">
-                      <p className="text-xs text-muted-foreground">ملفات مطلوبة</p>
+                      {/* Was "ملفات مطلوبة". Not all slot rules are gating —
+                          صياغة_عقد's MOU already had requiredBeforeLeavingStage
+                          null, and مراجعة_عقد's intake slot now does too — so the
+                          old header contradicted the rule for the commonest type.
+                          The per-slot rows below still say when a file is
+                          missing; the header just names the section. */}
+                      <p className="text-xs text-muted-foreground">ملفات العقد</p>
                       {slotRules.map((rule: any) => {
                         const att = attachmentsBySlot[rule.slotKey];
                         const isUploading = uploadingSlot === rule.slotKey;
@@ -2756,6 +2867,128 @@ export default function ContractsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* ============ Reopen dialog ============
+          Stage picker + optional notes. No number prompt (contracts carry no
+          platform numbers, unlike the cases version this mirrors) and no
+          cancelled-children warning (contracts have no hearings / memos / field
+          tasks; attachments and the activity log survive a close untouched).
+          The stage list comes from getContractReopenTargetStages, which is
+          CYCLE-AWARE — a contract that has been through a follow-up resolves
+          against the 3-stage cycle list, so offering the full 8-stage path would
+          land it off its own resolved path. */}
+      <AlertDialog
+        open={!!reopenTarget}
+        onOpenChange={(open) => { if (!open) { setReopenTarget(null); setReopenStage(""); setReopenNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RotateCcw className="w-5 h-5 text-green-700" />
+              إعادة فتح العقد
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيعود العقد للعمل عند المرحلة التي تختارها، ويُلغى سبب الإغلاق السابق
+              (مع بقائه في سجل النشاط).
+              <br />
+              إذا كان العميل قد عاد بسؤال <strong>جديد</strong> على عقد منتهٍ، استخدم
+              "استشارة تعقيبية" بدلاً من ذلك.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-4 text-right">
+            <div>
+              <Label>المرحلة <span className="text-red-500">*</span></Label>
+              <Select value={reopenStage} onValueChange={setReopenStage}>
+                <SelectTrigger data-testid="select-reopen-stage">
+                  <SelectValue placeholder="اختر المرحلة" />
+                </SelectTrigger>
+                <SelectContent>
+                  {reopenTarget && getContractReopenTargetStages(reopenTarget).map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {ContractStageLabels[s] || s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>ملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-reopen-notes"
+                value={reopenNotes}
+                onChange={(e) => setReopenNotes(e.target.value)}
+                placeholder="سبب إعادة الفتح..."
+                rows={3}
+              />
+            </div>
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-reopen"
+              disabled={reopenSaving || !reopenStage}
+              onClick={(e) => { e.preventDefault(); handleReopenContract(); }}
+            >
+              <RotateCcw className="w-4 h-4 ml-2" />
+              تأكيد إعادة الفتح
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ====== Skip-internal-review dialog (reasoned override) ======
+          Moves the contract straight to لجنة_مراجعة with NO internal-review
+          decision. Same shape as the committee skip below; the reason is
+          MANDATORY and is recorded with the acting name in the activity log.
+          The copy names the four-eyes constraint explicitly so the actor knows
+          why the action isn't offered to the drafter. */}
+      <Dialog open={showSkipInternalReview} onOpenChange={(open) => { if (!open) setShowSkipInternalReview(false); }}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              تجاوز مرحلة المراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم نقل العقد مباشرةً إلى <strong>لجنة المراجعة</strong> دون قرار مراجعة
+              داخلية. يُسجَّل هذا الإجراء في سجل نشاط العقد مع اسمك والسبب. السبب إلزامي.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              هذا الإجراء متاح لرئيس القسم أو مدير الفرع فقط، ولا يجوز لمن حرّر العقد تجاوز
+              مراجعته.
+            </p>
+            <div>
+              <Label>سبب التجاوز <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-skip-internal-review-reason"
+                value={skipInternalReviewReason}
+                onChange={(e) => setSkipInternalReviewReason(e.target.value)}
+                placeholder="سبب تجاوز المراجعة الداخلية (إلزامي)..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowSkipInternalReview(false)} data-testid="button-cancel-skip-internal-review">
+              إلغاء
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid="button-confirm-skip-internal-review"
+              onClick={async () => {
+                if (!skipInternalReviewTarget || !skipInternalReviewReason.trim()) return;
+                await wrap(() => skipInternalReview(skipInternalReviewTarget.id, skipInternalReviewReason.trim()), "تم تجاوز المراجعة الداخلية — العقد في لجنة المراجعة");
+                setShowSkipInternalReview(false);
+              }}
+              disabled={busy || !skipInternalReviewReason.trim()}
+            >
+              تأكيد التجاوز
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ============ Skip-committee dialog (reasoned override) ============
           Moves the contract straight to جاهزة_للإرسال with NO committee decision;
           the reason is MANDATORY and is recorded (with the acting name) in the
@@ -2911,7 +3144,8 @@ export default function ContractsPage() {
               سيتم إغلاق العقد بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
               البيانات والمرفقات الناقصة ضمن سبب الإغلاق.
               <br />
-              يمكن إعادة فتحه لاحقاً كاستشارة تعقيبية إذا تجاوب العميل.
+              إذا تجاوب العميل لاحقاً وأرسل الناقص، استخدم "إعادة فتح" للعودة إلى
+              المرحلة التي توقف عندها العمل.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2 text-right">

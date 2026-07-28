@@ -499,6 +499,11 @@ export interface IStorage {
     id: string,
     input: { reason: string; performedBy: string; performerName: string },
   ): Promise<Contract | undefined>;
+  // Same shape, different stage: مراجعة_داخلية → لجنة_مراجعة. CONTRACTS ONLY.
+  skipContractInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Contract | undefined>;
   createContractActivity(input: {
     contractId: string;
     activityType: string;
@@ -6155,6 +6160,45 @@ export class DatabaseStorage implements IStorage {
           performerName: input.performerName,
           fromStage,
           toStage: ContractStage.READY,
+        },
+        performedBy: input.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      return updated ? mapDbContract(updated) : undefined;
+    });
+  }
+
+  // Reasoned override — "تجاوز المراجعة الداخلية". Byte-for-byte the shape of
+  // skipContractCommittee above; only the target stage and the activity type
+  // differ. The target is COMMITTEE — the stage internal review would have
+  // advanced to on a PASSED decision, and the next entry in ContractStagesOrder,
+  // so the skipped contract lands exactly where a passing review would have put
+  // it. (Same relationship skip-committee has to its own APPROVED target.)
+  async skipContractInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Contract | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const truncated = input.reason.slice(0, 120);
+      await tx.update(contracts).set({
+        currentStage: ContractStage.COMMITTEE,
+        updatedAt: now,
+      }).where(eq(contracts.id, id));
+      await tx.insert(contractActivityLog).values({
+        id: randomUUID(),
+        contractId: id,
+        activityType: ContractActivityType.INTERNAL_REVIEW_SKIPPED,
+        description: `تجاوز المراجعة الداخلية بواسطة ${input.performerName} — ${truncated}`,
+        metadata: {
+          reason: input.reason,
+          performerName: input.performerName,
+          fromStage,
+          toStage: ContractStage.COMMITTEE,
         },
         performedBy: input.performedBy,
         performedAt: now,

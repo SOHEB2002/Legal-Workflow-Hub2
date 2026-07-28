@@ -46,6 +46,9 @@ import {
   getStagesForConsultationCycle,
   isContractInFollowUpCycle,
   getStagesForContractCycle,
+  getContractReopenTargetStages,
+  getConsultationReopenTargetStages,
+  reopenEntitySchema,
   ContractStage,
   ContractStagesAll,
   ContractStageLabels,
@@ -5195,6 +5198,125 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/consultations/:id/reopen
+  // Body: { targetStage, notes? }. Re-opens a CLOSED consultation at a
+  // caller-chosen stage. Mirrors POST /api/cases/:id/reopen, minus the number
+  // prompt — consultations carry no platform numbers.
+  //
+  // ⚠ REOPEN vs START-FOLLOW-UP — they are NOT duplicates, and both must exist:
+  //   /start-follow-up  the matter genuinely FINISHED and the client came back
+  //                     with a NEW question. followUpCount bumps and the record
+  //                     switches PERMANENTLY to the 3-stage cycle
+  //                     (getStagesForConsultationCycle is status-agnostic), which
+  //                     deliberately skips دراسة / تحرير / مراجعة / لجنة. Answer
+  //                     and close again.
+  //   /reopen           the CLOSURE ITSELF was wrong or premature. Resume the
+  //                     ORIGINAL work at the stage it should be at, on the full
+  //                     path, with no cycle counter touched.
+  // The close-for-no-response flow is the clearest case for reopen: a client who
+  // finally sends the missing documents should go back to where the work stopped,
+  // not into an answer-and-close cycle.
+  //
+  // TARGET STAGES: getConsultationReopenTargetStages — the record's OWN resolved
+  // path (cycle-aware), minus CLOSED_FINAL. No forced escape-hatch stage; see
+  // that helper's comment for why the cases منظورة carve-out has no analogue here.
+  //
+  // ROLE GATE: this entity's own CLOSE tier (canEarlyClose), evaluated against a
+  // closed row. Whoever can close can re-open. NOTE this INCLUDES admin_support,
+  // deliberately diverging from the cases reopen, which excludes it by a specific
+  // owner decision about CASES; the owner's instruction here was "each entity's
+  // own close tier".
+  //
+  // NO CANCELLED-CHILDREN WARNING — unlike cases. Consultations have no hearings,
+  // memos or field tasks, and their close paths cancel nothing; the helper rows
+  // (studies / drafts / reviews / committee decisions) are immutable history, not
+  // cancellable children. There is nothing to warn about, so nothing is claimed.
+  app.post("/api/consultations/:id/reopen", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = reopenEntitySchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "closed") {
+        return res.status(400).json({ error: "يمكن إعادة الفتح فقط لاستشارة مغلقة" });
+      }
+
+      // Close tier, evaluated on the closed row. canEarlyClose itself requires
+      // status "active", so the role half is restated here rather than reused.
+      const resolvedType = resolveConsultationType(consultation.consultationType);
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      const permitted = resolvedType === ConsultationType.WRITTEN
+        ? (["admin_support", "branch_manager"].includes(reqUser.role) ||
+           (reqUser.role === "department_head"
+             && !!reqUser.departmentId
+             && !!consultation.departmentId
+             && consultation.departmentId === reqUser.departmentId) ||
+           isLawyer)
+        : ["admin_support", "branch_manager"].includes(reqUser.role);
+      if (!permitted) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح الاستشارة" });
+
+      const targetStage = String(req.body?.targetStage ?? "").trim();
+      if (!targetStage) {
+        return res.status(400).json({ error: "يجب اختيار المرحلة التي ستُفتح عندها الاستشارة" });
+      }
+      const allowedTargets = getConsultationReopenTargetStages(consultation) as string[];
+      if (!allowedTargets.includes(targetStage)) {
+        return res.status(400).json({ error: "المرحلة المختارة ليست ضمن مسار هذه الاستشارة" });
+      }
+
+      const notes = String(req.body?.notes ?? "").trim();
+      const stageLabel = (ConsultationStageLabels as Record<string, string>)[targetStage] || targetStage;
+      const clearedReason = consultation.closureReason || "";
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        {
+          status: "active",
+          currentStage: targetStage as ConsultationStageValue,
+          // Closure metadata cleared on the row but PRESERVED in the activity
+          // row below, so the audit trail keeps why it had been closed.
+          closedAt: null,
+          closureReason: null,
+          closureReasonOther: null,
+          // Defensive cleanup, mirroring /start-follow-up: a consultation closed
+          // while paused or awaiting completion must not come back still latched.
+          pausedAt: null,
+          pausedBy: null,
+          pauseReason: null,
+          pauseUntil: null,
+          awaitingCompletion: false,
+          savedStage: null,
+        },
+        {
+          activityType: ConsultationActivityType.REOPENED,
+          description: [
+            `إعادة فتح الاستشارة عند مرحلة ${stageLabel}`,
+            clearedReason ? `سبب الإغلاق السابق: ${clearedReason}` : "",
+            notes,
+          ].filter(Boolean).join(" — "),
+          metadata: {
+            targetStage,
+            previousClosureReason: clearedReason || null,
+            previousClosedAt: consultation.closedAt || null,
+            notes,
+          },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل إعادة فتح الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/reopen] error:", error);
+      res.status(500).json({ error: error.message || "فشل إعادة فتح الاستشارة" });
+    }
+  });
+
   // POST /api/consultations/:id/start-follow-up
   // Re-opens a closed consultation into a follow-up cycle ("استشارة
   // تعقيبية"). Same row: status flips back to active, currentStage
@@ -7668,6 +7790,96 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/contracts/:id/skip-internal-review
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز المراجعة الداخلية". Moves the
+  // contract from مراجعة_داخلية straight to لجنة_مراجعة with NO internal-review
+  // decision, recording who did it and why in contract_activity_log (reason is
+  // MANDATORY). Same shape as /skip-committee above.
+  //
+  // TARGET = COMMITTEE — the stage a PASSED internal review advances to
+  // (:7485), and the next entry in ContractStagesOrder. The skipped contract
+  // lands exactly where a passing review would have put it, mirroring how
+  // skip-committee lands on the committee's own APPROVED target.
+  //
+  // CONTRACTS ONLY, per owner scope. The other three entities are untouched.
+  //
+  // 🔴 ROLE SET IS DELIBERATELY NARROWER THAN /skip-committee — THE ASSIGNEE IS
+  // EXCLUDED. This is the one place the two skips must NOT match, and the reason
+  // is written into the skip-committee comment itself: that endpoint restricted
+  // its ORIGIN to the committee stage "so the four-eyes internal-review lock is
+  // untouched", and justified including the author by noting four-eyes "does not
+  // apply here". An override that ORIGINATES at مراجعة_داخلية is the opposite
+  // case — it disposes of the review of the actor's own draft.
+  //
+  // Four-eyes exists so a drafter cannot approve their own work. Letting the
+  // drafter DELETE the review instead of passing it reaches the same end state
+  // by a shorter road, so the exclusion has to hold for the skip as well:
+  //   ALLOWED: branch_manager | department_head of the contract's OWN department
+  //            — and, exactly like the internal-review endpoint's
+  //            isOwnDeptHeadReviewer (:7476), a head who is themself the
+  //            contract's assignedTo is excluded too.
+  //   NOT ALLOWED: the assigned lawyer.
+  // DEPARTMENT TIER AND ABOVE, in the owner's terms. The mandatory reason and
+  // the audit row remain the control on top of that.
+  //
+  // Deliberately bypasses validateStageTransition — the precedent skip-committee
+  // and reopen already set. No transition-table entry is added, so this override
+  // is unreachable via /advance-stage.
+  app.post("/api/contracts/:id/skip-internal-review", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // Type-check-only gate; the handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز المراجعة الداخلية مطلوب" });
+
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.pausedAt || contract.awaitingCompletion) {
+        return res.status(400).json({ error: "العقد في حالة لا تسمح بتجاوز المراجعة الداخلية" });
+      }
+      if (contract.currentStage !== ContractStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة المراجعة الداخلية" });
+      }
+
+      // HUMAN role only — NOT delegation-expanded, matching the internal-review
+      // endpoint it protects (:7472 "HUMAN role only — not delegation-expanded").
+      // Delegation must not become a route around four-eyes.
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && !!reqUser.departmentId
+        && !!contract.departmentId
+        && contract.departmentId === reqUser.departmentId
+        && !isAssignedLawyer(reqUser, contract);
+      const allowed = reqUser.role === "branch_manager" || isOwnDeptHead;
+      if (!allowed) {
+        return res.status(403).json({ error: "تجاوز المراجعة الداخلية متاح لرئيس القسم أو مدير الفرع فقط، ولا يجوز لمن حرّر العقد تجاوز مراجعته" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, null, performer?.name || reqUser.id);
+      const updated = await storage.skipContractInternalReview(contract.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز المراجعة الداخلية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/skip-internal-review] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   app.post("/api/contracts/:id/take-notes-outcome", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -7907,6 +8119,97 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[contracts/close-no-response] error:", error);
       res.status(500).json({ error: error.message || "فشل إغلاق العقد" });
+    }
+  });
+
+  // POST /api/contracts/:id/reopen
+  // Body: { targetStage, notes? }. The contracts twin of the consultations
+  // reopen above — see that comment for the full reopen-vs-start-follow-up
+  // distinction, the target-stage derivation and the no-children note. Contracts
+  // likewise carry no platform numbers, so there is no number prompt.
+  //
+  // ROLE GATE: this entity's own close tier — the /early-close set verbatim
+  // (admin_support | branch_manager | own-dept department_head | assignee), with
+  // the status check inverted to "closed".
+  //
+  // NO CANCELLED-CHILDREN WARNING: contracts have no hearings / memos / field
+  // tasks, and /early-close cancels nothing. Attachments and the activity log
+  // survive a close untouched and need no restoring.
+  app.post("/api/contracts/:id/reopen", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = reopenEntitySchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+
+      if (contract.status !== "closed") {
+        return res.status(400).json({ error: "يمكن إعادة الفتح فقط لعقد مغلق" });
+      }
+
+      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
+      const allowed =
+        ["admin_support", "branch_manager"].includes(reqUser.role) ||
+        (reqUser.role === "department_head"
+          && !!reqUser.departmentId
+          && !!contract.departmentId
+          && contract.departmentId === reqUser.departmentId) ||
+        isAssigned;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح العقد" });
+
+      const targetStage = String(req.body?.targetStage ?? "").trim();
+      if (!targetStage) {
+        return res.status(400).json({ error: "يجب اختيار المرحلة التي سيُفتح عندها العقد" });
+      }
+      const allowedTargets = getContractReopenTargetStages(contract) as string[];
+      if (!allowedTargets.includes(targetStage)) {
+        return res.status(400).json({ error: "المرحلة المختارة ليست ضمن مسار هذا العقد" });
+      }
+
+      const notes = String(req.body?.notes ?? "").trim();
+      const stageLabel = (ContractStageLabels as Record<string, string>)[targetStage] || targetStage;
+      const clearedReason = contract.closureReason || "";
+      const updated = await storage.updateContractAndLog(
+        contract.id,
+        {
+          status: "active",
+          currentStage: targetStage as ContractStageValue,
+          closedAt: null,
+          closureReason: null,
+          closureReasonOther: null,
+          pausedAt: null,
+          pausedBy: null,
+          pauseReason: null,
+          pauseUntil: null,
+          awaitingCompletion: false,
+          savedStage: null,
+        },
+        {
+          activityType: ContractActivityType.REOPENED,
+          description: [
+            `إعادة فتح العقد عند مرحلة ${stageLabel}`,
+            clearedReason ? `سبب الإغلاق السابق: ${clearedReason}` : "",
+            notes,
+          ].filter(Boolean).join(" — "),
+          metadata: {
+            targetStage,
+            previousClosureReason: clearedReason || null,
+            previousClosedAt: contract.closedAt || null,
+            notes,
+          },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل إعادة فتح العقد" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/reopen] error:", error);
+      res.status(500).json({ error: error.message || "فشل إعادة فتح العقد" });
     }
   });
 
