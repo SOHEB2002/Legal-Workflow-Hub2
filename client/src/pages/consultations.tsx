@@ -49,7 +49,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play, RotateCw, Pencil } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play, RotateCw, Pencil, Archive } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -403,6 +403,11 @@ const ConsultationClosureReasonLabels: Record<ConsultationClosureReasonValue, st
   answered_verbally: "تم الرد شفهياً",
   duplicate:         "استشارة مكررة",
   no_longer_needed:  "لم تعد مطلوبة",
+  // Written only by /close-no-response, never offered in the early-close
+  // picker below (which filters this member out) — but it MUST have a label,
+  // because the timeline and the closed-row display resolve every stored value
+  // through this map.
+  data_not_completed: "عدم استكمال البيانات",
   other:             "أخرى",
 };
 
@@ -583,6 +588,27 @@ function canEarlyClose(
   if (userRole === "branch_manager" || userRole === "admin_support") return true;
   if (userRole === "department_head") return true;
   return !!consultation.assignedTo && consultation.assignedTo === userId;
+}
+
+// "إغلاق لعدم استكمال البيانات" gate — restates POST
+// /api/consultations/:id/close-no-response so visibility === authorization.
+// ROLE tier is canEarlyClose verbatim (this IS a close, and the endpoint copies
+// the early-close gate), plus the endpoint's own state conditions.
+//
+// Keyed on the STAGE, not on awaitingCompletion: a consultation reaches
+// RECEIVED_PENDING_COMPLETION both by the ordinary advance (latch false) and via
+// /await-completion (latch true), and the button must appear for both.
+function canCloseForNoResponse(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.currentStage !== ConsultationStage.RECEIVED_PENDING_COMPLETION) return false;
+  // The endpoint 400s on a paused row; canEarlyClose already covers
+  // status !== "active", which is what a paused consultation carries.
+  if (consultation.pausedAt) return false;
+  return canEarlyClose(consultation, userRole, userId, userDeptId);
 }
 
 // FE permission gate mirroring POST /api/consultations/:id/start-follow-up.
@@ -920,6 +946,9 @@ export default function ConsultationsPage() {
   // OPTIONAL auto-lift date. "" = open-ended pause, the default and the
   // pre-feature behaviour.
   const [pauseUntil, setPauseUntil] = useState("");
+  const [closeNoResponseTarget, setCloseNoResponseTarget] = useState<Consultation | null>(null);
+  const [closeNoResponseNotes, setCloseNoResponseNotes] = useState("");
+  const [closeNoResponseSaving, setCloseNoResponseSaving] = useState(false);
   const [showUnpauseDialog, setShowUnpauseDialog] = useState(false);
   const [unpauseTarget, setUnpauseTarget] = useState<Consultation | null>(null);
   const [unpauseNotes, setUnpauseNotes] = useState("");
@@ -1302,6 +1331,30 @@ export default function ConsultationsPage() {
       toast({ title: "فشل تحويل الاستشارة", description: extractApiError(err), variant: "destructive" });
     } finally {
       setActionInProgress(false);
+    }
+  };
+
+  // "إغلاق لعدم استكمال البيانات" — no reason picker and no required text: the
+  // closure reason is fixed (DATA_NOT_COMPLETED) and the missing-data text is
+  // resolved SERVER-side from the activity log. Optional notes only.
+  const handleCloseNoResponse = async () => {
+    if (!closeNoResponseTarget) return;
+    setCloseNoResponseSaving(true);
+    try {
+      const notes = closeNoResponseNotes.trim();
+      await apiRequest(
+        "POST",
+        `/api/consultations/${closeNoResponseTarget.id}/close-no-response`,
+        notes ? { notes } : {},
+      );
+      await refreshConsultations();
+      toast({ title: "تم إغلاق الاستشارة لعدم استكمال البيانات" });
+      setCloseNoResponseTarget(null);
+      setCloseNoResponseNotes("");
+    } catch (err) {
+      toast({ title: "فشل الإغلاق", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setCloseNoResponseSaving(false);
     }
   };
 
@@ -2626,6 +2679,21 @@ export default function ConsultationsPage() {
                               </DropdownMenuItem>
                             </>
                           )}
+                          {/* Sits ABOVE the generic إغلاق مبكر so the specific
+                              action is the first close a user sees on a
+                              data-completion consultation. Both can render
+                              together — إغلاق مبكر stays available for a
+                              genuinely different reason. */}
+                          {user && canCloseForNoResponse(consultation, user.role, user.id, user.departmentId) && (
+                            <DropdownMenuItem
+                              data-testid={`button-close-no-response-${consultation.id}`}
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => { setCloseNoResponseTarget(consultation); setCloseNoResponseNotes(""); }}
+                            >
+                              <Archive className="w-4 h-4 ml-2" />
+                              إغلاق لعدم استكمال البيانات
+                            </DropdownMenuItem>
+                          )}
                           {user && canEarlyClose(consultation, user.role, user.id, user.departmentId) && (
                             <DropdownMenuItem
                               data-testid={`button-early-close-${consultation.id}`}
@@ -2762,6 +2830,46 @@ export default function ConsultationsPage() {
                       ستعود إلى: <BidiText>{ConsultationStageLabels[selectedConsultation.savedStage as ConsultationStageValue] || selectedConsultation.savedStage}</BidiText>
                     </div>
                   )}
+                  {/* The client never responded → close. Lives INSIDE the banner
+                      so the escape hatch sits with the state it escapes from. */}
+                  {user && canCloseForNoResponse(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    <div className="mt-2 pt-2 border-t border-amber-500/30">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        data-testid="button-close-no-response-banner"
+                        onClick={() => { setCloseNoResponseTarget(selectedConsultation); setCloseNoResponseNotes(""); }}
+                      >
+                        <Archive className="w-4 h-4 ml-2" />
+                        إغلاق لعدم استكمال البيانات
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* PATH A — the consultation reached the data-completion stage by
+                  the ordinary advance, so awaitingCompletion is FALSE and the
+                  banner above does not render. Rendered only when that banner is
+                  absent, so exactly one box shows either way. */}
+              {user && !selectedConsultation.awaitingCompletion
+                && canCloseForNoResponse(selectedConsultation, user.role, user.id, user.departmentId) && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 flex items-center justify-between gap-3 flex-wrap"
+                  data-testid="banner-consultation-data-completion"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <AlertTriangle className="w-4 h-4" />
+                    الاستشارة في مرحلة استكمال المرفقات والبيانات
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    data-testid="button-close-no-response-strip"
+                    onClick={() => { setCloseNoResponseTarget(selectedConsultation); setCloseNoResponseNotes(""); }}
+                  >
+                    <Archive className="w-4 h-4 ml-2" />
+                    إغلاق لعدم استكمال البيانات
+                  </Button>
                 </div>
               )}
               {/* Phase-8 — paused banner. Renders at the top of the details
@@ -4093,7 +4201,15 @@ export default function ConsultationsPage() {
                   <SelectValue placeholder="اختر سبب الإغلاق" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(Object.values(ConsultationClosureReason) as ConsultationClosureReasonValue[]).map((r) => (
+                  {/* DATA_NOT_COMPLETED is filtered out on purpose: it is written
+                      only by /close-no-response, which is offered exclusively on
+                      the استكمال_المرفقات_والبيانات stage and fills the missing-data
+                      text automatically. Offering it in this stage-agnostic picker
+                      would let a user pick it on any stage and store a closure that
+                      claims data was missing with nothing to back it. */}
+                  {(Object.values(ConsultationClosureReason) as ConsultationClosureReasonValue[])
+                    .filter((r) => r !== ConsultationClosureReason.DATA_NOT_COMPLETED)
+                    .map((r) => (
                     <SelectItem key={r} value={r}>
                       {ConsultationClosureReasonLabels[r]}
                     </SelectItem>
@@ -4356,6 +4472,51 @@ export default function ConsultationsPage() {
             >
               <RotateCw className="w-4 h-4 ml-2" />
               بدء
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* "إغلاق لعدم استكمال البيانات". No reason picker, no required text — the
+          reason is fixed and the missing-data text is resolved server-side from
+          the activity log's metadata.reason. Optional notes only. */}
+      <AlertDialog
+        open={!!closeNoResponseTarget}
+        onOpenChange={(open) => { if (!open) { setCloseNoResponseTarget(null); setCloseNoResponseNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Archive className="w-5 h-5 text-destructive" />
+              إغلاق لعدم استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إغلاق الاستشارة بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
+              البيانات والمرفقات الناقصة ضمن سبب الإغلاق.
+              <br />
+              يمكن إعادة فتحها لاحقاً كاستشارة تعقيبية إذا تجاوب العميل.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-consultation-close-no-response-notes"
+              value={closeNoResponseNotes}
+              onChange={(e) => setCloseNoResponseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول الإغلاق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-close-no-response"
+              disabled={closeNoResponseSaving}
+              className="bg-destructive hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); handleCloseNoResponse(); }}
+            >
+              <Archive className="w-4 h-4 ml-2" />
+              تأكيد الإغلاق
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

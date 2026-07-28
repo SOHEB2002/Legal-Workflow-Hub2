@@ -5102,6 +5102,102 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/consultations/:id/close-no-response
+  // Body: { notes? }. The consultations twin of the cases endpoint — closes a
+  // consultation parked at استكمال_المرفقات_والبيانات because the client never
+  // supplied the missing documents/data, recording WHAT WAS MISSING.
+  //
+  // Simpler resolver than the cases side: consultation_activity_log has a
+  // metadata JSONB column, so awaitConsultationCompletion stores the reason
+  // STRUCTURALLY as metadata.reason. No prefix-stripping, no stageHistory
+  // fallback — consultations have no stageHistory at all.
+  //
+  // ROLES: this entity's OWN early-close tier, not the cases one — WRITTEN keeps
+  // the wider gate (admin_support | branch_manager | own-dept department_head |
+  // assigned lawyer), PHONE / PROCEDURAL narrow to admin_support | branch_manager.
+  app.post("/api/consultations/:id/close-no-response", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      // Early-close gate, copied from /early-close verbatim.
+      const resolvedType = resolveConsultationType(consultation.consultationType);
+      const isLawyer = isAssignedLawyer(reqUser, consultation);
+      const permitted = resolvedType === ConsultationType.WRITTEN
+        ? (["admin_support", "branch_manager"].includes(reqUser.role) ||
+           (reqUser.role === "department_head"
+             && !!reqUser.departmentId
+             && !!consultation.departmentId
+             && consultation.departmentId === reqUser.departmentId) ||
+           isLawyer)
+        : ["admin_support", "branch_manager"].includes(reqUser.role);
+      if (!permitted) return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      if (consultation.currentStage !== ConsultationStage.RECEIVED_PENDING_COMPLETION) {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لاستشارة في مرحلة استكمال المرفقات والبيانات" });
+      }
+      if (consultation.pausedAt) {
+        return res.status(400).json({ error: "الاستشارة معلّقة — أزل التعليق أولاً" });
+      }
+
+      // Latest await_completion row's metadata.reason. Isolated try/catch so an
+      // audit-trail read can never block a legitimate workflow action.
+      let missingData = "";
+      try {
+        const activities = await storage.getConsultationActivities(consultation.id);
+        // Already ordered performedAt DESC — the first match IS the latest.
+        const latestAwait = activities.find((a) => a.activityType === ConsultationActivityType.AWAIT_COMPLETION);
+        missingData = String(latestAwait?.metadata?.reason ?? "").trim();
+      } catch (e) {
+        console.error("[consultations/close-no-response] activity lookup failed:", e);
+      }
+
+      const notes = String(req.body?.notes ?? "").trim();
+      const description = [
+        "إغلاق لعدم استكمال البيانات",
+        missingData ? `الناقص: ${missingData}` : "",
+        notes,
+      ].filter(Boolean).join(" — ");
+
+      const updated = await storage.updateConsultationAndLog(
+        consultation.id,
+        {
+          status: "closed",
+          closureReason: ConsultationClosureReason.DATA_NOT_COMPLETED,
+          // varchar(500) — same truncation as the cases twin.
+          closureReasonOther: missingData.slice(0, 500) || null,
+          closedAt: new Date().toISOString(),
+          // Cleared for the same reason as the cases twin: the consultations
+          // "بانتظار" badge has no closed check, so the latch would stick.
+          awaitingCompletion: false,
+          savedStage: null,
+        },
+        {
+          activityType: ConsultationActivityType.CLOSED_NO_RESPONSE,
+          description,
+          metadata: { reason: ConsultationClosureReason.DATA_NOT_COMPLETED, missingData, notes },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل إغلاق الاستشارة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/close-no-response] error:", error);
+      res.status(500).json({ error: error.message || "فشل إغلاق الاستشارة" });
+    }
+  });
+
   // POST /api/consultations/:id/start-follow-up
   // Re-opens a closed consultation into a follow-up cycle ("استشارة
   // تعقيبية"). Same row: status flips back to active, currentStage
@@ -7824,6 +7920,100 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/contracts/:id/close-no-response
+  // Body: { notes? }. The contracts twin — closes a contract parked at
+  // استكمال_البيانات_والمرفقات because the client never supplied the data.
+  //
+  // Reason resolution is the STRUCTURED one (contract_activity_log has a
+  // metadata JSONB), same as consultations.
+  //
+  // TWO CONTRACT-SPECIFIC POINTS:
+  //   • closure_reason on contracts is FREE TEXT — there is no contract closure
+  //     enum at all (/early-close takes whatever the user types). So this writes
+  //     the shared Arabic ClosureReason.DATA_NOT_COMPLETED value, which keeps the
+  //     stored token greppable and identical to the cases side. It is 22 chars,
+  //     well inside the varchar(50) column.
+  //   • currentStage MUST move to CLOSED, mirroring /early-close: status and
+  //     stage are read independently (table badge, stage bar, pendingReview
+  //     filters), so leaving the stage behind creates a closed-but-still-at-
+  //     استكمال ghost row.
+  app.post("/api/contracts/:id/close-no-response", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+
+      // Early-close gate, copied from /early-close verbatim.
+      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
+      const allowed =
+        ["admin_support", "branch_manager"].includes(reqUser.role) ||
+        (reqUser.role === "department_head"
+          && !!reqUser.departmentId
+          && !!contract.departmentId
+          && contract.departmentId === reqUser.departmentId) ||
+        isAssigned;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق" });
+
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.currentStage !== ContractStage.RECEIVED_PENDING_COMPLETION) {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لعقد في مرحلة استكمال البيانات والمرفقات" });
+      }
+      if (contract.pausedAt) {
+        return res.status(400).json({ error: "العقد معلّق — أزل التعليق أولاً" });
+      }
+
+      let missingData = "";
+      try {
+        const activities = await storage.getContractActivities(contract.id);
+        // Already ordered performedAt DESC — the first match IS the latest.
+        const latestAwait = activities.find((a) => a.activityType === ContractActivityType.AWAIT_COMPLETION);
+        missingData = String(latestAwait?.metadata?.reason ?? "").trim();
+      } catch (e) {
+        console.error("[contracts/close-no-response] activity lookup failed:", e);
+      }
+
+      const notes = String(req.body?.notes ?? "").trim();
+      const description = [
+        "إغلاق لعدم استكمال البيانات",
+        missingData ? `الناقص: ${missingData}` : "",
+        notes,
+      ].filter(Boolean).join(" — ");
+
+      const updated = await storage.updateContractAndLog(
+        contract.id,
+        {
+          status: "closed",
+          currentStage: ContractStage.CLOSED,
+          closedAt: new Date().toISOString(),
+          closureReason: ClosureReason.DATA_NOT_COMPLETED,
+          closureReasonOther: missingData.slice(0, 500) || null,
+          awaitingCompletion: false,
+          savedStage: null,
+        },
+        {
+          activityType: ContractActivityType.CLOSED_NO_RESPONSE,
+          description,
+          metadata: { reason: ClosureReason.DATA_NOT_COMPLETED, missingData, notes, fromStage: contract.currentStage },
+          performedBy: reqUser.id,
+        },
+      );
+      if (!updated) return res.status(500).json({ error: "فشل إغلاق العقد" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/close-no-response] error:", error);
+      res.status(500).json({ error: error.message || "فشل إغلاق العقد" });
+    }
+  });
+
   // POST /api/contracts/:id/start-follow-up
   // Re-opens a CLOSED contract into a follow-up cycle ("استشارة تعقيبية"),
   // mirroring POST /api/consultations/:id/start-follow-up field-for-field.
@@ -9443,6 +9633,76 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[memos/cancel] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/memos/:id/cancel-no-response
+  // Body: { notes? }. The memos twin of the cases/consultations/contracts
+  // "close for no response".
+  //
+  // ⚠ THREE MEMO-SPECIFIC DIVERGENCES, all forced by what memos actually are:
+  //   1. NO STAGE GATE. Memos have no data-completion stage — the schema note on
+  //      memos.dataCompletionLastAckAt says so explicitly ("memos have no
+  //      data-completion STAGE; the button is the trigger"). So
+  //      awaiting_completion = true IS the state, and it is the gate. This is
+  //      the one entity where the latch is the correct thing to key on.
+  //   2. IT CANCELS, IT DOES NOT CLOSE. Memos have no closure model at all — no
+  //      closure_reason / closure_reason_other columns, no "closed" status.
+  //      Their terminal state is ملغاة + cancellation_reason, so the missing-data
+  //      text goes there instead. Same concept, the only shape memos have.
+  //   3. ROLE GATE is canActOnMemo with the CANCEL role set (which adds
+  //      cases_review_head, the memo committee chair) — this entity's own
+  //      terminal-action tier, delegation-aware like every other memo endpoint.
+  app.post("/api/memos/:id/cancel-no-response", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      const allowed = await canActOnMemo(reqUser, memo, req.actingContext, ["branch_manager", "admin_support", "cases_review_head"]);
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء المذكرة" });
+
+      if (!memo.awaitingCompletion) {
+        return res.status(400).json({ error: "هذه المذكرة ليست بانتظار استكمال المرفقات والبيانات" });
+      }
+      // Same terminal-status refusals the ordinary /cancel enforces.
+      if (memo.status === "ملغاة") {
+        return res.status(400).json({ error: "المذكرة ملغاة بالفعل" });
+      }
+      if (memo.status === "معتمدة" || memo.status === "مرفوعة") {
+        return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
+      }
+      if (memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة معلّقة — أزل التعليق أولاً" });
+      }
+
+      let missingData = "";
+      try {
+        const activities = await storage.getMemoActivities(memo.id);
+        // Already ordered performedAt DESC — the first match IS the latest.
+        const latestAwait = activities.find((a) => a.activityType === MemoActivityType.AWAIT_COMPLETION);
+        missingData = String(latestAwait?.metadata?.reason ?? "").trim();
+      } catch (e) {
+        console.error("[memos/cancel-no-response] activity lookup failed:", e);
+      }
+
+      const updated = await storage.cancelMemoForNoResponse(memo.id, {
+        missingData,
+        notes: String(req.body?.notes ?? "").trim(),
+        performedBy: reqUser.id,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إلغاء المذكرة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/cancel-no-response] error:", error);
+      res.status(500).json({ error: error.message || "فشل إلغاء المذكرة" });
     }
   });
 

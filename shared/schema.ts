@@ -2700,6 +2700,17 @@ export const ConsultationClosureReason = {
   ANSWERED_VERBALLY:   "answered_verbally",
   DUPLICATE:           "duplicate",
   NO_LONGER_NEEDED:    "no_longer_needed",
+  // The client never supplied the missing documents/data. Written ONLY by
+  // POST /api/consultations/:id/close-no-response, which is offered exclusively
+  // while the consultation sits at استكمال_المرفقات_والبيانات — deliberately NOT
+  // offered in the manual early-close picker, which is stage-agnostic.
+  //
+  // ENGLISH value to match this enum's own convention (see the header note) —
+  // the CASES twin is ClosureReason.DATA_NOT_COMPLETED = "عدم_استكمال_البيانات",
+  // Arabic, because the cases enum is Arabic throughout. Same concept, each in
+  // its own vocabulary; the Arabic label lives in the FE label map either way.
+  // No migration: closure_reason is a plain varchar.
+  DATA_NOT_COMPLETED:  "data_not_completed",
   OTHER:               "other",
 } as const;
 
@@ -2795,6 +2806,11 @@ export const ConsultationActivityType = {
   DELIVERY_EXTENDED:      "delivery_extended",
   CONVERTED_TO_CASE:      "converted_to_case",
   EARLY_CLOSED:           "early_closed",
+  // Closed because the client never completed the file. Distinct from
+  // EARLY_CLOSED so the timeline (and any future report) can tell a
+  // non-responsive client apart from a deliberate early closure.
+  // Type-only — activity_type is free text, so no migration.
+  CLOSED_NO_RESPONSE:     "closed_no_response",
   GENERAL_NOTE:           "general_note",
   PAUSED:                 "paused",
   UNPAUSED:               "unpaused",
@@ -2814,6 +2830,7 @@ export type ConsultationActivityTypeValue =
   typeof ConsultationActivityType[keyof typeof ConsultationActivityType];
 
 export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValue, string> = {
+  closed_no_response:       "إغلاق لعدم استكمال البيانات",
   created:                  "إنشاء",
   assigned:                 "إسناد",
   stage_advanced:           "تقدم في المرحلة",
@@ -3092,6 +3109,9 @@ export const ContractActivityType = {
   // guard. Type-only: activity_type is free text → no migration.
   COMMITTEE_SKIPPED:        "committee_skipped",
   EARLY_CLOSED:             "early_closed",
+  // Closed because the client never completed the file — see the consultations
+  // twin. Type-only; activity_type is free text, so no migration.
+  CLOSED_NO_RESPONSE:       "closed_no_response",
   GENERAL_NOTE:             "general_note",
   PAUSED:                   "paused",
   UNPAUSED:                 "unpaused",
@@ -3126,6 +3146,7 @@ export type ContractActivityTypeValue =
   typeof ContractActivityType[keyof typeof ContractActivityType];
 
 export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, string> = {
+  closed_no_response:     "إغلاق لعدم استكمال البيانات",
   created:                "إنشاء",
   assigned:               "إسناد",
   stage_advanced:         "تقدم في المرحلة",
@@ -3244,12 +3265,20 @@ export const MemoActivityType = {
   AWAIT_COMPLETION:       "await_completion",
   RESUME_FROM_COMPLETION: "resume_from_completion",
   CANCELLED:              "cancelled",
+  // Cancelled because the client never completed the file. Memos have NO
+  // closure model at all — no closure_reason column, no "closed" status — so
+  // the memo-equivalent of the cases/consultations/contracts CLOSE is a
+  // CANCEL (status ملغاة + cancellation_reason). Distinct from CANCELLED so a
+  // non-responsive client is distinguishable from an ordinary "لا يحتاج مذكرة".
+  // Type-only — activity_type is free text, so no migration.
+  CANCELLED_NO_RESPONSE:  "cancelled_no_response",
 } as const;
 
 export type MemoActivityTypeValue =
   typeof MemoActivityType[keyof typeof MemoActivityType];
 
 export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
+  cancelled_no_response:  "إلغاء لعدم استكمال البيانات",
   created:                "إنشاء",
   assigned:               "إسناد",
   stage_advanced:         "تقدم في المرحلة",

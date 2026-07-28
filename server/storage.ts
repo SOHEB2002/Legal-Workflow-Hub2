@@ -384,6 +384,13 @@ export interface IStorage {
     id: string,
     input: { reason: string; performedBy: string },
   ): Promise<Memo | undefined>;
+  // The memo-equivalent of the cases/consultations/contracts "close for no
+  // response". Memos have no closure model, so their terminal state is a
+  // CANCEL. missingData is resolved by the ROUTE (see the priority chain there).
+  cancelMemoForNoResponse(
+    id: string,
+    input: { missingData: string; notes: string; performedBy: string },
+  ): Promise<Memo | undefined>;
 
   // Return-to-committee from الأخذ_بالملاحظات → لجنة_المراجعة. One
   // transaction: stage update + activity-log row. Used by the
@@ -2749,6 +2756,57 @@ export class DatabaseStorage implements IStorage {
         activityType: MemoActivityType.CANCELLED,
         description: `تم إلغاء المذكرة — السبب: ${input.reason}`,
         metadata: { reason: input.reason },
+        performedBy: input.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
+  // Cancel a memo parked on the awaiting-completion latch because the client
+  // never completed the file.
+  //
+  // ⚠ MEMOS HAVE NO CLOSURE MODEL — no closure_reason column, no "closed"
+  // status. Their terminal state is CANCELLED (status ملغاة +
+  // cancellation_reason), so this is the memo-equivalent of the CLOSE that
+  // cases / consultations / contracts get, not a different feature.
+  //
+  // A separate method rather than a flag on cancelMemo so the ordinary
+  // "لا يحتاج مذكرة" cancel keeps its exact current behaviour: this one also
+  // clears the await latch and writes its own activity type.
+  async cancelMemoForNoResponse(
+    id: string,
+    input: { missingData: string; notes: string; performedBy: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      // cancellation_reason is text() — no truncation needed, unlike the
+      // varchar(500) closure_reason_other its siblings write to.
+      const reason = [
+        "عدم استكمال البيانات",
+        input.missingData ? `الناقص: ${input.missingData}` : "",
+        input.notes,
+      ].filter(Boolean).join(" — ");
+      await tx.update(memos).set({
+        status: "ملغاة",
+        cancellationReason: reason,
+        // Cleared for the same reason as the cases twin: the memos-table
+        // "بانتظار" badge is `awaitingCompletion && !isMemoPaused(memo)` with no
+        // cancelled check, so leaving the latch set would brand a cancelled memo
+        // as still-awaiting forever.
+        awaitingCompletion: false,
+        savedStage: null,
+        updatedAt: now,
+      }).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.CANCELLED_NO_RESPONSE,
+        description: `تم إلغاء المذكرة لعدم استكمال البيانات — ${reason}`,
+        metadata: { reason, missingData: input.missingData, notes: input.notes },
         performedBy: input.performedBy,
         performedAt: now,
       });
