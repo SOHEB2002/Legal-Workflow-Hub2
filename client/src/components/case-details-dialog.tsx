@@ -159,6 +159,10 @@ export interface CaseDetailsActions {
   // The two manual routes out of محكوم_حكم_ابتدائي (appeal path). Same rule the
   // server enforces on POST /api/cases/:id/appeal-outcome.
   canRecordAppealOutcome: boolean;
+  // "تم الاستئناف" — the manual counterpart to the objection-memo hook. Both
+  // land on منظورة_استئناف; see the endpoint comment for why they cannot
+  // double-fire.
+  onWeAppealed: () => void;
   onOpponentAppealed: () => void;
   onNoAppeal: () => void;
   // "تم استلام رد الخصم" — clears the مطلوب رد من الخصم indicator. The host gates
@@ -1936,24 +1940,43 @@ export function CaseDetailsDialog({
                         findPrimaryJudgmentHearing(getHearingsByCase(selectedCase.id)),
                       );
                       const weAppeal = weAreTheAppellant(direction);
+                      // BUTTON SET PER DIRECTION (2026-07-28):
+                      //   ضدنا / جزئي → THREE: تم الاستئناف · الخصم استأنف ·
+                      //                 لم نستأنف — الحكم نهائي.
+                      //   لصالحنا     → TWO (unchanged): الخصم استأنف · لم يستأنف.
+                      //                 We would not appeal a ruling in our own
+                      //                 favour, so "تم الاستئناف" is not offered.
+                      //   unknown     → all THREE. No primary-judgment hearing is
+                      //                 recorded, so nothing can be proven wrong
+                      //                 and nothing is hidden — the same stance
+                      //                 the row already took for the pair.
+                      // "الخصم استأنف" is now offered in EVERY direction: the
+                      // aa1e5c3 restriction that hid it for ضدنا/جزئي is removed,
+                      // and so is the matching server rejection. The opponent can
+                      // appeal a partial win, and the owner confirms it happens
+                      // on a straight ضدنا too.
+                      const showWeAppealed = weAppeal || direction === null;
                       return (
-                        <div className="flex items-center justify-between p-3 rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+                        <div className="flex items-start justify-between gap-3 p-3 rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20">
                           <div>
                             <p className="font-medium text-sm text-orange-700 dark:text-orange-400">نتيجة مهلة الاعتراض</p>
                             <p className="text-xs text-muted-foreground">
                               {weAppeal
-                                ? "الحكم ليس لصالحنا — الاستئناف من طرفنا يتم برفع اللائحة الاعتراضية. سجّل هنا إن قررنا عدم الاستئناف."
+                                ? "الحكم ليس لصالحنا — سجّل ما إذا استأنفنا، أو استأنف الخصم، أو انتهت المهلة دون استئناف."
                                 : direction === "لصالحنا"
                                 ? "الحكم لصالحنا — سجّل ما إذا كان الخصم قد استأنف أم انتهت المهلة دون استئناف"
                                 : "تعذّر تحديد اتجاه الحكم (لا توجد جلسة حكم ابتدائي مسجّلة) — اختر ما ينطبق"}
                             </p>
                           </div>
-                          <div className="flex gap-2 shrink-0">
-                            {!weAppeal && (
-                              <Button size="sm" variant="outline" className="border-orange-500 text-orange-600 hover:bg-orange-50" data-testid={`button-opponent-appealed-${selectedCase.id}`} onClick={() => { actions.onOpponentAppealed(); }}>
-                                <Gavel className="w-4 h-4 ml-1" />الخصم استأنف
+                          <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+                            {showWeAppealed && (
+                              <Button size="sm" variant="outline" className="border-orange-500 text-orange-600 hover:bg-orange-50" data-testid={`button-we-appealed-${selectedCase.id}`} onClick={() => { actions.onWeAppealed(); }}>
+                                <Gavel className="w-4 h-4 ml-1" />تم الاستئناف
                               </Button>
                             )}
+                            <Button size="sm" variant="outline" className="border-orange-500 text-orange-600 hover:bg-orange-50" data-testid={`button-opponent-appealed-${selectedCase.id}`} onClick={() => { actions.onOpponentAppealed(); }}>
+                              <Gavel className="w-4 h-4 ml-1" />الخصم استأنف
+                            </Button>
                             <Button size="sm" variant="outline" className="border-green-500 text-green-600 hover:bg-green-50" data-testid={`button-no-appeal-${selectedCase.id}`} onClick={() => { actions.onNoAppeal(); }}>
                               <CheckCircle className="w-4 h-4 ml-1" />
                               {weAppeal ? "لم نستأنف" : "لم يستأنف"}

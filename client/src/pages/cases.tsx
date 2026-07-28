@@ -4,6 +4,7 @@ import { getClientRoleLabel } from "@/lib/client-role";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
 import { usePersistedFilter, oneOf, anyString, objectLike } from "@/hooks/use-persisted-state";
+import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { LtrInline } from "@/components/ui/bidi-text";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
@@ -611,7 +612,7 @@ export default function CasesPage() {
   const [opponentResponseAnswer, setOpponentResponseAnswer] = useState<"" | "نعم" | "لا">("");
   const [opponentResponseSubmitting, setOpponentResponseSubmitting] = useState(false);
   const [appealOutcomeCase, setAppealOutcomeCase] = useState<LawCase | null>(null);
-  const [appealOutcomeKind, setAppealOutcomeKind] = useState<"opponent_appealed" | "no_appeal">("opponent_appealed");
+  const [appealOutcomeKind, setAppealOutcomeKind] = useState<"we_appealed" | "opponent_appealed" | "no_appeal">("opponent_appealed");
   const [appealSubmitting, setAppealSubmitting] = useState(false);
   const [showDeedDialog, setShowDeedDialog] = useState(false);
   const [deedCase, setDeedCase] = useState<LawCase | null>(null);
@@ -2363,6 +2364,7 @@ export default function CasesPage() {
             setOpponentResponseCase(selectedCase);
           },
           canRecordAppealOutcome: canRecordJudgmentDeed(selectedCase),
+          onWeAppealed: () => { setAppealOutcomeKind("we_appealed"); setAppealOutcomeCase(selectedCase); },
           onOpponentAppealed: () => { setAppealOutcomeKind("opponent_appealed"); setAppealOutcomeCase(selectedCase); },
           onNoAppeal: () => { setAppealOutcomeKind("no_appeal"); setAppealOutcomeCase(selectedCase); },
           canRecordJudgmentDeed: canRecordJudgmentDeed(selectedCase),
@@ -2798,7 +2800,23 @@ export default function CasesPage() {
       <AlertDialog open={!!appealOutcomeCase} onOpenChange={(open) => !open && setAppealOutcomeCase(null)}>
         <AlertDialogContent dir="rtl">
           {appealOutcomeCase && (() => {
+            const isWeAppeal = appealOutcomeKind === "we_appealed";
             const isOpponentAppeal = appealOutcomeKind === "opponent_appealed";
+            // Any appeal record (ours or theirs) moves the case to
+            // منظورة_استئناف; only no_appeal ends it at محكوم_حكم_نهائي, and only
+            // that branch shows the open-window warning below.
+            const isAppealRecord = isWeAppeal || isOpponentAppeal;
+            // WARN (never block) when recording OUR appeal with no لائحة اعتراضية
+            // on the case. The memo is the artifact an appeal normally produces —
+            // and filing it promotes the case by itself — so its absence usually
+            // means either the memo hasn't been marked مرفوعة yet or this is a
+            // data-entry slip. It is NOT an error: an appeal filed outside the
+            // system is legitimate, which is exactly what this button is for.
+            const hasObjectionMemo = memos.some(
+              (m) => m.caseId === appealOutcomeCase.id
+                && m.memoType === MemoType.OBJECTION
+                && m.status !== "ملغاة",
+            );
             // Same shared helpers the row and the server use, so the wording
             // ("لم نستأنف" vs "لم يستأنف الخصم") matches the button that opened it.
             const weAppeal = weAreTheAppellant(
@@ -2821,19 +2839,31 @@ export default function CasesPage() {
               <>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
-                    {isOpponentAppeal
+                    {isWeAppeal
+                      ? "تأكيد: تم الاستئناف"
+                      : isOpponentAppeal
                       ? "تأكيد: الخصم استأنف"
                       : weAppeal
                       ? "تأكيد: لم نستأنف — الحكم نهائي"
                       : "تأكيد: لم يستأنف الخصم — الحكم نهائي"}
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    {isOpponentAppeal
+                    {isAppealRecord
                       ? "ستنتقل القضية إلى مرحلة منظورة استئناف، ويُسجَّل الحكم النهائي لاحقاً من نتيجة الجلسة."
                       : "ستنتقل القضية إلى مرحلة محكوم حكم نهائي. تُستكمل بعدها إجراءات ما بعد الحكم (التحصيل/التنفيذ) إن وُجدت."}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
-                {!isOpponentAppeal && !deadlinePassed && (
+                {isWeAppeal && !hasObjectionMemo && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-amber-800 dark:text-amber-300" data-testid="warning-no-objection-memo">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <p className="text-xs">
+                      لا توجد لائحة اعتراضية مسجّلة على هذه القضية. إن كان الاستئناف قد رُفع
+                      عبر النظام فستنتقل القضية تلقائياً عند تعليم اللائحة كـ"مرفوعة"، ولا حاجة
+                      لهذا الإجراء. استخدمه إذا رُفع الاستئناف خارج النظام.
+                    </p>
+                  </div>
+                )}
+                {!isAppealRecord && !deadlinePassed && (
                   <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-amber-800 dark:text-amber-300" data-testid="warning-appeal-window-open">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                     <p className="text-xs">
@@ -2857,7 +2887,11 @@ export default function CasesPage() {
                         });
                         await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
                         await refreshCases();
-                        toast({ title: isOpponentAppeal ? "تم تسجيل استئناف الخصم" : "تم تسجيل أن الحكم أصبح نهائياً" });
+                        toast({ title: isWeAppeal
+                          ? "تم تسجيل الاستئناف — القضية منظورة استئناف"
+                          : isOpponentAppeal
+                          ? "تم تسجيل استئناف الخصم"
+                          : "تم تسجيل أن الحكم أصبح نهائياً" });
                         setAppealOutcomeCase(null);
                       } catch (err) {
                         toast({ title: "تعذّر تسجيل النتيجة", description: extractApiError(err), variant: "destructive" });
@@ -2920,16 +2954,18 @@ export default function CasesPage() {
                   <div className="rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/20 p-3 text-blue-800 dark:text-blue-300">
                     <p className="text-xs">
                       مهلة الاعتراض تنتهي في:{" "}
-                      <strong>
-                        <LtrInline>
-                          {(() => {
-                            const d = new Date(deedDate);
-                            if (isNaN(d.getTime())) return "-";
-                            d.setDate(d.getDate() + Number(deedWindowDays));
-                            return d.toISOString().split("T")[0];
-                          })()}
-                        </LtrInline>
-                      </strong>
+                      {/* HIJRI-first, Gregorian secondary — the app-wide date
+                          convention, via the SHARED <DualDateDisplay/> (which
+                          wraps formatDualDate). It previously printed a bare
+                          `toISOString().split("T")[0]`, i.e. Gregorian only, and
+                          was the one date on this screen not following the
+                          convention. No new conversion written. */}
+                      {(() => {
+                        const d = new Date(deedDate);
+                        if (isNaN(d.getTime())) return <strong>-</strong>;
+                        d.setDate(d.getDate() + Number(deedWindowDays));
+                        return <DualDateDisplay date={d} className="align-middle" />;
+                      })()}
                     </p>
                   </div>
                 )}
