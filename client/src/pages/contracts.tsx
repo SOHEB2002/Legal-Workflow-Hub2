@@ -210,6 +210,33 @@ function canDoCommitteeDecision(c: Contract, userRole: string, isLaborEntity: bo
 // The actor set is intentionally WIDER than canDoCommitteeDecision
 // (consultations_review_head / branch_manager) — a skip is an owner-approved
 // override, not a committee ruling. Entity 4 of 4; mirrors cases/memos/consultations.
+// Reasoned override — "تجاوز المراجعة الداخلية". Restates the SERVER rule on
+// POST /api/contracts/:id/skip-internal-review verbatim → visibility ==
+// authorization.
+//
+// 🔴 NARROWER THAN canSkipCommittee ON PURPOSE — the assignee is EXCLUDED, and
+// so is a department_head who is themself the contract's assignedTo. Four-eyes
+// exists so a drafter cannot approve their own work; letting the drafter DELETE
+// the review instead of passing it reaches the same end state by a shorter road.
+// Department tier and above only. See the server comment for the full argument.
+function canSkipInternalReview(
+  c: Contract,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (c.status !== "active") return false;
+  if (c.pausedAt || c.awaitingCompletion) return false;
+  if (c.currentStage !== ContractStage.INTERNAL_REVIEW) return false;
+  if (userRole === "branch_manager") return true;
+  const isAssignee = !!c.assignedTo && c.assignedTo === userId;
+  return userRole === "department_head"
+    && !!userDeptId
+    && !!c.departmentId
+    && c.departmentId === userDeptId
+    && !isAssignee;
+}
+
 function canSkipCommittee(
   c: Contract,
   userRole: string,
@@ -299,7 +326,7 @@ export default function ContractsPage() {
   const {
     contracts, addContract, updateContract, deleteContract,
     assignContract, advanceStage, returnStage,
-    submitInternalReview, submitCommitteeDecision, skipCommittee, recordTakeNotesOutcome,
+    submitInternalReview, submitCommitteeDecision, skipCommittee, skipInternalReview, recordTakeNotesOutcome,
     earlyCloseContract, startContractFollowUp, pauseContract, unpauseContract,
     awaitCompletion, resumeFromCompletion, skipCompletion,
     refreshContracts,
@@ -922,6 +949,11 @@ export default function ContractsPage() {
   const [showSkipCommittee, setShowSkipCommittee] = useState(false);
   const [skipCommitteeTarget, setSkipCommitteeTarget] = useState<Contract | null>(null);
   const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
+
+  // Reasoned override — "تجاوز المراجعة الداخلية" (skip straight to لجنة_مراجعة).
+  const [showSkipInternalReview, setShowSkipInternalReview] = useState(false);
+  const [skipInternalReviewTarget, setSkipInternalReviewTarget] = useState<Contract | null>(null);
+  const [skipInternalReviewReason, setSkipInternalReviewReason] = useState("");
 
   const [showTakeNotes, setShowTakeNotes] = useState(false);
   const [takeNotesTarget, setTakeNotesTarget] = useState<Contract | null>(null);
@@ -1864,6 +1896,19 @@ export default function ContractsPage() {
                     / own-dept head / assigned lawyer), and it skips the committee
                     rather than recording its decision. The gate restates the
                     server's rule verbatim → visibility == authorization. */}
+                {/* Reasoned override — "تجاوز المراجعة الداخلية". Same
+                    destructive framing as the committee skip, but a NARROWER
+                    actor set: department tier and above, author excluded, so a
+                    drafter can never dispose of the review of their own draft. */}
+                {user && canSkipInternalReview(selected, user.role, user.id, user.departmentId) && (
+                  <Button size="sm" variant="outline"
+                    data-testid={`dialog-button-skip-internal-review-${selected.id}`}
+                    onClick={() => { setSkipInternalReviewTarget(selected); setSkipInternalReviewReason(""); setShowSkipInternalReview(true); }}
+                    className="border-destructive/60 text-destructive hover:bg-destructive/10">
+                    <AlertTriangle className="w-4 h-4 ml-1" />
+                    تجاوز المراجعة الداخلية
+                  </Button>
+                )}
                 {user && canSkipCommittee(selected, user.role, user.id, user.departmentId) && (
                   <Button size="sm" variant="outline"
                     data-testid={`dialog-button-skip-committee-${selected.id}`}
@@ -2752,6 +2797,60 @@ export default function ContractsPage() {
               }}
               disabled={busy}
             >اعتماد</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ====== Skip-internal-review dialog (reasoned override) ======
+          Moves the contract straight to لجنة_مراجعة with NO internal-review
+          decision. Same shape as the committee skip below; the reason is
+          MANDATORY and is recorded with the acting name in the activity log.
+          The copy names the four-eyes constraint explicitly so the actor knows
+          why the action isn't offered to the drafter. */}
+      <Dialog open={showSkipInternalReview} onOpenChange={(open) => { if (!open) setShowSkipInternalReview(false); }}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              تجاوز مرحلة المراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم نقل العقد مباشرةً إلى <strong>لجنة المراجعة</strong> دون قرار مراجعة
+              داخلية. يُسجَّل هذا الإجراء في سجل نشاط العقد مع اسمك والسبب. السبب إلزامي.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              هذا الإجراء متاح لرئيس القسم أو مدير الفرع فقط، ولا يجوز لمن حرّر العقد تجاوز
+              مراجعته.
+            </p>
+            <div>
+              <Label>سبب التجاوز <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-skip-internal-review-reason"
+                value={skipInternalReviewReason}
+                onChange={(e) => setSkipInternalReviewReason(e.target.value)}
+                placeholder="سبب تجاوز المراجعة الداخلية (إلزامي)..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowSkipInternalReview(false)} data-testid="button-cancel-skip-internal-review">
+              إلغاء
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid="button-confirm-skip-internal-review"
+              onClick={async () => {
+                if (!skipInternalReviewTarget || !skipInternalReviewReason.trim()) return;
+                await wrap(() => skipInternalReview(skipInternalReviewTarget.id, skipInternalReviewReason.trim()), "تم تجاوز المراجعة الداخلية — العقد في لجنة المراجعة");
+                setShowSkipInternalReview(false);
+              }}
+              disabled={busy || !skipInternalReviewReason.trim()}
+            >
+              تأكيد التجاوز
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

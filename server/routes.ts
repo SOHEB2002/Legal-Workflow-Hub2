@@ -7668,6 +7668,96 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/contracts/:id/skip-internal-review
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز المراجعة الداخلية". Moves the
+  // contract from مراجعة_داخلية straight to لجنة_مراجعة with NO internal-review
+  // decision, recording who did it and why in contract_activity_log (reason is
+  // MANDATORY). Same shape as /skip-committee above.
+  //
+  // TARGET = COMMITTEE — the stage a PASSED internal review advances to
+  // (:7485), and the next entry in ContractStagesOrder. The skipped contract
+  // lands exactly where a passing review would have put it, mirroring how
+  // skip-committee lands on the committee's own APPROVED target.
+  //
+  // CONTRACTS ONLY, per owner scope. The other three entities are untouched.
+  //
+  // 🔴 ROLE SET IS DELIBERATELY NARROWER THAN /skip-committee — THE ASSIGNEE IS
+  // EXCLUDED. This is the one place the two skips must NOT match, and the reason
+  // is written into the skip-committee comment itself: that endpoint restricted
+  // its ORIGIN to the committee stage "so the four-eyes internal-review lock is
+  // untouched", and justified including the author by noting four-eyes "does not
+  // apply here". An override that ORIGINATES at مراجعة_داخلية is the opposite
+  // case — it disposes of the review of the actor's own draft.
+  //
+  // Four-eyes exists so a drafter cannot approve their own work. Letting the
+  // drafter DELETE the review instead of passing it reaches the same end state
+  // by a shorter road, so the exclusion has to hold for the skip as well:
+  //   ALLOWED: branch_manager | department_head of the contract's OWN department
+  //            — and, exactly like the internal-review endpoint's
+  //            isOwnDeptHeadReviewer (:7476), a head who is themself the
+  //            contract's assignedTo is excluded too.
+  //   NOT ALLOWED: the assigned lawyer.
+  // DEPARTMENT TIER AND ABOVE, in the owner's terms. The mandatory reason and
+  // the audit row remain the control on top of that.
+  //
+  // Deliberately bypasses validateStageTransition — the precedent skip-committee
+  // and reopen already set. No transition-table entry is added, so this override
+  // is unreachable via /advance-stage.
+  app.post("/api/contracts/:id/skip-internal-review", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // Type-check-only gate; the handler checks below stay.
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز المراجعة الداخلية مطلوب" });
+
+      const contract = await storage.getContractById(String(req.params.id));
+      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
+
+      if (contract.status !== "active") {
+        return res.status(400).json({ error: "العقد ليس نشطاً" });
+      }
+      if (contract.pausedAt || contract.awaitingCompletion) {
+        return res.status(400).json({ error: "العقد في حالة لا تسمح بتجاوز المراجعة الداخلية" });
+      }
+      if (contract.currentStage !== ContractStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "العقد ليس في مرحلة المراجعة الداخلية" });
+      }
+
+      // HUMAN role only — NOT delegation-expanded, matching the internal-review
+      // endpoint it protects (:7472 "HUMAN role only — not delegation-expanded").
+      // Delegation must not become a route around four-eyes.
+      const isOwnDeptHead =
+        reqUser.role === "department_head"
+        && !!reqUser.departmentId
+        && !!contract.departmentId
+        && contract.departmentId === reqUser.departmentId
+        && !isAssignedLawyer(reqUser, contract);
+      const allowed = reqUser.role === "branch_manager" || isOwnDeptHead;
+      if (!allowed) {
+        return res.status(403).json({ error: "تجاوز المراجعة الداخلية متاح لرئيس القسم أو مدير الفرع فقط، ولا يجوز لمن حرّر العقد تجاوز مراجعته" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, null, performer?.name || reqUser.id);
+      const updated = await storage.skipContractInternalReview(contract.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز المراجعة الداخلية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[contracts/skip-internal-review] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   app.post("/api/contracts/:id/take-notes-outcome", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;

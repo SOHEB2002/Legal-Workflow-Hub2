@@ -3122,6 +3122,12 @@ export const ContractActivityType = {
   // Contracts have a single stage flow (no phone/procedural analogue) → no type
   // guard. Type-only: activity_type is free text → no migration.
   COMMITTEE_SKIPPED:        "committee_skipped",
+  // Reasoned override — "تجاوز المراجعة الداخلية". CONTRACTS ONLY (owner scope);
+  // the other three entities have no such action. Distinct from
+  // COMMITTEE_SKIPPED because it bypasses a DIFFERENT stage answering to a
+  // DIFFERENT authority — see the route comment for why its actor set is
+  // narrower. Type-only; activity_type is free text, so no migration.
+  INTERNAL_REVIEW_SKIPPED:  "internal_review_skipped",
   EARLY_CLOSED:             "early_closed",
   // Closed because the client never completed the file — see the consultations
   // twin. Type-only; activity_type is free text, so no migration.
@@ -3160,7 +3166,8 @@ export type ContractActivityTypeValue =
   typeof ContractActivityType[keyof typeof ContractActivityType];
 
 export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, string> = {
-  closed_no_response:     "إغلاق لعدم استكمال البيانات",
+  closed_no_response:      "إغلاق لعدم استكمال البيانات",
+  internal_review_skipped: "تجاوز المراجعة الداخلية",
   created:                "إنشاء",
   assigned:               "إسناد",
   stage_advanced:         "تقدم في المرحلة",

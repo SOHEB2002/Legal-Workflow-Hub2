@@ -39,6 +39,7 @@ interface ContractsContextType {
   submitCommitteeDecision: (id: string, decision: CommitteeDecisionValue, notes?: string) => Promise<void>;
   // Reasoned override — skip the review committee straight to جاهزة_للإرسال. reason MANDATORY.
   skipCommittee: (id: string, reason: string) => Promise<void>;
+  skipInternalReview: (id: string, reason: string) => Promise<void>;
   recordTakeNotesOutcome: (id: string, outcome: NoteOutcomeValue, notes?: string) => Promise<void>;
   earlyCloseContract: (id: string, reason: string) => Promise<void>;
   // Re-open a CLOSED contract for a client follow-up question
@@ -162,6 +163,13 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
     apply(updated);
   };
 
+  // Reasoned override — "تجاوز المراجعة الداخلية". Same response shape.
+  const skipInternalReview = async (id: string, reason: string): Promise<void> => {
+    const res = await apiRequest("POST", `/api/contracts/${id}/skip-internal-review`, { reason });
+    const updated = (await res.json()) as Contract;
+    apply(updated);
+  };
+
   const recordTakeNotesOutcome = async (id: string, outcome: NoteOutcomeValue, notes = ""): Promise<void> => {
     const res = await apiRequest("POST", `/api/contracts/${id}/take-notes-outcome`, { outcome, notes });
     const { contract } = (await res.json()) as { contract: Contract };
@@ -230,6 +238,7 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
         submitInternalReview,
         submitCommitteeDecision,
         skipCommittee,
+        skipInternalReview,
         recordTakeNotesOutcome,
         earlyCloseContract,
         startContractFollowUp,
