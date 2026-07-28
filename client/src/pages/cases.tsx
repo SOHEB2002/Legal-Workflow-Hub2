@@ -101,6 +101,8 @@ import {
   StartingStageOption,
   currentStartingStage,
   startingStageCorrectionBlockedReason,
+  isCaseConcluded,
+  CONCLUDED_FILTER_VALUE,
   MemoType,
   MemoTypeLabels,
 } from "@shared/schema";
@@ -798,7 +800,13 @@ export default function CasesPage() {
 
   const [classificationFilter, setClassificationFilter] = usePersistedFilter<string>(
     "cases", "classification", "all",
-    oneOf(Object.values(CaseClassification) as readonly string[], "all"),
+    // CONCLUDED_FILTER_VALUE must be in the allow-list or a persisted "منتهية"
+    // would be rejected as unrecognised on the next visit and silently reset to
+    // "all" — the stale-value guard turning on a value that is not stale.
+    oneOf(
+      [...Object.values(CaseClassification), CONCLUDED_FILTER_VALUE] as readonly string[],
+      "all",
+    ),
   );
   const [formData, setFormData] = useState({
     clientId: "",
@@ -1007,8 +1015,25 @@ export default function CasesPage() {
       const displayStage = getCaseDisplayStage(c);
       const matchesStatus = statusFilter === "all" || displayStage === statusFilter;
       const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
-      const matchesClassification = classificationFilter === "all" ||
-        c.caseClassification === classificationFilter;
+      // THREE-WAY PARTITION. "منتهية" is DERIVED from the stage (isCaseConcluded),
+      // not stored — but the other two options now also EXCLUDE concluded cases,
+      // so the three are mutually exclusive and every case appears under exactly
+      // one of them.
+      //
+      // Without that exclusion a closed case would show under BOTH its stored
+      // classification AND منتهية, since closing never clears caseClassification
+      // — which makes "منظورة بالمحكمة" mean "in court, ever" rather than "in
+      // court now" and quietly inflates every active count.
+      //
+      // "جميع التصنيفات" is unchanged and still shows everything, so nothing is
+      // unreachable: a user who wants finished court cases picks منتهية.
+      const concluded = isCaseConcluded(c);
+      const matchesClassification =
+        classificationFilter === "all"
+          ? true
+          : classificationFilter === CONCLUDED_FILTER_VALUE
+          ? concluded
+          : c.caseClassification === classificationFilter && !concluded;
       const matchesLawyer = lawyerFilter === "all" || c.primaryLawyerId === lawyerFilter;
       const matchesAdvPriority =
         advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
@@ -1063,7 +1088,14 @@ export default function CasesPage() {
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap]);
 
   const basicAllowedStages = useMemo(() => {
-    const cls = classificationFilter !== "all" ? [classificationFilter] : [];
+    // "منتهية" is not a CaseClassification, so it must not be fed to
+    // getFilterStages — it would match no classification and return an empty
+    // stage list, emptying the STAGE dropdown whenever منتهية is selected.
+    // Treated as "no classification constraint": the stage dropdown keeps
+    // offering every stage, and the concluded filter does its own narrowing.
+    const cls = classificationFilter !== "all" && classificationFilter !== CONCLUDED_FILTER_VALUE
+      ? [classificationFilter]
+      : [];
     const deptName = deptFilter !== "all"
       ? departments.find((d) => String(d.id) === deptFilter)?.name
       : undefined;
@@ -1356,6 +1388,10 @@ export default function CasesPage() {
                 <SelectItem value="all">جميع التصنيفات</SelectItem>
                 <SelectItem value="قيد_الدراسة">قضية قيد الدراسة</SelectItem>
                 <SelectItem value="منظورة_بالمحكمة">منظورة بالمحكمة</SelectItem>
+                {/* DERIVED from currentStage (+ clientRole for أغلق_طلب_الصلح),
+                    never stored — see isCaseConcluded. The two options above now
+                    exclude concluded cases, so these three partition the list. */}
+                <SelectItem value={CONCLUDED_FILTER_VALUE}>منتهية</SelectItem>
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>

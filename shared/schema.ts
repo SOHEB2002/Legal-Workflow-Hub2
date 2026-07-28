@@ -1635,6 +1635,63 @@ export const TerminalCaseStages: ReadonlySet<CaseStageValue> = new Set<CaseStage
 // UnderStudy stage arrays — callers should pass the resolved department
 // name (e.g. via getDepartmentName(departmentId) on the client, or
 // storage.getDepartmentById(departmentId)?.name on the server).
+// ============ "منتهية" — DERIVED, FILTER-ONLY (2026-07-28) ============
+// A third option on the cases-page CLASSIFICATION FILTER, meaning "the legal
+// work is over".
+//
+// ⚠ IT IS NOT A STORED CLASSIFICATION. CaseClassification still has exactly two
+// members (قيد_الدراسة / منظورة_بالمحكمة); nothing is written, no column, no
+// migration, and no workflow reads this. It is computed from currentStage (plus
+// clientRole for the one conditional stage) at filter time only.
+//
+// ⚠ DELIBERATELY NOT TerminalCaseStages. That set answers a RENDERING question —
+// "should the progress bar stop advancing?" — and the two definitions genuinely
+// diverge on two stages:
+//   • محكوم_حكم_ابتدائي IS terminal for the bar but is NOT concluded here: the
+//     objection window may still be running, the صك may not have arrived, and
+//     an appeal may follow. That is live legal work, and it is exactly the case
+//     that most needs chasing — hiding it from the active list would bury it.
+//   • أغلق_طلب_الصلح is NOT terminal for the bar (a plaintiff continues into
+//     litigation from there) but IS concluded for a DEFENDANT.
+// This mirrors the precedent already recorded for منظورة_استئناف, which the
+// progress bar extends its own local set with while TerminalCaseStages omits it:
+// a display set and a semantic set are allowed to differ, on purpose.
+// DO NOT "unify" these two sets.
+//
+// EXECUTION AND COLLECTION ARE CONCLUDED, per the owner: they are enforcement,
+// not legal work. Note there is NO execution STAGE in this system — execution is
+// a post-judgment FIELD TASK (ExecutionTaskTitlePrefix) raised while the case
+// rests at محكوم_حكم_نهائي, so classifying that stage as concluded already
+// covers it.
+const UnconditionallyConcludedStages: string[] = [
+  "محكوم_حكم_نهائي",
+  "تحصيل",
+  "مقفلة",
+  "مؤرشفة",
+  "مشطوبة",
+];
+
+/**
+ * Is the firm's legal work on this case over? DERIVED — never stored.
+ *
+ * أغلق_طلب_الصلح is the one CONDITIONAL stage: settlement failed, so the
+ * OPPONENT must now file. When our client is the DEFENDANT the firm has nothing
+ * pending → concluded. When our client is the PLAINTIFF the case continues into
+ * litigation (تحرير_صحيفة_الدعوى → …) → active. So this depends on clientRole,
+ * not on the stage alone.
+ */
+export function isCaseConcluded(
+  lawCase: { currentStage?: string | null; clientRole?: string | null },
+): boolean {
+  const stage = String(lawCase.currentStage ?? "");
+  if (UnconditionallyConcludedStages.includes(stage)) return true;
+  if (stage === "أغلق_طلب_الصلح") return lawCase.clientRole === "مدعى_عليه";
+  return false;
+}
+
+/** Filter-only sentinel. Never written to caseClassification. */
+export const CONCLUDED_FILTER_VALUE = "منتهية";
+
 // ============ "مرحلة البداية" CORRECTION (2026-07-28) ============
 // An in-court case is sometimes REGISTERED WRONG — filed as محكمة when it is
 // really a صلح, or the reverse. This is the day-one correction for that.
