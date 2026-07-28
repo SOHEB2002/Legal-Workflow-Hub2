@@ -505,7 +505,9 @@ export default function ContractsPage() {
 
   const handleAdd = async () => {
     if (!formData.title.trim() || !formData.clientId || !formData.departmentId) return;
-    if (requiresIntakeFile && !intakeFile) return;
+    // The intake-file early return is GONE — the attachment is optional at
+    // creation (owner decision). It still uploads when supplied; see the
+    // uploads list below, which already guards on `intakeFile` being present.
     setCreating(true);
     let created: Contract | null = null;
     try {
@@ -1338,16 +1340,17 @@ export default function ContractsPage() {
                   rows={4}
                 />
               </div>
-              {/* مراجعة_عقد intake file — required at create time. The
-                  picker is hidden for the other two contract types since
-                  they have no required intake slot. The file is uploaded
-                  in a second request after the contract is committed
-                  (see handleAdd) so a failed upload doesn't lose the
-                  contract row. */}
+              {/* مراجعة_عقد intake file — OPTIONAL at create time (owner
+                  decision; it used to be mandatory and blocked submit). The
+                  picker is still shown for مراجعة_عقد only, since the other two
+                  types have no such slot. The file is uploaded in a second
+                  request after the contract is committed (see handleAdd) so a
+                  failed upload doesn't lose the contract row, and it can equally
+                  be added later from the المرفقات tab. */}
               {requiresIntakeFile && (
                 <div>
                   <Label>
-                    العقد محل المراجعة <span className="text-destructive">*</span>
+                    العقد محل المراجعة <span className="text-muted-foreground text-xs">(اختياري)</span>
                   </Label>
                   <Input
                     type="file"
@@ -1361,7 +1364,8 @@ export default function ContractsPage() {
                     </p>
                   )}
                   <p className="text-xs text-muted-foreground mt-1">
-                    يلزم رفع نسخة العقد قبل إنشاء طلب المراجعة. يمكن استبداله لاحقاً من تبويب المرفقات.
+                    يمكنك رفع نسخة العقد الآن أو لاحقاً من تبويب المرفقات. لن يمنع غيابه إنشاء
+                    الطلب أو تقدّمه بين المراحل.
                   </p>
                 </div>
               )}
@@ -1453,7 +1457,6 @@ export default function ContractsPage() {
                 || !formData.title.trim()
                 || !formData.clientId
                 || !formData.departmentId
-                || (requiresIntakeFile && !intakeFile)
               }
             >
               {creating
@@ -2115,7 +2118,13 @@ export default function ContractsPage() {
                   }
                   return (
                     <div className="space-y-3">
-                      <p className="text-xs text-muted-foreground">ملفات مطلوبة</p>
+                      {/* Was "ملفات مطلوبة". Not all slot rules are gating —
+                          صياغة_عقد's MOU already had requiredBeforeLeavingStage
+                          null, and مراجعة_عقد's intake slot now does too — so the
+                          old header contradicted the rule for the commonest type.
+                          The per-slot rows below still say when a file is
+                          missing; the header just names the section. */}
+                      <p className="text-xs text-muted-foreground">ملفات العقد</p>
                       {slotRules.map((rule: any) => {
                         const att = attachmentsBySlot[rule.slotKey];
                         const isUploading = uploadingSlot === rule.slotKey;

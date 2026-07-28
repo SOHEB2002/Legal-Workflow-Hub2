@@ -3121,7 +3121,20 @@ export const ContractSlotsByType: Record<ContractTypeValue, ContractSlotRule[]> 
     {
       slotKey: ContractAttachmentSlot.CONTRACT_UNDER_REVIEW,
       label: ContractAttachmentSlotLabels.contract_under_review,
-      requiredBeforeLeavingStage: ContractStage.RECEIVED,
+      // OPTIONAL (owner decision). Was ContractStage.RECEIVED, which blocked the
+      // contract from leaving استلام until the file was uploaded.
+      //
+      // ⚠ RELAXED TOGETHER WITH THE CREATE-FORM GATE, deliberately. Making the
+      // upload optional at creation while leaving this gate armed would not have
+      // made the attachment optional — it would only have MOVED THE WALL from
+      // "can't create" to "can't advance", stranding every contract created
+      // without the file at استلام with no way forward. Both had to go, or
+      // neither.
+      //
+      // The slot itself is untouched: it is still offered on the create form,
+      // still uploadable from the المرفقات tab, still the same immutable-once-set
+      // slot with the same delete permissions. Only the two BLOCKS are gone.
+      requiredBeforeLeavingStage: null,
     },
     {
       slotKey: ContractAttachmentSlot.REVIEW_STUDY,
