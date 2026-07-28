@@ -9960,7 +9960,17 @@ export async function registerRoutes(
             return res.status(400).json({ error: "لا يمكن إضافة جلسات لقضية مغلقة أو مؤرشفة" });
           }
           if (!validatedData.attendingLawyerId) {
-            validatedData.attendingLawyerId = relatedCase.primaryLawyerId || relatedCase.responsibleLawyerId || null;
+            // "المترافع" wins when set — the case's designated court-appearance
+            // lawyer, for when the responsible lawyer cannot plead. NULL (the
+            // normal case) falls through to the original chain unchanged, so
+            // every existing case behaves exactly as before.
+            //
+            // This one line is the whole permission story too: canActOnHearing
+            // is keyed on attendingLawyerId, so making the litigator the
+            // attending lawyer AT CREATION grants them the full hearing action
+            // set (record result, write report, close) with NO gate change.
+            validatedData.attendingLawyerId =
+              relatedCase.litigatorId || relatedCase.primaryLawyerId || relatedCase.responsibleLawyerId || null;
           }
         }
       }

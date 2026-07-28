@@ -635,6 +635,7 @@ export default function CasesPage() {
     whatsappGroupLink: "",
     googleDriveFolderId: "",
     internalReviewerId: "",
+    litigatorId: "",
     primaryLawyerId: "",
   });
 
@@ -669,6 +670,7 @@ export default function CasesPage() {
       whatsappGroupLink: caseItem.whatsappGroupLink || "",
       googleDriveFolderId: caseItem.googleDriveFolderId || "",
       internalReviewerId: caseItem.internalReviewerId || "",
+      litigatorId: caseItem.litigatorId || "",
       primaryLawyerId: caseItem.primaryLawyerId || "",
     });
     setShowEditDialog(true);
@@ -709,6 +711,7 @@ export default function CasesPage() {
         whatsappGroupLink: editFormData.whatsappGroupLink || "",
         googleDriveFolderId: editFormData.googleDriveFolderId || "",
         internalReviewerId: editFormData.internalReviewerId || null,
+        litigatorId: editFormData.litigatorId || null,
         primaryLawyerId: editFormData.primaryLawyerId || null,
         responsibleLawyerId: editFormData.primaryLawyerId || null,
         assignedLawyers: editFormData.primaryLawyerId ? [editFormData.primaryLawyerId] : [],
@@ -775,6 +778,7 @@ export default function CasesPage() {
     lawyerId: "",
     departmentId: "",
     internalReviewerId: "",
+    litigatorId: "",
   });
 
   const resetForm = () => {
@@ -879,11 +883,12 @@ export default function CasesPage() {
       assignData.lawyerId,
       assignData.departmentId,
       assignData.internalReviewerId || null,
+      assignData.litigatorId || null,
     );
     toast({ title: isReassign ? "تم تعديل الإسناد بنجاح" : "تم إسناد القضية بنجاح" });
     setShowAssignDialog(false);
     setSelectedCaseId(null);
-    setAssignData({ lawyerId: "", departmentId: "", internalReviewerId: "" });
+    setAssignData({ lawyerId: "", departmentId: "", internalReviewerId: "", litigatorId: "" });
   };
 
   const handleApprove = (caseItem: LawCase) => {
@@ -1052,6 +1057,7 @@ export default function CasesPage() {
       lawyerId: caseItem.primaryLawyerId || "",
       departmentId: isDeptHead ? (String(user?.departmentId || "")) : (String(caseItem.departmentId || "")),
       internalReviewerId: caseItem.internalReviewerId || "",
+      litigatorId: caseItem.litigatorId || "",
     });
     setShowAssignDialog(true);
   };
@@ -1582,7 +1588,21 @@ export default function CasesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-center text-sm break-words">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
+                  <TableCell className="text-center text-sm break-words">
+                    {getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}
+                    {/* "المترافع" — rendered only when set, so the row is
+                        unchanged for the overwhelming majority of cases. Makes
+                        it visible from the LIST that someone else appears in
+                        court, without opening the case. */}
+                    {c.litigatorId && (
+                      <span
+                        className="block text-[10px] text-amber-700 dark:text-amber-400 mt-0.5"
+                        title="المترافع — يحضر الجلسات نيابةً عن المحامي المسؤول"
+                      >
+                        يترافع: {getLawyerName(c.litigatorId)}
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-center text-sm break-words">
                     {c.internalReviewerId
                       ? (users.find(u => u.id === c.internalReviewerId)?.name || "—")
@@ -2082,7 +2102,7 @@ export default function CasesPage() {
               ) : (
                 <Select
                   value={assignData.departmentId}
-                  onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "", internalReviewerId: "" })}
+                  onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "", internalReviewerId: "", litigatorId: "" })}
                 >
                   <SelectTrigger data-testid="select-assign-department">
                     <SelectValue placeholder="اختر القسم" />
@@ -2173,6 +2193,47 @@ export default function CasesPage() {
                   })()}
                 </SelectContent>
               </Select>
+            </div>
+            {/* "المترافع" — OPTIONAL court-appearance override, for when the
+                responsible lawyer cannot plead (foreign / unlicensed). Same
+                shape as المراجع الداخلي above: optional, "— بدون —" default.
+                Deliberately NOT filtered to exclude the assigned lawyer — unlike
+                the reviewer, naming the responsible lawyer here is meaningless
+                but harmless, and the whole point is that this person may be
+                someone the reviewer rules would exclude. Department filter kept
+                so the picker stays scoped like its siblings. */}
+            <div>
+              <Label>المترافع</Label>
+              <Select
+                value={assignData.litigatorId || "__none__"}
+                onValueChange={(value) => setAssignData({
+                  ...assignData,
+                  litigatorId: value === "__none__" ? "" : value,
+                })}
+              >
+                <SelectTrigger data-testid="select-assign-litigator">
+                  <SelectValue placeholder="اختر المترافع (اختياري)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— بدون —</SelectItem>
+                  {users
+                    .filter((u) =>
+                      u.isActive &&
+                      u.role !== "branch_manager" &&
+                      u.role !== "admin_support" &&
+                      u.role !== "hr" &&
+                      u.role !== "technical_support" &&
+                      (!assignData.departmentId || String(u.departmentId) === String(assignData.departmentId))
+                    )
+                    .map((u) => (
+                      <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                اتركه فارغاً ليحضر المحامي المسؤول الجلسات كالمعتاد. عند تحديده، تُسند
+                الجلسات <strong>الجديدة</strong> إليه تلقائياً.
+              </p>
             </div>
           </div>
           <DialogFooter>
@@ -3433,6 +3494,43 @@ export default function CasesPage() {
                       ))}
                   </SelectContent>
                 </Select>
+              </div>
+              {/* "المترافع" — the SECOND assignment surface. Same optional
+                  override as the الإسناد dialog; both must offer it or the field
+                  is uneditable from whichever one the user happens to open. */}
+              <div>
+                <Label>المترافع</Label>
+                <Select
+                  value={editFormData.litigatorId || "__none__"}
+                  onValueChange={(value) =>
+                    setEditFormData({
+                      ...editFormData,
+                      litigatorId: value === "__none__" ? "" : value,
+                    })
+                  }
+                >
+                  <SelectTrigger data-testid="edit-litigator">
+                    <SelectValue placeholder="اختر المترافع (اختياري)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— بدون —</SelectItem>
+                    {users
+                      .filter((u) =>
+                        u.isActive &&
+                        u.role !== "branch_manager" &&
+                        u.role !== "admin_support" &&
+                        u.role !== "hr" &&
+                        u.role !== "technical_support" &&
+                        (!editFormData.departmentId || String(u.departmentId) === String(editFormData.departmentId)),
+                      )
+                      .map((u) => (
+                        <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  اتركه فارغاً ليحضر المحامي المسؤول الجلسات كالمعتاد.
+                </p>
               </div>
             </div>
 

@@ -1,0 +1,37 @@
+-- =====================================================================
+-- "المترافع" — optional court-appearance lawyer on law_cases
+-- =====================================================================
+-- ONE optional column. NULL is the normal case and changes nothing: a new
+-- hearing still defaults its attending lawyer to
+-- primary_lawyer_id || responsible_lawyer_id, exactly as before. When SET it
+-- takes first place in that chain for NEWLY CREATED hearings only.
+--
+-- Purpose: the lawyer responsible for a case sometimes cannot appear in court
+-- (a foreign or unlicensed lawyer). The firm keeps the responsible lawyer as
+-- the default attending lawyer and adds this optional override.
+--
+-- Design notes:
+--   - varchar(255), nullable, no FK — matches every other user-id column on
+--     this table (primary_lawyer_id, responsible_lawyer_id,
+--     internal_reviewer_id, appeal_lawyer_id).
+--   - Additive and nullable, so every existing row is unchanged and every
+--     existing case keeps today's behaviour with no backfill.
+--   - NOT a reuse of the dead appeal_lawyer_id column: "محامي الاستئناف" is a
+--     different concept, and the appeal path built in the judgment-lifecycle
+--     rebuild could legitimately claim that column later.
+--
+-- ⚠ ORDER IS NOT OPTIONAL. Drizzle builds an explicit column list from the
+--   table declaration in shared/schema.ts, so from the moment litigator_id is
+--   declared EVERY read of law_cases selects it. Run this on dev → confirm the
+--   app loads → run it on prod → deploy. db:push was NOT run.
+--
+-- Apply to BOTH dev and prod (per replit.md / CLAUDE.md).
+-- Idempotent — safe to re-run.
+-- =====================================================================
+
+ALTER TABLE law_cases ADD COLUMN IF NOT EXISTS litigator_id varchar(255);
+
+-- Verification — expect one row, varchar(255), is_nullable = YES:
+--   SELECT column_name, data_type, character_maximum_length, is_nullable
+--     FROM information_schema.columns
+--    WHERE table_name = 'law_cases' AND column_name = 'litigator_id';

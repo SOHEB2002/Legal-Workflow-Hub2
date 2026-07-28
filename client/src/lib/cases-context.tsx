@@ -14,7 +14,7 @@ interface CasesContextType {
   addCase: (data: Partial<LawCase>, createdBy: string, createdByName: string) => Promise<LawCase>;
   updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
   deleteCase: (id: string) => Promise<void>;
-  assignCase: (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null) => void;
+  assignCase: (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null, litigatorId?: string | null) => void;
   approveCase: (id: string, notes?: string) => void;
   rejectCase: (id: string, notes: string, decision: ReviewDecisionType) => void;
   markReadyToSubmit: (id: string) => void;
@@ -260,7 +260,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     setComments((prev) => prev.filter((c) => c.caseId !== id));
   };
 
-  const assignCase = (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null) => {
+  const assignCase = (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null, litigatorId?: string | null) => {
     const lawCase = cases.find(c => c.id === id);
     const isReassign = !!(lawCase?.primaryLawyerId);
     const updateData: any = {
@@ -274,6 +274,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     // the field (preserving the existing value).
     if (internalReviewerId !== undefined) {
       updateData.internalReviewerId = internalReviewerId || null;
+    }
+    // "المترافع" — same pass-through-null contract as the reviewer above, so the
+    // dept head can CLEAR the override; `undefined` skips the field entirely and
+    // preserves whatever is stored.
+    if (litigatorId !== undefined) {
+      updateData.litigatorId = litigatorId || null;
     }
     if (!isReassign) {
       updateData.status = CaseStatus.STUDY as CaseStatusValue;

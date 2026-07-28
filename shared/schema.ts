@@ -120,6 +120,28 @@ export const lawCases = pgTable("law_cases", {
   // stays court → najiz → settlement → base.
   executionRequestNumber: varchar("execution_request_number", { length: 100 }),
   appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
+  // "المترافع" — the lawyer who APPEARS IN COURT for this case, when that is not
+  // the responsible lawyer (a foreign or unlicensed lawyer cannot plead). Set in
+  // the الإسناد dialog alongside internalReviewerId.
+  //
+  // OPTIONAL AND OVERRIDE-ONLY. NULL is the normal case and changes nothing: a
+  // new hearing still defaults its attendingLawyerId to
+  // primaryLawyerId || responsibleLawyerId, exactly as before. When SET it takes
+  // first place in that chain for NEWLY CREATED hearings only — existing
+  // hearings are never retroactively reassigned (use the hearings page's
+  // "إعادة إسناد" action for those).
+  //
+  // ⚠ NOT appealLawyerId, which sits directly above and is declared, mapped and
+  // NEVER read or written by anything. Reusing it was considered and rejected:
+  // "محامي الاستئناف" is a different concept from "المترافع" (the appeal path
+  // built in the judgment-lifecycle rebuild could legitimately claim that column
+  // later), and a repurposed name is the two-names-for-one-thing trap this
+  // codebase keeps paying for.
+  //
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — ALTER both DBs BEFORE this code
+  // serves traffic: drizzle selects declared columns explicitly, so a missing
+  // column breaks EVERY read of law_cases, not just this feature.
+  litigatorId: varchar("litigator_id", { length: 255 }),
   internalReviewerId: varchar("internal_reviewer_id", { length: 255 }),
   moeenNumber: varchar("moeen_number", { length: 100 }),
   clientRole: varchar("client_role", { length: 50 }),
@@ -2610,6 +2632,8 @@ export interface LawCase {
   objectionWindowDays: number | null;
   executionRequestNumber: string | null;
   appealLawyerId: string | null;
+  // "المترافع" — optional court-appearance override. See the column comment.
+  litigatorId: string | null;
   internalReviewerId: string | null;
   moeenNumber: string | null;
   clientRole: string | null;
@@ -5258,6 +5282,7 @@ export const updateCaseSchema = z.object({
   responsibleLawyerId: z.string().nullable().optional(),
   internalReviewerId: z.string().nullable().optional(),
   appealLawyerId: z.string().nullable().optional(),
+  litigatorId: z.string().nullable().optional(),
   // Nullability mirrors the LawCase interface (both nullable).
   judgmentDeedReceivedDate: z.string().nullable().optional(),
   objectionWindowDays: z.number().nullable().optional(),

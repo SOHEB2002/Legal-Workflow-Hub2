@@ -124,10 +124,17 @@ async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotif
 
   const recipientIds: string[] = [];
 
-  if (caseInfo?.responsibleLawyerId) {
-    recipientIds.push(caseInfo.responsibleLawyerId);
+  // The person who ATTENDS is the person to chase about an un-updated hearing.
+  // Was caseInfo.responsibleLawyerId unconditionally, which sent "لديك جلسة"-style
+  // alerts to the wrong lawyer as soon as a case designated a المترافع. The
+  // hearing's own attendingLawyerId already carries the answer (it is set at
+  // creation from litigatorId → primary → responsible), so read it first and keep
+  // the old value as the fallback for legacy rows with no attending lawyer.
+  const hearingOwnerId = hearing.attendingLawyerId || caseInfo?.responsibleLawyerId;
+  if (hearingOwnerId) {
+    recipientIds.push(hearingOwnerId);
 
-    const lawyer = allUsers.find((u: any) => u.id === caseInfo.responsibleLawyerId);
+    const lawyer = allUsers.find((u: any) => u.id === hearingOwnerId);
     if (lawyer?.departmentId) {
       const deptHead = allUsers.find(
         (u: any) => u.departmentId === lawyer.departmentId && u.role === "department_head"
@@ -234,7 +241,11 @@ async function checkUpcomingHearingReminders() {
 
       if (hoursUntilHearing > 0 && hoursUntilHearing <= 48 && !hearing.reminderSent24h) {
         const caseInfo = hearing.caseId ? caseMap.get(hearing.caseId) : null;
-        const recipientId = caseInfo?.responsibleLawyerId;
+        // Same correction as sendUnupdatedHearingAlert: these messages say
+        // "لديك جلسة" — they must reach whoever actually attends. attendingLawyerId
+        // already resolves المترافع → primary → responsible at hearing creation;
+        // the case's responsible lawyer stays the fallback for legacy rows.
+        const recipientId = hearing.attendingLawyerId || caseInfo?.responsibleLawyerId;
         if (!recipientId) continue;
         const caseLabel = caseInfo ? caseInfo.caseNumber : "";
 
