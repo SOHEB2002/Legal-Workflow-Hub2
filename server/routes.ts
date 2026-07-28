@@ -103,6 +103,9 @@ import {
   updateCaseSchema,
   workflowReasonSchema,
   workflowNotesSchema,
+  workflowPauseSchema,
+  validatePauseUntil,
+  todayDateString,
   updateCaseTaradiSchema,
   updateCaseMohrSchema,
   workflowTargetStageSchema,
@@ -5473,16 +5476,21 @@ export async function registerRoutes(
       }
 
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
 
       const updated = await storage.pauseConsultation(consultation.id, {
         reason,
         performedBy: reqUser.id,
+        pauseUntil,
       });
       if (!updated) return res.status(500).json({ error: "فشل تعليق الاستشارة" });
       res.json(updated);
@@ -6456,12 +6464,16 @@ export async function registerRoutes(
       }
 
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
 
       const performer = await storage.getUser(reqUser.id);
       const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
@@ -6469,6 +6481,7 @@ export async function registerRoutes(
         reason,
         performedBy: reqUser.id,
         performerName,
+        pauseUntil,
       });
       if (!updated) return res.status(500).json({ error: "فشل تعليق القضية" });
       res.json(updated);
@@ -6553,16 +6566,21 @@ export async function registerRoutes(
       }
 
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
 
       const updated = await storage.pauseMemo(memo.id, {
         reason,
         performedBy: reqUser.id,
+        pauseUntil,
       });
       if (!updated) return res.status(500).json({ error: "فشل تعليق المذكرة" });
       res.json(updated);
@@ -7987,13 +8005,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "العقد ليس نشطاً" });
       }
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
-      const updated = await storage.pauseContract(contract.id, { reason, performedBy: reqUser.id });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
+      const updated = await storage.pauseContract(contract.id, { reason, performedBy: reqUser.id, pauseUntil });
       if (!updated) return res.status(500).json({ error: "فشل التعليق" });
       res.json(updated);
     } catch (error: any) {

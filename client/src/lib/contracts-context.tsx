@@ -46,7 +46,9 @@ interface ContractsContextType {
   // Returns the authoritative updated row so the caller can sync the open
   // details dialog directly (same as the consultations-side handler).
   startContractFollowUp: (id: string, question: string) => Promise<Contract>;
-  pauseContract: (id: string, reason: string) => Promise<void>;
+  // pauseUntil is the OPTIONAL "YYYY-MM-DD" auto-lift date; omitted/blank means
+  // an open-ended pause, which is the pre-feature behaviour.
+  pauseContract: (id: string, reason: string, pauseUntil?: string) => Promise<void>;
   unpauseContract: (id: string, notes?: string) => Promise<void>;
   awaitCompletion: (id: string, reason: string) => Promise<void>;
   resumeFromCompletion: (id: string, notes?: string) => Promise<void>;
@@ -182,8 +184,10 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
     return updated;
   };
 
-  const pauseContract = async (id: string, reason: string): Promise<void> => {
-    const res = await apiRequest("POST", `/api/contracts/${id}/pause`, { reason });
+  const pauseContract = async (id: string, reason: string, pauseUntil?: string): Promise<void> => {
+    const until = (pauseUntil ?? "").trim();
+    // Key omitted entirely when blank — the server reads absent as open-ended.
+    const res = await apiRequest("POST", `/api/contracts/${id}/pause`, until ? { reason, pauseUntil: until } : { reason });
     const updated = (await res.json()) as Contract;
     apply(updated);
   };

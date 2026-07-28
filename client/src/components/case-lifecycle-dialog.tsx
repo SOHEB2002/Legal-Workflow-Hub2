@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
 import { apiRequest } from "@/lib/queryClient";
 import { cn, extractApiError } from "@/lib/utils";
 import { getStageLabel } from "@shared/schema";
@@ -59,6 +60,16 @@ interface LifecycleConfig {
   requiredToast?: string;
   inputTestId: string;
   buttonTestId: string;
+  // OPTIONAL secondary DATE input, rendered under the textarea as the shared
+  // <PauseUntilField/> (which owns the label, hint and past-date message so all
+  // four entities' pause dialogs read identically). Only `pause` declares one;
+  // unpause / await / resume omit it and are byte-identical to before. Always
+  // optional to FILL IN — an empty date is a valid submission and simply omits
+  // the key from the body.
+  dateInput?: {
+    bodyField: string;
+    testId: string;
+  };
 }
 
 const LIFECYCLE_CONFIG: Record<CaseLifecycleType, LifecycleConfig> = {
@@ -85,6 +96,10 @@ const LIFECYCLE_CONFIG: Record<CaseLifecycleType, LifecycleConfig> = {
     requiredToast: "أدخل سبب التعليق",
     inputTestId: "input-case-pause-reason",
     buttonTestId: "button-confirm-pause-case",
+    dateInput: {
+      bodyField: "pauseUntil",
+      testId: "input-case-pause-until",
+    },
   },
   unpause: {
     endpoint: "unpause",
@@ -159,14 +174,19 @@ interface LifecycleState {
   type: CaseLifecycleType | null;
   target: LawCase | null;
   value: string;
+  // Secondary date input's value. Always reset to "" alongside `value`, so a
+  // flow with no dateInput simply never reads it.
+  dateValue: string;
 }
 
 export interface CaseLifecycleDialogProps {
   type: CaseLifecycleType | null;
   target: LawCase | null;
   value: string;
+  dateValue: string;
   inProgress: boolean;
   onValueChange: (value: string) => void;
+  onDateChange: (value: string) => void;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -182,14 +202,15 @@ export function useCaseLifecycleActions({
     type: null,
     target: null,
     value: "",
+    dateValue: "",
   });
   const [inProgress, setInProgress] = useState(false);
 
   const open = (type: CaseLifecycleType) => (c: LawCase) =>
-    setState({ type, target: c, value: "" });
+    setState({ type, target: c, value: "", dateValue: "" });
 
   const onClose = () =>
-    setState({ type: null, target: null, value: "" });
+    setState({ type: null, target: null, value: "", dateValue: "" });
 
   const onConfirm = async () => {
     if (!state.type || !state.target) return;
@@ -199,13 +220,30 @@ export function useCaseLifecycleActions({
       toast({ title: config.requiredToast!, variant: "destructive" });
       return;
     }
+    // Mirror of the server's validatePauseUntil so the user gets the same Arabic
+    // message without a round-trip. The server stays authoritative — this is the
+    // client half of the past-date rule (HijriDatePicker exposes no `min`, so
+    // the check is done here rather than by the input).
+    const dateText = state.dateValue.trim();
+    if (config.dateInput) {
+      const dateError = pauseUntilError(dateText);
+      if (dateError) {
+        toast({ title: dateError, variant: "destructive" });
+        return;
+      }
+    }
     setInProgress(true);
     try {
-      const body = config.required
+      const body: Record<string, string> = config.required
         ? { [config.bodyField]: text }
         : text
         ? { [config.bodyField]: text }
         : {};
+      // Omitted entirely when blank — the server reads absent as "open-ended",
+      // which is the pre-feature behaviour.
+      if (config.dateInput && dateText) {
+        body[config.dateInput.bodyField] = dateText;
+      }
       await apiRequest(
         "POST",
         `/api/cases/${state.target.id}/${config.endpoint}`,
@@ -234,9 +272,12 @@ export function useCaseLifecycleActions({
       type: state.type,
       target: state.target,
       value: state.value,
+      dateValue: state.dateValue,
       inProgress,
       onValueChange: (value: string) =>
         setState((s) => ({ ...s, value })),
+      onDateChange: (dateValue: string) =>
+        setState((s) => ({ ...s, dateValue })),
       onConfirm,
       onClose,
     } as CaseLifecycleDialogProps,
@@ -247,8 +288,10 @@ export function CaseLifecycleDialog({
   type,
   target,
   value,
+  dateValue,
   inProgress,
   onValueChange,
+  onDateChange,
   onConfirm,
   onClose,
 }: CaseLifecycleDialogProps) {
@@ -256,6 +299,12 @@ export function CaseLifecycleDialog({
   const config = LIFECYCLE_CONFIG[type];
   const Icon = config.icon;
   const ActionIcon = config.actionIcon;
+  // Client mirror of the server's past-date rule. HijriDatePicker takes no
+  // `min`, so instead of a native constraint the confirm button is disabled and
+  // the reason is shown inline — same outcome, and it keeps the Hijri/dual-date
+  // picker this app uses for every other date rather than a Gregorian-only
+  // native input.
+  const dateError = config.dateInput ? pauseUntilError(dateValue) : null;
   return (
     <AlertDialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <AlertDialogContent dir="rtl">
@@ -278,12 +327,19 @@ export function CaseLifecycleDialog({
             rows={3}
           />
         </div>
+        {config.dateInput && (
+          <PauseUntilField
+            value={dateValue}
+            onChange={onDateChange}
+            testId={config.dateInput.testId}
+          />
+        )}
         <AlertDialogFooter className="gap-2">
           <AlertDialogCancel onClick={onClose}>إلغاء</AlertDialogCancel>
           <AlertDialogAction
             data-testid={config.buttonTestId}
             onClick={onConfirm}
-            disabled={inProgress || (config.required && !value.trim())}
+            disabled={inProgress || (config.required && !value.trim()) || !!dateError}
             className={config.actionClass}
           >
             <ActionIcon className="w-4 h-4 ml-2" />

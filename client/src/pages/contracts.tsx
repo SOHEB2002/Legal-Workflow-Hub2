@@ -50,6 +50,8 @@ import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest, refreshAuthToken } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
+import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
+import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
 
 // FE mirror of ALLOWED_CONTRACT_TRANSITIONS for the linear-forward
 // path. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES exits are handled
@@ -932,6 +934,9 @@ export default function ContractsPage() {
   const [showPause, setShowPause] = useState(false);
   const [pauseTarget, setPauseTarget] = useState<Contract | null>(null);
   const [pauseReason, setPauseReason] = useState("");
+  // OPTIONAL auto-lift date. "" = open-ended pause, the default and the
+  // pre-feature behaviour.
+  const [pauseUntil, setPauseUntil] = useState("");
 
   const [showAwait, setShowAwait] = useState(false);
   const [awaitTarget, setAwaitTarget] = useState<Contract | null>(null);
@@ -1470,7 +1475,11 @@ export default function ContractsPage() {
                       {ContractStageLabels[c.currentStage] || c.currentStage}
                     </Badge>
                     {c.status === "paused" && (
-                      <Badge variant="outline" className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                        title={pauseBadgeTooltip(c, "معلّق")}
+                      >
                         <Pause className="w-2.5 h-2.5 ml-1" /> معلّق
                       </Badge>
                     )}
@@ -1600,7 +1609,7 @@ export default function ContractsPage() {
                             <DropdownMenuItem
                               data-testid={`row-action-pause-${c.id}`}
                               className="text-amber-600 focus:text-amber-700"
-                              onClick={() => { setPauseTarget(c); setPauseReason(""); setShowPause(true); }}
+                              onClick={() => { setPauseTarget(c); setPauseReason(""); setPauseUntil(""); setShowPause(true); }}
                             >
                               <Pause className="w-4 h-4 ml-2" />
                               تعليق
@@ -2774,15 +2783,23 @@ export default function ContractsPage() {
             <Label>السبب</Label>
             <Textarea value={pauseReason} onChange={(e) => setPauseReason(e.target.value)} rows={3} />
           </div>
+          <PauseUntilField
+            value={pauseUntil}
+            onChange={setPauseUntil}
+            testId="input-contract-pause-until"
+          />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPause(false)}>إلغاء</Button>
             <Button
               onClick={async () => {
                 if (!pauseTarget || !pauseReason.trim()) return;
-                await wrap(() => pauseContract(pauseTarget.id, pauseReason.trim()), "تم تعليق العقد");
+                // Client half of the past-date rule; the server's
+                // validatePauseUntil (the SAME shared function) is authoritative.
+                if (pauseUntilError(pauseUntil)) return;
+                await wrap(() => pauseContract(pauseTarget.id, pauseReason.trim(), pauseUntil.trim()), "تم تعليق العقد");
                 setShowPause(false);
               }}
-              disabled={!pauseReason.trim() || busy}
+              disabled={!pauseReason.trim() || busy || !!pauseUntilError(pauseUntil)}
             >تأكيد</Button>
           </DialogFooter>
         </DialogContent>

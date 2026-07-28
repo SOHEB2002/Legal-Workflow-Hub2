@@ -148,6 +148,18 @@ export const lawCases = pgTable("law_cases", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // OPTIONAL auto-lift date for the pause, "YYYY-MM-DD". NULL = open-ended,
+  // which is today's behaviour and stays the default — an existing pause is
+  // completely unaffected. varchar(50) is the struck_off_reopen_deadline idiom
+  // and is deliberately NOT a timestamp: the scheduler compares it as a plain
+  // string against todayStr, which keeps it clear of the drizzle date-mode
+  // conversion that silently broke auto-archive (Phase-4 S3).
+  // ⚠ MUST be cleared on EVERY unpause path, or a stale date survives into the
+  // next pause and lifts it early. See scheduler.checkExpiredPauses.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — ALTER both DBs BEFORE this code
+  // serves traffic: drizzle selects declared columns explicitly, so a missing
+  // column breaks EVERY read of the table, not just the pause feature.
+  pauseUntil:         varchar("pause_until", { length: 50 }),
   // Set true when the responsible lawyer answers "لا يوجد وكالة" on the
   // agency-verification task → drives + tracks the admin_support "إصدار وكالة"
   // task (generated in sub-step 2); cleared when the issuance is completed.
@@ -248,6 +260,18 @@ export const consultations = pgTable("consultations", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // OPTIONAL auto-lift date for the pause, "YYYY-MM-DD". NULL = open-ended,
+  // which is today's behaviour and stays the default — an existing pause is
+  // completely unaffected. varchar(50) is the struck_off_reopen_deadline idiom
+  // and is deliberately NOT a timestamp: the scheduler compares it as a plain
+  // string against todayStr, which keeps it clear of the drizzle date-mode
+  // conversion that silently broke auto-archive (Phase-4 S3).
+  // ⚠ MUST be cleared on EVERY unpause path, or a stale date survives into the
+  // next pause and lifts it early. See scheduler.checkExpiredPauses.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — ALTER both DBs BEFORE this code
+  // serves traffic: drizzle selects declared columns explicitly, so a missing
+  // column breaks EVERY read of the table, not just the pause feature.
+  pauseUntil:         varchar("pause_until", { length: 50 }),
   // data-completion reminder ack (consultation at its استكمال_المرفقات_والبيانات
   // stage). Mirrors lawCases.dataCompletionLastAckAt — the unified-tasks feed
   // suppresses the data_completion_consultation task for 2 days after each ack.
@@ -446,6 +470,18 @@ export const contracts = pgTable("contracts", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // OPTIONAL auto-lift date for the pause, "YYYY-MM-DD". NULL = open-ended,
+  // which is today's behaviour and stays the default — an existing pause is
+  // completely unaffected. varchar(50) is the struck_off_reopen_deadline idiom
+  // and is deliberately NOT a timestamp: the scheduler compares it as a plain
+  // string against todayStr, which keeps it clear of the drizzle date-mode
+  // conversion that silently broke auto-archive (Phase-4 S3).
+  // ⚠ MUST be cleared on EVERY unpause path, or a stale date survives into the
+  // next pause and lifts it early. See scheduler.checkExpiredPauses.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — ALTER both DBs BEFORE this code
+  // serves traffic: drizzle selects declared columns explicitly, so a missing
+  // column breaks EVERY read of the table, not just the pause feature.
+  pauseUntil:         varchar("pause_until", { length: 50 }),
   // data-completion reminder ack (contract at its استكمال_البيانات_والمرفقات
   // stage). Mirrors lawCases.dataCompletionLastAckAt — the unified-tasks feed
   // suppresses the data_completion_contract task for 2 days after each ack.
@@ -796,6 +832,18 @@ export const memos = pgTable("memos", {
   pausedAt:           timestamp("paused_at"),
   awaitingCompletion: boolean("awaiting_completion").notNull().default(false),
   savedStage:         varchar("saved_stage", { length: 50 }),
+  // OPTIONAL auto-lift date for the pause, "YYYY-MM-DD". NULL = open-ended,
+  // which is today's behaviour and stays the default — an existing pause is
+  // completely unaffected. varchar(50) is the struck_off_reopen_deadline idiom
+  // and is deliberately NOT a timestamp: the scheduler compares it as a plain
+  // string against todayStr, which keeps it clear of the drizzle date-mode
+  // conversion that silently broke auto-archive (Phase-4 S3).
+  // ⚠ MUST be cleared on EVERY unpause path, or a stale date survives into the
+  // next pause and lifts it early. See scheduler.checkExpiredPauses.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — ALTER both DBs BEFORE this code
+  // serves traffic: drizzle selects declared columns explicitly, so a missing
+  // column breaks EVERY read of the table, not just the pause feature.
+  pauseUntil:         varchar("pause_until", { length: 50 }),
   // data-completion reminder ack (memo awaiting-completion latch). Mirrors
   // lawCases.dataCompletionLastAckAt — the feed suppresses the
   // data_completion_memo task for 2 days after each ack. The task is gated on
@@ -2563,6 +2611,8 @@ export interface LawCase {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  // "YYYY-MM-DD" or null (open-ended pause). See the column comment.
+  pauseUntil: string | null;
   agencyIssuanceRequested: boolean;
 }
 
@@ -2620,6 +2670,8 @@ export interface Consultation {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  // "YYYY-MM-DD" or null (open-ended pause). See the column comment.
+  pauseUntil: string | null;
   dataCompletionLastAckAt: string | null;
   // Committee-referral fields. internalReviewerId is set/cleared by
   // department_head / admin_support / branch_manager (mirrors cases /
@@ -3124,6 +3176,8 @@ export interface Contract {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  // "YYYY-MM-DD" or null (open-ended pause). See the column comment.
+  pauseUntil: string | null;
   dataCompletionLastAckAt: string | null;
   // Follow-up cycle counters — mirror Consultation.followUpCount /
   // followUpStartedAt. followUpCount is NOT NULL default 0 in the column, so
@@ -3427,6 +3481,8 @@ export interface Memo {
   pausedAt: string | null;
   awaitingCompletion: boolean;
   savedStage: string | null;
+  // "YYYY-MM-DD" or null (open-ended pause). See the column comment.
+  pauseUntil: string | null;
   dataCompletionLastAckAt: string | null;
   // Phase-9 — review-workflow stage. Null on legacy memos until the
   // backfill in script/backfill-memo-stages.sql runs. New memos start
@@ -4520,6 +4576,48 @@ export const workflowReasonSchema = z.object({
 export const workflowNotesSchema = z.object({
   notes: z.string().optional(),
 }).passthrough();
+
+// Pause body for all four entities. Same tolerant shape as its neighbours:
+// every field optional, the handlers keep their own requiredness checks (reason
+// is still mandatory there) and their own Arabic 400s. pauseUntil is nullable so
+// an explicit null clears it, and undefined/absent means "open-ended" — which is
+// exactly the pre-feature behaviour, so an old client that sends only { reason }
+// keeps working unchanged.
+export const workflowPauseSchema = z.object({
+  reason: z.string().optional(),
+  pauseUntil: z.string().nullable().optional(),
+}).passthrough();
+
+// Today as "YYYY-MM-DD". The repo idiom (checkStruckOffExpiry) inlined once so
+// the four pause routes and the scheduler compare against the SAME string.
+export function todayDateString(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+// Shared "YYYY-MM-DD" validator for the pause auto-lift date. Lives here so the
+// four routes and the FE cannot drift on the format or on the past-date rule.
+// Returns an Arabic error string, or null when the value is acceptable.
+// Absent/empty is ALWAYS acceptable — the date is optional by design.
+export function validatePauseUntil(raw: unknown, todayStr: string): string | null {
+  if (raw === undefined || raw === null) return null;
+  const value = String(raw).trim();
+  if (!value) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return "صيغة تاريخ انتهاء التعليق غير صحيحة";
+  }
+  // Reject an impossible calendar date (2026-02-31 passes the regex).
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    return "تاريخ انتهاء التعليق غير صالح";
+  }
+  // Lexicographic compare is correct for zero-padded ISO dates, and is the same
+  // comparison checkStruckOffExpiry uses. Same-day is ALLOWED: the scheduler's
+  // `pauseUntil >= todayStr` skip means it lifts tomorrow morning, not instantly.
+  if (value < todayStr) {
+    return "تاريخ انتهاء التعليق يجب ألا يكون في الماضي";
+  }
+  return null;
+}
 
 // Sub-step 4 — general (عام) task requester-review body. decision is
 // "تم_الاطلاع" (close) or "ملاحظة" (send back); reviewNote required only for the

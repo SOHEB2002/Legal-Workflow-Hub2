@@ -553,6 +553,14 @@ export function CaseDetailsDialog({
                       </>
                     )}
                   </div>
+                  {/* Auto-lift date. Absent = open-ended pause (the default),
+                      in which case we say so explicitly rather than leaving the
+                      user to guess whether a date was set. */}
+                  <div className="mt-1 text-xs font-medium">
+                    {selectedCase.pauseUntil
+                      ? <>ينتهي التعليق تلقائياً في: <LtrInline>{selectedCase.pauseUntil}</LtrInline></>
+                      : <span className="text-amber-700/80">تعليق مفتوح — يستمر حتى يُلغى يدوياً</span>}
+                  </div>
                 </div>
               )}
               {sourceConsultation && (

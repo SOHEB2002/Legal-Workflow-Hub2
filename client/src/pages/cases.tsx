@@ -104,7 +104,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseDetailsDialog } from "@/components/case-details-dialog";
-import { caseHasReturnedFromReview, isCasePaused } from "@/lib/case-stage-utils";
+import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
@@ -1478,7 +1478,7 @@ export default function CasesPage() {
                             variant="outline"
                             className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
                             data-testid={`badge-paused-${c.id}`}
-                            title={c.pauseReason || "معلّقة"}
+                            title={pauseBadgeTooltip(c)}
                           >
                             <Pause className="w-2.5 h-2.5 ml-1" />
                             معلّقة

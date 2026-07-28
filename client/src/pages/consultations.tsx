@@ -110,6 +110,8 @@ import {
 import { DialogFooter } from "@/components/ui/dialog";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
+import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
+import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
 import { sendConsultationReminder, requestConsultationTransfer } from "@/lib/notification-triggers";
 
 // Lawyer-filter source: role-based exclusion. Wider than the
@@ -915,6 +917,9 @@ export default function ConsultationsPage() {
   const [showPauseDialog, setShowPauseDialog] = useState(false);
   const [pauseTarget, setPauseTarget] = useState<Consultation | null>(null);
   const [pauseReason, setPauseReason] = useState("");
+  // OPTIONAL auto-lift date. "" = open-ended pause, the default and the
+  // pre-feature behaviour.
+  const [pauseUntil, setPauseUntil] = useState("");
   const [showUnpauseDialog, setShowUnpauseDialog] = useState(false);
   const [unpauseTarget, setUnpauseTarget] = useState<Consultation | null>(null);
   const [unpauseNotes, setUnpauseNotes] = useState("");
@@ -922,12 +927,14 @@ export default function ConsultationsPage() {
   const openPauseDialog = (c: Consultation) => {
     setPauseTarget(c);
     setPauseReason("");
+    setPauseUntil("");
     setShowPauseDialog(true);
   };
   const closePauseDialog = () => {
     setShowPauseDialog(false);
     setPauseTarget(null);
     setPauseReason("");
+    setPauseUntil("");
   };
   const openUnpauseDialog = (c: Consultation) => {
     setUnpauseTarget(c);
@@ -947,9 +954,18 @@ export default function ConsultationsPage() {
       toast({ title: "أدخل سبب التعليق", variant: "destructive" });
       return;
     }
+    // Client half of the past-date rule; the server's validatePauseUntil (the
+    // SAME shared function) stays authoritative.
+    const untilError = pauseUntilError(pauseUntil);
+    if (untilError) {
+      toast({ title: untilError, variant: "destructive" });
+      return;
+    }
+    const until = pauseUntil.trim();
     setActionInProgress(true);
     try {
-      await apiRequest("POST", `/api/consultations/${pauseTarget.id}/pause`, { reason });
+      // pauseUntil omitted when blank — absent means open-ended, exactly as before.
+      await apiRequest("POST", `/api/consultations/${pauseTarget.id}/pause`, until ? { reason, pauseUntil: until } : { reason });
       await refreshConsultations();
       toast({ title: "تم تعليق الاستشارة" });
       closePauseDialog();
@@ -2393,7 +2409,7 @@ export default function ConsultationsPage() {
                           variant="outline"
                           className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
                           data-testid={`badge-paused-${consultation.id}`}
-                          title={consultation.pauseReason || "معلّقة"}
+                          title={pauseBadgeTooltip(consultation)}
                         >
                           <Pause className="w-2.5 h-2.5 ml-1" />
                           معلّقة
@@ -2775,6 +2791,13 @@ export default function ConsultationsPage() {
                         في <LtrInline>{formatExpectedDate(selectedConsultation.pausedAt)}</LtrInline>
                       </>
                     )}
+                  </div>
+                  {/* Auto-lift date. Absent = open-ended, stated explicitly so
+                      the user never has to guess whether a date was set. */}
+                  <div className="mt-1 text-xs font-medium">
+                    {selectedConsultation.pauseUntil
+                      ? <>ينتهي التعليق تلقائياً في: <LtrInline>{selectedConsultation.pauseUntil}</LtrInline></>
+                      : <span className="text-amber-700/80">تعليق مفتوح — يستمر حتى يُلغى يدوياً</span>}
                   </div>
                 </div>
               )}
@@ -4360,12 +4383,17 @@ export default function ConsultationsPage() {
               rows={3}
             />
           </div>
+          <PauseUntilField
+            value={pauseUntil}
+            onChange={setPauseUntil}
+            testId="input-consultation-pause-until"
+          />
           <AlertDialogFooter className="gap-2">
             <AlertDialogCancel onClick={closePauseDialog}>إلغاء</AlertDialogCancel>
             <AlertDialogAction
               data-testid="button-confirm-pause"
               onClick={handlePause}
-              disabled={actionInProgress || !pauseReason.trim()}
+              disabled={actionInProgress || !pauseReason.trim() || !!pauseUntilError(pauseUntil)}
               className="bg-amber-600 hover:bg-amber-700"
             >
               <Pause className="w-4 h-4 ml-2" />
