@@ -3585,78 +3585,98 @@ export default function CasesPage() {
                   </div>
                 )}
                 {/* 🔴 THE BARE "قضية تسوية فقط" CHECKBOX WAS REMOVED HERE and
-                    replaced by the مرحلة البداية control below.
-                    It wrote isSettlementCase through the generic updateCase
-                    WITHOUT touching currentStage — and since that flag selects
-                    the stage array (InCourtSettlementStages wins before
-                    memoRequired/clientRole are consulted), ticking it on a case
-                    at دراسة / منظورة / تحرير_صحيفة_الدعوى stranded the stage off
-                    its own path and collapsed the progress bar to index 0. That
-                    is the 3fcd4e3 / c24308e bug class, reachable from this
-                    dialog today. The replacement moves both axes together, in
-                    one transaction, and only inside the correction window. */}
-                {(() => {
-                  // Shared with the server — the FE can never offer an edit the
-                  // endpoint would reject, and when it IS blocked the user is
-                  // shown the endpoint's own sentence rather than a silent
-                  // disabled control.
-                  const editCase = editCaseId ? getCaseById(editCaseId) : undefined;
-                  if (!editCase) return null;
-                  const caseHearings = getHearingsByCase(editCase.id);
-                  const blocked = startingStageCorrectionBlockedReason(
-                    editCase,
-                    caseHearings.some((h) => !!h.result),
-                  );
-                  const current = currentStartingStage(editCase);
-                  const currentLabel = current === StartingStageOption.SETTLEMENT ? "مداولة الصلح" : "محكمة";
-                  // SOFT consequences — warned about, never blocked. Both are
-                  // recoverable by hand; a judgment is not, which is why that
-                  // one is in the hard guard instead.
-                  const liveMemoCount = memos.filter(
-                    (m) => m.caseId === editCase.id && m.status !== "ملغاة" && m.status !== "مرفوعة",
-                  ).length;
-                  const hasSettlementNumber = !!(editCase.mohrNumber || editCase.taradiNumber);
-                  return (
-                    <div className="pt-1">
-                      <Label>مرحلة البداية</Label>
-                      {blocked ? (
-                        <>
-                          <Input value={currentLabel} disabled data-testid="edit-starting-stage-readonly" />
-                          <p className="text-xs text-muted-foreground mt-1">{blocked}</p>
-                        </>
-                      ) : (
-                        <>
-                          <Select
-                            value={current}
-                            onValueChange={(v) => {
-                              if (v === current) return;
-                              setStartingStageTarget({
-                                caseItem: editCase,
-                                toSettlement: v === StartingStageOption.SETTLEMENT,
-                                liveMemoCount,
-                                hasSettlementNumber,
-                              });
-                            }}
-                          >
-                            <SelectTrigger data-testid="edit-starting-stage">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value={StartingStageOption.COURT}>محكمة</SelectItem>
-                              <SelectItem value={StartingStageOption.SETTLEMENT}>مداولة الصلح</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            لتصحيح تسجيل خاطئ. يُطبَّق فوراً وبشكل مستقل عن بقية التعديلات، مع نقل
-                            القضية إلى المسار الصحيح.
-                          </p>
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
+                    replaced by the مرحلة البداية control, which now lives in its
+                    OWN always-rendered section BELOW this block (see the fix
+                    note there). It wrote isSettlementCase through the generic
+                    updateCase WITHOUT touching currentStage — and since that
+                    flag selects the stage array (InCourtSettlementStages wins
+                    before memoRequired/clientRole are consulted), ticking it on
+                    a case at دراسة / منظورة / تحرير_صحيفة_الدعوى stranded the
+                    stage off its own path and collapsed the progress bar to
+                    index 0 (the 3fcd4e3 / c24308e class). */}
               </div>
             )}
+
+            {/* === مرحلة البداية — ALWAYS RENDERED === */}
+            {/* 🔴 FIX (a4d417c shipped this INSIDE the IN_COURT block above, so
+                it did not render at all on any case that is not
+                منظورة_بالمحكمة — not even read-only). The guard's own first
+                branch returns "مرحلة البداية تخص القضايا المنظورة بالمحكمة فقط",
+                i.e. it is DESIGNED to explain that case — but that branch was
+                unreachable, because the wrapper removed the field before the
+                guard ever ran. Exactly the "removed entirely instead of the
+                read-only fallback" failure.
+                It now sits OUTSIDE every classification condition: the guard is
+                the single decider, and the field is ALWAYS visible — editable
+                inside the correction window, read-only with the reason outside
+                it. */}
+            {(() => {
+              // Shared with the server — the FE can never offer an edit the
+              // endpoint would reject, and when it IS blocked the user is shown
+              // the endpoint's own sentence rather than a silent disabled control.
+              const editCase = editCaseId ? getCaseById(editCaseId) : undefined;
+              const caseHearings = editCase ? getHearingsByCase(editCase.id) : [];
+              // getCaseById reads the LOADED LIST, which carries every field the
+              // guard needs (classification, currentStage, status, isArchived,
+              // pausedAt, awaitingCompletion, isSettlementCase, the settlement
+              // numbers) — only stageHistory is stripped by the list endpoint,
+              // and the guard does not read it. Hearings come from their own
+              // context; if they have not landed yet the array is empty, which
+              // fails OPEN (no recorded result found) rather than hiding the
+              // field — the server re-checks with the real data on submit.
+              const blocked = editCase
+                ? startingStageCorrectionBlockedReason(editCase, caseHearings.some((h) => !!h.result))
+                // No case object → read-only, never a silent disappearance. The
+                // second "renders nothing" path in a4d417c was `return null` here.
+                : "تعذّر تحميل بيانات القضية";
+              const current = editCase ? currentStartingStage(editCase) : StartingStageOption.COURT;
+              const currentLabel = current === StartingStageOption.SETTLEMENT ? "مداولة الصلح" : "محكمة";
+              // SOFT consequences — warned about, never blocked. Both are
+              // recoverable by hand; a judgment is not, which is why that one is
+              // in the hard guard instead.
+              const liveMemoCount = editCase
+                ? memos.filter((m) => m.caseId === editCase.id && m.status !== "ملغاة" && m.status !== "مرفوعة").length
+                : 0;
+              const hasSettlementNumber = !!(editCase?.mohrNumber || editCase?.taradiNumber);
+              return (
+                <div className="border-t pt-4 space-y-3">
+                  <h4 className="font-semibold">مرحلة البداية</h4>
+                  {blocked ? (
+                    <div>
+                      <Input value={currentLabel} disabled data-testid="edit-starting-stage-readonly" />
+                      <p className="text-xs text-muted-foreground mt-1">{blocked}</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <Select
+                        value={current}
+                        onValueChange={(v) => {
+                          if (!editCase || v === current) return;
+                          setStartingStageTarget({
+                            caseItem: editCase,
+                            toSettlement: v === StartingStageOption.SETTLEMENT,
+                            liveMemoCount,
+                            hasSettlementNumber,
+                          });
+                        }}
+                      >
+                        <SelectTrigger data-testid="edit-starting-stage">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={StartingStageOption.COURT}>محكمة</SelectItem>
+                          <SelectItem value={StartingStageOption.SETTLEMENT}>مداولة الصلح</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        لتصحيح تسجيل خاطئ. يُطبَّق فوراً وبشكل مستقل عن بقية التعديلات، مع نقل
+                        القضية إلى المسار الصحيح.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {/* Next-hearing date/time — present on the ADD dialog but missing
                 here. Plain case columns, saved with the rest of the form. */}
             {editFormData.caseClassification !== CaseClassification.UNDER_STUDY && (
