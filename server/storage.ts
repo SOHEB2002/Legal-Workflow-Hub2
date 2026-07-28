@@ -13,12 +13,12 @@ import {
   AssignableAdminSupportTaskKind, resolveAdminSupportAssignee,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
-  type ConsultationDeliveryExtension, type ConsultationActivity,
+  type ConsultationActivity,
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   type Contract, type ContractAttachment, type ContractActivity,
   CaseStatus, CaseStage, CaseClassification, ClosureReason, ConsultationStage, ConsultationStatus,
   ConsultationType, resolveConsultationType,
-  ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
+  ConsultationCategory, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType,
   CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, findPrimaryJudgmentHearing,
@@ -27,7 +27,7 @@ import {
   adminSupportTaskAssignments,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
-  consultationDeliveryExtensions, consultationActivityLog,
+  consultationActivityLog,
   contracts, contractAttachments, contractActivityLog,
   memoActivityLog, generalTaskEvents,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
@@ -258,16 +258,6 @@ export interface IStorage {
   getConsultationCommitteeDecisions(consultationId: string): Promise<ConsultationCommitteeDecision[]>;
   createConsultationNoteOutcome(data: { consultationId: string; outcome: string; notes: string; recordedBy: string }): Promise<ConsultationNoteOutcome>;
   getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]>;
-  // Phase-5: extend the consultation's expectedDeliveryDate. Insert + update
-  // run inside one transaction so the audit row and the consultation row
-  // can never get out of sync.
-  extendConsultationDelivery(
-    consultationId: string,
-    data: { newExpectedDeliveryDate: Date; reason: string },
-    extendedBy: string,
-    activity?: { description: string; metadata?: Record<string, any> },
-  ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }>;
-  getConsultationDeliveryExtensions(consultationId: string): Promise<ConsultationDeliveryExtension[]>;
 
   // Phase-6 — consultation activity log. Inserts always run inside the
   // SAME DB transaction as the underlying state change (see workflow
@@ -810,11 +800,12 @@ function mapDbConsultation(dbCon: any): Consultation {
     googleDriveFolderId: dbCon.googleDriveFolderId ?? "",
     reviewNotes: dbCon.reviewNotes ?? "",
     reviewDecision: dbCon.reviewDecision ?? null,
-    // Phase-4 SLA columns. Category falls back to "عادية" so consultations
-    // created before the column existed (and never backfilled) still
-    // present a valid value to the UI; expectedDeliveryDate stays null
-    // when the row predates the migration.
+    // Category falls back to "عادية" so consultations created before the column
+    // existed (and never backfilled) still present a valid value to the UI.
     category: dbCon.category ?? "عادية",
+    // @deprecated — feature removed; nothing writes this and no UI reads it.
+    // Still mapped so historical rows round-trip unchanged through update paths
+    // and the column keeps its stored value. See the schema.ts note.
     expectedDeliveryDate: toISOStringOrNull(dbCon.expectedDeliveryDate),
     // Falls back so rows created before the column existed still present
     // a valid value to the UI.
@@ -1489,16 +1480,15 @@ export class DatabaseStorage implements IStorage {
     const id = randomUUID();
     const now = new Date();
 
-    // Phase-4: category drives the SLA. Default to STANDARD (3 days) when
-    // not supplied so older clients keep working. expectedDeliveryDate is
-    // computed once at creation — there's no manual override (per spec).
+    // Category is a triage label only. Default to STANDARD when not supplied so
+    // older clients keep working. It used to also compute expectedDeliveryDate
+    // (createdAt + SLA days); that feature was REMOVED, so nothing is computed
+    // from it any more and expectedDeliveryDate is left NULL on new rows.
     const incomingCategory = data.category as ConsultationCategoryValue | undefined;
     const category: ConsultationCategoryValue =
       incomingCategory && (Object.values(ConsultationCategory) as string[]).includes(incomingCategory)
         ? incomingCategory
         : ConsultationCategory.STANDARD;
-    const slaDays = ConsultationCategorySLADays[category];
-    const expectedDeliveryDate = new Date(now.getTime() + slaDays * 24 * 60 * 60 * 1000);
 
     // Pre-rebuild this method conflated the two: it wrote the stage value
     // ("استلام") into the status column. Status now is a separate
@@ -1525,7 +1515,8 @@ export class DatabaseStorage implements IStorage {
       reviewNotes: "",
       reviewDecision: null,
       category,
-      expectedDeliveryDate,
+      // expectedDeliveryDate is deliberately NOT set — the feature was removed
+      // and the column is nullable, so new rows simply leave it NULL.
       // Intake channel. Literal fallback mirrors mapDbConsultation's
       // "عادية" style; column default also guards manual inserts.
       source: data.source || "عبر_المجموعة",
@@ -4941,97 +4932,6 @@ export class DatabaseStorage implements IStorage {
       notes: r.notes ?? "",
       recordedBy: r.recordedBy,
       recordedAt: toISOString(r.recordedAt),
-    }));
-  }
-
-  // ==================== Delivery-date extension (Phase-5) ====================
-
-  // Inserts the audit row and updates consultations.expectedDeliveryDate
-  // in one transaction. Sentinel errors mirror the convert-to-case method
-  // so the route handler can map them to specific 4xx codes:
-  //   CONSULTATION_NOT_FOUND, CONSULTATION_NOT_ACTIVE,
-  //   EXTENSION_NOT_FORWARD (new date is not strictly after the old one).
-  async extendConsultationDelivery(
-    consultationId: string,
-    data: { newExpectedDeliveryDate: Date; reason: string },
-    extendedBy: string,
-    activity?: { description: string; metadata?: Record<string, any> },
-  ): Promise<{ extension: ConsultationDeliveryExtension; consultation: Consultation }> {
-    return await db.transaction(async (tx) => {
-      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, consultationId));
-      if (!existing) throw new Error("CONSULTATION_NOT_FOUND");
-      if (existing.status !== "active") throw new Error("CONSULTATION_NOT_ACTIVE");
-
-      const oldDate = existing.expectedDeliveryDate ?? null;
-      // "Extension" means moving the date forward. Reject same/earlier
-      // values so the audit log carries meaningful events; the route
-      // surfaces this as a 400.
-      if (oldDate && data.newExpectedDeliveryDate.getTime() <= new Date(oldDate).getTime()) {
-        throw new Error("EXTENSION_NOT_FORWARD");
-      }
-
-      const now = new Date();
-      const extensionId = randomUUID();
-      const extensionRow = {
-        id: extensionId,
-        consultationId,
-        oldExpectedDeliveryDate: oldDate,
-        newExpectedDeliveryDate: data.newExpectedDeliveryDate,
-        reason: data.reason,
-        extendedBy,
-        extendedAt: now,
-      };
-      await tx.insert(consultationDeliveryExtensions).values(extensionRow);
-
-      const updated = await tx.update(consultations)
-        .set({
-          expectedDeliveryDate: data.newExpectedDeliveryDate,
-          updatedAt: now,
-        })
-        .where(eq(consultations.id, consultationId))
-        .returning();
-      if (!updated.length) throw new Error("CONSULTATION_UPDATE_FAILED");
-
-      // Phase-6 — log the extension as part of the same transaction.
-      if (activity) {
-        await tx.insert(consultationActivityLog).values({
-          id: randomUUID(),
-          consultationId,
-          activityType: ConsultationActivityType.DELIVERY_EXTENDED,
-          description: activity.description,
-          metadata: activity.metadata ?? {},
-          performedBy: extendedBy,
-          performedAt: now,
-        });
-      }
-
-      return {
-        extension: {
-          id: extensionRow.id,
-          consultationId: extensionRow.consultationId,
-          oldExpectedDeliveryDate: oldDate ? toISOString(oldDate) : null,
-          newExpectedDeliveryDate: toISOString(extensionRow.newExpectedDeliveryDate),
-          reason: extensionRow.reason,
-          extendedBy: extensionRow.extendedBy,
-          extendedAt: toISOString(extensionRow.extendedAt),
-        },
-        consultation: mapDbConsultation(updated[0]),
-      };
-    });
-  }
-
-  async getConsultationDeliveryExtensions(consultationId: string): Promise<ConsultationDeliveryExtension[]> {
-    const rows = await db.select().from(consultationDeliveryExtensions)
-      .where(eq(consultationDeliveryExtensions.consultationId, consultationId))
-      .orderBy(asc(consultationDeliveryExtensions.extendedAt));
-    return rows.map(r => ({
-      id: r.id,
-      consultationId: r.consultationId,
-      oldExpectedDeliveryDate: r.oldExpectedDeliveryDate ? toISOString(r.oldExpectedDeliveryDate) : null,
-      newExpectedDeliveryDate: toISOString(r.newExpectedDeliveryDate),
-      reason: r.reason ?? "",
-      extendedBy: r.extendedBy,
-      extendedAt: toISOString(r.extendedAt),
     }));
   }
 

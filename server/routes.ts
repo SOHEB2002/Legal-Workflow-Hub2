@@ -8,7 +8,6 @@ import {
   insertClientSchema,
   insertCaseSchema,
   insertConsultationSchema,
-  extendConsultationDeliverySchema,
   insertHearingSchema,
   insertFieldTaskSchema,
   generalTaskReviewSchema,
@@ -47,8 +46,6 @@ import {
   getStagesForConsultationCycle,
   isContractInFollowUpCycle,
   getStagesForContractCycle,
-  ConsultationCategorySLADays,
-  ConsultationCategory,
   ContractStage,
   ContractStagesAll,
   ContractStageLabels,
@@ -5204,9 +5201,10 @@ export async function registerRoutes(
   // resets to RECEIVED, followUpCount increments, followUpStartedAt is
   // stamped, and the previous closure metadata (closedAt /
   // closureReason*) plus stale pause/await fields are cleared so the
-  // row doesn't carry forward into the new cycle. expectedDeliveryDate
-  // is recomputed as now + SLA_DAYS[category] so the cycle gets a
-  // fresh SLA window. The activity log preserves the full history.
+  // row doesn't carry forward into the new cycle. The activity log preserves
+  // the full history. (The expectedDeliveryDate/SLA recompute that used to run
+  // here went with the removal of that feature — there is no delivery window to
+  // refresh any more.)
   // Permission: admin_support / branch_manager.
   app.post("/api/consultations/:id/start-follow-up", requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -5247,15 +5245,9 @@ export async function registerRoutes(
       }
 
       const nextCount = (consultation.followUpCount ?? 0) + 1;
-      // Recompute SLA window for the new cycle. Falls back to STANDARD
-      // (3 days) when the row's category is legacy/unrecognised — same
-      // safe fallback used at creation in storage.createConsultation.
-      const category = (Object.values(ConsultationCategory) as string[])
-        .includes(consultation.category as string)
-        ? (consultation.category as keyof typeof ConsultationCategorySLADays)
-        : ConsultationCategory.STANDARD;
-      const slaDays = ConsultationCategorySLADays[category];
-      const newExpectedDeliveryDate = new Date(Date.now() + slaDays * 24 * 60 * 60 * 1000);
+      // The SLA-window recompute that used to live here is GONE with the
+      // expected-delivery-date feature. A follow-up cycle no longer refreshes
+      // any delivery date — there is none to refresh.
 
       const updated = await storage.updateConsultationAndLog(
         consultation.id,
@@ -5269,8 +5261,6 @@ export async function registerRoutes(
           closedAt: null,
           closureReason: null,
           closureReasonOther: null,
-          // Fresh SLA window for the cycle (R6).
-          expectedDeliveryDate: newExpectedDeliveryDate.toISOString(),
           // Defensive cleanup (R10) — clear any stale pause/await state
           // the row might carry from before its original closure so the
           // new cycle starts cleanly.
@@ -5288,7 +5278,6 @@ export async function registerRoutes(
           description: `بدء استشارة تعقيبية #${nextCount}: ${question.slice(0, 80)}${question.length > 80 ? "..." : ""}`,
           metadata: {
             followUpCount: nextCount,
-            expectedDeliveryDate: newExpectedDeliveryDate.toISOString(),
             followUpQuestion: question,
           },
           performedBy: reqUser.id,
@@ -5418,99 +5407,6 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[convert-to-case] error:", error);
       res.status(500).json({ error: error.message || "فشل تحويل الاستشارة" });
-    }
-  });
-
-  // POST /api/consultations/:id/extend-delivery
-  // Body: { newExpectedDeliveryDate: ISO string, reason: string }.
-  // Inserts an audit row in consultation_delivery_extensions and updates
-  // consultations.expectedDeliveryDate in a single DB transaction.
-  // Allowed roles (Phase-5): department_head (own dept), branch_manager.
-  app.post("/api/consultations/:id/extend-delivery", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const reqUser = req.user!;
-      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-
-      const consultation = await storage.getConsultationById(String(req.params.id));
-      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
-
-      // Role gate. branch_manager is global; department_head is scoped to
-      // their own department, mirroring assign / early-close.
-      // WIDENED MODEL — the assigned lawyer may now extend their own consultation's
-      // delivery date. Every extension is still recorded with a mandatory reason in
-      // consultation_delivery_extensions, so the audit trail is unchanged.
-      if (!canActOnEntityTiered(reqUser, consultation, consultation.departmentId, req.actingContext, null)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لتمديد التسليم" });
-      }
-
-      if (consultation.status !== "active") {
-        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
-      }
-
-      const parsed = extendConsultationDeliverySchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: parsed.error.errors });
-      }
-
-      const newDate = new Date(parsed.data.newExpectedDeliveryDate);
-      if (Number.isNaN(newDate.getTime())) {
-        return res.status(400).json({ error: "تاريخ التسليم الجديد غير صحيح" });
-      }
-
-      try {
-        const reasonTrimmed = parsed.data.reason.trim();
-        const oldDateIso = consultation.expectedDeliveryDate || null;
-        const newDateIso = newDate.toISOString();
-        const fmtDate = (iso: string | null) => iso ? iso.slice(0, 10) : "—";
-        const description = `تم تمديد تاريخ التسليم من ${fmtDate(oldDateIso)} إلى ${fmtDate(newDateIso)} — ${reasonTrimmed}`;
-
-        const result = await storage.extendConsultationDelivery(
-          consultation.id,
-          { newExpectedDeliveryDate: newDate, reason: reasonTrimmed },
-          reqUser.id,
-          {
-            description,
-            metadata: { oldDate: oldDateIso, newDate: newDateIso, reason: reasonTrimmed },
-          },
-        );
-        res.status(201).json(result);
-      } catch (e: any) {
-        const msg = e?.message || "";
-        if (msg === "CONSULTATION_NOT_FOUND") return res.status(404).json({ error: "الاستشارة غير موجودة" });
-        if (msg === "CONSULTATION_NOT_ACTIVE") return res.status(400).json({ error: "الاستشارة ليست نشطة" });
-        if (msg === "EXTENSION_NOT_FORWARD") {
-          return res.status(400).json({ error: "تاريخ التسليم الجديد يجب أن يكون بعد التاريخ الحالي" });
-        }
-        if (msg === "CONSULTATION_UPDATE_FAILED") {
-          return res.status(500).json({ error: "فشل تمديد التسليم، تم التراجع عن جميع التغييرات" });
-        }
-        throw e;
-      }
-    } catch (error: any) {
-      console.error("[extend-delivery] error:", error);
-      res.status(500).json({ error: error.message || "فشل تمديد التسليم" });
-    }
-  });
-
-  // GET /api/consultations/:id/delivery-extensions
-  // Returns the chronological list of expectedDeliveryDate extensions
-  // for a consultation. Auth/visibility piggybacks off canModifyConsultation
-  // — anyone allowed to view the consultation can see its history.
-  app.get("/api/consultations/:id/delivery-extensions", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const reqUser = req.user!;
-      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-
-      const consultation = await storage.getConsultationById(String(req.params.id));
-      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
-      if (!canModifyConsultation(reqUser, consultation, req.actingContext)) {
-        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه الاستشارة" });
-      }
-
-      const rows = await storage.getConsultationDeliveryExtensions(consultation.id);
-      res.json(rows);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
 

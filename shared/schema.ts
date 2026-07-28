@@ -235,11 +235,17 @@ export const consultations = pgTable("consultations", {
   reviewDecision: varchar("review_decision", { length: 50 }),
   closureReason: varchar("closure_reason", { length: 50 }),
   closureReasonOther: varchar("closure_reason_other", { length: 500 }),
-  // Phase-4 SLA columns. Category is set once at creation and drives the
-  // expectedDeliveryDate (createdAt + SLA days). The DB default mirrors the
-  // server fallback so manual inserts still get a valid category.
+  // Triage label, set once at creation. The DB default mirrors the server
+  // fallback so manual inserts still get a valid category.
   // Migration: script/add-consultation-category-and-due-date.sql.
   category: varchar("category", { length: 50 }).notNull().default("عادية"),
+  // @deprecated — the expected-delivery-date feature (and its تمديد التسليم
+  // extension flow) was REMOVED from the product. Nothing writes this column any
+  // more and no UI reads it. The COLUMN IS DELIBERATELY LEFT IN PLACE, populated
+  // on historical rows: dropping it would be a destructive migration, which this
+  // codebase does not do (additive-only rule). The declaration must stay too —
+  // drizzle builds an explicit column list, and the column still exists in both
+  // DBs. Same treatment as `deliveryType` above. Do not surface it in new UI.
   expectedDeliveryDate: timestamp("expected_delivery_date"),
   // How the consultation reached us — group chat vs. private DM. NOT NULL
   // + default so `drizzle-kit push` backfills existing rows in one DDL
@@ -389,11 +395,18 @@ export const consultationNoteOutcomes = pgTable("consultation_note_outcomes", {
   consultationIdx: index("consultation_note_outcomes_consultation_idx").on(t.consultationId),
 }));
 
-// Phase-5 — audit log for expectedDeliveryDate extensions. Each row
-// captures one extension (old → new) so the dialog can show a history
-// list. The corresponding consultations.expectedDeliveryDate is updated
-// in the same transaction as the insert (see storage.extendConsultationDelivery).
-// Migration: script/add-consultation-delivery-extensions.sql.
+// @deprecated — audit log for expectedDeliveryDate extensions.
+//
+// The تمديد التسليم flow that wrote these rows was REMOVED along with the
+// expected-delivery-date feature: the endpoints, the storage methods, the dialog
+// and the history list are all gone. The TABLE IS DELIBERATELY LEFT IN PLACE
+// with its historical rows — dropping it would be a destructive migration, which
+// this codebase does not do (additive-only rule).
+//
+// The declaration stays because the table still exists in both DBs and Republish
+// diffs live schema against live schema; removing it here would make the deploy
+// propose a DROP TABLE. Nothing reads or writes it in application code any more.
+// Migration that created it: script/add-consultation-delivery-extensions.sql.
 export const consultationDeliveryExtensions = pgTable("consultation_delivery_extensions", {
   id: varchar("id", { length: 255 }).primaryKey(),
   consultationId: varchar("consultation_id", { length: 255 }).notNull(),
@@ -2071,10 +2084,19 @@ export function remapConsultationStageForType(
   return ConsultationStage.RECEIVED;
 }
 
-// ==================== Consultation Category (Phase 4 — SLA categories) ====================
-// Category is set once at consultation creation (no manual override) and
-// drives the expectedDeliveryDate via SLA_DAYS. Stored as plain varchar in
-// the DB so a future category addition is a value change with no DDL.
+// ==================== Consultation Category ====================
+// A TRIAGE label — how big a job the consultation looks like. Set once at
+// creation (no manual override) and stored as plain varchar so a future
+// category addition is a value change with no DDL.
+//
+// ⚠ It no longer computes ANYTHING. Until the expected-delivery-date feature was
+// removed, this drove expectedDeliveryDate via a SLA_DAYS map (1 / 3 / 14) and
+// the labels read "سريعة (يوم)" / "عادية (3 أيام)" / "طويلة (14 يوم)". Those
+// day-counts were dropped WITH the feature: nothing computes or enforces a
+// delivery window any more, so a label promising one would be a lie. Do NOT
+// re-add day-counts to these labels without re-adding something that enforces
+// them. ConsultationCategorySLADays was deleted outright — it had no other
+// consumer.
 export const ConsultationCategory = {
   QUICK:    "سريعة",
   STANDARD: "عادية",
@@ -2083,18 +2105,10 @@ export const ConsultationCategory = {
 
 export type ConsultationCategoryValue = typeof ConsultationCategory[keyof typeof ConsultationCategory];
 
-// SLA days per category — used server-side on insert to compute
-// expectedDeliveryDate = createdAt + SLA_DAYS[category].
-export const ConsultationCategorySLADays: Record<ConsultationCategoryValue, number> = {
-  "سريعة": 1,
-  "عادية": 3,
-  "طويلة": 14,
-};
-
 export const ConsultationCategoryLabels: Record<ConsultationCategoryValue, string> = {
-  "سريعة": "سريعة (يوم)",
-  "عادية": "عادية (3 أيام)",
-  "طويلة": "طويلة (14 يوم)",
+  "سريعة": "سريعة",
+  "عادية": "عادية",
+  "طويلة": "طويلة",
 };
 
 // ==================== Consultation Status (per consultations-rebuild-spec.md §3.1.2) ====================
@@ -3734,17 +3748,6 @@ export const insertContractSchema = z.object({
 });
 
 export type InsertContract = z.infer<typeof insertContractSchema>;
-
-// Phase-5 — body for POST /api/consultations/:id/extend-delivery.
-// newExpectedDeliveryDate must parse as a date; we keep it as a string in
-// the wire format and let the route turn it into a Date. reason is
-// required (free text) so the audit log carries enough context.
-export const extendConsultationDeliverySchema = z.object({
-  newExpectedDeliveryDate: z.string().min(1, "تاريخ التسليم الجديد مطلوب"),
-  reason: z.string().min(1, "سبب التمديد مطلوب"),
-});
-
-export type ExtendConsultationDeliveryInput = z.infer<typeof extendConsultationDeliverySchema>;
 
 export const insertHearingSchema = z.object({
   caseId: z.string().min(1, "القضية مطلوبة"),

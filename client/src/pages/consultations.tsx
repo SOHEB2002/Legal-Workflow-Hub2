@@ -67,7 +67,6 @@ import type {
   ConsultationClosureReasonValue,
   ConsultationCategoryValue,
   ConsultationPriorityValue,
-  ConsultationDeliveryExtension,
   ConsultationActivity,
 } from "@shared/schema";
 import {
@@ -101,7 +100,6 @@ import {
   CaseStagesOrder,
 } from "@shared/schema";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
-import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
   ConsultationsAdvancedFilters,
   EMPTY_CONSULTATIONS_FILTERS,
@@ -538,20 +536,13 @@ function canPauseConsultation(
   return c.assignedTo === user.id;
 }
 
-// Phase-4 SLA helpers — overdue is "active consultation whose
-// expectedDeliveryDate has already passed". Closed/converted rows never
-// count as overdue (the SLA only matters while we're working the file).
-function isConsultationOverdue(c: Consultation, now: number = Date.now()): boolean {
-  if (c.status !== "active") return false;
-  if (!c.expectedDeliveryDate) return false;
-  const due = new Date(c.expectedDeliveryDate).getTime();
-  if (Number.isNaN(due)) return false;
-  return now > due;
-}
-
-// Render the expectedDeliveryDate as a short, locale-agnostic ISO date
-// (YYYY-MM-DD). The DB stores a timestamp but the SLA precision the user
-// cares about is days, and the page already shows other dates this way.
+// Render a timestamp as a short, locale-agnostic ISO date (YYYY-MM-DD).
+//
+// ⚠ The NAME is historical — it was written for the expectedDeliveryDate row,
+// which has since been removed. It is now a GENERIC date formatter and is still
+// used for pausedAt and createdAt elsewhere on this page, so it must NOT be
+// deleted along with the delivery feature. (isConsultationOverdue, its former
+// companion, WAS deleted: it read expectedDeliveryDate and had no other use.)
 function formatExpectedDate(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -916,17 +907,6 @@ export default function ConsultationsPage() {
   const [showFollowUpDialog, setShowFollowUpDialog] = useState(false);
   const [followUpTarget, setFollowUpTarget] = useState<Consultation | null>(null);
   const [followUpQuestion, setFollowUpQuestion] = useState("");
-
-  // Phase-5 — extend-delivery dialog + history list state. extensions are
-  // fetched once when the details dialog opens (see useEffect below);
-  // refreshed after a successful extension so the list reflects the new
-  // entry without a full consultations refresh.
-  const [showExtendDialog, setShowExtendDialog] = useState(false);
-  const [extendConsultation, setExtendConsultation] = useState<Consultation | null>(null);
-  const [extendNewDate, setExtendNewDate] = useState<string>("");
-  const [extendReason, setExtendReason] = useState<string>("");
-  const [deliveryExtensions, setDeliveryExtensions] = useState<ConsultationDeliveryExtension[]>([]);
-  const [extensionsExpanded, setExtensionsExpanded] = useState(false);
 
   // Phase-6 — consultation activity log. Fetched when the details dialog
   // opens and re-fetched after any workflow mutation that updates the
@@ -1374,10 +1354,6 @@ export default function ConsultationsPage() {
     setEarlyCloseNotes("");
   };
 
-  // Phase-5: matches the server gate on POST /extend-delivery —
-  // department_head (own dept) and branch_manager only.
-  // WIDENED MODEL — + the assigned lawyer (mirrors POST /:id/extend-delivery).
-  // Every extension still records a mandatory reason, so the audit trail is intact.
   // CREATE-SCOPE — department_head AND employee may open a consultation, but only in
   // THEIR OWN department. Mirrors POST /api/consultations + scopedCreateDepartmentId:
   // the picker is filtered to their department and locked, so the server's
@@ -1392,42 +1368,6 @@ export default function ConsultationsPage() {
     : departments;
   const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "") : "";
 
-  const canExtendDelivery = (c: Consultation): boolean => {
-    if (!user) return false;
-    if (c.status !== "active") return false;
-    return consultationActorTier(c, user.role, user.id, user.departmentId);
-  };
-
-  const openExtendDialog = (c: Consultation) => {
-    setExtendConsultation(c);
-    // Pre-fill with the current expected date so the user only needs to push
-    // it forward. HijriDatePicker stores YYYY-MM-DD in local time.
-    const seed = c.expectedDeliveryDate ? new Date(c.expectedDeliveryDate) : new Date();
-    const yyyy = seed.getFullYear();
-    const mm = String(seed.getMonth() + 1).padStart(2, "0");
-    const dd = String(seed.getDate()).padStart(2, "0");
-    setExtendNewDate(`${yyyy}-${mm}-${dd}`);
-    setExtendReason("");
-    setShowExtendDialog(true);
-  };
-
-  const closeExtendDialog = () => {
-    setShowExtendDialog(false);
-    setExtendConsultation(null);
-    setExtendNewDate("");
-    setExtendReason("");
-  };
-
-  const fetchDeliveryExtensions = async (consultationId: string) => {
-    try {
-      const res = await apiRequest("GET", `/api/consultations/${consultationId}/delivery-extensions`);
-      const rows = (await res.json()) as ConsultationDeliveryExtension[];
-      setDeliveryExtensions(Array.isArray(rows) ? rows : []);
-    } catch {
-      setDeliveryExtensions([]);
-    }
-  };
-
   // Phase-6 — fetch the consultation activity log for the open dialog.
   // Called on dialog open and after any workflow mutation that changes
   // the consultation state.
@@ -1438,38 +1378,6 @@ export default function ConsultationsPage() {
       setActivityLog(Array.isArray(rows) ? rows : []);
     } catch {
       setActivityLog([]);
-    }
-  };
-
-  const handleExtendDelivery = async () => {
-    if (!extendConsultation) return;
-    if (!extendNewDate) {
-      toast({ title: "اختر تاريخ التسليم الجديد", variant: "destructive" });
-      return;
-    }
-    if (!extendReason.trim()) {
-      toast({ title: "أدخل سبب التمديد", variant: "destructive" });
-      return;
-    }
-    setActionInProgress(true);
-    try {
-      // HijriDatePicker emits YYYY-MM-DD. Anchor to local noon so the
-      // resulting timestamp is unambiguously "that day" regardless of TZ
-      // and is strictly after a same-day current value at any morning hour.
-      const [y, m, d] = extendNewDate.split("-").map(Number);
-      const iso = new Date(y, (m ?? 1) - 1, d ?? 1, 12, 0, 0).toISOString();
-      await apiRequest("POST", `/api/consultations/${extendConsultation.id}/extend-delivery`, {
-        newExpectedDeliveryDate: iso,
-        reason: extendReason.trim(),
-      });
-      await refreshConsultations();
-      await fetchDeliveryExtensions(extendConsultation.id);
-      toast({ title: "تم تمديد تاريخ التسليم" });
-      closeExtendDialog();
-    } catch (err) {
-      toast({ title: "فشل تمديد التسليم", description: extractApiError(err), variant: "destructive" });
-    } finally {
-      setActionInProgress(false);
     }
   };
 
@@ -1922,16 +1830,12 @@ export default function ConsultationsPage() {
   // Also collapses the list back when switching consultations.
   useEffect(() => {
     if (!selectedConsultation) {
-      setDeliveryExtensions([]);
-      setExtensionsExpanded(false);
       setActivityLog([]);
       setActivityLogExpanded(false);
       return;
     }
-    setExtensionsExpanded(false);
     // Default collapsed on every dialog open. User can toggle.
     setActivityLogExpanded(false);
-    fetchDeliveryExtensions(selectedConsultation.id);
     fetchActivityLog(selectedConsultation.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConsultation?.id]);
@@ -2008,10 +1912,6 @@ export default function ConsultationsPage() {
         }
       }
     }
-    // Phase-4 SLA filter: keep only active rows past their
-    // expectedDeliveryDate. Reuses isConsultationOverdue so the
-    // table indicator and the filter agree on the threshold.
-    if (advFilters.overdue && !isConsultationOverdue(consultation)) return false;
     return true;
   });
 
@@ -3092,17 +2992,6 @@ export default function ConsultationsPage() {
                         استشارة تعقيبية
                       </Button>
                     )}
-                    {canExtendDelivery(selectedConsultation) && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        data-testid={`dialog-button-extend-delivery-${selectedConsultation.id}`}
-                        onClick={() => openExtendDialog(selectedConsultation)}
-                      >
-                        <AlertTriangle className="w-4 h-4 ml-1" />
-                        تمديد التسليم
-                      </Button>
-                    )}
                   </div>
                 )}
               </div>
@@ -3171,25 +3060,6 @@ export default function ConsultationsPage() {
                   <p data-testid="dialog-source">
                     {ConsultationSourceLabels[selectedConsultation.source as keyof typeof ConsultationSourceLabels]
                       || selectedConsultation.source}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">التسليم المتوقع</Label>
-                  <p data-testid="dialog-expected-delivery">
-                    {(() => {
-                      const overdue = isConsultationOverdue(selectedConsultation);
-                      const text = formatExpectedDate(selectedConsultation.expectedDeliveryDate);
-                      return (
-                        <span
-                          className={
-                            overdue ? "inline-flex items-center gap-1 text-destructive font-medium" : ""
-                          }
-                        >
-                          {overdue && <AlertTriangle className="w-3.5 h-3.5" />}
-                          <LtrInline>{text}</LtrInline>
-                        </span>
-                      );
-                    })()}
                   </p>
                 </div>
                 {/* Phase-9.1 — priority + priority_reason editors moved
@@ -3375,54 +3245,6 @@ export default function ConsultationsPage() {
                 </div>
               )}
 
-              {/* Phase-5: collapsible delivery-extension history. Fetched
-                  on dialog-open (see useEffect below). Hidden when there
-                  are no extensions to avoid noise. */}
-              {deliveryExtensions.length > 0 && (
-                <div className="text-right border rounded-lg p-3 bg-muted/20">
-                  <button
-                    type="button"
-                    className="flex items-center gap-2 text-sm font-medium w-full text-right"
-                    onClick={() => setExtensionsExpanded((v) => !v)}
-                    data-testid="button-toggle-extensions"
-                  >
-                    <span>سجل تمديدات التسليم ({deliveryExtensions.length})</span>
-                    <ChevronLeft
-                      className={
-                        "w-4 h-4 transition-transform " +
-                        (extensionsExpanded ? "-rotate-90" : "")
-                      }
-                    />
-                  </button>
-                  {extensionsExpanded && (
-                    <ul className="mt-3 space-y-2" data-testid="list-delivery-extensions">
-                      {deliveryExtensions.map((ext) => (
-                        <li
-                          key={ext.id}
-                          className="text-xs border-r-2 border-primary/40 pr-3 py-1"
-                          data-testid={`extension-${ext.id}`}
-                        >
-                          <div className="font-medium">
-                            <LtrInline>{formatExpectedDate(ext.oldExpectedDeliveryDate)}</LtrInline>
-                            {" ← "}
-                            <LtrInline>{formatExpectedDate(ext.newExpectedDeliveryDate)}</LtrInline>
-                          </div>
-                          {ext.reason && (
-                            <div className="text-muted-foreground mt-0.5">
-                              <BidiText>{ext.reason}</BidiText>
-                            </div>
-                          )}
-                          <div className="text-muted-foreground mt-0.5">
-                            بواسطة <BidiText>{getLawyerName(ext.extendedBy)}</BidiText>
-                            {" • "}
-                            <LtrInline>{formatExpectedDate(ext.extendedAt)}</LtrInline>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
             </div>
           )}
         </DialogContent>
@@ -4264,71 +4086,6 @@ export default function ConsultationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <Dialog
-        open={showExtendDialog}
-        onOpenChange={(open) => { if (!open) closeExtendDialog(); }}
-      >
-        <DialogContent dir="rtl" className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5" />
-              تمديد تاريخ التسليم
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 text-right">
-            <p className="text-sm text-muted-foreground">
-              التمديد يسجَّل في سجل التمديدات ويصبح هو التاريخ المتوقع الجديد.
-              لا يمكن أن يكون قبل التاريخ الحالي أو مساوياً له.
-            </p>
-            {extendConsultation && (
-              <div className="text-xs text-muted-foreground">
-                التاريخ الحالي:{" "}
-                <LtrInline>{formatExpectedDate(extendConsultation.expectedDeliveryDate)}</LtrInline>
-              </div>
-            )}
-            <div>
-              <Label>تاريخ التسليم الجديد <span className="text-red-500">*</span></Label>
-              <HijriDatePicker
-                value={extendNewDate}
-                onChange={setExtendNewDate}
-                data-testid="input-extend-new-date"
-              />
-            </div>
-            <div>
-              <Label>سبب التمديد <span className="text-red-500">*</span></Label>
-              <Textarea
-                data-testid="input-extend-reason"
-                value={extendReason}
-                onChange={(e) => setExtendReason(e.target.value)}
-                placeholder="اكتب سبب تمديد التسليم..."
-                rows={3}
-              />
-            </div>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={closeExtendDialog}
-              data-testid="button-cancel-extend"
-            >
-              إلغاء
-            </Button>
-            <Button
-              onClick={handleExtendDelivery}
-              disabled={
-                actionInProgress ||
-                !extendNewDate ||
-                !extendReason.trim()
-              }
-              data-testid="button-confirm-extend"
-            >
-              تأكيد التمديد
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Phase-8 — await-completion dialog. Reason required. */}
       <AlertDialog open={showAwaitDialog} onOpenChange={(open) => { if (!open) closeAwaitDialog(); }}>
         <AlertDialogContent dir="rtl">
