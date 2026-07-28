@@ -7381,13 +7381,11 @@ export async function registerRoutes(
         req.actingContext,
       );
       if (!check.allowed) return res.status(400).json({ error: check.reason });
-      // Slot-validation gate per ContractSlotsByType. Required slots
-      // are checked at the moment the contract LEAVES their gating
-      // stage — e.g. مراجعة_عقد cannot leave RECEIVED without an
-      // uploaded "العقد محل المراجعة", and cannot leave DRAFTING
-      // without "دراسة المراجعة". Slots whose
-      // requiredBeforeLeavingStage doesn't match the from-stage are
-      // ignored for this transition.
+      // Slot-validation gate per ContractSlotsByType.
+      // ⚠ CURRENTLY A NO-OP by owner policy — every requiredBeforeLeavingStage in
+      // that table is null, so no attachment blocks a contract transition. Kept
+      // wired so re-arming a slot is a one-line data change in schema.ts rather
+      // than re-plumbing the route. See the note above ContractSlotsByType.
       const slotCheckErr = await checkRequiredSlotsForTransition(
         contract,
         contract.currentStage,
@@ -8517,15 +8515,13 @@ export async function registerRoutes(
         return res.status(400).json({ error: "استخدم العودة من الاستكمال بدلاً من التجاوز" });
       }
       // Skip respects the same slot rules as a normal advance from
-      // PENDING_COMPLETION — e.g. مراجعة_عقد still needs the intake
-      // file (contract_under_review) on the row. The skip lands on
-      // DRAFTING just like advance from PENDING_COMPLETION; we use
-      // the from-stage RECEIVED_PENDING_COMPLETION here, which has
-      // no required slots itself, but the RECEIVED slot rule applies
-      // because it requires the file before LEAVING RECEIVED — which
-      // already happened to reach this stage. So the gate effectively
-      // covers the RECEIVED→PENDING transition, not the skip itself.
-      // We keep the call for symmetry / future-proofing.
+      // ⚠ CURRENTLY A NO-OP by owner policy — every requiredBeforeLeavingStage
+      // in ContractSlotsByType is null, so no attachment blocks a contract
+      // transition. (This call was already the weaker of the two: it passes the
+      // from-stage RECEIVED_PENDING_COMPLETION, which never carried a rule of its
+      // own, so it only ever fired on rules inherited from the RECEIVED edge.)
+      // Kept wired for symmetry with /advance-stage so re-arming a slot is a
+      // one-line data change in schema.ts. See the note above ContractSlotsByType.
       const slotCheckErr = await checkRequiredSlotsForTransition(
         contract,
         contract.currentStage,
@@ -8602,6 +8598,19 @@ export async function registerRoutes(
   // the current stage is missing its row in contract_attachments.
   // Returns an Arabic error string when something's missing, or null
   // when the gate passes (or there are no rules for this type/stage).
+  //
+  // ⚠ CURRENTLY UNREACHABLE-BY-DATA, not dead code. Owner policy is that NO
+  // attachment gates a contract stage transition, so every
+  // requiredBeforeLeavingStage in the table is null. `gating` therefore always
+  // comes back empty and this returns null immediately: the filter compares
+  // `r.requiredBeforeLeavingStage === fromStage`, and fromStage is always a
+  // non-null stage string (contracts.current_stage is NOT NULL with a default),
+  // so a null rule can never match it.
+  //
+  // Deliberately KEPT rather than deleted, unlike the truly-dead paths this
+  // audit removed (court-register, the localStorage delegation dialog): those
+  // could never succeed, whereas this mechanism works and is disarmed only by
+  // its data. Re-arming one slot stays a one-line change in schema.ts.
   async function checkRequiredSlotsForTransition(
     contract: any,
     fromStage: string,
