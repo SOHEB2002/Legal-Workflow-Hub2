@@ -703,6 +703,7 @@ function mapDbCase(dbCase: any): LawCase {
     objectionWindowDays: dbCase.objectionWindowDays ?? null,
     executionRequestNumber: dbCase.executionRequestNumber || null,
     appealLawyerId: dbCase.appealLawyerId || null,
+    litigatorId: dbCase.litigatorId || null,
     internalReviewerId: dbCase.internalReviewerId || null,
     moeenNumber: dbCase.moeenNumber || null,
     clientRole: dbCase.clientRole || null,

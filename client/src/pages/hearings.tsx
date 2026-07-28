@@ -217,7 +217,10 @@ export default function HearingsPage() {
       ...prev,
       caseId: caseId || prev.caseId,
       hearingType: type && Object.values(HearingType).includes(type) ? type : prev.hearingType,
-      attendingLawyerId: c?.primaryLawyerId || c?.responsibleLawyerId || prev.attendingLawyerId,
+      // "المترافع" first when the case designates one — mirrors the server
+      // default in POST /api/hearings so the pre-filled value matches what the
+      // server would have chosen anyway.
+      attendingLawyerId: c?.litigatorId || c?.primaryLawyerId || c?.responsibleLawyerId || prev.attendingLawyerId,
       courtName: c?.courtName || prev.courtName,
     }));
     setIsAddDialogOpen(true);
@@ -497,8 +500,12 @@ export default function HearingsPage() {
 
   const getLawyerForHearing = (hearing: Hearing) => {
     if (hearing.attendingLawyerId) return hearing.attendingLawyerId;
+    // Fallback for legacy rows with no attending lawyer stored. Same chain the
+    // server uses at creation, so an old hearing on a case that has since
+    // designated a المترافع resolves to them rather than to the responsible
+    // lawyer — this is DISPLAY only and reassigns nothing.
     const caseData = hearing.caseId ? getCaseById(hearing.caseId) : null;
-    return caseData?.primaryLawyerId || caseData?.responsibleLawyerId || null;
+    return caseData?.litigatorId || caseData?.primaryLawyerId || caseData?.responsibleLawyerId || null;
   };
 
   const getDepartmentForHearing = (hearing: Hearing) => {
@@ -692,7 +699,8 @@ export default function HearingsPage() {
                                 onSelect={(val) => {
                                   const selected = cases.find(x => x.id === val);
                                   if (!selected) return;
-                                  const autoLawyer = selected.primaryLawyerId || selected.responsibleLawyerId || "";
+                                  // "المترافع" first — same chain as the server.
+                                  const autoLawyer = selected.litigatorId || selected.primaryLawyerId || selected.responsibleLawyerId || "";
                                   // Auto-derive hearing type: settlement/conciliation stages → TARADI,
                                   // labor case type → SETTLEMENT (tasweya), otherwise COURT.
                                   const stage = selected.currentStage;

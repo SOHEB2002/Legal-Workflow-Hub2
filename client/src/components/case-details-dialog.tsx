@@ -676,6 +676,17 @@ export function CaseDetailsDialog({
                     <div>
                       <Label className="text-muted-foreground">المحامي المسؤول</Label>
                       <p className="font-medium">{getLawyerName(selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)}</p>
+                      {/* "المترافع" — shown ONLY when the case designates one, and
+                          directly under the responsible lawyer, so it is obvious
+                          at a glance that someone ELSE appears in court. Absent
+                          on the overwhelming majority of cases, which is why it
+                          renders nothing rather than an em-dash row. */}
+                      {selectedCase.litigatorId && (
+                        <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 flex items-center gap-1">
+                          <Gavel className="w-3 h-3" />
+                          يترافع عنه: <BidiText>{getLawyerName(selectedCase.litigatorId)}</BidiText>
+                        </p>
+                      )}
                     </div>
                     <div>
                       <Label className="text-muted-foreground">النوع</Label>
