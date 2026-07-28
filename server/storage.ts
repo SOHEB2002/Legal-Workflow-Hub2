@@ -16,7 +16,7 @@ import {
   type ConsultationDeliveryExtension, type ConsultationActivity,
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   type Contract, type ContractAttachment, type ContractActivity,
-  CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
+  CaseStatus, CaseStage, CaseClassification, ClosureReason, ConsultationStage, ConsultationStatus,
   ConsultationType, resolveConsultationType,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
@@ -304,6 +304,10 @@ export interface IStorage {
   skipConsultationCompletion(id: string, input: { performedBy: string }): Promise<Consultation | undefined>;
   awaitCaseCompletion(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
   resumeCaseFromCompletion(id: string, input: { notes?: string; performedBy: string; performerName: string; isValidStage: (stage: string) => boolean }): Promise<{ ok: true; lawCase: LawCase } | { ok: false; reason: "INVALID_SAVED_STAGE" | "NOT_FOUND" }>;
+  // The THIRD exit from استكمال_البيانات (the other two being resume and the
+  // normal forward advance): the client never supplied the data, so the case
+  // closes. missingData is resolved by the ROUTE — see the priority chain there.
+  closeCaseForNoResponse(id: string, input: { missingData: string; notes: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
   awaitMemoCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
   resumeMemoFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
   // Atomic helper-row + stage update + log for the three workflow
@@ -5484,6 +5488,82 @@ export class DatabaseStorage implements IStorage {
       return updated
         ? { ok: true as const, lawCase: mapDbCase(updated) }
         : { ok: false, reason: "NOT_FOUND" } as const;
+    });
+  }
+
+  // Close a case parked at استكمال_البيانات because the client never completed
+  // the file. Deliberately a DEDICATED method rather than a generic updateCase
+  // call: the closure, the flag clearing, the stageHistory append and the audit
+  // row must land in ONE transaction, exactly like reopenCase (its mirror).
+  //
+  // input.missingData is the resolved "what was missing" text (see the route).
+  // It goes into closure_reason_other TRUNCATED to the column's varchar(500);
+  // the activity row below keeps the UNTRUNCATED text, so nothing is ever lost.
+  //
+  // awaiting_completion / saved_stage are CLEARED. Not cosmetic: the cases-table
+  // "بانتظار" badge is `c.awaitingCompletion && !isCasePaused(c)` with NO closed
+  // check (cases.tsx), so leaving the latch set would brand a closed case as
+  // still-awaiting forever — the exact never-cleared-flag class of bug that the
+  // "مطلوب رد من الخصم" indicator had (55fc32b).
+  async closeCaseForNoResponse(
+    id: string,
+    input: { missingData: string; notes: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
+        : [];
+      const historyNote = [
+        "إغلاق لعدم استكمال البيانات",
+        input.missingData ? `الناقص: ${input.missingData}` : "",
+        input.notes,
+      ].filter(Boolean).join(" — ");
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: CaseStage.CLOSED,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: historyNote,
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: CaseStage.CLOSED,
+        // status is the legacy parallel tracker; consumers only ever test it for
+        // "مغلق". The judgment-close audit found closes that skipped it, so it is
+        // set explicitly here rather than left to a downstream PATCH.
+        status: CaseStatus.CLOSED,
+        closedAt: now,
+        closureReason: ClosureReason.DATA_NOT_COMPLETED,
+        closureReasonOther: input.missingData.slice(0, 500) || null,
+        awaitingCompletion: false,
+        savedStage: null,
+        stageHistory,
+        updatedAt: now,
+      }).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "closed_no_response",
+        title: "إغلاق القضية لعدم استكمال البيانات",
+        // UNTRUNCATED — this row is the durable record of what was missing.
+        details: [
+          input.missingData ? `البيانات الناقصة: ${input.missingData}` : "لم تُسجَّل البيانات الناقصة",
+          input.notes,
+        ].filter(Boolean).join(" — "),
+        previousValue: fromStage,
+        newValue: CaseStage.CLOSED,
+        createdAt: now,
+      });
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
     });
   }
 

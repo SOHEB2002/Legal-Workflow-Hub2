@@ -1678,6 +1678,16 @@ export const ClosureReason = {
   // deliberately NOT offered in the manual early-close dialog, which is for
   // closing a case that still had work left.
   COLLECTION_COMPLETED: "تم_التحصيل",
+  // The client never supplied the missing documents/data. Written ONLY by
+  // POST /api/cases/:id/close-no-response, which is offered exclusively while
+  // the case sits at استكمال_البيانات. Deliberately NOT offered in the manual
+  // early-close dialog: that dialog is stage-agnostic, and this reason is only
+  // meaningful on the data-completion stage (it is also the one closure whose
+  // closureReasonOther is filled automatically rather than typed).
+  //
+  // NOT تنازل_العميل — a waiver is a decision the client made; non-response is
+  // the absence of one, and the two must stay distinguishable in reporting.
+  DATA_NOT_COMPLETED: "عدم_استكمال_البيانات",
   OTHER: "أخرى",
 } as const;
 
@@ -1700,6 +1710,7 @@ export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
   "شطب_بدون_إعادة_قيد": "شطب بدون إعادة قيد",
   "لم_يتم_الصلح": "لم يتم الصلح",
   "تم_التحصيل": "تم التحصيل",
+  "عدم_استكمال_البيانات": "عدم استكمال البيانات",
   "أخرى": "أخرى",
 };
 
@@ -4793,6 +4804,11 @@ export function resolveCaseOutcome(
     ClosureReason.CLIENT_WAIVER,
     ClosureReason.CONTRACT_NOT_RENEWED,
     ClosureReason.OPPONENT_PAID,
+    // The client never completed the file. Administrative like its neighbours:
+    // no substantive legal result was ever reached, so the reason IS the story
+    // and the badge composer falls back to the "عدم استكمال البيانات" label.
+    // Without this entry it would drop to arm 6 (NONE) and show no badge at all.
+    ClosureReason.DATA_NOT_COMPLETED,
   ];
   if (isClosed && administrativeReasons.includes(reason)) {
     return { kind: CaseOutcomeKind.ADMINISTRATIVE, label: null, tone: "neutral" };

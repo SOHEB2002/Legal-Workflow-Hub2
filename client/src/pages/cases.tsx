@@ -25,6 +25,7 @@ import {
   Play,
   RotateCcw,
   MoreHorizontal,
+  Archive,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -387,6 +388,27 @@ export default function CasesPage() {
     return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
 
+  // "إغلاق لعدم استكمال البيانات" gate. Restates the server rule for
+  // POST /api/cases/:id/close-no-response so visibility === authorization.
+  // The ROLE tier is canEarlyCloseCase verbatim (this IS a close), plus the
+  // state conditions the endpoint enforces.
+  //
+  // ⚠ Gated on the STAGE, not on awaitingCompletion. A case reaches
+  // استكمال_البيانات either by the ordinary استلام advance (latch FALSE — the
+  // common path, with the missing-data text in the mandatory stage note) or via
+  // /await-completion (latch TRUE). Gating on the latch would hide the button
+  // from every Path-A case. See the server comment for the full chain.
+  const canCloseCaseForNoResponse = (c: LawCase): boolean => {
+    if (c.currentStage !== "استكمال_البيانات") return false;
+    if (c.status === "مغلق" || c.isArchived) return false;
+    // A paused case must be unpaused first — the endpoint 400s otherwise, and
+    // a paused case DISPLAYS as استكمال_البيانات (getCaseDisplayStage) without
+    // actually being on that stage, so the stage test alone would offer the
+    // button on rows that are merely paused.
+    if (isCasePaused(c)) return false;
+    return canEarlyCloseCase(c);
+  };
+
   // Reopen permission gate — the MIRROR of canEarlyCloseCase above, with two
   // deliberate differences that restate the server rule for
   // POST /api/cases/:id/reopen (canActOnMohrSettlement + the مقفلة guard):
@@ -556,6 +578,13 @@ export default function CasesPage() {
   const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
   const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
+  // "إغلاق لعدم استكمال البيانات" — the third exit from استكمال_البيانات. No
+  // reason picker: the closure reason is fixed (DATA_NOT_COMPLETED) and the
+  // "what was missing" text is resolved SERVER-side, so this dialog only
+  // confirms and takes optional notes.
+  const [closeNoResponseCase, setCloseNoResponseCase] = useState<LawCase | null>(null);
+  const [closeNoResponseNotes, setCloseNoResponseNotes] = useState("");
+  const [closeNoResponseSaving, setCloseNoResponseSaving] = useState(false);
   const [opponentResponseCase, setOpponentResponseCase] = useState<LawCase | null>(null);
   const [opponentResponseAnswer, setOpponentResponseAnswer] = useState<"" | "نعم" | "لا">("");
   const [opponentResponseSubmitting, setOpponentResponseSubmitting] = useState(false);
@@ -1575,9 +1604,10 @@ export default function CasesPage() {
                       const canUnpause = isCasePaused(c) && canPauseCase(c);
                       const canPause = !isCasePaused(c) && c.status !== "مغلق" && !c.isArchived && canPauseCase(c);
                       const canEarlyClose = canEarlyCloseCase(c);
+                      const canCloseNoResponse = canCloseCaseForNoResponse(c);
                       const canDelete = user?.role === "branch_manager";
                       const hasAnyAction = canEdit || canReassign || canResumeAwait || canMarkAwait
-                        || canUnpause || canPause || canEarlyClose || canDelete;
+                        || canUnpause || canPause || canEarlyClose || canCloseNoResponse || canDelete;
                       return (
                         <div className="flex items-center justify-center gap-1">
                           <Button
@@ -1659,7 +1689,22 @@ export default function CasesPage() {
                                     تعليق القضية
                                   </DropdownMenuItem>
                                 )}
-                                {(canEarlyClose || canDelete) && <DropdownMenuSeparator />}
+                                {(canEarlyClose || canCloseNoResponse || canDelete) && <DropdownMenuSeparator />}
+                                {/* Sits ABOVE the generic إغلاق مبكر so the
+                                    specific action is the first close a user
+                                    sees on a data-completion case. Both can
+                                    render together — إغلاق مبكر stays available
+                                    for a genuinely different reason. */}
+                                {canCloseNoResponse && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-close-no-response-${c.id}`}
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() => { setCloseNoResponseCase(c); setCloseNoResponseNotes(""); }}
+                                  >
+                                    <Archive className="w-4 h-4 ml-2" />
+                                    إغلاق لعدم استكمال البيانات
+                                  </DropdownMenuItem>
+                                )}
                                 {canEarlyClose && (
                                   <DropdownMenuItem
                                     data-testid={`button-early-close-row-${c.id}`}
@@ -2195,6 +2240,8 @@ export default function CasesPage() {
           canClose: canClose(selectedCase),
           canEarlyClose: canEarlyCloseCase(selectedCase),
           onEarlyClose: () => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); },
+          canCloseNoResponse: canCloseCaseForNoResponse(selectedCase),
+          onCloseNoResponse: () => { setCloseNoResponseCase(selectedCase); setCloseNoResponseNotes(""); },
           canReopen: canReopenCase(selectedCase),
           onReopen: () => { setReopenCase(selectedCase); setShowReopenDialog(true); },
           // Same gate as the صك action — both live only at محكوم_حكم_ابتدائي and
@@ -2480,6 +2527,83 @@ export default function CasesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* "إغلاق لعدم استكمال البيانات". NO reason picker and NO required text:
+          the closure reason is fixed (ClosureReason.DATA_NOT_COMPLETED) and the
+          "what was missing" text is resolved SERVER-side from the activity log /
+          stageHistory — the client must not re-type data the server already
+          holds, and must not be able to contradict it. Optional notes only.
+
+          The case is CLOSED, not archived (owner decision): it stays in the list
+          as an ordinary closed case and the scheduler archives it after 6 months
+          like every other closure. The dialog says so, because the Arabic label
+          the owner uses ("أرشفة لعدم التجاوب") would otherwise imply it vanishes. */}
+      <AlertDialog
+        open={!!closeNoResponseCase}
+        onOpenChange={(open) => { if (!open) { setCloseNoResponseCase(null); setCloseNoResponseNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Archive className="w-5 h-5 text-destructive" />
+              إغلاق لعدم استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إغلاق القضية بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
+              البيانات والمرفقات الناقصة ضمن سبب الإغلاق. سيتم أيضاً إلغاء الجلسات
+              القادمة والمذكرات والمهام المفتوحة على القضية.
+              <br />
+              تبقى القضية ظاهرة في القائمة كقضية مقفلة، وتُؤرشف تلقائياً بعد 6 أشهر
+              كبقية القضايا المقفلة. ويمكن إعادة فتحها لاحقاً إذا تجاوب العميل.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-close-no-response-notes"
+              value={closeNoResponseNotes}
+              onChange={(e) => setCloseNoResponseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول الإغلاق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-close-no-response"
+              disabled={closeNoResponseSaving}
+              className="bg-destructive hover:bg-destructive/90"
+              onClick={async (e) => {
+                // The action button closes the dialog by default; prevent that
+                // so the dialog stays up until the request settles (same shape
+                // as the other async AlertDialog actions on this page).
+                e.preventDefault();
+                if (!closeNoResponseCase) return;
+                setCloseNoResponseSaving(true);
+                try {
+                  const notes = closeNoResponseNotes.trim();
+                  await apiRequest(
+                    "POST",
+                    `/api/cases/${closeNoResponseCase.id}/close-no-response`,
+                    notes ? { notes } : {},
+                  );
+                  await refreshCases();
+                  toast({ title: "تم إغلاق القضية لعدم استكمال البيانات" });
+                  setCloseNoResponseCase(null);
+                  setCloseNoResponseNotes("");
+                } catch (err) {
+                  toast({ title: "فشل إغلاق القضية", description: extractApiError(err), variant: "destructive" });
+                } finally {
+                  setCloseNoResponseSaving(false);
+                }
+              }}
+            >
+              <Archive className="w-4 h-4 ml-2" />
+              تأكيد الإغلاق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* "تم استلام رد الخصم" — clears the مطلوب رد من الخصم indicator (which the
           audit found could never clear) and asks whether we must reply. نعم
