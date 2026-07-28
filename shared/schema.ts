@@ -1635,6 +1635,86 @@ export const TerminalCaseStages: ReadonlySet<CaseStageValue> = new Set<CaseStage
 // UnderStudy stage arrays — callers should pass the resolved department
 // name (e.g. via getDepartmentName(departmentId) on the client, or
 // storage.getDepartmentById(departmentId)?.name on the server).
+// ============ "مرحلة البداية" CORRECTION (2026-07-28) ============
+// An in-court case is sometimes REGISTERED WRONG — filed as محكمة when it is
+// really a صلح, or the reverse. This is the day-one correction for that.
+//
+// 🔴 IT IS NOT A FIELD FLIP. isSettlementCase decides which array
+// getStagesForClassification returns — InCourtSettlementStages
+// [استلام, مداولة_الصلح, تحصيل] wins BEFORE memoRequired/clientRole are even
+// consulted — so changing the flag without also moving currentStage onto the new
+// array leaves the stage OFF ITS OWN PATH. indexOf returns -1 and the progress
+// bar collapses onto استلام: the exact bug class fixed in 3fcd4e3 / c24308e,
+// recreated from data instead of code.
+//
+// WHY THIS WINDOW. The stages are the cheap part; what cannot be undone is
+// everything already recorded against the old shape. A RECORDED HEARING RESULT
+// is the real "this case has started living" line — a judgment lives on a
+// hearing, and InCourtSettlementStages has no judgment stages at all, so
+// flipping a judged case to صلح orphans the judgment with no route to the
+// post-judgment flow. Past منظورة is the same story one step earlier.
+//
+// Soft consequences are WARNED about in the dialog, not blocked: in-flight memos
+// and an already-captured settlement number are recoverable by hand; a judgment
+// is not.
+export const StartingStageOption = {
+  COURT:      "استلام",
+  SETTLEMENT: "مداولة_الصلح",
+} as const;
+
+export type StartingStageOptionValue =
+  typeof StartingStageOption[keyof typeof StartingStageOption];
+
+// Stages that mean the case has moved past its opening — correcting the starting
+// stage from here would rewrite history rather than fix a registration mistake.
+const StartingStageLockedStages: string[] = [
+  "منظورة",
+  "منظورة_استئناف",
+  "محكوم_حكم_ابتدائي",
+  "محكوم_حكم_نهائي",
+  "تحصيل",
+  "مشطوبة",
+  "مقفلة",
+];
+
+/**
+ * May the starting stage still be corrected? Shared so the FE cannot offer an
+ * edit the endpoint rejects. Returns a REASON string when blocked (rendered to
+ * the user as the read-only explanation), or null when the correction is open.
+ */
+export function startingStageCorrectionBlockedReason(
+  lawCase: {
+    caseClassification?: string | null;
+    currentStage?: string | null;
+    status?: string | null;
+    isArchived?: boolean | null;
+    pausedAt?: string | null;
+    awaitingCompletion?: boolean | null;
+  },
+  hasRecordedHearingResult: boolean,
+): string | null {
+  if (lawCase.caseClassification !== "منظورة_بالمحكمة") {
+    return "مرحلة البداية تخص القضايا المنظورة بالمحكمة فقط";
+  }
+  if (lawCase.status === "مغلق" || lawCase.isArchived || lawCase.currentStage === "مقفلة") {
+    return "لا يمكن تصحيح مرحلة البداية لقضية مغلقة أو مؤرشفة";
+  }
+  if (lawCase.pausedAt) return "القضية معلّقة — أزل التعليق أولاً";
+  if (lawCase.awaitingCompletion) return "القضية بانتظار استكمال البيانات";
+  if (hasRecordedHearingResult) {
+    return "لا يمكن تصحيح مرحلة البداية بعد تسجيل نتيجة جلسة على القضية";
+  }
+  if (StartingStageLockedStages.includes(String(lawCase.currentStage ?? ""))) {
+    return "تجاوزت القضية مرحلة البداية — التصحيح متاح فقط قبل نظر القضية أمام المحكمة";
+  }
+  return null;
+}
+
+/** The current starting-stage value implied by a case's stored state. */
+export function currentStartingStage(lawCase: { isSettlementCase?: boolean | null }): StartingStageOptionValue {
+  return lawCase.isSettlementCase ? StartingStageOption.SETTLEMENT : StartingStageOption.COURT;
+}
+
 export function getStagesForClassification(
   classification: CaseClassificationValue,
   departmentName?: string,
@@ -4726,6 +4806,13 @@ export const workflowNotesSchema = z.object({
 // Body for POST /api/consultations/:id/reopen and /api/contracts/:id/reopen.
 // Tolerant like its neighbours; the handlers enforce requiredness. No number
 // fields — unlike the CASES reopen, these two carry no platform numbers.
+// POST /api/cases/:id/correct-starting-stage. Tolerant gate; the handler
+// enforces the boolean and the correction window.
+export const correctStartingStageSchema = z.object({
+  toSettlement: z.boolean().optional(),
+  notes: z.string().optional(),
+}).passthrough();
+
 export const reopenEntitySchema = z.object({
   targetStage: z.string().optional(),
   notes: z.string().optional(),

@@ -98,6 +98,9 @@ import {
   findPrimaryJudgmentHearing,
   judgmentDirectionOf,
   weAreTheAppellant,
+  StartingStageOption,
+  currentStartingStage,
+  startingStageCorrectionBlockedReason,
   MemoType,
   MemoTypeLabels,
 } from "@shared/schema";
@@ -660,7 +663,24 @@ export default function CasesPage() {
     internalReviewerId: "",
     litigatorId: "",
     primaryLawyerId: "",
+    // Present on the ADD dialog; added here so the two forms match.
+    nextHearingDate: "",
+    nextHearingTime: "",
   });
+
+  // "مرحلة البداية" correction. Applied by its OWN endpoint, not with the rest
+  // of the form: it moves isSettlementCase and currentStage together plus
+  // stageHistory and an audit row, which the generic updateCase cannot do
+  // atomically — and doing it through the form would let a half-saved edit
+  // strand the stage off its path.
+  const [startingStageTarget, setStartingStageTarget] = useState<{
+    caseItem: LawCase;
+    toSettlement: boolean;
+    liveMemoCount: number;
+    hasSettlementNumber: boolean;
+  } | null>(null);
+  const [startingStageNotes, setStartingStageNotes] = useState("");
+  const [startingStageSaving, setStartingStageSaving] = useState(false);
 
   const openEditDialog = (caseItem: LawCase) => {
     setEditCaseId(caseItem.id);
@@ -695,6 +715,8 @@ export default function CasesPage() {
       internalReviewerId: caseItem.internalReviewerId || "",
       litigatorId: caseItem.litigatorId || "",
       primaryLawyerId: caseItem.primaryLawyerId || "",
+      nextHearingDate: caseItem.nextHearingDate || "",
+      nextHearingTime: caseItem.nextHearingTime || "",
     });
     setShowEditDialog(true);
   };
@@ -733,6 +755,8 @@ export default function CasesPage() {
         isSettlementCase: editFormData.isSettlementCase,
         whatsappGroupLink: editFormData.whatsappGroupLink || "",
         googleDriveFolderId: editFormData.googleDriveFolderId || "",
+        nextHearingDate: editFormData.nextHearingDate || null,
+        nextHearingTime: editFormData.nextHearingTime || null,
         internalReviewerId: editFormData.internalReviewerId || null,
         litigatorId: editFormData.litigatorId || null,
         primaryLawyerId: editFormData.primaryLawyerId || null,
@@ -2637,6 +2661,88 @@ export default function CasesPage() {
         </DialogContent>
       </Dialog>
 
+      {/* "مرحلة البداية" correction — confirm + optional note. Applied by its own
+          endpoint the moment it is confirmed, independently of the edit form's
+          Save, because it is a state MOVE (flag + stage + history + audit row in
+          one transaction), not a field edit. */}
+      <AlertDialog
+        open={!!startingStageTarget}
+        onOpenChange={(open) => { if (!open) { setStartingStageTarget(null); setStartingStageNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              تصحيح مرحلة البداية
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {startingStageTarget?.toSettlement
+                ? <>ستُسجَّل القضية كقضية <strong>صلح</strong>، وتنتقل إلى مرحلة <strong>مداولة الصلح</strong>، ويصبح مسارها: استلام ← مداولة الصلح ← تحصيل.</>
+                : <>ستُسجَّل القضية كقضية <strong>محكمة</strong>، وتعود إلى مرحلة <strong>استلام</strong> على مسار المحكمة المعتاد.</>}
+              <br />
+              يُسجَّل التصحيح في سجل القضية مع الحالة قبله وبعده.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {/* SOFT consequences — surfaced, not blocking. Both are fixable by
+              hand; the hard blockers (a recorded result, a judgment, closure)
+              already prevented this dialog from opening at all. */}
+          {!!startingStageTarget && (startingStageTarget.liveMemoCount > 0 || startingStageTarget.hasSettlementNumber) && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-amber-800 dark:text-amber-300" data-testid="warning-starting-stage-side-effects">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                {startingStageTarget.liveMemoCount > 0 && (
+                  <p>على القضية {startingStageTarget.liveMemoCount} مذكرة غير مكتملة — راجعها بعد التصحيح، فقد لا تعود مناسبة للمسار الجديد.</p>
+                )}
+                {startingStageTarget.hasSettlementNumber && (
+                  <p>القضية تحمل رقم صلح مسجَّلاً — يبقى محفوظاً ولا يُحذف.</p>
+                )}
+              </div>
+            </div>
+          )}
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-starting-stage-notes"
+              value={startingStageNotes}
+              onChange={(e) => setStartingStageNotes(e.target.value)}
+              placeholder="سبب التصحيح..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-starting-stage"
+              disabled={startingStageSaving}
+              className="bg-amber-600 hover:bg-amber-700"
+              onClick={async (e) => {
+                e.preventDefault();
+                if (!startingStageTarget) return;
+                setStartingStageSaving(true);
+                try {
+                  const notes = startingStageNotes.trim();
+                  await apiRequest(
+                    "POST",
+                    `/api/cases/${startingStageTarget.caseItem.id}/correct-starting-stage`,
+                    { toSettlement: startingStageTarget.toSettlement, ...(notes ? { notes } : {}) },
+                  );
+                  await refreshCases();
+                  toast({ title: "تم تصحيح مرحلة البداية" });
+                  setStartingStageTarget(null);
+                  setStartingStageNotes("");
+                } catch (err) {
+                  toast({ title: "فشل التصحيح", description: extractApiError(err), variant: "destructive" });
+                } finally {
+                  setStartingStageSaving(false);
+                }
+              }}
+            >
+              تأكيد التصحيح
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* "إغلاق لعدم استكمال البيانات". NO reason picker and NO required text:
           the closure reason is fixed (ClosureReason.DATA_NOT_COMPLETED) and the
           "what was missing" text is resolved SERVER-side from the activity log /
@@ -3478,18 +3584,102 @@ export default function CasesPage() {
                     />
                   </div>
                 )}
-                <div className="flex items-center gap-2 pt-1">
-                  <Checkbox
-                    id="edit-isSettlementCase"
-                    checked={editFormData.isSettlementCase}
-                    onCheckedChange={(checked) =>
-                      setEditFormData({ ...editFormData, isSettlementCase: !!checked })
-                    }
-                    data-testid="edit-checkbox-is-settlement-case"
-                  />
-                  <Label htmlFor="edit-isSettlementCase" className="text-sm cursor-pointer">
-                    قضية تسوية فقط
-                  </Label>
+                {/* 🔴 THE BARE "قضية تسوية فقط" CHECKBOX WAS REMOVED HERE and
+                    replaced by the مرحلة البداية control below.
+                    It wrote isSettlementCase through the generic updateCase
+                    WITHOUT touching currentStage — and since that flag selects
+                    the stage array (InCourtSettlementStages wins before
+                    memoRequired/clientRole are consulted), ticking it on a case
+                    at دراسة / منظورة / تحرير_صحيفة_الدعوى stranded the stage off
+                    its own path and collapsed the progress bar to index 0. That
+                    is the 3fcd4e3 / c24308e bug class, reachable from this
+                    dialog today. The replacement moves both axes together, in
+                    one transaction, and only inside the correction window. */}
+                {(() => {
+                  // Shared with the server — the FE can never offer an edit the
+                  // endpoint would reject, and when it IS blocked the user is
+                  // shown the endpoint's own sentence rather than a silent
+                  // disabled control.
+                  const editCase = editCaseId ? getCaseById(editCaseId) : undefined;
+                  if (!editCase) return null;
+                  const caseHearings = getHearingsByCase(editCase.id);
+                  const blocked = startingStageCorrectionBlockedReason(
+                    editCase,
+                    caseHearings.some((h) => !!h.result),
+                  );
+                  const current = currentStartingStage(editCase);
+                  const currentLabel = current === StartingStageOption.SETTLEMENT ? "مداولة الصلح" : "محكمة";
+                  // SOFT consequences — warned about, never blocked. Both are
+                  // recoverable by hand; a judgment is not, which is why that
+                  // one is in the hard guard instead.
+                  const liveMemoCount = memos.filter(
+                    (m) => m.caseId === editCase.id && m.status !== "ملغاة" && m.status !== "مرفوعة",
+                  ).length;
+                  const hasSettlementNumber = !!(editCase.mohrNumber || editCase.taradiNumber);
+                  return (
+                    <div className="pt-1">
+                      <Label>مرحلة البداية</Label>
+                      {blocked ? (
+                        <>
+                          <Input value={currentLabel} disabled data-testid="edit-starting-stage-readonly" />
+                          <p className="text-xs text-muted-foreground mt-1">{blocked}</p>
+                        </>
+                      ) : (
+                        <>
+                          <Select
+                            value={current}
+                            onValueChange={(v) => {
+                              if (v === current) return;
+                              setStartingStageTarget({
+                                caseItem: editCase,
+                                toSettlement: v === StartingStageOption.SETTLEMENT,
+                                liveMemoCount,
+                                hasSettlementNumber,
+                              });
+                            }}
+                          >
+                            <SelectTrigger data-testid="edit-starting-stage">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={StartingStageOption.COURT}>محكمة</SelectItem>
+                              <SelectItem value={StartingStageOption.SETTLEMENT}>مداولة الصلح</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            لتصحيح تسجيل خاطئ. يُطبَّق فوراً وبشكل مستقل عن بقية التعديلات، مع نقل
+                            القضية إلى المسار الصحيح.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+            {/* Next-hearing date/time — present on the ADD dialog but missing
+                here. Plain case columns, saved with the rest of the form. */}
+            {editFormData.caseClassification !== CaseClassification.UNDER_STUDY && (
+              <div className="border-t pt-4 space-y-3">
+                <h4 className="font-semibold">الجلسة القادمة</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>تاريخ الجلسة القادمة (اختياري)</Label>
+                    <HijriDatePicker
+                      value={editFormData.nextHearingDate}
+                      onChange={(v) => setEditFormData({ ...editFormData, nextHearingDate: v })}
+                      data-testid="edit-next-hearing-date"
+                    />
+                  </div>
+                  <div>
+                    <Label>وقت الجلسة القادمة (اختياري)</Label>
+                    <Input
+                      type="time"
+                      data-testid="edit-next-hearing-time"
+                      value={editFormData.nextHearingTime}
+                      onChange={(e) => setEditFormData({ ...editFormData, nextHearingTime: e.target.value })}
+                    />
+                  </div>
                 </div>
               </div>
             )}

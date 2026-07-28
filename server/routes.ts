@@ -49,6 +49,8 @@ import {
   getContractReopenTargetStages,
   getConsultationReopenTargetStages,
   reopenEntitySchema,
+  correctStartingStageSchema,
+  startingStageCorrectionBlockedReason,
   ContractStage,
   ContractStagesAll,
   ContractStageLabels,
@@ -6587,6 +6589,70 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[cases/close-no-response] error:", error);
       res.status(500).json({ error: error.message || "فشل إغلاق القضية" });
+    }
+  });
+
+  // POST /api/cases/:id/correct-starting-stage
+  // Body: { toSettlement: boolean, notes? }. Corrects a MIS-REGISTERED in-court
+  // case between the محكمة and مداولة الصلح openings.
+  //
+  // This exists because the two axes must move TOGETHER — see
+  // storage.correctCaseStartingStage for why writing isSettlementCase alone
+  // strands currentStage off its resolved array. It is NOT reachable through the
+  // generic PATCH, which would do exactly that.
+  //
+  // The window is the SHARED startingStageCorrectionBlockedReason, so the FE
+  // renders the field read-only with the same sentence this endpoint would 400
+  // with — visibility == authorization, and the user is told WHY.
+  //
+  // ROLES: canActOnMohrSettlement — branch_manager | own-dept department_head |
+  // assigned lawyer, delegation-aware. Same tier as the other case-shape
+  // corrections (reopen, صك, MOHR).
+  app.post("/api/cases/:id/correct-starting-stage", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = correctStartingStageSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      if (typeof req.body?.toSettlement !== "boolean") {
+        return res.status(400).json({ error: "يجب تحديد مرحلة البداية" });
+      }
+      const toSettlement = req.body.toSettlement as boolean;
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتعديل بيانات القضية" });
+      }
+
+      // A RECORDED RESULT is the "this case has started living" test — a
+      // judgment lives on a hearing, and the settlement path has no judgment
+      // stages, so a judged case can never be flipped.
+      const caseHearings = await storage.getHearingsByCase(lawCase.id);
+      const hasRecordedResult = caseHearings.some((h) => !!h.result);
+      const blocked = startingStageCorrectionBlockedReason(lawCase, hasRecordedResult);
+      if (blocked) return res.status(400).json({ error: blocked });
+
+      if (!!lawCase.isSettlementCase === toSettlement) {
+        return res.status(400).json({ error: "مرحلة البداية لم تتغيّر" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+      const updated = await storage.correctCaseStartingStage(lawCase.id, {
+        toSettlement,
+        performedBy: reqUser.id,
+        performerName,
+        notes: String(req.body?.notes ?? "").trim(),
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تصحيح مرحلة البداية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/correct-starting-stage] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
 
