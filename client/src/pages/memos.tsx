@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
+import { usePersistedFilter, oneOf, anyString, objectLike } from "@/hooks/use-persisted-state";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -88,6 +89,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useUsers } from "@/lib/users-context";
 import { useClients } from "@/lib/clients-context";
 import {
+  MemoType,
   MemoTypeLabels,
   MemoStatus,
   MemoStatusLabels,
@@ -419,13 +421,37 @@ export default function MemosPage() {
   const [unpauseMemoNotes, setUnpauseMemoNotes] = useState("");
   const [pauseMemoInProgress, setPauseMemoInProgress] = useState(false);
 
-  const [filterStatus, setFilterStatus] = useState<string>("all");
-  const [filterDept, setFilterDept] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = usePersistedFilter<string>(
+    "memos", "status", "all", oneOf(Object.values(MemoStage) as readonly string[], "all"),
+  );
+  // DEFAULT = the user's OWN department when they have one; "all" otherwise.
+  const [filterDept, setFilterDept] = usePersistedFilter<string>(
+    "memos", "dept", user?.departmentId || "all", anyString,
+  );
   // Phase-9 — quick filter axis switched: was priority, now assigned
   // lawyer. Priority lives on in advFilters for power users.
-  const [filterAssignedTo, setFilterAssignedTo] = useState<string>("all");
+  const [filterAssignedTo, setFilterAssignedTo] = usePersistedFilter<string>(
+    "memos", "assignedTo", "all", anyString,
+  );
+  // Search stays TRANSIENT — same call as the other four pages.
   const [searchQuery, setSearchQuery] = useState("");
-  const [advFilters, setAdvFilters] = useState<AdvancedMemosFilters>(EMPTY_MEMOS_ADV_FILTERS);
+  const [advFilters, setAdvFilters] = usePersistedFilter<AdvancedMemosFilters>(
+    "memos", "adv", EMPTY_MEMOS_ADV_FILTERS,
+    objectLike(EMPTY_MEMOS_ADV_FILTERS, {
+      memoTypes: Object.values(MemoType) as readonly string[],
+      statuses: Object.values(MemoStatus) as readonly string[],
+    }),
+  );
+
+  // STALE-VALUE GUARD for the async department list — see the hearings twin.
+  // The `length === 0` bail keeps it from wiping a valid saved value before
+  // departments have loaded.
+  useEffect(() => {
+    if (departments.length === 0) return;
+    if (filterDept !== "all" && !departments.some((d) => String(d.id) === filterDept)) {
+      setFilterDept("all");
+    }
+  }, [departments, filterDept, setFilterDept]);
 
   // Phase-9.3 — dashboard "بانتظار المراجعة" deep-link. Pre-selects the
   // COMMITTEE stage on the quick filter and (for non-manager roles)

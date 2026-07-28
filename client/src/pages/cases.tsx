@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
+import { usePersistedFilter, oneOf, anyString, objectLike } from "@/hooks/use-persisted-state";
 import { LtrInline } from "@/components/ui/bidi-text";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
@@ -490,11 +491,32 @@ export default function CasesPage() {
   // at the row level (they decide whether each trigger button renders).
   const lifecycle = useCaseLifecycleActions({ refreshCases, toast });
 
+  // SEARCH IS DELIBERATELY TRANSIENT — see the note on the other pages: a
+  // restored search box is the one filter users don't expect to persist, and it
+  // is the hardest to notice (an invisible substring silently emptying a list).
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [deptFilter, setDeptFilter] = useState<string>("all");
-  const [lawyerFilter, setLawyerFilter] = useState<string>("all");
-  const [advFilters, setAdvFilters] = useState<AdvancedCasesFilters>(EMPTY_ADV_FILTERS);
+  // Persisted per user + per page (use-persisted-state). Stage/classification
+  // are sanitized against their STATIC option lists; dept/lawyer accept any
+  // string here because departments and users load async — their existence is
+  // re-checked by the "reset if not in the loaded list" effects below.
+  const [statusFilter, setStatusFilter] = usePersistedFilter<string>(
+    "cases", "status", "all", oneOf(CaseStagesOrder as readonly string[], "all"),
+  );
+  // DEFAULT = the user's OWN department when they have one (department_head /
+  // employee); "all" for users with none (branch_manager / admin_support).
+  // A DEFAULT, not a restriction — every department stays selectable, and the
+  // saved value wins whenever one exists, so an explicit choice is never
+  // overridden.
+  const [deptFilter, setDeptFilter] = usePersistedFilter<string>(
+    "cases", "dept", user?.departmentId || "all", anyString,
+  );
+  const [lawyerFilter, setLawyerFilter] = usePersistedFilter<string>(
+    "cases", "lawyer", "all", anyString,
+  );
+  const [advFilters, setAdvFilters] = usePersistedFilter<AdvancedCasesFilters>(
+    "cases", "adv", EMPTY_ADV_FILTERS,
+    objectLike(EMPTY_ADV_FILTERS, { stages: CaseStagesOrder as readonly string[] }),
+  );
 
   // Refresh cases on page mount to pick up changes from other tabs/users
   useEffect(() => {
@@ -749,7 +771,10 @@ export default function CasesPage() {
     }
   };
 
-  const [classificationFilter, setClassificationFilter] = useState<string>("all");
+  const [classificationFilter, setClassificationFilter] = usePersistedFilter<string>(
+    "cases", "classification", "all",
+    oneOf(Object.values(CaseClassification) as readonly string[], "all"),
+  );
   const [formData, setFormData] = useState({
     clientId: "",
     plaintiffName: "",
@@ -1032,11 +1057,25 @@ export default function CasesPage() {
     }
   }, [basicAllowedStages, statusFilter]);
 
+  // STALE-VALUE GUARD for the async list. `departmentFilteredLawyers.length > 0`
+  // is load-bearing now that lawyerFilter can be RESTORED from storage: without
+  // it this fires on the first render (before users land) and wipes a perfectly
+  // valid saved lawyer. Same reason the department guard below waits.
   useEffect(() => {
+    if (departmentFilteredLawyers.length === 0) return;
     if (lawyerFilter !== "all" && !departmentFilteredLawyers.some(u => u.id === lawyerFilter)) {
       setLawyerFilter("all");
     }
   }, [departmentFilteredLawyers, lawyerFilter]);
+
+  // A saved (or defaulted) department that no longer exists — a deleted dept, or
+  // a user moved out of one — must not leave the list mysteriously empty.
+  useEffect(() => {
+    if (departments.length === 0) return;
+    if (deptFilter !== "all" && !departments.some(d => String(d.id) === deptFilter)) {
+      setDeptFilter("all");
+    }
+  }, [departments, deptFilter]);
 
   // Rows-per-page is user-configurable and persisted per user + per page
   // (see use-page-size). Default stays 15.

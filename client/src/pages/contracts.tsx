@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
+import { usePersistedFilter, oneOf } from "@/hooks/use-persisted-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -350,9 +351,25 @@ export default function ContractsPage() {
     return users.find((u) => u.id === id)?.name || "—";
   };
 
+  // Search stays TRANSIENT — same call as the other four pages.
   const [searchTerm, setSearchTerm] = useState("");
-  const [stageFilter, setStageFilter] = useState<string>("all");
-  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [stageFilter, setStageFilter] = usePersistedFilter<string>(
+    "contracts", "stage", "all", oneOf(ContractStagesAll as readonly string[], "all"),
+  );
+  const [typeFilter, setTypeFilter] = usePersistedFilter<string>(
+    "contracts", "type", "all", oneOf(Object.values(ContractType) as readonly string[], "all"),
+  );
+  // ⚠ deptFilter / assignedToFilter are NOT persisted and get NO department
+  // default — deliberately, and this is the one page that diverges.
+  //
+  // CONTRACTS HAVE NO DEPARTMENT OR ASSIGNEE DROPDOWN. Both are set ONLY by the
+  // dashboard "بانتظار المراجعة" deep-link (?dept= / ?assignedTo=) and there is
+  // no UI anywhere to change or clear them. Persisting one — or seeding it with
+  // the user's own department — would pin the list to a single department with
+  // no control to widen it, turning a DEFAULT into a permanent RESTRICTION,
+  // which is exactly what this feature must not do. They stay per-visit state
+  // owned by the deep-link. Adding the two dropdowns would make them eligible;
+  // that is a separate UI change, not this one.
   const [deptFilter, setDeptFilter] = useState<string>("");
   const [assignedToFilter, setAssignedToFilter] = useState<string>("");
 
