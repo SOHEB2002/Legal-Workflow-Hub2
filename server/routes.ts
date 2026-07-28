@@ -103,6 +103,9 @@ import {
   updateCaseSchema,
   workflowReasonSchema,
   workflowNotesSchema,
+  workflowPauseSchema,
+  validatePauseUntil,
+  todayDateString,
   updateCaseTaradiSchema,
   updateCaseMohrSchema,
   workflowTargetStageSchema,
@@ -5473,16 +5476,21 @@ export async function registerRoutes(
       }
 
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
 
       const updated = await storage.pauseConsultation(consultation.id, {
         reason,
         performedBy: reqUser.id,
+        pauseUntil,
       });
       if (!updated) return res.status(500).json({ error: "فشل تعليق الاستشارة" });
       res.json(updated);
@@ -6302,6 +6310,126 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/cases/:id/close-no-response
+  // Body: { notes? }. Closes a case parked at استكمال_البيانات because the client
+  // never supplied the missing documents/data, recording WHAT WAS MISSING in the
+  // closure. Owner-requested ("أرشفة لعدم التجاوب").
+  //
+  // ⚠ DELIBERATELY NOT the generic PATCH early-close (:3304). That path cannot
+  // resolve the missing-data text — it never reads stageHistory or the activity
+  // log — and would need the client to send text the SERVER already holds.
+  //
+  // CLOSE ONLY — isArchived is NOT set (owner decision). The case stays visible
+  // in the list as an ordinary closed case and autoArchiveClosedCases archives it
+  // 6 months later like every other closure. Archiving here would only skip that
+  // grace period and drop the case out of hearing/memo auto-creation immediately.
+  //
+  // GATED ON THE STAGE, NOT ON awaitingCompletion. A case reaches
+  // استكمال_البيانات two ways, and only ONE sets the latch:
+  //   Path A — the ordinary استلام → استكمال_البيانات advance. awaitingCompletion
+  //            stays FALSE; the missing-data text is the MANDATORY stage note
+  //            (case-progress-bar.tsx isReceptionToDataCompletion) and lands in
+  //            stageHistory only. This is the COMMON path.
+  //   Path B — POST /await-completion. Latch true, saved_stage set, reason in
+  //            case_activity_log AND stageHistory.
+  // Gating on the latch would hide the button from every Path-A case.
+  //
+  // ROLES: the CLOSE tier — branch_manager | admin_support | own-dept
+  // department_head | assigned lawyer. Inlined verbatim from the sibling
+  // /await-completion and /pause routes on this same stage (and mirroring
+  // canEarlyCloseCase on the FE) rather than reusing canActOnMohrSettlement,
+  // which EXCLUDES admin_support — and admin support is precisely the role
+  // chasing the client for the documents. Wider than /reopen, on purpose.
+  app.post("/api/cases/:id/close-no-response", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // 2D' Pattern-A gate: type check only; the handler's own checks stay.
+      const bodyCheck = workflowNotesSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const isAssigned =
+        lawCase.primaryLawyerId === reqUser.id ||
+        lawCase.responsibleLawyerId === reqUser.id ||
+        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
+      const allowed =
+        reqUser.role === "branch_manager" ||
+        reqUser.role === "admin_support" ||
+        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
+        isAssigned;
+      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإغلاق هذه القضية" });
+
+      if (lawCase.currentStage !== CaseStage.DATA_COMPLETION) {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضية في مرحلة استكمال المرفقات والبيانات" });
+      }
+      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+        return res.status(400).json({ error: "القضية مغلقة أو مؤرشفة بالفعل" });
+      }
+      if (lawCase.pausedAt) {
+        return res.status(400).json({ error: "القضية معلّقة — أزل التعليق أولاً" });
+      }
+
+      // RESOLVE WHAT WAS MISSING. There is no dedicated column for it anywhere
+      // (case_activity_log has no metadata JSONB, unlike its consultation /
+      // contract / memo siblings), so the text is recovered in priority order:
+      //   1. the latest await_completion activity row's details  — Path B, exact.
+      //   2. the LAST stageHistory entry for استكمال_البيانات    — Paths A and B.
+      //   3. ""                                                  — never guess.
+      // Step 2 covers step 1's cases too, but the activity row is preferred: it
+      // holds the reason verbatim, while the history note carries a prefix.
+      let missingData = "";
+      try {
+        const activities = await storage.getCaseActivities(lawCase.id);
+        // getCaseActivities is already ordered createdAt DESC, so the first
+        // match IS the latest — no re-sort needed.
+        const latestAwait = activities.find((a) => a.actionType === "await_completion");
+        missingData = String(latestAwait?.details ?? "").trim();
+      } catch (e) {
+        // Degrade to the stageHistory fallback rather than failing the close —
+        // never block a legitimate workflow action on an audit-trail read.
+        console.error("[cases/close-no-response] activity lookup failed, falling back to stageHistory:", e);
+      }
+      if (!missingData) {
+        const history = Array.isArray(lawCase.stageHistory) ? lawCase.stageHistory : [];
+        const lastEntry = [...history].reverse().find((h) => h?.stage === CaseStage.DATA_COMPLETION);
+        // Strip the prefix awaitCaseCompletion writes, so Path B via this branch
+        // yields the same bare text Path A does.
+        const AWAIT_HISTORY_PREFIX = "بانتظار استكمال المرفقات والبيانات — ";
+        const raw = String(lastEntry?.notes ?? "").trim();
+        missingData = raw.startsWith(AWAIT_HISTORY_PREFIX)
+          ? raw.slice(AWAIT_HISTORY_PREFIX.length).trim()
+          : raw;
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+      const updated = await storage.closeCaseForNoResponse(lawCase.id, {
+        missingData,
+        notes: String(req.body?.notes ?? "").trim(),
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل إغلاق القضية" });
+
+      // Same cleanup every other close path performs — hearings, memos, field
+      // tasks and the opponent-response flag. Skipping it is what left orphans
+      // on judgment-closed cases before b41553a.
+      await cancelOpenCaseChildrenOnClose(lawCase.id);
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/close-no-response] error:", error);
+      res.status(500).json({ error: error.message || "فشل إغلاق القضية" });
+    }
+  });
+
   // POST /api/cases/:id/pause
   // Body: { reason }. Sets pause_* columns; status (workflow stage) is
   // intentionally left alone — pause is detected via paused_at IS NOT
@@ -6336,12 +6464,16 @@ export async function registerRoutes(
       }
 
       // 2D'-V2a Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
 
       const performer = await storage.getUser(reqUser.id);
       const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
@@ -6349,6 +6481,7 @@ export async function registerRoutes(
         reason,
         performedBy: reqUser.id,
         performerName,
+        pauseUntil,
       });
       if (!updated) return res.status(500).json({ error: "فشل تعليق القضية" });
       res.json(updated);
@@ -6433,16 +6566,21 @@ export async function registerRoutes(
       }
 
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "سبب التعليق مطلوب" });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
 
       const updated = await storage.pauseMemo(memo.id, {
         reason,
         performedBy: reqUser.id,
+        pauseUntil,
       });
       if (!updated) return res.status(500).json({ error: "فشل تعليق المذكرة" });
       res.json(updated);
@@ -7867,13 +8005,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "العقد ليس نشطاً" });
       }
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
-      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      const bodyCheck = workflowPauseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const reason = String(req.body?.reason ?? "").trim();
       if (!reason) return res.status(400).json({ error: "السبب مطلوب" });
-      const updated = await storage.pauseContract(contract.id, { reason, performedBy: reqUser.id });
+      // OPTIONAL auto-lift date. Absent → open-ended, exactly as before.
+      const pauseUntil = String(req.body?.pauseUntil ?? "").trim();
+      const pauseUntilError = validatePauseUntil(pauseUntil, todayDateString());
+      if (pauseUntilError) return res.status(400).json({ error: pauseUntilError });
+      const updated = await storage.pauseContract(contract.id, { reason, performedBy: reqUser.id, pauseUntil });
       if (!updated) return res.status(500).json({ error: "فشل التعليق" });
       res.json(updated);
     } catch (error: any) {

@@ -16,7 +16,7 @@ import {
   type ConsultationDeliveryExtension, type ConsultationActivity,
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   type Contract, type ContractAttachment, type ContractActivity,
-  CaseStatus, CaseStage, CaseClassification, ConsultationStage, ConsultationStatus,
+  CaseStatus, CaseStage, CaseClassification, ClosureReason, ConsultationStage, ConsultationStatus,
   ConsultationType, resolveConsultationType,
   ConsultationCategory, ConsultationCategorySLADays, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
@@ -291,11 +291,14 @@ export interface IStorage {
     activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
   ): Promise<Consultation | undefined>;
   // Phase-8 — pause / unpause + activity log writers across the 3 entities.
-  pauseConsultation(id: string, input: { reason: string; performedBy: string }): Promise<Consultation | undefined>;
+  // pauseUntil is the OPTIONAL "YYYY-MM-DD" auto-lift date; omitted/empty means
+  // an open-ended pause (the pre-feature behaviour). The four unpause methods
+  // clear it unconditionally — see the note on their .set() blocks.
+  pauseConsultation(id: string, input: { reason: string; performedBy: string; pauseUntil?: string | null }): Promise<Consultation | undefined>;
   unpauseConsultation(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
-  pauseCase(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
+  pauseCase(id: string, input: { reason: string; performedBy: string; performerName: string; pauseUntil?: string | null }): Promise<LawCase | undefined>;
   unpauseCase(id: string, input: { notes?: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
-  pauseMemo(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
+  pauseMemo(id: string, input: { reason: string; performedBy: string; pauseUntil?: string | null }): Promise<Memo | undefined>;
   unpauseMemo(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
   getMemoActivities(memoId: string): Promise<MemoActivity[]>;
   // Phase-8 — await-completion / resume / skip across the 3 entities.
@@ -304,6 +307,10 @@ export interface IStorage {
   skipConsultationCompletion(id: string, input: { performedBy: string }): Promise<Consultation | undefined>;
   awaitCaseCompletion(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
   resumeCaseFromCompletion(id: string, input: { notes?: string; performedBy: string; performerName: string; isValidStage: (stage: string) => boolean }): Promise<{ ok: true; lawCase: LawCase } | { ok: false; reason: "INVALID_SAVED_STAGE" | "NOT_FOUND" }>;
+  // The THIRD exit from استكمال_البيانات (the other two being resume and the
+  // normal forward advance): the client never supplied the data, so the case
+  // closes. missingData is resolved by the ROUTE — see the priority chain there.
+  closeCaseForNoResponse(id: string, input: { missingData: string; notes: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
   awaitMemoCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Memo | undefined>;
   resumeMemoFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Memo | undefined>;
   // Atomic helper-row + stage update + log for the three workflow
@@ -451,7 +458,7 @@ export interface IStorage {
     activity: { activityType: string; description: string; metadata?: Record<string, any>; performedBy: string | null },
   ): Promise<Contract | undefined>;
   deleteContract(id: string): Promise<boolean>;
-  pauseContract(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined>;
+  pauseContract(id: string, input: { reason: string; performedBy: string; pauseUntil?: string | null }): Promise<Contract | undefined>;
   unpauseContract(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
   awaitContractCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined>;
   resumeContractFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
@@ -718,6 +725,7 @@ function mapDbCase(dbCase: any): LawCase {
     pausedAt: toISOStringOrNull(dbCase.pausedAt),
     awaitingCompletion: dbCase.awaitingCompletion ?? false,
     savedStage: dbCase.savedStage ?? null,
+    pauseUntil: dbCase.pauseUntil ?? null,
     agencyIssuanceRequested: dbCase.agencyIssuanceRequested ?? false,
   };
 }
@@ -815,6 +823,7 @@ function mapDbConsultation(dbCon: any): Consultation {
     pausedAt: toISOStringOrNull(dbCon.pausedAt),
     awaitingCompletion: dbCon.awaitingCompletion ?? false,
     savedStage: dbCon.savedStage ?? null,
+    pauseUntil: dbCon.pauseUntil ?? null,
     dataCompletionLastAckAt: toISOStringOrNull(dbCon.dataCompletionLastAckAt),
     // Committee-referral fields. All nullable so legacy rows
     // (pre-add-consultation-committee-fields migration) surface as null.
@@ -870,6 +879,7 @@ function mapDbContract(row: any): Contract {
     pausedAt: toISOStringOrNull(row.pausedAt),
     awaitingCompletion: row.awaitingCompletion ?? false,
     savedStage: row.savedStage ?? null,
+    pauseUntil: row.pauseUntil ?? null,
     dataCompletionLastAckAt: toISOStringOrNull(row.dataCompletionLastAckAt),
     // Follow-up cycle — mirrors mapDbConsultation. The column is NOT NULL
     // default 0; `?? 0` keeps the mapper's shape identical to the
@@ -1100,6 +1110,7 @@ function mapDbMemo(dbMemo: any): Memo {
     pausedAt: toISOStringOrNull(dbMemo.pausedAt),
     awaitingCompletion: dbMemo.awaitingCompletion ?? false,
     savedStage: dbMemo.savedStage ?? null,
+    pauseUntil: dbMemo.pauseUntil ?? null,
     dataCompletionLastAckAt: toISOStringOrNull(dbMemo.dataCompletionLastAckAt),
     // Phase-9 — review-workflow stage. Legacy rows pre-backfill surface
     // as null; the FE treats null as "no stage yet" (legacy status flow).
@@ -1640,7 +1651,7 @@ export class DatabaseStorage implements IStorage {
   // assume the caller already checked.
   async pauseConsultation(
     id: string,
-    input: { reason: string; performedBy: string },
+    input: { reason: string; performedBy: string; pauseUntil?: string | null },
   ): Promise<Consultation | undefined> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
@@ -1651,6 +1662,10 @@ export class DatabaseStorage implements IStorage {
         pauseReason: input.reason,
         pausedBy: input.performedBy,
         pausedAt: now,
+        // Optional auto-lift date, already format- and past-validated by the
+        // route (validatePauseUntil). Falsy/absent → null → open-ended pause,
+        // which is the pre-feature behaviour.
+        pauseUntil: input.pauseUntil || null,
         updatedAt: now,
       }).where(eq(consultations.id, id));
       await tx.insert(consultationActivityLog).values({
@@ -1786,6 +1801,12 @@ export class DatabaseStorage implements IStorage {
         pauseReason: null,
         pausedBy: null,
         pausedAt: null,
+        // ⚠ LOAD-BEARING. Without this a manual unpause leaves the auto-lift
+        // date behind, and the NEXT pause silently inherits it — a pause set
+        // today would lift on a date somebody chose weeks ago. Every one of the
+        // four unpause methods clears it; so does the scheduler, which lifts an
+        // expired pause by calling these same methods.
+        pauseUntil: null,
         updatedAt: now,
       }).where(eq(consultations.id, id));
       const notes = (input.notes ?? "").trim();
@@ -2328,7 +2349,7 @@ export class DatabaseStorage implements IStorage {
   // state, not lifecycle); pause is detected via paused_at IS NOT NULL.
   async pauseMemo(
     id: string,
-    input: { reason: string; performedBy: string },
+    input: { reason: string; performedBy: string; pauseUntil?: string | null },
   ): Promise<Memo | undefined> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
@@ -2338,6 +2359,10 @@ export class DatabaseStorage implements IStorage {
         pauseReason: input.reason,
         pausedBy: input.performedBy,
         pausedAt: now,
+        // Optional auto-lift date, already format- and past-validated by the
+        // route (validatePauseUntil). Falsy/absent → null → open-ended pause,
+        // which is the pre-feature behaviour.
+        pauseUntil: input.pauseUntil || null,
         updatedAt: now,
       }).where(eq(memos.id, id));
       await tx.insert(memoActivityLog).values({
@@ -2426,6 +2451,12 @@ export class DatabaseStorage implements IStorage {
         pauseReason: null,
         pausedBy: null,
         pausedAt: null,
+        // ⚠ LOAD-BEARING. Without this a manual unpause leaves the auto-lift
+        // date behind, and the NEXT pause silently inherits it — a pause set
+        // today would lift on a date somebody chose weeks ago. Every one of the
+        // four unpause methods clears it; so does the scheduler, which lifts an
+        // expired pause by calling these same methods.
+        pauseUntil: null,
         updatedAt: now,
       }).where(eq(memos.id, id));
       const notes = (input.notes ?? "").trim();
@@ -5347,7 +5378,7 @@ export class DatabaseStorage implements IStorage {
   // alone; pause is detected via paused_at IS NOT NULL.
   async pauseCase(
     id: string,
-    input: { reason: string; performedBy: string; performerName: string },
+    input: { reason: string; performedBy: string; performerName: string; pauseUntil?: string | null },
   ): Promise<LawCase | undefined> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
@@ -5357,6 +5388,10 @@ export class DatabaseStorage implements IStorage {
         pauseReason: input.reason,
         pausedBy: input.performedBy,
         pausedAt: now,
+        // Optional auto-lift date, already format- and past-validated by the
+        // route (validatePauseUntil). Falsy/absent → null → open-ended pause,
+        // which is the pre-feature behaviour.
+        pauseUntil: input.pauseUntil || null,
         updatedAt: now,
       }).where(eq(lawCases.id, id));
       await tx.insert(caseActivityLog).values({
@@ -5487,6 +5522,82 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // Close a case parked at استكمال_البيانات because the client never completed
+  // the file. Deliberately a DEDICATED method rather than a generic updateCase
+  // call: the closure, the flag clearing, the stageHistory append and the audit
+  // row must land in ONE transaction, exactly like reopenCase (its mirror).
+  //
+  // input.missingData is the resolved "what was missing" text (see the route).
+  // It goes into closure_reason_other TRUNCATED to the column's varchar(500);
+  // the activity row below keeps the UNTRUNCATED text, so nothing is ever lost.
+  //
+  // awaiting_completion / saved_stage are CLEARED. Not cosmetic: the cases-table
+  // "بانتظار" badge is `c.awaitingCompletion && !isCasePaused(c)` with NO closed
+  // check (cases.tsx), so leaving the latch set would brand a closed case as
+  // still-awaiting forever — the exact never-cleared-flag class of bug that the
+  // "مطلوب رد من الخصم" indicator had (55fc32b).
+  async closeCaseForNoResponse(
+    id: string,
+    input: { missingData: string; notes: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
+        : [];
+      const historyNote = [
+        "إغلاق لعدم استكمال البيانات",
+        input.missingData ? `الناقص: ${input.missingData}` : "",
+        input.notes,
+      ].filter(Boolean).join(" — ");
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: CaseStage.CLOSED,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: historyNote,
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: CaseStage.CLOSED,
+        // status is the legacy parallel tracker; consumers only ever test it for
+        // "مغلق". The judgment-close audit found closes that skipped it, so it is
+        // set explicitly here rather than left to a downstream PATCH.
+        status: CaseStatus.CLOSED,
+        closedAt: now,
+        closureReason: ClosureReason.DATA_NOT_COMPLETED,
+        closureReasonOther: input.missingData.slice(0, 500) || null,
+        awaitingCompletion: false,
+        savedStage: null,
+        stageHistory,
+        updatedAt: now,
+      }).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "closed_no_response",
+        title: "إغلاق القضية لعدم استكمال البيانات",
+        // UNTRUNCATED — this row is the durable record of what was missing.
+        details: [
+          input.missingData ? `البيانات الناقصة: ${input.missingData}` : "لم تُسجَّل البيانات الناقصة",
+          input.notes,
+        ].filter(Boolean).join(" — "),
+        previousValue: fromStage,
+        newValue: CaseStage.CLOSED,
+        createdAt: now,
+      });
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
   async unpauseCase(
     id: string,
     input: { notes?: string; performedBy: string; performerName: string },
@@ -5499,6 +5610,12 @@ export class DatabaseStorage implements IStorage {
         pauseReason: null,
         pausedBy: null,
         pausedAt: null,
+        // ⚠ LOAD-BEARING. Without this a manual unpause leaves the auto-lift
+        // date behind, and the NEXT pause silently inherits it — a pause set
+        // today would lift on a date somebody chose weeks ago. Every one of the
+        // four unpause methods clears it; so does the scheduler, which lifts an
+        // expired pause by calling these same methods.
+        pauseUntil: null,
         updatedAt: now,
       }).where(eq(lawCases.id, id));
       const notes = (input.notes ?? "").trim();
@@ -5690,6 +5807,7 @@ export class DatabaseStorage implements IStorage {
       pausedAt: null,
       awaitingCompletion: false,
       savedStage: null,
+      pauseUntil: null,
       // Explicit rather than relying on the column default, so the object
       // returned by mapDbContract(newContract) below (which reads this local
       // object, not a re-SELECT) carries the same shape as a fetched row.
@@ -5792,7 +5910,7 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async pauseContract(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined> {
+  async pauseContract(id: string, input: { reason: string; performedBy: string; pauseUntil?: string | null }): Promise<Contract | undefined> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
       if (!existing) return undefined;
@@ -5802,6 +5920,10 @@ export class DatabaseStorage implements IStorage {
         pauseReason: input.reason,
         pausedBy: input.performedBy,
         pausedAt: now,
+        // Optional auto-lift date, already format- and past-validated by the
+        // route (validatePauseUntil). Falsy/absent → null → open-ended pause,
+        // which is the pre-feature behaviour.
+        pauseUntil: input.pauseUntil || null,
         updatedAt: now,
       }).where(eq(contracts.id, id));
       await tx.insert(contractActivityLog).values({
@@ -5828,6 +5950,12 @@ export class DatabaseStorage implements IStorage {
         pauseReason: null,
         pausedBy: null,
         pausedAt: null,
+        // ⚠ LOAD-BEARING. Without this a manual unpause leaves the auto-lift
+        // date behind, and the NEXT pause silently inherits it — a pause set
+        // today would lift on a date somebody chose weeks ago. Every one of the
+        // four unpause methods clears it; so does the scheduler, which lifts an
+        // expired pause by calling these same methods.
+        pauseUntil: null,
         updatedAt: now,
       }).where(eq(contracts.id, id));
       const notes = (input.notes ?? "").trim();

@@ -136,6 +136,14 @@ export interface CaseDetailsActions {
   canClose: boolean;
   canEarlyClose: boolean;
   onEarlyClose: () => void;
+  // "إغلاق لعدم استكمال البيانات" — POST /api/cases/:id/close-no-response. The
+  // host gates it on the CLOSE tier (canEarlyCloseCase) plus the endpoint's own
+  // state conditions: currentStage === استكمال_البيانات, not closed/archived,
+  // not paused. Deliberately NOT keyed on awaitingCompletion — a case reaches
+  // that stage by the ordinary advance too (latch false), and that is the more
+  // common path; see the server comment for the full chain.
+  canCloseNoResponse: boolean;
+  onCloseNoResponse: () => void;
   // Reopen a CLOSED case at a chosen stage (POST /api/cases/:id/reopen). The
   // host computes canReopen with the SAME rule the server enforces
   // (branch_manager | dept_head of the case's dept | assigned lawyer — note
@@ -472,6 +480,49 @@ export function CaseDetailsDialog({
                       ستعود إلى: <BidiText>{getStageLabel(selectedCase.savedStage as CaseStageValue)}</BidiText>
                     </div>
                   )}
+                  {/* The client never responded → close. Lives INSIDE the banner
+                      so the escape hatch sits with the state it escapes from,
+                      rather than as a third amber box. The Path-A counterpart
+                      (case at the stage with the latch off, so this banner does
+                      not render) is the standalone strip below. */}
+                  {actions?.canCloseNoResponse && (
+                    <div className="mt-2 pt-2 border-t border-amber-500/30">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        data-testid="button-close-no-response-banner"
+                        onClick={() => { onOpenChange(false); actions.onCloseNoResponse(); }}
+                      >
+                        <Archive className="w-4 h-4 ml-2" />
+                        إغلاق لعدم استكمال البيانات
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* PATH A — the case reached استكمال_البيانات by the ordinary
+                  استلام advance, so awaitingCompletion is FALSE and the banner
+                  above does not render. This is the COMMON path, and the action
+                  must be reachable from the dialog there too. Rendered only when
+                  that banner is absent, so exactly one box shows either way. */}
+              {actions?.canCloseNoResponse && !selectedCase.awaitingCompletion && (
+                <div
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 flex items-center justify-between gap-3 flex-wrap"
+                  data-testid="banner-case-data-completion"
+                >
+                  <div className="flex items-center gap-2 font-medium">
+                    <AlertTriangle className="w-4 h-4" />
+                    القضية في مرحلة استكمال المرفقات والبيانات
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    data-testid="button-close-no-response-strip"
+                    onClick={() => { onOpenChange(false); actions.onCloseNoResponse(); }}
+                  >
+                    <Archive className="w-4 h-4 ml-2" />
+                    إغلاق لعدم استكمال البيانات
+                  </Button>
                 </div>
               )}
               {/* Phase-8 — paused banner. Renders at the top of the details
@@ -501,6 +552,14 @@ export function CaseDetailsDialog({
                         في <LtrInline>{new Date(selectedCase.pausedAt).toISOString().slice(0, 10)}</LtrInline>
                       </>
                     )}
+                  </div>
+                  {/* Auto-lift date. Absent = open-ended pause (the default),
+                      in which case we say so explicitly rather than leaving the
+                      user to guess whether a date was set. */}
+                  <div className="mt-1 text-xs font-medium">
+                    {selectedCase.pauseUntil
+                      ? <>ينتهي التعليق تلقائياً في: <LtrInline>{selectedCase.pauseUntil}</LtrInline></>
+                      : <span className="text-amber-700/80">تعليق مفتوح — يستمر حتى يُلغى يدوياً</span>}
                   </div>
                 </div>
               )}
@@ -813,6 +872,20 @@ export function CaseDetailsDialog({
                           <p className="font-medium">{selectedCase.closureReason === "أخرى"
                             ? selectedCase.closureReasonOther || ClosureReasonLabels["أخرى"]
                             : (ClosureReasonLabels[selectedCase.closureReason as ClosureReasonValue] ?? selectedCase.closureReason)}</p>
+                          {/* closureReasonOther used to render ONLY under أخرى,
+                              which would have silently swallowed the missing-data
+                              text that close-no-response writes there. Now shown
+                              for ANY non-empty value on a non-أخرى reason — أخرى
+                              keeps rendering it as the reason ITSELF above, so
+                              this must not repeat it. Nothing else writes the
+                              column on a non-أخرى closure today, so no existing
+                              closed case gains a line. */}
+                          {selectedCase.closureReason !== "أخرى"
+                            && !!String(selectedCase.closureReasonOther || "").trim() && (
+                            <p className="text-sm text-muted-foreground mt-1">
+                              <BidiText>{selectedCase.closureReasonOther}</BidiText>
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>

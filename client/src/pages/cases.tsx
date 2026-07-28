@@ -25,6 +25,7 @@ import {
   Play,
   RotateCcw,
   MoreHorizontal,
+  Archive,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -103,7 +104,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseDetailsDialog } from "@/components/case-details-dialog";
-import { caseHasReturnedFromReview, isCasePaused } from "@/lib/case-stage-utils";
+import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
@@ -387,6 +388,27 @@ export default function CasesPage() {
     return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
 
+  // "إغلاق لعدم استكمال البيانات" gate. Restates the server rule for
+  // POST /api/cases/:id/close-no-response so visibility === authorization.
+  // The ROLE tier is canEarlyCloseCase verbatim (this IS a close), plus the
+  // state conditions the endpoint enforces.
+  //
+  // ⚠ Gated on the STAGE, not on awaitingCompletion. A case reaches
+  // استكمال_البيانات either by the ordinary استلام advance (latch FALSE — the
+  // common path, with the missing-data text in the mandatory stage note) or via
+  // /await-completion (latch TRUE). Gating on the latch would hide the button
+  // from every Path-A case. See the server comment for the full chain.
+  const canCloseCaseForNoResponse = (c: LawCase): boolean => {
+    if (c.currentStage !== "استكمال_البيانات") return false;
+    if (c.status === "مغلق" || c.isArchived) return false;
+    // A paused case must be unpaused first — the endpoint 400s otherwise, and
+    // a paused case DISPLAYS as استكمال_البيانات (getCaseDisplayStage) without
+    // actually being on that stage, so the stage test alone would offer the
+    // button on rows that are merely paused.
+    if (isCasePaused(c)) return false;
+    return canEarlyCloseCase(c);
+  };
+
   // Reopen permission gate — the MIRROR of canEarlyCloseCase above, with two
   // deliberate differences that restate the server rule for
   // POST /api/cases/:id/reopen (canActOnMohrSettlement + the مقفلة guard):
@@ -556,6 +578,13 @@ export default function CasesPage() {
   const [earlyCloseCase, setEarlyCloseCase] = useState<any>(null);
   const [earlyCloseReason, setEarlyCloseReason] = useState("");
   const [earlyCloseReasonOther, setEarlyCloseReasonOther] = useState("");
+  // "إغلاق لعدم استكمال البيانات" — the third exit from استكمال_البيانات. No
+  // reason picker: the closure reason is fixed (DATA_NOT_COMPLETED) and the
+  // "what was missing" text is resolved SERVER-side, so this dialog only
+  // confirms and takes optional notes.
+  const [closeNoResponseCase, setCloseNoResponseCase] = useState<LawCase | null>(null);
+  const [closeNoResponseNotes, setCloseNoResponseNotes] = useState("");
+  const [closeNoResponseSaving, setCloseNoResponseSaving] = useState(false);
   const [opponentResponseCase, setOpponentResponseCase] = useState<LawCase | null>(null);
   const [opponentResponseAnswer, setOpponentResponseAnswer] = useState<"" | "نعم" | "لا">("");
   const [opponentResponseSubmitting, setOpponentResponseSubmitting] = useState(false);
@@ -1283,15 +1312,38 @@ export default function CasesPage() {
         <CardContent>
           <div className="overflow-x-auto">
           <Table className="w-full" style={{ tableLayout: 'fixed' }}>
+            {/* Widths sum to EXACTLY 100%, in header order:
+                   4  #
+                  10  رقم القضية
+                  12  العميل                ← free text (+ sub-line)
+                  11  الخصم                 ← free text
+                   8  صفة العميل            ← ONE short badge (مدعي / مدعى عليه)
+                  16  الحالة                ← stage badge + up to 2 status pills
+                                              on one line, then derived pills
+                  13  المحامي المسؤول       ← long Arabic names
+                  10  المراجع الداخلي       ← usually "—"
+                   8  القسم
+                   8  الإجراءات
+                  ---
+                 100
+                الحالة was 12% and its badge row was a non-wrapping inline-flex,
+                so a stage badge + a معلقة/بانتظار pill overflowed the cell and
+                painted over المحامي المسؤول. The 4 points come from صفة العميل
+                (a single short badge never needed 12) and 2 more for the lawyer
+                column from المراجع الداخلي. The row itself now wraps — see the
+                badge container below. Labels live here rather than as inline JSX
+                comments after each <col />, which would leave whitespace text
+                nodes inside <colgroup> and trip React's DOM-nesting validation.
+                Same idiom as consultations.tsx / hearings.tsx. */}
             <colgroup>
               <col style={{ width: '4%' }} />
               <col style={{ width: '10%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '11%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
             </colgroup>
@@ -1366,7 +1418,12 @@ export default function CasesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-center">
+                  {/* break-words on every free-text cell: table-layout is fixed,
+                      so ordinary Arabic names already wrap at their spaces and
+                      never widen a column — but a single long unbroken token (a
+                      pasted ID, a URL-ish opponent name) would still spill out of
+                      its cell. break-words confines it. */}
+                  <TableCell className="text-center break-words">
                     <div>
                       <div className="font-medium text-sm leading-snug">{c.plaintiffName || getClientName(c.clientId)}</div>
                       {c.plaintiffName && getClientName(c.clientId) && (
@@ -1374,7 +1431,7 @@ export default function CasesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-center text-sm">{c.opponentName || "-"}</TableCell>
+                  <TableCell className="text-center text-sm break-words">{c.opponentName || "-"}</TableCell>
                   <TableCell className="text-center">
                     {(() => {
                       const role = getClientRoleLabel(c.caseClassification, c.clientRole);
@@ -1399,8 +1456,16 @@ export default function CasesPage() {
                         its own row below — keeps the cell from overflowing
                         when both the stage label and the loop marker are
                         present. */}
-                    <div className="flex flex-col items-center gap-1">
-                      <div className="inline-flex items-center gap-1">
+                    <div className="flex flex-col items-center gap-1 min-w-0">
+                      {/* flex-wrap + max-w-full: Badge is whitespace-nowrap by
+                          design (ui/badge.tsx), and a flex item's min-width
+                          defaults to auto — so the old non-wrapping inline-flex
+                          could not shrink and bled sideways over the neighbouring
+                          column whenever a status pill joined the stage badge.
+                          Wrapping drops the extra pill onto a second line inside
+                          the cell instead. Same container shape consultations.tsx
+                          already uses (:2376). */}
+                      <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
                         {/* displayStage groups paused → استكمال_البيانات
                             and closed/archived → مقفلة so the badge
                             matches what the stage filter returns. */}
@@ -1413,7 +1478,7 @@ export default function CasesPage() {
                             variant="outline"
                             className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
                             data-testid={`badge-paused-${c.id}`}
-                            title={c.pauseReason || "معلّقة"}
+                            title={pauseBadgeTooltip(c)}
                           >
                             <Pause className="w-2.5 h-2.5 ml-1" />
                             معلّقة
@@ -1510,13 +1575,13 @@ export default function CasesPage() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-center text-sm">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
-                  <TableCell className="text-center text-sm">
+                  <TableCell className="text-center text-sm break-words">{getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}</TableCell>
+                  <TableCell className="text-center text-sm break-words">
                     {c.internalReviewerId
                       ? (users.find(u => u.id === c.internalReviewerId)?.name || "—")
                       : "—"}
                   </TableCell>
-                  <TableCell className="text-center text-sm">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
+                  <TableCell className="text-center text-sm break-words">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell className="text-center">
                     {/* Row actions — Eye stays inline for the common
                         "open details" path; everything else moves into a
@@ -1539,9 +1604,10 @@ export default function CasesPage() {
                       const canUnpause = isCasePaused(c) && canPauseCase(c);
                       const canPause = !isCasePaused(c) && c.status !== "مغلق" && !c.isArchived && canPauseCase(c);
                       const canEarlyClose = canEarlyCloseCase(c);
+                      const canCloseNoResponse = canCloseCaseForNoResponse(c);
                       const canDelete = user?.role === "branch_manager";
                       const hasAnyAction = canEdit || canReassign || canResumeAwait || canMarkAwait
-                        || canUnpause || canPause || canEarlyClose || canDelete;
+                        || canUnpause || canPause || canEarlyClose || canCloseNoResponse || canDelete;
                       return (
                         <div className="flex items-center justify-center gap-1">
                           <Button
@@ -1623,7 +1689,22 @@ export default function CasesPage() {
                                     تعليق القضية
                                   </DropdownMenuItem>
                                 )}
-                                {(canEarlyClose || canDelete) && <DropdownMenuSeparator />}
+                                {(canEarlyClose || canCloseNoResponse || canDelete) && <DropdownMenuSeparator />}
+                                {/* Sits ABOVE the generic إغلاق مبكر so the
+                                    specific action is the first close a user
+                                    sees on a data-completion case. Both can
+                                    render together — إغلاق مبكر stays available
+                                    for a genuinely different reason. */}
+                                {canCloseNoResponse && (
+                                  <DropdownMenuItem
+                                    data-testid={`button-close-no-response-${c.id}`}
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() => { setCloseNoResponseCase(c); setCloseNoResponseNotes(""); }}
+                                  >
+                                    <Archive className="w-4 h-4 ml-2" />
+                                    إغلاق لعدم استكمال البيانات
+                                  </DropdownMenuItem>
+                                )}
                                 {canEarlyClose && (
                                   <DropdownMenuItem
                                     data-testid={`button-early-close-row-${c.id}`}
@@ -2159,6 +2240,8 @@ export default function CasesPage() {
           canClose: canClose(selectedCase),
           canEarlyClose: canEarlyCloseCase(selectedCase),
           onEarlyClose: () => { setEarlyCloseCase(selectedCase); setShowEarlyCloseDialog(true); },
+          canCloseNoResponse: canCloseCaseForNoResponse(selectedCase),
+          onCloseNoResponse: () => { setCloseNoResponseCase(selectedCase); setCloseNoResponseNotes(""); },
           canReopen: canReopenCase(selectedCase),
           onReopen: () => { setReopenCase(selectedCase); setShowReopenDialog(true); },
           // Same gate as the صك action — both live only at محكوم_حكم_ابتدائي and
@@ -2444,6 +2527,83 @@ export default function CasesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* "إغلاق لعدم استكمال البيانات". NO reason picker and NO required text:
+          the closure reason is fixed (ClosureReason.DATA_NOT_COMPLETED) and the
+          "what was missing" text is resolved SERVER-side from the activity log /
+          stageHistory — the client must not re-type data the server already
+          holds, and must not be able to contradict it. Optional notes only.
+
+          The case is CLOSED, not archived (owner decision): it stays in the list
+          as an ordinary closed case and the scheduler archives it after 6 months
+          like every other closure. The dialog says so, because the Arabic label
+          the owner uses ("أرشفة لعدم التجاوب") would otherwise imply it vanishes. */}
+      <AlertDialog
+        open={!!closeNoResponseCase}
+        onOpenChange={(open) => { if (!open) { setCloseNoResponseCase(null); setCloseNoResponseNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Archive className="w-5 h-5 text-destructive" />
+              إغلاق لعدم استكمال البيانات
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم إغلاق القضية بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
+              البيانات والمرفقات الناقصة ضمن سبب الإغلاق. سيتم أيضاً إلغاء الجلسات
+              القادمة والمذكرات والمهام المفتوحة على القضية.
+              <br />
+              تبقى القضية ظاهرة في القائمة كقضية مقفلة، وتُؤرشف تلقائياً بعد 6 أشهر
+              كبقية القضايا المقفلة. ويمكن إعادة فتحها لاحقاً إذا تجاوب العميل.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-right">
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea
+              data-testid="input-close-no-response-notes"
+              value={closeNoResponseNotes}
+              onChange={(e) => setCloseNoResponseNotes(e.target.value)}
+              placeholder="اكتب ملاحظات حول الإغلاق..."
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-close-no-response"
+              disabled={closeNoResponseSaving}
+              className="bg-destructive hover:bg-destructive/90"
+              onClick={async (e) => {
+                // The action button closes the dialog by default; prevent that
+                // so the dialog stays up until the request settles (same shape
+                // as the other async AlertDialog actions on this page).
+                e.preventDefault();
+                if (!closeNoResponseCase) return;
+                setCloseNoResponseSaving(true);
+                try {
+                  const notes = closeNoResponseNotes.trim();
+                  await apiRequest(
+                    "POST",
+                    `/api/cases/${closeNoResponseCase.id}/close-no-response`,
+                    notes ? { notes } : {},
+                  );
+                  await refreshCases();
+                  toast({ title: "تم إغلاق القضية لعدم استكمال البيانات" });
+                  setCloseNoResponseCase(null);
+                  setCloseNoResponseNotes("");
+                } catch (err) {
+                  toast({ title: "فشل إغلاق القضية", description: extractApiError(err), variant: "destructive" });
+                } finally {
+                  setCloseNoResponseSaving(false);
+                }
+              }}
+            >
+              <Archive className="w-4 h-4 ml-2" />
+              تأكيد الإغلاق
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* "تم استلام رد الخصم" — clears the مطلوب رد من الخصم indicator (which the
           audit found could never clear) and asks whether we must reply. نعم

@@ -21,6 +21,10 @@ export function startScheduler() {
     await checkContactFollowUps();
     await recalculateCasePriorities();
     await checkStruckOffExpiry();
+    // BEFORE checkSettlementLinkMissingTimeout on purpose: a pause that lifts
+    // today must be gone before the 15-day settlement-link scan looks at the
+    // same rows, so one tick can never both lift and close a case.
+    await checkExpiredPauses();
     await checkSettlementLinkMissingTimeout();
     await checkNajizReviewReminders();
   });
@@ -717,6 +721,125 @@ async function checkNajizReviewReminders() {
     }
   } catch (error) {
     console.error("Error checking najiz review reminders:", error);
+  }
+}
+
+// Auto-lift pauses whose optional end date has passed, across all four
+// pausable entities (cases / consultations / contracts / memos).
+//
+// SHAPE mirrors checkStruckOffExpiry: pause_until is a "YYYY-MM-DD" varchar, so
+// the expiry test is the same lexicographic string compare against today
+// (`deadline >= todayStr → skip`). Zero-padded ISO dates compare correctly as
+// strings, and staying out of Date arithmetic keeps this clear of the drizzle
+// date-mode conversion that silently broke auto-archive (Phase-4 S3).
+//
+// GUARDS mirror checkSettlementLinkMissingTimeout: skip anything already
+// closed/archived, and skip rows whose pause is owned by that job.
+//
+// ⚠ It lifts by calling the SAME storage.unpause* methods the manual buttons
+// call, not by hand-writing the columns — so the pause_* clearing (including
+// pause_until itself) and the unpaused activity-log row stay in one place and
+// can never drift from the manual path.
+async function checkExpiredPauses() {
+  const todayStr = new Date().toISOString().split("T")[0];
+  // The settlement-link pause is owned by checkSettlementLinkMissingTimeout,
+  // which CLOSES the case after 15 days. It never sets pause_until, so this is
+  // belt-and-braces — but if anyone ever sets one by hand, two jobs racing the
+  // same row would be a genuinely nasty bug. Exact string equality; we control
+  // the text (it is the same constant the hearing-result handler writes).
+  const SETTLEMENT_LINK_PAUSE = "بانتظار رابط جلسة الصلح من العميل";
+
+  // Shared per-row test. A row qualifies only if it is actually paused AND
+  // carries a date AND that date is strictly before today (so a pause ending
+  // "today" survives the day and lifts tomorrow morning — the same-day
+  // semantics validatePauseUntil documents).
+  const isExpired = (row: { pausedAt?: string | null; pauseUntil?: string | null; pauseReason?: string | null }): boolean => {
+    if (!row.pausedAt) return false;
+    const until = String(row.pauseUntil ?? "").trim();
+    if (!until) return false;
+    if (until >= todayStr) return false;
+    if (row.pauseReason === SETTLEMENT_LINK_PAUSE) return false;
+    return true;
+  };
+
+  const UNPAUSE_NOTE = "إلغاء تعليق تلقائي — انتهاء مدة التعليق";
+  let lifted = 0;
+
+  // Each entity is isolated in its own try/catch: one entity failing (a missing
+  // column mid-deploy, a bad row) must not stop the other three from lifting.
+  try {
+    const allCases = await storage.getAllCases();
+    for (const c of allCases) {
+      if (c.isArchived) continue;
+      if ((c.currentStage as string) === "مقفلة") continue;
+      if ((c as { status?: string }).status === "مغلق") continue;
+      if (!isExpired(c)) continue;
+      await storage.unpauseCase(c.id, {
+        performedBy: "system",
+        performerName: "النظام",
+        notes: UNPAUSE_NOTE,
+      });
+      lifted++;
+    }
+  } catch (error) {
+    console.error("Error lifting expired case pauses:", error);
+  }
+
+  try {
+    const allConsultations = await storage.getAllConsultations();
+    for (const c of allConsultations) {
+      // Consultations are the one entity whose pause ALSO flips status to
+      // "paused"; unpauseConsultation flips it back to "active". Guard on that
+      // status rather than on pausedAt alone so a row left inconsistent by hand
+      // isn't dragged back to active.
+      if (c.status !== "paused") continue;
+      if (!isExpired(c)) continue;
+      await storage.unpauseConsultation(c.id, {
+        performedBy: "system",
+        notes: UNPAUSE_NOTE,
+      });
+      lifted++;
+    }
+  } catch (error) {
+    console.error("Error lifting expired consultation pauses:", error);
+  }
+
+  try {
+    const allContracts = await storage.getAllContracts();
+    for (const c of allContracts) {
+      // Same status-flip model as consultations.
+      if (c.status !== "paused") continue;
+      if (!isExpired(c)) continue;
+      await storage.unpauseContract(c.id, {
+        performedBy: "system",
+        notes: UNPAUSE_NOTE,
+      });
+      lifted++;
+    }
+  } catch (error) {
+    console.error("Error lifting expired contract pauses:", error);
+  }
+
+  try {
+    const allMemos = await storage.getAllMemos();
+    for (const m of allMemos) {
+      // Memos leave status alone on pause (it is workflow state), so pausedAt
+      // is the only indicator — but a memo that reached a terminal status while
+      // paused should not be revived.
+      if (m.status === "ملغاة" || m.status === "مرفوعة" || m.status === "معتمدة") continue;
+      if (!isExpired(m)) continue;
+      await storage.unpauseMemo(m.id, {
+        performedBy: "system",
+        notes: UNPAUSE_NOTE,
+      });
+      lifted++;
+    }
+  } catch (error) {
+    console.error("Error lifting expired memo pauses:", error);
+  }
+
+  if (lifted > 0) {
+    console.log(`Expired-pause auto-lift: ${lifted} entities resumed.`);
   }
 }
 

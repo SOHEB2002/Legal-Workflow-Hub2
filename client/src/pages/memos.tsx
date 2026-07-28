@@ -78,6 +78,8 @@ import {
 import { useMemos } from "@/lib/memos-context";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
+import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
+import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
 import { useCases } from "@/lib/cases-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -405,6 +407,9 @@ export default function MemosPage() {
   const [showPauseMemoDialog, setShowPauseMemoDialog] = useState(false);
   const [pauseMemoTarget, setPauseMemoTarget] = useState<Memo | null>(null);
   const [pauseMemoReason, setPauseMemoReason] = useState("");
+  // OPTIONAL auto-lift date. "" = open-ended pause, the default and the
+  // pre-feature behaviour.
+  const [pauseMemoUntil, setPauseMemoUntil] = useState("");
   const [showUnpauseMemoDialog, setShowUnpauseMemoDialog] = useState(false);
   const [unpauseMemoTarget, setUnpauseMemoTarget] = useState<Memo | null>(null);
   const [unpauseMemoNotes, setUnpauseMemoNotes] = useState("");
@@ -705,12 +710,14 @@ export default function MemosPage() {
   const openPauseMemoDialog = (memo: Memo) => {
     setPauseMemoTarget(memo);
     setPauseMemoReason("");
+    setPauseMemoUntil("");
     setShowPauseMemoDialog(true);
   };
   const closePauseMemoDialog = () => {
     setShowPauseMemoDialog(false);
     setPauseMemoTarget(null);
     setPauseMemoReason("");
+    setPauseMemoUntil("");
   };
   const openUnpauseMemoDialog = (memo: Memo) => {
     setUnpauseMemoTarget(memo);
@@ -730,9 +737,18 @@ export default function MemosPage() {
       toast({ title: "أدخل سبب التعليق", variant: "destructive" });
       return;
     }
+    // Client half of the past-date rule; the server's validatePauseUntil (the
+    // SAME shared function) stays authoritative.
+    const untilError = pauseUntilError(pauseMemoUntil);
+    if (untilError) {
+      toast({ title: untilError, variant: "destructive" });
+      return;
+    }
+    const until = pauseMemoUntil.trim();
     setPauseMemoInProgress(true);
     try {
-      await apiRequest("POST", `/api/memos/${pauseMemoTarget.id}/pause`, { reason });
+      // pauseUntil omitted when blank — absent means open-ended, exactly as before.
+      await apiRequest("POST", `/api/memos/${pauseMemoTarget.id}/pause`, until ? { reason, pauseUntil: until } : { reason });
       await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
       toast({ title: "تم تعليق المذكرة" });
       closePauseMemoDialog();
@@ -1404,7 +1420,7 @@ export default function MemosPage() {
                                 variant="outline"
                                 className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
                                 data-testid={`badge-memo-paused-${memo.id}`}
-                                title={memo.pauseReason || "معلّق"}
+                                title={pauseBadgeTooltip(memo, "معلّق")}
                               >
                                 <Pause className="w-2.5 h-2.5 ml-1" />
                                 معلّق
@@ -1827,6 +1843,13 @@ export default function MemosPage() {
                           في <LtrInline>{new Date(detailMemo.pausedAt).toISOString().slice(0, 10)}</LtrInline>
                         </>
                       )}
+                    </div>
+                    {/* Auto-lift date. Absent = open-ended, stated explicitly so
+                        the user never has to guess whether a date was set. */}
+                    <div className="mt-1 text-xs font-medium">
+                      {detailMemo.pauseUntil
+                        ? <>ينتهي التعليق تلقائياً في: <LtrInline>{detailMemo.pauseUntil}</LtrInline></>
+                        : <span className="text-amber-700/80">تعليق مفتوح — يستمر حتى يُلغى يدوياً</span>}
                     </div>
                   </div>
                 )}
@@ -2285,12 +2308,17 @@ export default function MemosPage() {
               rows={3}
             />
           </div>
+          <PauseUntilField
+            value={pauseMemoUntil}
+            onChange={setPauseMemoUntil}
+            testId="input-memo-pause-until"
+          />
           <AlertDialogFooter className="gap-2">
             <AlertDialogCancel onClick={closePauseMemoDialog}>إلغاء</AlertDialogCancel>
             <AlertDialogAction
               data-testid="button-confirm-pause-memo"
               onClick={handlePauseMemo}
-              disabled={pauseMemoInProgress || !pauseMemoReason.trim()}
+              disabled={pauseMemoInProgress || !pauseMemoReason.trim() || !!pauseUntilError(pauseMemoUntil)}
               className="bg-amber-600 hover:bg-amber-700"
             >
               <Pause className="w-4 h-4 ml-2" />

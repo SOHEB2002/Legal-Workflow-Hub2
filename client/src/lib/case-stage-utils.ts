@@ -20,6 +20,22 @@ export function isCasePaused(c: { pausedAt?: string | null }): boolean {
   return !!c.pausedAt;
 }
 
+// Tooltip text for the "معلّقة" row badge, shared by all four pausable entities
+// (cases / consultations / contracts / memos) so the auto-lift date is surfaced
+// identically everywhere. A `title` attribute takes a plain string, so this
+// cannot use the DualDateDisplay component the banners use.
+//
+// pauseUntil is nullable by design — an open-ended pause is still the default —
+// and this degrades to exactly the previous text when it is absent.
+export function pauseBadgeTooltip(entity: {
+  pauseReason?: string | null;
+  pauseUntil?: string | null;
+}, fallback = "معلّقة"): string {
+  const reason = String(entity.pauseReason ?? "").trim() || fallback;
+  const until = String(entity.pauseUntil ?? "").trim();
+  return until ? `${reason} — ينتهي التعليق تلقائياً في ${until}` : reason;
+}
+
 export function caseHasReturnedFromReview(c: {
   currentStage: string;
   stageHistory?: any[] | null;

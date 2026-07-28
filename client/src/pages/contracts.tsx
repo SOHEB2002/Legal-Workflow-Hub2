@@ -50,6 +50,8 @@ import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest, refreshAuthToken } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
+import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
+import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
 
 // FE mirror of ALLOWED_CONTRACT_TRANSITIONS for the linear-forward
 // path. INTERNAL_REVIEW / COMMITTEE / TAKING_NOTES exits are handled
@@ -932,6 +934,9 @@ export default function ContractsPage() {
   const [showPause, setShowPause] = useState(false);
   const [pauseTarget, setPauseTarget] = useState<Contract | null>(null);
   const [pauseReason, setPauseReason] = useState("");
+  // OPTIONAL auto-lift date. "" = open-ended pause, the default and the
+  // pre-feature behaviour.
+  const [pauseUntil, setPauseUntil] = useState("");
 
   const [showAwait, setShowAwait] = useState(false);
   const [awaitTarget, setAwaitTarget] = useState<Contract | null>(null);
@@ -1456,17 +1461,30 @@ export default function ContractsPage() {
                       {ContractTypeLabels[c.contractType as keyof typeof ContractTypeLabels] || c.contractType}
                     </Badge>
                   </TableCell>
+                  {/* Badges were bare siblings of the cell with mr-1 spacing. JSX
+                      strips the newline-only text nodes between them, so the run
+                      had NO break opportunity and could only grow sideways. This
+                      table is auto-layout (no colgroup), so it never painted over
+                      a neighbour the way the fixed-layout cases table did — it
+                      just widened المرحلة at the expense of العنوان/العميل. Same
+                      wrapping container as cases.tsx / consultations.tsx; gap-1
+                      replaces the per-badge mr-1 for identical spacing. */}
                   <TableCell className="text-center">
+                    <div className="flex flex-wrap items-center justify-center gap-1 max-w-full">
                     <Badge className={getStageBadgeColor(c.currentStage)}>
                       {ContractStageLabels[c.currentStage] || c.currentStage}
                     </Badge>
                     {c.status === "paused" && (
-                      <Badge variant="outline" className="mr-1 border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0"
+                        title={pauseBadgeTooltip(c, "معلّق")}
+                      >
                         <Pause className="w-2.5 h-2.5 ml-1" /> معلّق
                       </Badge>
                     )}
                     {c.awaitingCompletion && c.status === "active" && (
-                      <Badge variant="outline" className="mr-1 border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
+                      <Badge variant="outline" className="border-amber-500 bg-amber-500/10 text-amber-700 text-[10px] px-1 py-0">
                         <AlertTriangle className="w-2.5 h-2.5 ml-1" /> بانتظار
                       </Badge>
                     )}
@@ -1480,7 +1498,7 @@ export default function ContractsPage() {
                     {isContractInFollowUpCycle(c) && (
                       <Badge
                         variant="outline"
-                        className="mr-1 border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px] px-1 py-0"
+                        className="border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300 text-[10px] px-1 py-0"
                         data-testid={`badge-contract-follow-up-${c.id}`}
                         title="العقد في جولة استشارة تعقيبية"
                       >
@@ -1488,6 +1506,7 @@ export default function ContractsPage() {
                         تعقيبية #{c.followUpCount}
                       </Badge>
                     )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-center">{getDepartmentName(c.departmentId)}</TableCell>
                   <TableCell className="text-center">
@@ -1590,7 +1609,7 @@ export default function ContractsPage() {
                             <DropdownMenuItem
                               data-testid={`row-action-pause-${c.id}`}
                               className="text-amber-600 focus:text-amber-700"
-                              onClick={() => { setPauseTarget(c); setPauseReason(""); setShowPause(true); }}
+                              onClick={() => { setPauseTarget(c); setPauseReason(""); setPauseUntil(""); setShowPause(true); }}
                             >
                               <Pause className="w-4 h-4 ml-2" />
                               تعليق
@@ -2764,15 +2783,23 @@ export default function ContractsPage() {
             <Label>السبب</Label>
             <Textarea value={pauseReason} onChange={(e) => setPauseReason(e.target.value)} rows={3} />
           </div>
+          <PauseUntilField
+            value={pauseUntil}
+            onChange={setPauseUntil}
+            testId="input-contract-pause-until"
+          />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPause(false)}>إلغاء</Button>
             <Button
               onClick={async () => {
                 if (!pauseTarget || !pauseReason.trim()) return;
-                await wrap(() => pauseContract(pauseTarget.id, pauseReason.trim()), "تم تعليق العقد");
+                // Client half of the past-date rule; the server's
+                // validatePauseUntil (the SAME shared function) is authoritative.
+                if (pauseUntilError(pauseUntil)) return;
+                await wrap(() => pauseContract(pauseTarget.id, pauseReason.trim(), pauseUntil.trim()), "تم تعليق العقد");
                 setShowPause(false);
               }}
-              disabled={!pauseReason.trim() || busy}
+              disabled={!pauseReason.trim() || busy || !!pauseUntilError(pauseUntil)}
             >تأكيد</Button>
           </DialogFooter>
         </DialogContent>
