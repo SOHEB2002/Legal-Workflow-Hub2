@@ -2032,6 +2032,16 @@ export function getStagesForConsultationCycle(
   return ConsultationCycleStagesWritten;
 }
 
+// Stages a CLOSED consultation may be re-opened at (POST /:id/reopen).
+// Same reasoning as getContractReopenTargetStages — see its comment for why
+// this derives from the CYCLE-aware resolver rather than the raw type list, and
+// why no forced escape-hatch stage is offered. CLOSED_FINAL is excluded.
+export function getConsultationReopenTargetStages(
+  c: { followUpCount?: number | null; consultationType?: string | null } | null | undefined,
+): ConsultationStageValue[] {
+  return getStagesForConsultationCycle(c).filter((s) => s !== ConsultationStage.CLOSED_FINAL);
+}
+
 // Remap currentStage when the consultation's workflow type changes. If
 // the existing stage is already valid in the new type's stages list,
 // keep it. Otherwise apply a small heuristic for stages that semantically
@@ -2825,6 +2835,10 @@ export const ConsultationActivityType = {
   // non-responsive client apart from a deliberate early closure.
   // Type-only — activity_type is free text, so no migration.
   CLOSED_NO_RESPONSE:     "closed_no_response",
+  // Re-opened at a caller-chosen stage to RESUME the original work. Distinct
+  // from FOLLOW_UP_STARTED, which is a different act: that begins a NEW,
+  // smaller piece of work in a 3-stage cycle. See the route comment.
+  REOPENED:               "reopened",
   GENERAL_NOTE:           "general_note",
   PAUSED:                 "paused",
   UNPAUSED:               "unpaused",
@@ -2845,6 +2859,7 @@ export type ConsultationActivityTypeValue =
 
 export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValue, string> = {
   closed_no_response:       "إغلاق لعدم استكمال البيانات",
+  reopened:                 "إعادة فتح",
   created:                  "إنشاء",
   assigned:                 "إسناد",
   stage_advanced:           "تقدم في المرحلة",
@@ -3024,6 +3039,28 @@ export function getStagesForContractCycle(
   return ContractCycleStages;
 }
 
+// Stages a CLOSED contract may be re-opened at (POST /:id/reopen).
+//
+// 🔴 DERIVED FROM getStagesForContractCycle, NOT from ContractStagesAll. That
+// helper is STATUS-AGNOSTIC: once followUpCount > 0 it returns the 3-stage cycle
+// list forever, closed or not. So a contract that has been through a follow-up
+// resolves its stage bar against the CYCLE list — and re-opening it at, say,
+// تحرير would put currentStage OFF its own resolved path, which is exactly the
+// data-shaped version of the progress-bar collapse fixed in 3fcd4e3. Offering
+// only what the record will actually resolve to makes that unreachable.
+//
+// CLOSED is excluded — re-opening INTO the terminal stage is a no-op.
+//
+// NO ESCAPE-HATCH STAGE. The cases version force-offers منظورة because that
+// stage is absent from InCourtSettlementStages yet re-opening into court is the
+// entire promise the defendant close makes. Contracts have no analogue: every
+// stage a contract can meaningfully resume at is already on its resolved list.
+export function getContractReopenTargetStages(
+  c: { followUpCount?: number | null } | null | undefined,
+): ContractStageValue[] {
+  return getStagesForContractCycle(c).filter((s) => s !== ContractStage.CLOSED);
+}
+
 export const ContractStatus = {
   ACTIVE: "active",
   PAUSED: "paused",
@@ -3132,6 +3169,9 @@ export const ContractActivityType = {
   // Closed because the client never completed the file — see the consultations
   // twin. Type-only; activity_type is free text, so no migration.
   CLOSED_NO_RESPONSE:       "closed_no_response",
+  // See the consultations twin — resume the original work, as opposed to
+  // FOLLOW_UP_STARTED which begins a new 3-stage cycle.
+  REOPENED:                 "reopened",
   GENERAL_NOTE:             "general_note",
   PAUSED:                   "paused",
   UNPAUSED:                 "unpaused",
@@ -3168,6 +3208,7 @@ export type ContractActivityTypeValue =
 export const ContractActivityTypeLabels: Record<ContractActivityTypeValue, string> = {
   closed_no_response:      "إغلاق لعدم استكمال البيانات",
   internal_review_skipped: "تجاوز المراجعة الداخلية",
+  reopened:                "إعادة فتح",
   created:                "إنشاء",
   assigned:               "إسناد",
   stage_advanced:         "تقدم في المرحلة",
@@ -4622,6 +4663,14 @@ export const workflowNotesSchema = z.object({
 // an explicit null clears it, and undefined/absent means "open-ended" — which is
 // exactly the pre-feature behaviour, so an old client that sends only { reason }
 // keeps working unchanged.
+// Body for POST /api/consultations/:id/reopen and /api/contracts/:id/reopen.
+// Tolerant like its neighbours; the handlers enforce requiredness. No number
+// fields — unlike the CASES reopen, these two carry no platform numbers.
+export const reopenEntitySchema = z.object({
+  targetStage: z.string().optional(),
+  notes: z.string().optional(),
+}).passthrough();
+
 export const workflowPauseSchema = z.object({
   reason: z.string().optional(),
   pauseUntil: z.string().nullable().optional(),

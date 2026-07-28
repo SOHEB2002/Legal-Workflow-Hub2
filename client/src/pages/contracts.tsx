@@ -27,7 +27,7 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
-  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, Pencil, Archive,
+  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, RotateCcw, Pencil, Archive,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -41,6 +41,7 @@ import {
   ContractAttachmentSlot, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
   ContractActivityType, isContractInFollowUpCycle, getStagesForContractCycle,
+  getContractReopenTargetStages,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
 import { useClients } from "@/lib/clients-context";
@@ -1138,6 +1139,39 @@ export default function ContractsPage() {
     return false;
   };
 
+  // Reopen — resume the ORIGINAL work at a chosen stage. Same actor set as
+  // canStartFollowUp (both are "the close tier on a closed row"), but a
+  // different ACT: تعقيبية starts a NEW 3-stage cycle on a finished contract,
+  // إعادة فتح says the closure itself was wrong. Kept as its own helper so the
+  // two can diverge without one silently dragging the other.
+  const canReopenContract = (c: Contract): boolean => canStartFollowUp(c);
+
+  const [reopenTarget, setReopenTarget] = useState<Contract | null>(null);
+  const [reopenStage, setReopenStage] = useState("");
+  const [reopenNotes, setReopenNotes] = useState("");
+  const [reopenSaving, setReopenSaving] = useState(false);
+
+  const handleReopenContract = async () => {
+    if (!reopenTarget || !reopenStage) return;
+    setReopenSaving(true);
+    try {
+      const notes = reopenNotes.trim();
+      await apiRequest("POST", `/api/contracts/${reopenTarget.id}/reopen`, {
+        targetStage: reopenStage,
+        ...(notes ? { notes } : {}),
+      });
+      await refreshContracts();
+      toast({ title: "تم إعادة فتح العقد" });
+      setReopenTarget(null);
+      setReopenStage("");
+      setReopenNotes("");
+    } catch (err) {
+      toast({ title: "فشل إعادة الفتح", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReopenSaving(false);
+    }
+  };
+
   const [showFollowUp, setShowFollowUp] = useState(false);
   const [followUpTarget, setFollowUpTarget] = useState<Contract | null>(null);
   const [followUpQuestion, setFollowUpQuestion] = useState("");
@@ -1942,6 +1976,22 @@ export default function ContractsPage() {
                     onClick={() => { setEarlyCloseTarget(selected); setEarlyCloseReason(""); setShowEarlyClose(true); }}>
                     <XCircle className="w-4 h-4 ml-1" />
                     إغلاق مبكر
+                  </Button>
+                )}
+                {/* REOPEN — resume the ORIGINAL work. Sits beside استشارة تعقيبية
+                    because both act on a closed contract, but the labels keep the
+                    two acts apart: تعقيبية = a NEW question on a finished
+                    contract (3-stage cycle); إعادة فتح = the closure was wrong. */}
+                {canReopenContract(selected) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-green-600 text-green-700 hover:bg-green-50"
+                    data-testid={`dialog-button-reopen-${selected.id}`}
+                    onClick={() => { setReopenTarget(selected); setReopenStage(""); setReopenNotes(""); }}
+                  >
+                    <RotateCcw className="w-4 h-4 ml-1" />
+                    إعادة فتح
                   </Button>
                 )}
                 {/* Re-open a closed contract for a client follow-up question.
@@ -2801,6 +2851,74 @@ export default function ContractsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* ============ Reopen dialog ============
+          Stage picker + optional notes. No number prompt (contracts carry no
+          platform numbers, unlike the cases version this mirrors) and no
+          cancelled-children warning (contracts have no hearings / memos / field
+          tasks; attachments and the activity log survive a close untouched).
+          The stage list comes from getContractReopenTargetStages, which is
+          CYCLE-AWARE — a contract that has been through a follow-up resolves
+          against the 3-stage cycle list, so offering the full 8-stage path would
+          land it off its own resolved path. */}
+      <AlertDialog
+        open={!!reopenTarget}
+        onOpenChange={(open) => { if (!open) { setReopenTarget(null); setReopenStage(""); setReopenNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RotateCcw className="w-5 h-5 text-green-700" />
+              إعادة فتح العقد
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              سيعود العقد للعمل عند المرحلة التي تختارها، ويُلغى سبب الإغلاق السابق
+              (مع بقائه في سجل النشاط).
+              <br />
+              إذا كان العميل قد عاد بسؤال <strong>جديد</strong> على عقد منتهٍ، استخدم
+              "استشارة تعقيبية" بدلاً من ذلك.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-4 text-right">
+            <div>
+              <Label>المرحلة <span className="text-red-500">*</span></Label>
+              <Select value={reopenStage} onValueChange={setReopenStage}>
+                <SelectTrigger data-testid="select-reopen-stage">
+                  <SelectValue placeholder="اختر المرحلة" />
+                </SelectTrigger>
+                <SelectContent>
+                  {reopenTarget && getContractReopenTargetStages(reopenTarget).map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {ContractStageLabels[s] || s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>ملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-reopen-notes"
+                value={reopenNotes}
+                onChange={(e) => setReopenNotes(e.target.value)}
+                placeholder="سبب إعادة الفتح..."
+                rows={3}
+              />
+            </div>
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-reopen"
+              disabled={reopenSaving || !reopenStage}
+              onClick={(e) => { e.preventDefault(); handleReopenContract(); }}
+            >
+              <RotateCcw className="w-4 h-4 ml-2" />
+              تأكيد إعادة الفتح
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* ====== Skip-internal-review dialog (reasoned override) ======
           Moves the contract straight to لجنة_مراجعة with NO internal-review
           decision. Same shape as the committee skip below; the reason is
@@ -3010,7 +3128,8 @@ export default function ContractsPage() {
               سيتم إغلاق العقد بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
               البيانات والمرفقات الناقصة ضمن سبب الإغلاق.
               <br />
-              يمكن إعادة فتحه لاحقاً كاستشارة تعقيبية إذا تجاوب العميل.
+              إذا تجاوب العميل لاحقاً وأرسل الناقص، استخدم "إعادة فتح" للعودة إلى
+              المرحلة التي توقف عندها العمل.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2 text-right">

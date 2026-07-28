@@ -49,7 +49,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play, RotateCw, Pencil, Archive } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle, FileText, ClipboardCheck, Bell, MoreHorizontal, UserPlus, ArrowLeftRight, Trash2, ChevronLeft, ChevronRight, FileSymlink, XCircle, ExternalLink, AlertTriangle, Sparkles, Clock, ListChecks, Pause, Play, RotateCw, RotateCcw, Pencil, Archive } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConsultations } from "@/lib/consultations-context";
 import { useFavorites } from "@/lib/favorites-context";
@@ -72,6 +72,7 @@ import type {
 import {
   ConsultationStage,
   ConsultationStageLabels,
+  getConsultationReopenTargetStages,
   ConsultationStagesAll,
   ConsultationStagesOrder,
   ConsultationStagesOrderPhone,
@@ -617,6 +618,30 @@ function canStartFollowUp(
   return consultationActorTier(consultation, userRole, userId, userDeptId);
 }
 
+// Restates POST /api/consultations/:id/reopen so visibility == authorization.
+// The CLOSE tier with the status check inverted — including its TYPE SPLIT,
+// which canStartFollowUp above does NOT have: /early-close narrows PHONE and
+// PROCEDURAL to admin_support | branch_manager, and reopen copies that gate, so
+// mirroring canStartFollowUp here would show the button to actors the server
+// rejects.
+function canReopenConsultation(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.status !== "closed") return false;
+  const resolved = resolveConsultationType(consultation.consultationType);
+  if (resolved !== ConsultationType.WRITTEN) {
+    return ["admin_support", "branch_manager"].includes(userRole);
+  }
+  if (["admin_support", "branch_manager"].includes(userRole)) return true;
+  if (userRole === "department_head") {
+    return !!userDeptId && !!consultation.departmentId && consultation.departmentId === userDeptId;
+  }
+  return !!consultation.assignedTo && consultation.assignedTo === userId;
+}
+
 // Mirrors the role gate on PATCH /api/consultations/:id for the
 // consultationType field: branch_manager / admin_support /
 // department_head (own dept). The PATCH endpoint silently drops the
@@ -926,6 +951,12 @@ export default function ConsultationsPage() {
   // OPTIONAL auto-lift date. "" = open-ended pause, the default and the
   // pre-feature behaviour.
   const [pauseUntil, setPauseUntil] = useState("");
+  // Reopen — resume the ORIGINAL work at a chosen stage. Distinct from the
+  // follow-up cycle, which starts a NEW 3-stage mini-flow on a finished matter.
+  const [reopenTarget, setReopenTarget] = useState<Consultation | null>(null);
+  const [reopenStage, setReopenStage] = useState("");
+  const [reopenNotes, setReopenNotes] = useState("");
+  const [reopenSaving, setReopenSaving] = useState(false);
   const [closeNoResponseTarget, setCloseNoResponseTarget] = useState<Consultation | null>(null);
   const [closeNoResponseNotes, setCloseNoResponseNotes] = useState("");
   const [closeNoResponseSaving, setCloseNoResponseSaving] = useState(false);
@@ -1317,6 +1348,27 @@ export default function ConsultationsPage() {
   // "إغلاق لعدم استكمال البيانات" — no reason picker and no required text: the
   // closure reason is fixed (DATA_NOT_COMPLETED) and the missing-data text is
   // resolved SERVER-side from the activity log. Optional notes only.
+  const handleReopen = async () => {
+    if (!reopenTarget || !reopenStage) return;
+    setReopenSaving(true);
+    try {
+      const notes = reopenNotes.trim();
+      await apiRequest("POST", `/api/consultations/${reopenTarget.id}/reopen`, {
+        targetStage: reopenStage,
+        ...(notes ? { notes } : {}),
+      });
+      await refreshConsultations();
+      toast({ title: "تم إعادة فتح الاستشارة" });
+      setReopenTarget(null);
+      setReopenStage("");
+      setReopenNotes("");
+    } catch (err) {
+      toast({ title: "فشل إعادة الفتح", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReopenSaving(false);
+    }
+  };
+
   const handleCloseNoResponse = async () => {
     if (!closeNoResponseTarget) return;
     setCloseNoResponseSaving(true);
@@ -2980,6 +3032,27 @@ export default function ConsultationsPage() {
                         إغلاق مبكر
                       </Button>
                     )}
+                    {/* REOPEN sits beside استشارة تعقيبية because both act on a
+                        CLOSED consultation — but they are different acts and the
+                        labels say so: تعقيبية = a NEW question on a finished
+                        matter (3-stage cycle); إعادة فتح = the closure was wrong,
+                        resume the ORIGINAL work at a chosen stage. */}
+                    {canReopenConsultation(selectedConsultation, user.role, user.id, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-green-600 text-green-700 hover:bg-green-50"
+                        data-testid={`dialog-button-reopen-${selectedConsultation.id}`}
+                        onClick={() => {
+                          setReopenTarget(selectedConsultation);
+                          setReopenStage("");
+                          setReopenNotes("");
+                        }}
+                      >
+                        <RotateCcw className="w-4 h-4 ml-1" />
+                        إعادة فتح
+                      </Button>
+                    )}
                     {canStartFollowUp(selectedConsultation, user.role, user.id, user.departmentId) && (
                       <Button
                         size="sm"
@@ -4234,6 +4307,69 @@ export default function ConsultationsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Reopen — stage picker + optional notes. No number prompt (consultations
+          carry no platform numbers, unlike the cases version this mirrors) and
+          no cancelled-children warning (consultations have no hearings / memos /
+          field tasks, and their closes cancel nothing). */}
+      <AlertDialog
+        open={!!reopenTarget}
+        onOpenChange={(open) => { if (!open) { setReopenTarget(null); setReopenStage(""); setReopenNotes(""); } }}
+      >
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <RotateCcw className="w-5 h-5 text-green-700" />
+              إعادة فتح الاستشارة
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              ستعود الاستشارة للعمل عند المرحلة التي تختارها، ويُلغى سبب الإغلاق
+              السابق (مع بقائه في سجل النشاط).
+              <br />
+              إذا كان العميل قد عاد بسؤال <strong>جديد</strong> على استشارة منتهية،
+              استخدم "استشارة تعقيبية" بدلاً من ذلك.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-4 text-right">
+            <div>
+              <Label>المرحلة <span className="text-red-500">*</span></Label>
+              <Select value={reopenStage} onValueChange={setReopenStage}>
+                <SelectTrigger data-testid="select-reopen-stage">
+                  <SelectValue placeholder="اختر المرحلة" />
+                </SelectTrigger>
+                <SelectContent>
+                  {reopenTarget && getConsultationReopenTargetStages(reopenTarget).map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {ConsultationStageLabels[s] || s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>ملاحظات (اختياري)</Label>
+              <Textarea
+                data-testid="input-reopen-notes"
+                value={reopenNotes}
+                onChange={(e) => setReopenNotes(e.target.value)}
+                placeholder="سبب إعادة الفتح..."
+                rows={3}
+              />
+            </div>
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-reopen"
+              disabled={reopenSaving || !reopenStage}
+              onClick={(e) => { e.preventDefault(); handleReopen(); }}
+            >
+              <RotateCcw className="w-4 h-4 ml-2" />
+              تأكيد إعادة الفتح
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* "إغلاق لعدم استكمال البيانات". No reason picker, no required text — the
           reason is fixed and the missing-data text is resolved server-side from
           the activity log's metadata.reason. Optional notes only. */}
@@ -4251,7 +4387,8 @@ export default function ConsultationsPage() {
               سيتم إغلاق الاستشارة بسبب <strong>عدم استكمال البيانات</strong>، مع تسجيل
               البيانات والمرفقات الناقصة ضمن سبب الإغلاق.
               <br />
-              يمكن إعادة فتحها لاحقاً كاستشارة تعقيبية إذا تجاوب العميل.
+              إذا تجاوب العميل لاحقاً وأرسل الناقص، استخدم "إعادة فتح" للعودة إلى
+              المرحلة التي توقف عندها العمل.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2 text-right">
