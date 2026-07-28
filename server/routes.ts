@@ -79,8 +79,11 @@ import {
   opponentResponseSchema,
   DefaultObjectionWindowDays,
   findPrimaryJudgmentHearing,
-  judgmentDirectionOf,
-  weAreTheAppellant,
+  // judgmentDirectionOf / weAreTheAppellant are no longer imported here: with
+  // the aa1e5c3 direction restriction removed, the SERVER no longer constrains
+  // the appeal outcome by judgment direction. Both remain exported from
+  // shared/schema.ts and are still used by the FE, which uses the direction to
+  // decide which buttons to LEAD with — a presentation choice now, not a gate.
   canAddCasesAndConsultations,
   canCreateMemos,
   canReviewMemos,
@@ -4100,26 +4103,50 @@ export async function registerRoutes(
       }
 
       const allConsultations = await storage.getAllConsultations();
-      const { role, id: userId, departmentId } = user;
+      const { role } = user;
 
-      if (["branch_manager", "admin_support", "consultations_review_head", "cases_review_head", "viewer"].includes(role)) {
-        return res.json(allConsultations);
+      // 🔴 THE LIST NO LONGER NARROWS BY DEPARTMENT (2026-07-28).
+      //
+      // It used to return only own-department rows to department_head, and
+      // own-department-or-assigned rows to employee. That made "كل الأقسام" a
+      // LIE for those two roles: the filter read "all departments" while the
+      // server had already cut the rows, so a dept head saw one department and
+      // could not tell why.
+      //
+      // ⚠ CONSULTATIONS WAS THE ONLY ENTITY DOING THIS. Verified against all
+      // four siblings — GET /api/cases, /api/contracts, /api/memos and
+      // /api/hearings ALL return every row and let the client filter. There was
+      // no comment or spec justifying the divergence; it was inconsistency, not
+      // design.
+      //
+      // The model (owner-confirmed): the LIST returns everything the user may
+      // SEE, and the filter is the user's own choice. SEEING another
+      // department's consultation is not ACTING on it — every mutating endpoint
+      // is separately gated (canModifyConsultation, the tiered helper, the
+      // per-action carve-outs), and none of that is touched here.
+      //
+      // VIEW ALLOWLIST is still enforced, so this widens WHO SEES ALL ROWS, not
+      // who sees consultations at all: hr / technical_support keep their 403.
+      //
+      // labor_review_head ADDED — it was missing and therefore 403'd on the
+      // list, even though canModifyConsultationIdentity already lets it act on
+      // its own department's consultations. A role that can modify a record it
+      // cannot load is a plain bug; it arrived with the e1f6569 labor-committee
+      // work that was merged in from main.
+      const CONSULTATION_VIEWER_ROLES = [
+        "branch_manager",
+        "admin_support",
+        "consultations_review_head",
+        "cases_review_head",
+        "labor_review_head",
+        "viewer",
+        "department_head",
+        "employee",
+      ];
+      if (!CONSULTATION_VIEWER_ROLES.includes(role)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لعرض الاستشارات" });
       }
-
-      if (role === "department_head") {
-        const filtered = allConsultations.filter((c: any) => c.departmentId === departmentId);
-        return res.json(filtered);
-      }
-
-      if (role === "employee") {
-        const filtered = allConsultations.filter((c: any) =>
-          c.departmentId === departmentId ||
-          c.assignedTo === userId
-        );
-        return res.json(filtered);
-      }
-
-      return res.status(403).json({ error: "ليس لديك صلاحية لعرض الاستشارات" });
+      return res.json(allConsultations);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الاستشارات" });
     }
@@ -6082,19 +6109,40 @@ export async function registerRoutes(
   });
 
   // POST /api/cases/:id/appeal-outcome
-  // Body: { outcome: "opponent_appealed" | "no_appeal" }.
-  // Judgment-lifecycle step 3 — the two MANUAL routes out of محكوم_حكم_ابتدائي:
-  //   • opponent_appealed → منظورة_استئناف ("الخصم استأنف"). The other trigger
-  //     for the same outcome is creating a COURT hearing at this stage, handled
-  //     in POST /api/hearings; both are valid and land on the same stage.
-  //   • no_appeal        → محكوم_حكم_نهائي ("لم يستأنف الخصم — الحكم نهائي").
+  // Body: { outcome: "we_appealed" | "opponent_appealed" | "no_appeal" }.
+  // Judgment-lifecycle step 3 — the THREE MANUAL routes out of محكوم_حكم_ابتدائي:
+  //   • we_appealed       → منظورة_استئناف ("تم الاستئناف"). ADDED 2026-07-28.
+  //   • opponent_appealed → منظورة_استئناف ("الخصم استأنف"). Another trigger for
+  //     the same outcome is creating a COURT hearing at this stage, handled in
+  //     POST /api/hearings; all are valid and land on the same stage.
+  //   • no_appeal        → محكوم_حكم_نهائي ("لم يستأنف — الحكم نهائي").
   //     DELIBERATELY MANUAL, never automatic: only the lawyer knows the window
   //     truly lapsed with no filing. Under step 1 محكوم_حكم_نهائي is a RESTING
   //     stage, so the case waits there rather than auto-closing.
   //
-  // "WE appealed" is NOT here — that is driven by FILING the لائحة اعتراضية
-  // (promoteCaseOnObjectionFiled), which is the strong memo↔case link the owner
-  // asked for.
+  // ⚠ we_appealed COEXISTS WITH THE MEMO HOOK, it does not replace it. FILING
+  // the لائحة اعتراضية still promotes the case on its own
+  // (promoteCaseOnObjectionFiled) — that memo↔case link is untouched. The button
+  // is the manual equivalent for an appeal filed OUTSIDE the system, or ahead of
+  // the memo being marked مرفوعة.
+  //   • SAME END STATE — both call moveCaseFromPrimaryJudgment(…,
+  //     "منظورة_استئناف", …); only the activity actionType/title differ
+  //     (appeal_filed vs we_appealed), so the timeline records which route ran.
+  //   • THEY CANNOT DOUBLE-FIRE — both are guarded on
+  //     currentStage === "محكوم_حكم_ابتدائي". Whichever runs first moves the
+  //     stage; the second then no-ops (the memo hook returns early, this
+  //     endpoint 400s "متاح فقط لقضية عليها حكم ابتدائي").
+  //   • The UI WARNS (does not block) when no non-cancelled لائحة اعتراضية
+  //     exists on the case — recording an appeal with no objection memo is a
+  //     plausible data-entry slip, but a legitimate one when the filing happened
+  //     off-system.
+  //
+  // ⚠ THE aa1e5c3 DIRECTION RESTRICTION ON opponent_appealed IS REMOVED
+  // (owner decision 2026-07-28). It rejected "الخصم استأنف" whenever the primary
+  // judgment went against us, on the reasoning that WE would be the appellant.
+  // That is wrong on a PARTIAL judgment — the opponent may appeal a partial win
+  // — and the owner confirms it happens on a straight ضدنا too. Both sides can
+  // appeal the same ruling, so direction no longer gates this at all.
   //
   // AUTHORIZED ROLES: canActOnMohrSettlement — branch_manager | department_head
   // of the case's own department | assigned lawyer, delegation-aware.
@@ -6109,7 +6157,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
       const outcome = String(req.body?.outcome ?? "").trim();
-      if (outcome !== "opponent_appealed" && outcome !== "no_appeal") {
+      if (outcome !== "we_appealed" && outcome !== "opponent_appealed" && outcome !== "no_appeal") {
         return res.status(400).json({ error: "يجب تحديد نتيجة مهلة الاعتراض" });
       }
 
@@ -6122,28 +6170,26 @@ export async function registerRoutes(
         return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
       }
 
-      // WHO would appeal depends on the judgment direction. When the primary
-      // judgment went against us (ضدنا/جزئي) WE are the appellant — our appeal is
-      // FILING the لائحة اعتراضية, which moves the case on its own — so
-      // "الخصم استأنف" is meaningless and is rejected here. The UI hides the
-      // button in that direction, and this keeps visibility === authorization on
-      // both sides rather than only in the client.
-      //
-      // Direction UNKNOWN (no primary-judgment hearing on the case — e.g. the
-      // stage was set by a direct PATCH) → NOT rejected: we cannot prove the
-      // action wrong, and the UI correspondingly still offers both buttons.
-      const outcomeHearings = await storage.getHearingsByCase(lawCase.id);
-      const judgmentDirection = judgmentDirectionOf(findPrimaryJudgmentHearing(outcomeHearings));
-      if (outcome === "opponent_appealed" && weAreTheAppellant(judgmentDirection)) {
-        return res.status(400).json({
-          error: "الحكم الابتدائي ليس لصالحنا — الاستئناف من طرفنا يتم برفع اللائحة الاعتراضية، لا بتسجيل استئناف الخصم",
-        });
-      }
+      // NO DIRECTION CHECK. The aa1e5c3 rejection of opponent_appealed for a
+      // ضدنا/جزئي judgment is gone — see the header comment. Either side can
+      // appeal any ruling, so the judgment direction constrains nothing here; it
+      // now only shapes which buttons the UI leads with.
 
       const performer = await storage.getUser(reqUser.id);
       const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
 
-      const updated = outcome === "opponent_appealed"
+      const updated = outcome === "we_appealed"
+        ? await moveCaseFromPrimaryJudgment(req, lawCase, "منظورة_استئناف", {
+            actorId: reqUser.id,
+            actorName: performerName,
+            note: "تم رفع الاستئناف من طرفنا",
+            // Distinct from the memo hook's "appeal_filed" so the timeline shows
+            // WHICH route promoted the case — the لائحة اعتراضية being filed, or
+            // this manual record.
+            actionType: "we_appealed",
+            title: "تم الاستئناف — القضية منظورة استئناف",
+          })
+        : outcome === "opponent_appealed"
         ? await moveCaseFromPrimaryJudgment(req, lawCase, "منظورة_استئناف", {
             actorId: reqUser.id,
             actorName: performerName,
