@@ -286,6 +286,9 @@ export interface IStorage {
   // clear it unconditionally — see the note on their .set() blocks.
   pauseConsultation(id: string, input: { reason: string; performedBy: string; pauseUntil?: string | null }): Promise<Consultation | undefined>;
   unpauseConsultation(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
+  // "مرحلة البداية" correction — flips isSettlementCase AND currentStage
+  // together, plus stageHistory + an audit row, in one transaction.
+  correctCaseStartingStage(id: string, input: { toSettlement: boolean; performedBy: string; performerName: string; notes: string }): Promise<LawCase | undefined>;
   pauseCase(id: string, input: { reason: string; performedBy: string; performerName: string; pauseUntil?: string | null }): Promise<LawCase | undefined>;
   unpauseCase(id: string, input: { notes?: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
   pauseMemo(id: string, input: { reason: string; performedBy: string; pauseUntil?: string | null }): Promise<Memo | undefined>;
@@ -5330,6 +5333,84 @@ export class DatabaseStorage implements IStorage {
         ].filter(Boolean).join(" — ").slice(0, 500),
         previousValue: fromStage,
         newValue: input.targetStage,
+        createdAt: now,
+      });
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  // "مرحلة البداية" correction — flip an in-court case between the COURT and
+  // SETTLEMENT openings, re-deriving every dependent field IN ONE TRANSACTION.
+  //
+  // 🔴 THE FLAG AND THE STAGE MOVE TOGETHER, ALWAYS. isSettlementCase selects
+  // the stage array (getStagesForClassification returns InCourtSettlementStages
+  // first, before memoRequired/clientRole), so writing one without the other
+  // strands currentStage off its own path and collapses the progress bar to
+  // index 0. Targets are chosen to be the first meaningful stage of the array
+  // the case is moving ONTO:
+  //   → SETTLEMENT: مداولة_الصلح — InCourtSettlementStages[1], the working stage
+  //     (استلام is the shared intake entry; a case being corrected INTO صلح is
+  //     already past intake, which is exactly what the create handler does when
+  //     startingStage=مداولة_الصلح is chosen at registration).
+  //   → COURT:      استلام — the FIRST entry of ALL THREE non-settlement in-court
+  //     arrays (NoMemo / PlaintiffMemo / DefendantMemo), so the bar resolves
+  //     whatever memoRequired/clientRole happen to be. A case corrected back to
+  //     محكمة genuinely restarts its intake.
+  async correctCaseStartingStage(
+    id: string,
+    input: {
+      toSettlement: boolean;
+      performedBy: string;
+      performerName: string;
+      notes: string;
+    },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const targetStage = input.toSettlement ? "مداولة_الصلح" : CaseStage.RECEPTION;
+      const fromLabel = existing.isSettlementCase ? "مداولة الصلح" : "محكمة";
+      const toLabel = input.toSettlement ? "مداولة الصلح" : "محكمة";
+      const existingHistory = Array.isArray(existing.stageHistory) ? existing.stageHistory : [];
+      const historyNote = [
+        `تصحيح مرحلة البداية: ${fromLabel} ← ${toLabel}`,
+        input.notes,
+      ].filter(Boolean).join(" — ");
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: targetStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: historyNote,
+        },
+      ];
+      await tx.update(lawCases).set({
+        isSettlementCase: input.toSettlement,
+        currentStage: targetStage,
+        stageHistory,
+        updatedAt: now,
+      }).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "starting_stage_corrected",
+        title: `تصحيح مرحلة البداية — ${fromLabel} ← ${toLabel}`,
+        // BEFORE/AFTER on both axes, so the correction is auditable even though
+        // isSettlementCase is a bare boolean with no history of its own.
+        details: [
+          `مرحلة البداية: ${fromLabel} ← ${toLabel}`,
+          `المرحلة: ${fromStage} ← ${targetStage}`,
+          input.notes,
+        ].filter(Boolean).join(" — "),
+        previousValue: fromStage,
+        newValue: targetStage,
         createdAt: now,
       });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
