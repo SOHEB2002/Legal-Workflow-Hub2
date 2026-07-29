@@ -13019,12 +13019,32 @@ export async function registerRoutes(
         senderName: isSystemNotification ? null : user.name,
       };
       const newNotification = await storage.createNotification(notificationPayload);
-      // Real-time push to recipient + admins
-      const wsEvent = { type: "notification:new", payload: newNotification };
+      // Real-time push to the ADDRESSEE ONLY.
+      //
+      // This used to also call broadcastToAdmins(wsEvent) unconditionally, which
+      // pushed the FULL payload — title, message, sender, recipientId, relatedId —
+      // to every branch_manager / admin_support / cases_review_head /
+      // consultations_review_head / labor_review_head socket no matter who the
+      // notification was addressed to. notifications.recipient_id is a scalar
+      // NOT NULL column and fan-out is done by inserting one row per person, so
+      // there is no "announcement" semantic here: those admins were receiving
+      // another user's mail, and notifications-context prepends whatever arrives
+      // straight into the viewer's own list.
+      //
+      // ⚠ The firm-wide admin READ is deliberate and is NOT changed: GET
+      // /api/notifications still returns the 200 most recent (or all, with
+      // ?all=true) to the admin roles. What an admin loses is only the LIVE push
+      // of other people's notifications — that list now fills on its next fetch,
+      // exactly like every scheduler-generated notification already did (those
+      // never went through this route and so were never pushed at all).
+      //
+      // The two role lists also disagreed, which made the leak worse than the
+      // read it mirrored: broadcastToAdmins includes labor_review_head, who is
+      // NOT in this endpoint's admin read set and therefore received content a
+      // refresh would immediately remove from their list.
       if (newNotification.recipientId) {
-        sendToUser(newNotification.recipientId, wsEvent);
+        sendToUser(newNotification.recipientId, { type: "notification:new", payload: newNotification });
       }
-      broadcastToAdmins(wsEvent);
       res.status(201).json(newNotification);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في إنشاء الإشعار" });
