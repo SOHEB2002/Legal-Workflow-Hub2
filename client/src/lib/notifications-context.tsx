@@ -39,6 +39,34 @@ const RULES_STORAGE_KEY = "lawfirm_notification_rules";
 // bounding a fetch that previously returned the user's whole life.
 const NOTIFICATIONS_PAGE_SIZE = 30;
 
+// The two SERVER-SIDE tab filters. Only these two moved server-side; the type
+// and priority filters stay client-side by decision.
+export interface NotificationTabFilter {
+  unread?: boolean;
+  requiresResponse?: boolean;
+}
+
+const isTabFilterActive = (f: NotificationTabFilter): boolean =>
+  !!(f.unread || f.requiresResponse);
+
+const tabFilterQuery = (f: NotificationTabFilter): string =>
+  `${f.unread ? "&unread=true" : ""}${f.requiresResponse ? "&requiresResponse=true" : ""}`;
+
+// Does a single notification satisfy the active tab filter?
+//
+// Used ONLY to decide whether a WebSocket-pushed row may be prepended into a
+// filtered view. It is a deliberate second implementation of the server's two
+// predicates — acceptable precisely because there are two of them and each is
+// one comparison; the pair is trivially checkable against the SQL in
+// getNotificationsByRecipient. If the type/priority filters ever move
+// server-side, this shortcut stops being reasonable and the prepend should
+// switch to "don't prepend while filtered, let the poll reconcile".
+const matchesTabFilter = (n: Notification, f: NotificationTabFilter): boolean => {
+  if (f.unread && n.isRead) return false;
+  if (f.requiresResponse && !(n.requiresResponse && !n.response)) return false;
+  return true;
+};
+
 export interface WorkflowNotificationEvent {
   type: NotificationTypeValue;
   entityType: "case" | "consultation";
@@ -211,6 +239,11 @@ interface NotificationsContextType {
   rules: NotificationRule[];
   isLoading: boolean;
   refetchNotifications: () => Promise<void>;
+  /** The two server-side tab filters. Setting one resets paging to one page. */
+  tabFilter: NotificationTabFilter;
+  setTabFilter: (next: NotificationTabFilter) => Promise<void>;
+  /** Newest rows for the bell — never filtered by the page's active tab. */
+  getBellNotifications: (userId: string) => Notification[];
   /** True when a full page came back, i.e. there are probably older rows. */
   hasMoreNotifications: boolean;
   isLoadingMore: boolean;
@@ -351,6 +384,21 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [serverUnreadCount, setServerUnreadCount] = useState(0);
 
+  // THE ACTIVE TAB FILTER, HELD IN A REF AS WELL AS STATE.
+  //
+  // ⚠ The ref is not a style choice, it is the fix for the one bug most likely
+  // to be shipped here. The polling setInterval captures its callback ONCE; a
+  // filter kept only in React state would be stale inside that closure and the
+  // poll would silently re-fetch with whatever filter was active when the
+  // interval was created — quietly repopulating the list with the wrong rows.
+  // loadedCountRef already exists for exactly this reason. The state copy is
+  // only so consumers can re-render off it.
+  const tabFilterRef = useRef<NotificationTabFilter>({});
+  const [tabFilter, setTabFilterState] = useState<NotificationTabFilter>({});
+  // Newest few UNFILTERED rows, fetched only while a filter is active — see
+  // getBellNotifications.
+  const [unfilteredRecent, setUnfilteredRecent] = useState<Notification[]>([]);
+
   // The unread badge comes from SQL, never from the loaded array.
   //
   // getUnreadCount used to filter `notifications` client-side. With the list
@@ -393,7 +441,12 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       //     corrupting a page boundary.
       // Cost is bounded by what the user asked for, not by their history.
       const count = countOverride ?? loadedCountRef.current;
-      const res = await apiRequest("GET", `/api/notifications?limit=${count}&offset=0`);
+      // Read the filter from the REF, never from a captured state value.
+      const filter = tabFilterRef.current;
+      const res = await apiRequest(
+        "GET",
+        `/api/notifications?limit=${count}&offset=0${tabFilterQuery(filter)}`,
+      );
       const data = await res.json();
       const prevCount = prevCountRef.current;
       setNotifications(data);
@@ -412,10 +465,39 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     // The unread BADGE must not depend on the loaded window — see
     // fetchUnreadCount.
     void fetchUnreadCount();
+
+    // THE BELL MUST STAY UNFILTERED. It shows the newest few notifications
+    // regardless of which tab the page is on, so while a filter is active the
+    // main array can no longer serve it. One EXTRA request, and only then —
+    // with no filter the main array is already unfiltered and the bell reads it
+    // directly, so the common case adds no traffic at all. limit=5 matches what
+    // the bell renders.
+    if (isTabFilterActive(tabFilterRef.current)) {
+      try {
+        const bellRes = await apiRequest("GET", "/api/notifications?limit=5&offset=0");
+        const bellData = await bellRes.json();
+        if (Array.isArray(bellData)) setUnfilteredRecent(bellData);
+      } catch {
+        // Leave the previous bell rows rather than emptying the dropdown.
+      }
+    }
   }, [fetchUnreadCount]);
 
   const refetchNotifications = useCallback(async () => {
     await fetchNotifications();
+  }, [fetchNotifications]);
+
+  // Switch tab. RESETS PAGING to one page, which is not optional: a user three
+  // pages deep in الكل who switches to a narrow tab would otherwise re-request
+  // 90 MATCHING rows, which very likely do not exist — the page would render
+  // short and "load more" would already be exhausted, making the tab look empty
+  // of history it actually has.
+  const setTabFilter = useCallback(async (next: NotificationTabFilter) => {
+    tabFilterRef.current = next;      // ref FIRST — the fetch below reads it
+    setTabFilterState(next);
+    loadedCountRef.current = NOTIFICATIONS_PAGE_SIZE;
+    if (!isTabFilterActive(next)) setUnfilteredRecent([]); // bell falls back to the main array
+    await fetchNotifications(NOTIFICATIONS_PAGE_SIZE);
   }, [fetchNotifications]);
 
   // Grow the window by one page and re-read it.
@@ -436,9 +518,18 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     switch (event.type) {
       case "notification:new":
         if (event.payload) {
-          setNotifications((prev) => [event.payload, ...prev]);
           setHasNewNotifications(true);
-          prevCountRef.current += 1;
+          // The badge is a server COUNT and must move immediately, whatever the
+          // page is filtered to.
+          void fetchUnreadCount();
+          // PREPEND ONLY IF IT BELONGS IN THE CURRENT VIEW. A row that does not
+          // match the active tab would otherwise appear and then vanish at the
+          // next poll — a visible glitch. A row that DOES match is prepended as
+          // before, so غير مقروءة stays instant (see matchesTabFilter).
+          if (matchesTabFilter(event.payload, tabFilterRef.current)) {
+            setNotifications((prev) => [event.payload, ...prev]);
+            prevCountRef.current += 1;
+          }
         }
         break;
       case "notification:updated":
@@ -645,6 +736,19 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     
     return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [notifications]);
+
+  // The bell's rows — ALWAYS UNFILTERED, whatever tab the page is on.
+  //
+  // With no filter active the main array is already unfiltered, so it is used
+  // directly and there is no extra request. Only while filtered does the bell
+  // fall back to unfilteredRecent, the small limit=5 read fetchNotifications
+  // makes alongside the main one.
+  const getBellNotifications = useCallback((userId: string): Notification[] => {
+    const source = isTabFilterActive(tabFilterRef.current) ? unfilteredRecent : notifications;
+    return source
+      .filter(n => n.recipientId === userId || n.escalatedTo === userId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [notifications, unfilteredRecent]);
 
   // Does this senderId belong to a real user who could receive a reply?
   //
@@ -953,6 +1057,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       rules,
       isLoading,
       refetchNotifications,
+      tabFilter,
+      setTabFilter,
+      getBellNotifications,
       hasMoreNotifications,
       isLoadingMore,
       loadMoreNotifications,

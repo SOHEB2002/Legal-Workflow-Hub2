@@ -13090,9 +13090,30 @@ export async function registerRoutes(
       const rawOffset = Number(req.query.offset);
       const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : undefined;
       const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+
+      // OPTIONAL TAB FILTERS — ?unread=true and ?requiresResponse=true, the two
+      // tabs on the notifications page. Applied in SQL before the LIMIT so a
+      // filtered page holds a full page of MATCHING rows.
+      //
+      // STRICTLY OPT-IN, NOT PARSED LOOSELY: only the exact string "true"
+      // enables a filter. Anything else — "false", "1", "yes", a typo, an array
+      // from a repeated param — is IGNORED and the filter stays off. Chosen over
+      // rejecting with a 400 because these are additive narrowing flags on a
+      // read: the safe failure is to return MORE than asked (the unfiltered
+      // list the caller already had a right to), never to 400 a list the user
+      // can legitimately see. Same posture as limit/offset above, which clamp
+      // rather than reject.
+      const unread = req.query.unread === "true";
+      const requiresResponse = req.query.requiresResponse === "true";
+      const hasFilter = unread || requiresResponse;
+
+      // No limit AND no filter → the exact call that was made before, so the
+      // unbounded dashboard read is byte-identical.
       const notificationList = await storage.getNotificationsByRecipient(
         user.id,
-        limit === undefined ? undefined : { limit, offset },
+        limit === undefined && !hasFilter
+          ? undefined
+          : { ...(limit === undefined ? {} : { limit, offset }), unread, requiresResponse },
       );
       // ENTITY CONTEXT is stamped only on the PAGED read.
       //

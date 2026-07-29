@@ -43,7 +43,7 @@ import type { ActingContext } from "./acting-context";
 // a8ecc40 for the opponent-response task's `ne(status, "مغلق")` guard. Same
 // symbol, same intent, different position in the list; kept main's ordering so
 // the line is textually identical on both sides. Both call sites survive.
-import { eq, and, or, gt, ne, desc, asc, lte, gte, sql, inArray } from "drizzle-orm";
+import { eq, and, or, gt, ne, desc, asc, lte, gte, sql, inArray, isNull } from "drizzle-orm";
 import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import { nanoid } from "nanoid";
@@ -151,7 +151,7 @@ export interface IStorage {
   // Notifications
   getAllNotifications(): Promise<Notification[]>;
   getRecentNotifications(limit: number): Promise<Notification[]>;
-  getNotificationsByRecipient(recipientId: string, opts?: { limit?: number; offset?: number }): Promise<Notification[]>;
+  getNotificationsByRecipient(recipientId: string, opts?: { limit?: number; offset?: number; unread?: boolean; requiresResponse?: boolean }): Promise<Notification[]>;
   enrichNotificationsWithContext(rows: Notification[]): Promise<Notification[]>;
   createNotification(data: Partial<Notification>): Promise<Notification>;
   updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
@@ -2171,12 +2171,37 @@ export class DatabaseStorage implements IStorage {
   // newest first — which is what the stats dashboard needs. The notifications
   // LIST passes a window. LIMIT/OFFSET are applied in SQL; fetching everything
   // and slicing in JS would defeat the entire point.
+  // FILTERS ARE APPLIED IN THE `WHERE`, BEFORE THE LIMIT — that is the whole
+  // point. Filtering a fetched page in JS would yield "30 rows of which 4
+  // match", which is worse than no filtering at all: the page would look
+  // almost empty while more matches sat one page behind.
+  //
+  // Exactly two predicates, matching the two TABS the client drives. The type
+  // and priority filters stay client-side by decision; if they ever move, they
+  // slot into the same conditions array.
   async getNotificationsByRecipient(
     recipientId: string,
-    opts?: { limit?: number; offset?: number },
+    opts?: {
+      limit?: number;
+      offset?: number;
+      /** الإشعارات غير المقروءة. */
+      unread?: boolean;
+      /** تحتاج رد — flagged as needing a reply and not yet answered. */
+      requiresResponse?: boolean;
+    },
   ): Promise<Notification[]> {
+    const conditions = [eq(notifications.recipientId, recipientId)];
+    if (opts?.unread) {
+      conditions.push(eq(notifications.isRead, false));
+    }
+    if (opts?.requiresResponse) {
+      // Both halves, mirroring the client's `requiresResponse && !response`.
+      conditions.push(eq(notifications.requiresResponse, true));
+      conditions.push(isNull(notifications.response));
+    }
+
     const base = db.select().from(notifications)
-      .where(eq(notifications.recipientId, recipientId))
+      .where(and(...conditions))
       .orderBy(desc(notifications.createdAt));
     const result = opts?.limit !== undefined
       ? await base.limit(opts.limit).offset(opts.offset ?? 0)
