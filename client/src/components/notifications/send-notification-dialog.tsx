@@ -43,6 +43,35 @@ import {
 } from "@shared/schema";
 import type { NotificationTypeValue, NotificationPriorityValue, User } from "@shared/schema";
 
+// The نوع الإشعار options a HUMAN picks when sending by hand.
+//
+// The dropdown used to list all 58 NotificationType members. A census of every
+// producer (server routes + scheduler + client triggers) shows only 21 are ever
+// emitted, and most of those 21 are machine provenance — delegation_*,
+// weekly_report / monthly_report, legal_deadline_*, hearing_update_overdue,
+// contact_followup_overdue. Offering those to a person invites mislabelling a
+// hand-written message as a system event.
+//
+// These five are the distinct INTENTS someone actually has when messaging a
+// colleague. Nothing in the codebase branches on `type` — it drives a display
+// label and a filter option — so this list is cosmetic and reversible, and the
+// enum and label map are untouched (historical rows and other code depend on
+// them).
+// ⚠ Must remain a SUPERSET of every type used by the قالب جاهز templates
+// (defaultTemplates in notifications-context): handleTemplateSelect calls
+// setNotificationType(template.type), and a value with no matching SelectItem
+// renders the trigger blank. CASE_DELAY and ASSIGNMENT are here for that reason
+// as much as their own — both are legitimate things a person sends about.
+const MANUAL_SEND_TYPES: NotificationTypeValue[] = [
+  NotificationType.GENERAL_ALERT,     // تنبيه عام — the default catch-all
+  NotificationType.TASK_REMINDER,     // تذكير بمهمة
+  NotificationType.ASSIGNMENT,        // إسناد مهمة        (template "إسناد مهمة جديدة")
+  NotificationType.RESPONSE_REQUEST,  // طلب رد            (template "مطلوب تحديث حالة")
+  NotificationType.DEADLINE_WARNING,  // تحذير موعد نهائي  (templates "تذكير موعد جلسة" / "مراجعة عاجلة")
+  NotificationType.CASE_DELAY,        // تأخر قضية         (template "تنبيه تأخر")
+  NotificationType.ESCALATION,        // تصعيد
+];
+
 interface SendNotificationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -375,8 +404,8 @@ export function SendNotificationDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(NotificationTypeLabels).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                  {MANUAL_SEND_TYPES.map(t => (
+                    <SelectItem key={t} value={t}>{NotificationTypeLabels[t]}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
