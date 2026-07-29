@@ -87,6 +87,7 @@ import {
   // shared/schema.ts and are still used by the FE, which uses the direction to
   // decide which buttons to LEAD with — a presentation choice now, not a gate.
   canAddCasesAndConsultations,
+  canSendNotifications,
   canCreateMemos,
   canReviewMemos,
   canChangeMemoStatus,
@@ -256,6 +257,33 @@ const loginLimiter = rateLimit({
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
+});
+
+// POST /api/notifications. Shape follows the three limiters above (named
+// rateLimit, Arabic message, standardHeaders) rather than a new pattern.
+//
+// SIZED FOR A LEGITIMATE BULK SEND. The send dialog's "قسم كامل" and
+// "عدة موظفين" modes fan out to ONE POST PER RECIPIENT
+// (sendBulkNotification in notifications-context), so a single firm-wide send
+// in a ~40-person firm is ~40 requests in a few seconds. 150 per 5 minutes
+// leaves room for three such sends plus the workflow notifications the same
+// user's actions generate in that window, while capping sustained abuse at an
+// average of 30/min. The global apiLimiter (100/min, applied to /api/ at the
+// top of registerRoutes) still applies on top of this.
+// ⚠ KEYED BY USER, not by IP — the one deliberate departure from the limiters
+// above, and it is required here rather than stylistic. express-rate-limit keys
+// on req.ip by default, and this firm works from one office behind one NAT, so
+// an IP-keyed budget would be shared by everyone: one person's bulk send would
+// rate-limit their colleagues. The limiter is therefore mounted AFTER
+// requireAuth so req.user is populated. (The global apiLimiter has the same
+// IP-keyed property, but it is a blunt 100/min ceiling rather than a per-action
+// budget, so it is left alone.)
+const notificationSendLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 150,
+  keyGenerator: (req) => (req as AuthRequest).user?.id ?? "anonymous",
+  message: { error: "تم إرسال عدد كبير من الإشعارات. حاول بعد قليل" },
+  standardHeaders: true,
 });
 
 const passwordChangeLimiter = rateLimit({
@@ -438,6 +466,70 @@ function canViewMemoActivitiesIdentity(u: CaseActorIdentity, memo: any, parentCa
   )) return true;
   if (u.role === "department_head" && !!u.departmentId && !!parentCase && parentCase.departmentId === u.departmentId) return true;
   return false;
+}
+
+// May this actor send a notification ABOUT this entity?
+//
+// The non-admin half of the POST /api/notifications gate. Every live workflow
+// trigger (lib/notification-triggers.ts) carries relatedType + relatedId —
+// sendNotificationDirect makes both REQUIRED — so this re-derives authority
+// over the named row instead of trusting any claim in the body.
+//
+// The bar is canModify* on the entity, PLUS its creator. The creator clause is
+// load-bearing, not a courtesy: a freshly created case has assignedLawyers: []
+// and null lawyer fields (storage.createCase), so an `employee` who opens a case
+// in their own department is NOT yet an assigned lawyer on it and would fail
+// canModifyCase — which would break notifyCaseAdded, the dept-head heads-up,
+// the moment the gate landed. createdBy is server-derived at creation
+// (POST /api/cases), so it is not forgeable. Consultations already admit their
+// creator inside canModifyConsultationIdentity, so they need no special case.
+//
+// Unresolvable or absent link → false → the caller falls back to the role
+// branch. "task" carries a DELEGATION id, not a task id, so it is never
+// resolvable here.
+async function canReferenceRelatedEntity(
+  user: CaseActorIdentity,
+  relatedType: string | null,
+  relatedId: string | null,
+  ctx?: ActingContext,
+): Promise<boolean> {
+  if (!relatedType || !relatedId) return false;
+
+  const onCase = async (caseId: string | null | undefined): Promise<boolean> => {
+    if (!caseId) return false;
+    const c = await storage.getCaseById(caseId);
+    return !!c && (canModifyCase(user, c, ctx) || c.createdBy === user.id);
+  };
+  const onConsultation = async (id: string | null | undefined): Promise<boolean> => {
+    if (!id) return false;
+    const c = await storage.getConsultationById(id);
+    return !!c && canModifyConsultation(user, c, ctx);
+  };
+
+  switch (relatedType) {
+    case "case":
+      return onCase(relatedId);
+    case "consultation":
+      return onConsultation(relatedId);
+    case "hearing": {
+      const h = await storage.getHearingById(relatedId);
+      return !!h && onCase(h.caseId);
+    }
+    case "memo": {
+      const m = await storage.getMemoById(relatedId);
+      return !!m && onCase(m.caseId);
+    }
+    case "field_task": {
+      const t = await storage.getFieldTaskById(relatedId);
+      if (!t) return false;
+      // A field task's own participants may notify about it even when it hangs
+      // off no case/consultation (contract- or client-linked, or free-standing).
+      if (t.assignedTo === user.id || t.assignedBy === user.id) return true;
+      return (await onCase(t.caseId)) || (await onConsultation(t.consultationId));
+    }
+    default:
+      return false;
+  }
 }
 
 function canActOnHearingIdentity(u: { id: string; role: string }, hearing: any): boolean {
@@ -13043,12 +13135,44 @@ export async function registerRoutes(
     "isRead", "readAt", "status", "response", "escalationLevel", "escalatedTo",
   ] as const satisfies readonly (keyof Notification)[];
 
-  app.post("/api/notifications", requireAuth, async (req: AuthRequest, res) => {
+  app.post("/api/notifications", requireAuth, notificationSendLimiter, async (req: AuthRequest, res) => {
     try {
       const parsed = insertNotificationSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.errors });
       }
+      const user = req.user!;
+
+      // WHO MAY SEND. The route was requireAuth-only: any authenticated user
+      // could send anything to anyone. canSendNotifications named five roles
+      // but was only ever called on the CLIENT, so it hid a button and gated
+      // nothing.
+      //
+      // Two ways to pass, and the second is what keeps the workflow working:
+      //   1. A role that may COMPOSE FREELY — canSendNotifications. These roles
+      //      can message any user with or without a link; that is the product
+      //      intent of the "إرسال إشعار" dialog.
+      //   2. Anyone else, but ONLY about an entity they are authorised on. Every
+      //      one of the ten live triggers in lib/notification-triggers.ts routes
+      //      through sendNotificationDirect, whose signature makes relatedType
+      //      and relatedId REQUIRED — so all of them carry a link, and the
+      //      server re-derives authority over that real row.
+      //
+      // ⚠ This deliberately does NOT try to tell "workflow" from
+      // "human-composed". The request body cannot distinguish them and any flag
+      // that claimed to would be client-forgeable. Branch 2 asks a question the
+      // server can VERIFY instead: do you have rights on the entity you named?
+      // Forging it means naming an entity you genuinely act on — which is the
+      // permitted case, so there is nothing to forge.
+      const relatedType = typeof req.body?.relatedType === "string" ? req.body.relatedType : null;
+      const relatedId = typeof req.body?.relatedId === "string" ? req.body.relatedId : null;
+      const maySend =
+        canSendNotifications(user.role)
+        || await canReferenceRelatedEntity(user, relatedType, relatedId, req.actingContext);
+      if (!maySend) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإرسال الإشعارات" });
+      }
+
       // Phase 5 A1/H1 — sender identity is ALWAYS derived server-side, never
       // trusted from the body (anti-impersonation). The sole exception is an
       // explicit senderId:null, the contract for automatic/system
@@ -13057,7 +13181,6 @@ export async function registerRoutes(
       // authenticated user — closing the spoofing hole while keeping every
       // legitimate FE send byte-identical (the FE already sends the current
       // user's own id/name, or null for system notifications).
-      const user = req.user!;
       const isSystemNotification = req.body.senderId === null;
       const notificationPayload = {
         ...req.body,
