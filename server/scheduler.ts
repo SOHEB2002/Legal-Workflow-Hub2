@@ -136,8 +136,10 @@ async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotif
 
     const lawyer = allUsers.find((u: any) => u.id === hearingOwnerId);
     if (lawyer?.departmentId) {
+      // !!u.departmentId — a null/"" dept must never match; u.isActive mirrors
+      // checkStruckOffExpiry's lookup, so a deactivated head stops being paged.
       const deptHead = allUsers.find(
-        (u: any) => u.departmentId === lawyer.departmentId && u.role === "department_head"
+        (u: any) => !!u.departmentId && u.departmentId === lawyer.departmentId && u.role === "department_head" && u.isActive
       );
       if (deptHead) recipientIds.push(deptHead.id);
     }
@@ -439,7 +441,9 @@ async function checkLegalDeadlines() {
 
           const recipients = [recipientId];
           if (caseInfo?.departmentId) {
-            const deptHead = allUsers.find((u: any) => u.departmentId === caseInfo.departmentId && u.role === "department_head");
+            // !!u.departmentId — a null/"" dept must never match; u.isActive mirrors
+            // checkStruckOffExpiry's lookup, so a deactivated head stops being paged.
+            const deptHead = allUsers.find((u: any) => !!u.departmentId && u.departmentId === caseInfo.departmentId && u.role === "department_head" && u.isActive);
             if (deptHead) recipients.push(deptHead.id);
           }
           const branchManager = allUsers.find((u: any) => u.role === "branch_manager");

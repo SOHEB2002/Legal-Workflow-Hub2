@@ -418,7 +418,8 @@ async function canActOnMemo(
   if (deptHeads.length === 0) return false;
   const parentCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
   if (!parentCase) return false;
-  return deptHeads.some((u) => parentCase.departmentId === u.departmentId);
+  // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+  return deptHeads.some((u) => !!u.departmentId && parentCase.departmentId === u.departmentId);
 }
 
 // 4c-5 (memos) — per-identity predicate for the memo /activities READ gate
@@ -12710,7 +12711,8 @@ export async function registerRoutes(
       const isAssignedToMemo = memo.assignedTo === user.id;
       const relatedCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
       const isAssignedToCase = relatedCase && (relatedCase.primaryLawyerId === user.id || relatedCase.responsibleLawyerId === user.id);
-      const isDeptHeadForCase = user.role === "department_head" && relatedCase && relatedCase.departmentId === user.departmentId;
+      // !!user.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+      const isDeptHeadForCase = user.role === "department_head" && !!user.departmentId && relatedCase && relatedCase.departmentId === user.departmentId;
       const canChangeStatus = canReviewMemos(user.role) || canChangeMemoStatus(user.role) || isAssignedToMemo || isAssignedToCase || isDeptHeadForCase;
 
       if (updateData.status && !canChangeStatus) {
