@@ -26,15 +26,16 @@ import { useToast } from "@/hooks/use-toast";
 import { SendNotificationDialog } from "@/components/notifications/send-notification-dialog";
 import { RespondDialog } from "@/components/notifications/respond-dialog";
 import {
+  NotificationType,
   NotificationPriority,
   NotificationPriorityLabels,
-  NotificationStatus,
   NotificationTypeLabels,
   ResponseTypeLabels,
 } from "@shared/schema";
-import type { Notification, ResponseTypeValue } from "@shared/schema";
+import type { Notification, ResponseTypeValue, NotificationTypeValue } from "@shared/schema";
 import { cn, notificationDisplayMessage } from "@/lib/utils";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
+import { BidiText } from "@/components/ui/bidi-text";
 import { Link } from "wouter";
 
 function getPriorityColor(priority: string): string {
@@ -50,12 +51,50 @@ function getPriorityColor(priority: string): string {
   }
 }
 
+// The notification types any producer can actually emit — the filter offers
+// these and nothing else.
+//
+// The dropdown used to iterate all 58 NotificationTypeLabels entries, so ~37 of
+// its options could never match a row. A FIXED list is used rather than deriving
+// the options from the loaded rows: with the list now PAGINATED, derived options
+// would appear and disappear as the user loads more pages, and a type the user
+// has received but not yet loaded would be unselectable — hiding the very rows
+// they were looking for. A fixed list is stable, and choosing a type that is not
+// in the loaded window yields an empty result the load-more hint already
+// explains. It drifts only when a new producer is added, which is a code change
+// anyway — the same maintenance contract as MANUAL_SEND_TYPES in the send dialog.
+const PRODUCED_NOTIFICATION_TYPES: NotificationTypeValue[] = [
+  // server routes + scheduler
+  NotificationType.CASE_ASSIGNED,
+  NotificationType.STAGE_CHANGED,
+  NotificationType.TASK_REMINDER,
+  NotificationType.GENERAL_ALERT,
+  NotificationType.FIELD_TASK_ASSIGNED,
+  NotificationType.HEARING_REMINDER,
+  NotificationType.HEARING_UPDATE_OVERDUE,
+  NotificationType.LEGAL_DEADLINE_7DAYS,
+  NotificationType.LEGAL_DEADLINE_3DAYS,
+  NotificationType.LEGAL_DEADLINE_1DAY,
+  NotificationType.LEGAL_DEADLINE_OVERDUE,
+  NotificationType.CONTACT_FOLLOWUP_OVERDUE,
+  NotificationType.DELEGATION_REQUESTED,
+  NotificationType.DELEGATION_APPROVED,
+  NotificationType.DELEGATION_REJECTED,
+  NotificationType.DELEGATION_EXPIRED,
+  NotificationType.WEEKLY_REPORT,
+  NotificationType.MONTHLY_REPORT,
+  // client-side workflow triggers (lib/notification-triggers.ts)
+  NotificationType.CONSULTATION_ASSIGNED,
+  NotificationType.SENT_TO_REVIEW,
+  NotificationType.RETURNED_FOR_REVISION,
+];
+
 export default function NotificationsPage() {
   const { user, permissions, users } = useAuth();
   const {
     getMyNotifications,
     markAsRead,
-    getEscalatedNotifications,
+    getUnreadCount,
     hasMoreNotifications,
     isLoadingMore,
     loadMoreNotifications,
@@ -65,7 +104,6 @@ export default function NotificationsPage() {
   const [activeTab, setActiveTab] = useState("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
-  const [senderFilter, setSenderFilter] = useState<string>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [showRespondDialog, setShowRespondDialog] = useState(false);
@@ -84,12 +122,6 @@ export default function NotificationsPage() {
       case "requires_response":
         notifications = notifications.filter(n => n.requiresResponse && !n.response);
         break;
-      case "escalated":
-        notifications = getEscalatedNotifications(userId);
-        break;
-      case "archived":
-        notifications = notifications.filter(n => n.status === NotificationStatus.ARCHIVED);
-        break;
     }
 
     if (typeFilter !== "all") {
@@ -98,15 +130,16 @@ export default function NotificationsPage() {
     if (priorityFilter !== "all") {
       notifications = notifications.filter(n => n.priority === priorityFilter);
     }
-    if (senderFilter !== "all") {
-      notifications = notifications.filter(n => n.senderId === senderFilter);
-    }
 
     return notifications;
   };
 
   const notifications = getFilteredNotifications();
-  const unreadCount = notifications.filter(n => !n.isRead).length;
+  // The header states a TOTAL ("N إشعار غير مقروء"), so it must be the real
+  // total. It used to count `!isRead` over the FILTERED, loaded array — which
+  // once the list became paged meant the header and the bell badge, both on
+  // screen at once, could disagree. getUnreadCount is the server COUNT(*).
+  const unreadCount = getUnreadCount(userId);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -134,13 +167,6 @@ export default function NotificationsPage() {
     setSelectedNotification(notification);
     setShowRespondDialog(true);
   };
-
-  const getSenderName = (senderId: string): string => {
-    const sender = allUsers.find(u => u.id === senderId);
-    return sender?.name || "غير معروف";
-  };
-
-  const uniqueSenders = Array.from(new Set(notifications.map(n => n.senderId).filter((id): id is string => !!id)));
 
   // Mirrors senderResolvesToUser in notifications-context and senderIsHuman in
   // RespondDialog — a sender that does not resolve to a real users row is an
@@ -195,8 +221,6 @@ export default function NotificationsPage() {
                 <TabsTrigger value="all" data-testid="tab-all">الكل</TabsTrigger>
                 <TabsTrigger value="unread" data-testid="tab-unread">غير مقروءة</TabsTrigger>
                 <TabsTrigger value="requires_response" data-testid="tab-requires-response">تحتاج رد</TabsTrigger>
-                <TabsTrigger value="escalated" data-testid="tab-escalated">مصعّدة</TabsTrigger>
-                <TabsTrigger value="archived" data-testid="tab-archived">مؤرشفة</TabsTrigger>
               </TabsList>
             </div>
 
@@ -211,8 +235,8 @@ export default function NotificationsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل الأنواع</SelectItem>
-                  {Object.entries(NotificationTypeLabels).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                  {PRODUCED_NOTIFICATION_TYPES.map(t => (
+                    <SelectItem key={t} value={t}>{NotificationTypeLabels[t]}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -227,17 +251,12 @@ export default function NotificationsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Select value={senderFilter} onValueChange={setSenderFilter}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="المرسل" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل المرسلين</SelectItem>
-                  {uniqueSenders.map(senderId => (
-                    <SelectItem key={senderId} value={senderId}>{getSenderName(senderId)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* The المرسل filter was removed — see the commit message. Its
+                  options were built from the visible rows, and the overwhelming
+                  majority of notifications are sent by the scheduler with
+                  senderId "system", which is not a users row, so getSenderName
+                  rendered the dominant option as "غير معروف". For most users it
+                  offered one meaningless choice that filtered nothing. */}
 
               {selectedIds.length > 0 && (
                 <div className="flex gap-2 mr-auto">
@@ -315,6 +334,35 @@ export default function NotificationsPage() {
                             >
                               {notificationDisplayMessage(notification.message)}
                             </p>
+                            {/* WHICH MATTER is this about — server-stamped, display
+                                only. Same idiom as the my-tasks row: a secondary
+                                muted line beneath, each piece rendering only when
+                                present, separated by "•". A notification with no
+                                link — or whose linked row has been deleted — comes
+                                back with no linkedContext at all and this block
+                                does not render. */}
+                            {notification.linkedContext && (
+                              <div
+                                className="mt-0.5 flex items-center gap-2 flex-wrap text-xs text-muted-foreground"
+                                data-testid={`notification-context-${notification.id}`}
+                              >
+                                {[
+                                  notification.linkedContext.primary,
+                                  notification.linkedContext.clientName && `العميل: ${notification.linkedContext.clientName}`,
+                                  notification.linkedContext.opponentName && `ضد: ${notification.linkedContext.opponentName}`,
+                                  notification.linkedContext.hearingDate,
+                                  notification.linkedContext.courtName,
+                                  notification.linkedContext.stageLabel,
+                                ]
+                                  .filter((part): part is string => !!part)
+                                  .map((part, i, all) => (
+                                    <span key={part + i} className="flex items-center gap-2">
+                                      <BidiText>{part}</BidiText>
+                                      {i < all.length - 1 && <span>•</span>}
+                                    </span>
+                                  ))}
+                              </div>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell>

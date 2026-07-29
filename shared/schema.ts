@@ -4489,6 +4489,30 @@ export interface NotificationResponse {
   responderName?: string;
 }
 
+// "Which matter is this about?" for a notification that carries a relatedType +
+// relatedId. DISPLAY-ONLY and SERVER-ENRICHED — never persisted, never sent by
+// a client, and absent whenever the link is missing or the linked row has been
+// deleted, so a consumer renders it only when it exists.
+//
+// The data is LIVE, not a snapshot: a three-month-old notification shows the
+// entity's stage TODAY, not the stage it was at when the notification was
+// written. That is intended — the reader wants to know where the matter stands
+// now, not to archaeologise.
+export interface NotificationLinkedContext {
+  /** Headline identifier where the entity has one of its own: the consultation
+   *  TITLE, or the resolved entity name for a field task. Cases/hearings/memos
+   *  lead with the client instead, so they leave this unset. */
+  primary?: string;
+  clientName?: string;
+  /** Absent for consultations — they have no opponent column. */
+  opponentName?: string;
+  /** Current stage of the case / consultation / memo, already localised. */
+  stageLabel?: string;
+  /** Hearings only. */
+  hearingDate?: string;
+  courtName?: string;
+}
+
 export interface Notification {
   id: string;
   type: NotificationTypeValue;
@@ -4506,6 +4530,9 @@ export interface Notification {
   recipientIds?: string[];
   relatedType: "case" | "consultation" | "task" | "field_task" | "hearing" | "memo" | null;
   relatedId: string | null;
+  /** Optional = additive. Stamped only on the PAGED list read; absent on every
+   *  other path, so nothing that does not ask for it is affected. */
+  linkedContext?: NotificationLinkedContext;
   isRead: boolean;
   // TODO(Phase 6 dead-code): vestigial — no DB column backs this; the only
   // reader (getWorkflowNotifications) is exposed but never called. Optional
