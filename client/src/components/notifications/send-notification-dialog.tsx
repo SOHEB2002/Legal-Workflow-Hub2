@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react";
-import { Send, Calendar as CalendarIcon, AlertTriangle, Users, Search, Check, ChevronsUpDown } from "lucide-react";
+import { Send, Users, Search, Check, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
   Dialog,
   DialogContent,
@@ -64,7 +63,7 @@ export function SendNotificationDialog({
   prefilledMessage,
 }: SendNotificationDialogProps) {
   const { user, users } = useAuth();
-  const { sendNotification, sendBulkNotification, getTemplates, scheduleNotification } = useNotifications();
+  const { sendNotification, sendBulkNotification, getTemplates } = useNotifications();
   const { departments } = useDepartments();
   const { cases } = useCases();
   const { consultations } = useConsultations();
@@ -108,12 +107,6 @@ export function SendNotificationDialog({
   const [message, setMessage] = useState(prefilledMessage || "");
   const [relatedType, setRelatedType] = useState<"case" | "consultation" | "task" | "">(prefilledRelatedType || "");
   const [relatedId, setRelatedId] = useState(prefilledRelatedId || "");
-  const [requiresResponse, setRequiresResponse] = useState(false);
-  const [enableSchedule, setEnableSchedule] = useState(false);
-  const [scheduledDate, setScheduledDate] = useState("");
-  const [scheduledTime, setScheduledTime] = useState("12:00");
-  const [enableAutoEscalate, setEnableAutoEscalate] = useState(false);
-  const [autoEscalateHours, setAutoEscalateHours] = useState("24");
   const [selectedTemplate, setSelectedTemplate] = useState("");
 
   const filteredMultiUsers = recipientSearch.trim()
@@ -151,12 +144,6 @@ export function SendNotificationDialog({
     setMessage("");
     setRelatedType("");
     setRelatedId("");
-    setRequiresResponse(false);
-    setEnableSchedule(false);
-    setScheduledDate("");
-    setScheduledTime("12:00");
-    setEnableAutoEscalate(false);
-    setAutoEscalateHours("24");
     setSelectedTemplate("");
   };
 
@@ -171,10 +158,11 @@ export function SendNotificationDialog({
       senderId: user.id,
       senderName: user.name,
       relatedType: relatedType || null,
+      // requiresResponse / scheduledAt / autoEscalateAfterHours are no longer
+      // sent from this dialog — their controls are gone (see the commit
+      // message). The COLUMNS are untouched and server-side producers still set
+      // requiresResponse: true; only the manual-send path stops offering them.
       relatedId: relatedId || null,
-      requiresResponse,
-      scheduledAt: enableSchedule && scheduledDate ? `${scheduledDate}T${scheduledTime}` : null,
-      autoEscalateAfterHours: enableAutoEscalate ? parseInt(autoEscalateHours) : 0,
       isAutomatic: false,
       relatedStage: null,
       workflowTriggerId: null,
@@ -186,12 +174,7 @@ export function SendNotificationDialog({
           toast({ title: "يرجى اختيار المستلم", variant: "destructive" });
           return;
         }
-        if (enableSchedule && scheduledDate) {
-          const scheduledAtStr = `${scheduledDate}T${scheduledTime}`;
-          scheduleNotification({ ...baseNotification, recipientId, status: "pending" }, scheduledAtStr);
-        } else {
-          sendNotification({ ...baseNotification, recipientId });
-        }
+        sendNotification({ ...baseNotification, recipientId });
       } else if (recipientMode === "multiple") {
         if (selectedRecipients.length === 0) {
           toast({ title: "يرجى اختيار المستلمين", variant: "destructive" });
@@ -467,68 +450,6 @@ export function SendNotificationDialog({
             )}
           </div>
 
-          <div className="space-y-3 pt-2 border-t">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="requires-response"
-                checked={requiresResponse}
-                onCheckedChange={(c) => setRequiresResponse(!!c)}
-              />
-              <label htmlFor="requires-response" className="text-sm cursor-pointer">طلب رد من المستلم</label>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="enable-schedule"
-                checked={enableSchedule}
-                onCheckedChange={(c) => setEnableSchedule(!!c)}
-              />
-              <label htmlFor="enable-schedule" className="text-sm cursor-pointer flex items-center gap-1">
-                <CalendarIcon className="w-4 h-4" />
-                جدولة الإرسال
-              </label>
-            </div>
-            {enableSchedule && (
-              <div className="mt-2 flex gap-2 items-center">
-                <HijriDatePicker
-                  value={scheduledDate}
-                  onChange={setScheduledDate}
-                  placeholder="اختر التاريخ"
-                  className="flex-1"
-                  data-testid="input-scheduled-date"
-                />
-                <Input
-                  type="time"
-                  value={scheduledTime}
-                  onChange={(e) => setScheduledTime(e.target.value)}
-                  className="w-28"
-                  dir="ltr"
-                />
-              </div>
-            )}
-
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="enable-escalate"
-                checked={enableAutoEscalate}
-                onCheckedChange={(c) => setEnableAutoEscalate(!!c)}
-              />
-              <label htmlFor="enable-escalate" className="text-sm cursor-pointer flex items-center gap-1">
-                <AlertTriangle className="w-4 h-4" />
-                تصعيد تلقائي بعد
-              </label>
-              {enableAutoEscalate && (
-                <Input
-                  type="number"
-                  value={autoEscalateHours}
-                  onChange={(e) => setAutoEscalateHours(e.target.value)}
-                  className="w-20 h-8"
-                  min="1"
-                />
-              )}
-              {enableAutoEscalate && <span className="text-sm">ساعة</span>}
-            </div>
-          </div>
         </div>
 
         <DialogFooter className="mt-4">
