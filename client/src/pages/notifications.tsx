@@ -160,17 +160,21 @@ export default function NotificationsPage() {
         </div>
         <div className="flex gap-2 flex-wrap">
           {permissions.canSendNotifications && (
-            <>
-              <Button onClick={() => setShowSendDialog(true)} data-testid="button-send-new-notification">
-                <Send className="w-4 h-4 ml-2" />
-                إرسال إشعار
-              </Button>
-              <Button variant="outline" asChild>
-                <Link href="/notification-dashboard">
-                  لوحة الإحصائيات
-                </Link>
-              </Button>
-            </>
+            <Button onClick={() => setShowSendDialog(true)} data-testid="button-send-new-notification">
+              <Send className="w-4 h-4 ml-2" />
+              إرسال إشعار
+            </Button>
+          )}
+          {/* The stats page is branch_manager-only (see notification-dashboard.tsx).
+              This link used to ride the canSendNotifications block, which admits
+              five roles — four of them would now land on the "غير مصرح" card.
+              Gated to match the page so visibility == authorization. */}
+          {user?.role === "branch_manager" && (
+            <Button variant="outline" asChild>
+              <Link href="/notification-dashboard">
+                لوحة الإحصائيات
+              </Link>
+            </Button>
           )}
           <Button variant="outline" asChild>
             <Link href="/notification-preferences">
