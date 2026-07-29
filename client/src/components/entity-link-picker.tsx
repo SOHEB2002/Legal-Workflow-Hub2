@@ -68,7 +68,28 @@ export function EntityLinkPicker({
     linkType === "case"
       ? cases.map((c) => ({ id: c.id, label: c.caseNumber, sublabel: getClientName(c.clientId) }))
       : linkType === "consultation"
-      ? consultations.map((c) => ({ id: c.id, label: c.consultationNumber, sublabel: getClientName(c.clientId) }))
+      // TITLE first — a consultation number identifies nothing to a reader,
+      // which is why the consultations list itself leads with the title. The
+      // NUMBER moves into the sublabel rather than being dropped: the filter
+      // below matches label OR sublabel, so someone who knows the number can
+      // still find it, and it stays visible for cross-referencing.
+      //
+      // title is NULLABLE (schema.ts: rows created before the column existed
+      // have none), so a title-less consultation falls back to the number as
+      // its label — i.e. exactly the previous behaviour — and never renders a
+      // blank row. The number is then left out of the sublabel so it is not
+      // shown twice.
+      ? consultations.map((c) => {
+          const title = (c.title || "").trim();
+          const client = getClientName(c.clientId);
+          return {
+            id: c.id,
+            label: title || c.consultationNumber,
+            sublabel: title
+              ? [c.consultationNumber, client].filter(Boolean).join(" — ")
+              : client,
+          };
+        })
       : linkType === "contract"
       ? contracts.map((c) => ({ id: c.id, label: c.contractNumber, sublabel: c.title }))
       : linkType === "client"
