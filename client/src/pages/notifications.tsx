@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, CheckCheck, Send, Filter, ArrowUpCircle, Eye, MessageSquare } from "lucide-react";
+import { Bell, CheckCheck, Send, Filter, Eye, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,7 +33,7 @@ import {
   ResponseTypeLabels,
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
-import { cn } from "@/lib/utils";
+import { cn, notificationDisplayMessage } from "@/lib/utils";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { Link } from "wouter";
 
@@ -138,6 +138,13 @@ export default function NotificationsPage() {
   };
 
   const uniqueSenders = Array.from(new Set(notifications.map(n => n.senderId).filter((id): id is string => !!id)));
+
+  // Mirrors senderResolvesToUser in notifications-context and senderIsHuman in
+  // RespondDialog — a sender that does not resolve to a real users row is an
+  // automated producer (the scheduler writes the literal "system"), and those
+  // can only be acknowledged, never replied to.
+  const senderIsHuman = (n: Notification): boolean =>
+    !!n.senderId && allUsers.some(u => u.id === n.senderId);
 
   return (
     <div className="p-6 space-y-6" dir="rtl">
@@ -260,7 +267,13 @@ export default function NotificationsPage() {
                       <TableHead>العنوان</TableHead>
                       <TableHead>المرسل</TableHead>
                       <TableHead>التاريخ</TableHead>
-                      <TableHead>الحالة</TableHead>
+                      {/* Was "الحالة", which this cell never showed: it does not read
+                          notification.status at all, it derives a response-state from
+                          `response` / `requiresResponse`. That is why every row read
+                          "بانتظار الرد" while the page header said "لا توجد إشعارات
+                          جديدة" — two independent axes (isRead vs response) under one
+                          heading. Renamed to what it actually displays. */}
+                      <TableHead>الرد</TableHead>
                       <TableHead>الإجراءات</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -288,7 +301,17 @@ export default function NotificationsPage() {
                         <TableCell>
                           <div>
                             <p className="font-medium bidi-override">{notification.title}</p>
-                            <p className="text-sm text-muted-foreground truncate max-w-xs bidi-override">{notification.message}</p>
+                            {/* title= carries the FULL text on hover — the same idiom the
+                                response message on this row already used. Without it the
+                                message was clipped to one line with no way to read it:
+                                the row has no click handler and there is no detail view,
+                                so the only path to the full text was the respond dialog. */}
+                            <p
+                              className="text-sm text-muted-foreground truncate max-w-xs bidi-override"
+                              title={notificationDisplayMessage(notification.message)}
+                            >
+                              {notificationDisplayMessage(notification.message)}
+                            </p>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -318,16 +341,14 @@ export default function NotificationsPage() {
                                 )}
                               </div>
                             ) : notification.requiresResponse ? (
+                              /* An automated notification cannot be replied to — only
+                                 acknowledged (see respond-dialog). Saying "بانتظار الرد"
+                                 on one asks for something the UI will not accept. Same
+                                 sender predicate the dialog uses. */
                               <Badge variant="outline" className="text-xs bg-yellow-50 text-yellow-700 border-yellow-200">
-                                بانتظار الرد
+                                {senderIsHuman(notification) ? "بانتظار الرد" : "بانتظار الاطلاع"}
                               </Badge>
                             ) : null}
-                            {notification.escalationLevel > 0 && (
-                              <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-200">
-                                <ArrowUpCircle className="w-3 h-3 ml-1" />
-                                مصعّد
-                              </Badge>
-                            )}
                           </div>
                         </TableCell>
                         <TableCell>

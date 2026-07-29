@@ -300,7 +300,7 @@ const defaultPreferences: UserNotificationPreferences = {
 };
 
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, users } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [templates, setTemplates] = useState<NotificationTemplate[]>(() => getStoredTemplates());
   const [preferences, setPreferences] = useState<Record<string, UserNotificationPreferences>>(() => getStoredPreferences());
@@ -561,6 +561,26 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [notifications]);
 
+  // Does this senderId belong to a real user who could receive a reply?
+  //
+  // THE PREDICATE IS "resolves to a users row", not `=== "system"`, because the
+  // automated producers do not agree on one sentinel:
+  //   • server/scheduler.ts — 18 sites, all senderId: "system"
+  //   • server/routes.ts:2640 — also "system"
+  //   • the POST route's documented system-notification contract sends
+  //     senderId: null, which createNotification coalesces to "" (storage.ts)
+  // A literal check would have to enumerate all three and would still miss a
+  // sender who has since been deleted. Resolving against the roster covers
+  // every case with one rule, and GET /api/users returns the FULL roster to
+  // every role (routes.ts:2161-2168), so this is reliable for all viewers.
+  //
+  // ⚠ Fails SAFE: while `users` is still loading it returns false, so a reply
+  // is skipped rather than attempted. The acknowledgement is still recorded on
+  // the row; only the courtesy reply-to-sender is lost in that brief window.
+  const senderResolvesToUser = useCallback((senderId: string | null | undefined): boolean => {
+    return !!senderId && users.some(u => u.id === senderId);
+  }, [users]);
+
   const respondToNotification = useCallback(async (id: string, responseType: ResponseTypeValue | string, message: string) => {
     try {
       const notification = notifications.find(n => n.id === id);
@@ -620,7 +640,20 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
             });
           } catch {}
         }
-      } else if (notification && notification.senderId && notification.senderId !== user?.id) {
+      } else if (
+        notification
+        && notification.senderId
+        && notification.senderId !== user?.id
+        // NO HUMAN SENDER → no reply. senderId must resolve to a real users row,
+        // because notifications_recipient_id_fkey (recipient_id → users.id)
+        // rejects anything else. All 18 server/scheduler.ts producers write the
+        // literal "system", as does routes.ts:2640, and there is NO users row
+        // with id='system' (verified against production: 0 rows) — so this POST
+        // was guaranteed to fail with a foreign-key violation, 500, and be
+        // swallowed by the catch below. The user saw the dialog close and
+        // nothing happen. See senderResolvesToUser.
+        && senderResolvesToUser(notification.senderId)
+      ) {
         try {
           const responseLabel = responseType === "approve" ? "موافقة" 
             : responseType === "reject" ? "رفض"
@@ -646,14 +679,23 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
             escalatedTo: null,
             autoEscalateAfterHours: 0,
           });
-        } catch {}
+        } catch {
+          // The courtesy reply-to-sender is BEST EFFORT and stays swallowed on
+          // purpose: the user's own response is already persisted by the PATCH
+          // above, and failing the whole action because a secondary
+          // notification could not be delivered would lose their answer.
+        }
       }
 
       await refetchNotifications();
     } catch (err) {
-      // respond to notification failed silently
+      // The PATCH that records the response is NOT best-effort. It used to be
+      // swallowed here, so a failed response looked identical to a successful
+      // one — the dialog closed and showed "تم إرسال الرد بنجاح" either way.
+      // Rethrow so the caller can surface it; RespondDialog toasts it.
+      throw err;
     }
-  }, [refetchNotifications, user, notifications]);
+  }, [refetchNotifications, user, notifications, senderResolvesToUser]);
 
   const getNotificationResponses = useCallback((senderId: string): Notification[] => {
     return notifications.filter(n => n.senderId === senderId && n.response !== null);
