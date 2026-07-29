@@ -12,6 +12,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useNotifications } from "@/lib/notifications-context";
+import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import {
   ResponseType,
@@ -21,7 +22,7 @@ import {
   NotificationPriority,
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
-import { cn, notificationDisplayMessage } from "@/lib/utils";
+import { cn, notificationDisplayMessage, extractApiError } from "@/lib/utils";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 interface RespondDialogProps {
@@ -52,29 +53,54 @@ const responseOptions: { type: ResponseTypeValue; icon: typeof CheckCircle; labe
 
 export function RespondDialog({ open, onOpenChange, notification }: RespondDialogProps) {
   const { respondToNotification, markAsRead } = useNotifications();
+  const { users } = useAuth();
   const { toast } = useToast();
 
   const [selectedResponse, setSelectedResponse] = useState<ResponseTypeValue | null>(null);
   const [responseMessage, setResponseMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleRespond = () => {
+  // AUTOMATED SENDER → acknowledgement only. Mirrors senderResolvesToUser in
+  // notifications-context: a sender that does not resolve to a real users row
+  // cannot receive a reply, because notifications_recipient_id_fkey rejects it.
+  // Every scheduler notification is in this class (senderId "system", and there
+  // is no such user), so replying to one used to fail silently.
+  const senderIsHuman = !!notification?.senderId && users.some(u => u.id === notification.senderId);
+
+  const handleRespond = async () => {
     if (!notification) return;
-    if (!selectedResponse && !responseMessage.trim()) return;
+    const responseType = senderIsHuman ? (selectedResponse || "text_reply") : ResponseType.NOTED;
+    if (senderIsHuman && !selectedResponse && !responseMessage.trim()) return;
 
-    respondToNotification(notification.id, selectedResponse || "text_reply", responseMessage);
-    markAsRead(notification.id);
-
-    toast({ title: "تم إرسال الرد بنجاح" });
-    setSelectedResponse(null);
-    setResponseMessage("");
-    onOpenChange(false);
+    setSubmitting(true);
+    try {
+      // The message is deliberately dropped on the acknowledgement path — that
+      // path renders no free-text box, so there is nothing to send.
+      await respondToNotification(notification.id, responseType, senderIsHuman ? responseMessage : "");
+      markAsRead(notification.id);
+      toast({ title: senderIsHuman ? "تم إرسال الرد بنجاح" : "تم تسجيل الاطلاع" });
+      setSelectedResponse(null);
+      setResponseMessage("");
+      onOpenChange(false);
+    } catch (err) {
+      // Was fire-and-forget with an unconditional success toast, so a failed
+      // response was indistinguishable from a successful one. Same toast idiom
+      // the rest of the app uses for a failed action.
+      toast({
+        title: senderIsHuman ? "تعذّر إرسال الرد" : "تعذّر تسجيل الاطلاع",
+        description: extractApiError(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (!notification) return null;
 
   const existingResponse = notification.response as { type?: string; message?: string; respondedAt?: string; responderName?: string } | null;
   const hasRequiresResponse = notification.requiresResponse;
-  const canSubmit = selectedResponse || responseMessage.trim();
+  const canSubmit = senderIsHuman ? !!(selectedResponse || responseMessage.trim()) : true;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -82,7 +108,9 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="w-5 h-5" />
-            الرد على الإشعار
+            {/* A header promising a reply on a dialog that states you cannot reply
+                is the same mismatch this commit exists to remove. */}
+            {senderIsHuman ? "الرد على الإشعار" : "الاطلاع على الإشعار"}
           </DialogTitle>
         </DialogHeader>
 
@@ -126,51 +154,64 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
             </div>
           )}
 
-          {hasRequiresResponse && (
-            <div>
-              <Label className="mb-3 block">رد سريع</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {responseOptions.map((option) => {
-                  const Icon = option.icon;
-                  return (
-                    <Button
-                      key={option.type}
-                      variant={selectedResponse === option.type ? "default" : "outline"}
-                      className="justify-start"
-                      onClick={() => setSelectedResponse(prev => prev === option.type ? null : option.type)}
-                      data-testid={`button-response-${option.type}`}
-                    >
-                      <Icon className="w-4 h-4 ml-2" />
-                      {option.label}
-                    </Button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          {senderIsHuman ? (
+            <>
+              {hasRequiresResponse && (
+                <div>
+                  <Label className="mb-3 block">رد سريع</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {responseOptions.map((option) => {
+                      const Icon = option.icon;
+                      return (
+                        <Button
+                          key={option.type}
+                          variant={selectedResponse === option.type ? "default" : "outline"}
+                          className="justify-start"
+                          onClick={() => setSelectedResponse(prev => prev === option.type ? null : option.type)}
+                          data-testid={`button-response-${option.type}`}
+                        >
+                          <Icon className="w-4 h-4 ml-2" />
+                          {option.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-          <div>
-            <Label className="mb-2 block">
-              {hasRequiresResponse ? "رد نصي (اختياري)" : "اكتب ردك"}
-            </Label>
-            <Textarea
-              value={responseMessage}
-              onChange={(e) => setResponseMessage(e.target.value)}
-              placeholder="اكتب ردك هنا..."
-              rows={3}
-              className="mt-1"
-              data-testid="input-response-message"
-            />
-          </div>
+              <div>
+                <Label className="mb-2 block">
+                  {hasRequiresResponse ? "رد نصي (اختياري)" : "اكتب ردك"}
+                </Label>
+                <Textarea
+                  value={responseMessage}
+                  onChange={(e) => setResponseMessage(e.target.value)}
+                  placeholder="اكتب ردك هنا..."
+                  rows={3}
+                  className="mt-1"
+                  data-testid="input-response-message"
+                />
+              </div>
+            </>
+          ) : (
+            /* AUTOMATED SENDER — acknowledgement only. The four quick-replies and
+               the free-text box are both gone: there is no human on the other end
+               to receive either, and nothing in the system reads a response and
+               acts on it. Recording the acknowledgement on the row is the whole
+               action, so the confirm button below IS the acknowledgement. */
+            <p className="text-sm text-muted-foreground" data-testid="text-ack-only-hint">
+              هذا إشعار تلقائي من النظام ولا يمكن الرد عليه. يمكنك تسجيل اطلاعك عليه فقط.
+            </p>
+          )}
         </div>
 
         <DialogFooter className="mt-4 gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-response">
             إلغاء
           </Button>
-          <Button onClick={handleRespond} disabled={!canSubmit} data-testid="button-submit-response">
+          <Button onClick={handleRespond} disabled={!canSubmit || submitting} data-testid="button-submit-response">
             <Send className="w-4 h-4 ml-2" />
-            إرسال الرد
+            {senderIsHuman ? "إرسال الرد" : "تم الاطلاع"}
           </Button>
         </DialogFooter>
       </DialogContent>
