@@ -35,6 +35,7 @@ import {
 import type { Notification, ResponseTypeValue } from "@shared/schema";
 import { cn, notificationDisplayMessage } from "@/lib/utils";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
+import { BidiText } from "@/components/ui/bidi-text";
 import { Link } from "wouter";
 
 function getPriorityColor(priority: string): string {
@@ -315,6 +316,35 @@ export default function NotificationsPage() {
                             >
                               {notificationDisplayMessage(notification.message)}
                             </p>
+                            {/* WHICH MATTER is this about — server-stamped, display
+                                only. Same idiom as the my-tasks row: a secondary
+                                muted line beneath, each piece rendering only when
+                                present, separated by "•". A notification with no
+                                link — or whose linked row has been deleted — comes
+                                back with no linkedContext at all and this block
+                                does not render. */}
+                            {notification.linkedContext && (
+                              <div
+                                className="mt-0.5 flex items-center gap-2 flex-wrap text-xs text-muted-foreground"
+                                data-testid={`notification-context-${notification.id}`}
+                              >
+                                {[
+                                  notification.linkedContext.primary,
+                                  notification.linkedContext.clientName && `العميل: ${notification.linkedContext.clientName}`,
+                                  notification.linkedContext.opponentName && `ضد: ${notification.linkedContext.opponentName}`,
+                                  notification.linkedContext.hearingDate,
+                                  notification.linkedContext.courtName,
+                                  notification.linkedContext.stageLabel,
+                                ]
+                                  .filter((part): part is string => !!part)
+                                  .map((part, i, all) => (
+                                    <span key={part + i} className="flex items-center gap-2">
+                                      <BidiText>{part}</BidiText>
+                                      {i < all.length - 1 && <span>•</span>}
+                                    </span>
+                                  ))}
+                              </div>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell>

@@ -13002,7 +13002,17 @@ export async function registerRoutes(
         user.id,
         limit === undefined ? undefined : { limit, offset },
       );
-      res.json(notificationList);
+      // ENTITY CONTEXT is stamped only on the PAGED read.
+      //
+      // It costs at most five batched queries for the page — one per
+      // relatedType present — so it scales with the page, never with history.
+      // The UNBOUNDED read (no ?limit) is the stats dashboard, which aggregates
+      // counts and timings and uses none of these fields; enriching there would
+      // be up to five extra queries over the caller's entire history to produce
+      // data nothing reads. Skipping it is both cheaper and the honest scope.
+      res.json(limit === undefined
+        ? notificationList
+        : await storage.enrichNotificationsWithContext(notificationList));
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الإشعارات" });
     }

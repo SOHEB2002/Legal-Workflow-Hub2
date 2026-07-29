@@ -22,6 +22,10 @@ import {
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType,
   CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, findPrimaryJudgmentHearing,
+  type NotificationLinkedContext,
+  CaseStageLabels, type CaseStageValue,
+  MemoStageLabels, type MemoStageValue,
+  ConsultationStageLabels, type ConsultationStageValue,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
   adminSupportTaskAssignments,
@@ -148,6 +152,7 @@ export interface IStorage {
   getAllNotifications(): Promise<Notification[]>;
   getRecentNotifications(limit: number): Promise<Notification[]>;
   getNotificationsByRecipient(recipientId: string, opts?: { limit?: number; offset?: number }): Promise<Notification[]>;
+  enrichNotificationsWithContext(rows: Notification[]): Promise<Notification[]>;
   createNotification(data: Partial<Notification>): Promise<Notification>;
   updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
   markAllNotificationsRead(recipientId: string): Promise<number>;
@@ -2177,6 +2182,165 @@ export class DatabaseStorage implements IStorage {
       ? await base.limit(opts.limit).offset(opts.offset ?? 0)
       : await base;
     return result.map(mapDbNotification);
+  }
+
+  // Stamp "which matter is this about?" onto a PAGE of notifications.
+  //
+  // Shape copied from getMyTasks' identity pass (fa454d4): batched lookups over
+  // the distinct ids the rows already carry, each returning a Map, then one
+  // in-memory stamp. Never a per-row query.
+  //
+  // COST: at most FIVE queries for the whole page — one per relatedType present
+  // — and a type contributes nothing when the page holds none of it. The cost
+  // scales with the PAGE, never with the user's history, which is exactly why
+  // this waited for the list to be bounded.
+  //
+  // A deleted entity simply has no Map entry, so the row comes back with no
+  // linkedContext and the client renders nothing. relatedType "task" carries a
+  // DELEGATION id, not a task id, so it is intentionally not resolvable.
+  async enrichNotificationsWithContext(rows: Notification[]): Promise<Notification[]> {
+    const idsOf = (t: string): string[] =>
+      Array.from(new Set(
+        rows.filter(n => n.relatedType === t && !!n.relatedId).map(n => n.relatedId as string),
+      ));
+
+    const caseIds = idsOf("case");
+    const hearingIds = idsOf("hearing");
+    const memoIds = idsOf("memo");
+    const consultationIds = idsOf("consultation");
+    const fieldTaskIds = idsOf("field_task");
+
+    const byCase = new Map<string, NotificationLinkedContext>();
+    const byHearing = new Map<string, NotificationLinkedContext>();
+    const byMemo = new Map<string, NotificationLinkedContext>();
+    const byConsultation = new Map<string, NotificationLinkedContext>();
+    const byFieldTask = new Map<string, NotificationLinkedContext>();
+
+    // Empty/whitespace collapses to undefined so the client renders only what
+    // actually exists rather than stray separators.
+    const clean = (v: string | null | undefined): string | undefined => v?.trim() || undefined;
+
+    if (caseIds.length > 0) {
+      const r = await db.select({
+        id: lawCases.id, currentStage: lawCases.currentStage, opponentName: lawCases.opponentName,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      }).from(lawCases).leftJoin(clients, eq(lawCases.clientId, clients.id))
+        .where(inArray(lawCases.id, caseIds));
+      for (const row of r) {
+        byCase.set(row.id, {
+          clientName: clean(clientDisplayName(row)),
+          opponentName: clean(row.opponentName),
+          stageLabel: CaseStageLabels[row.currentStage as CaseStageValue] || clean(row.currentStage),
+        });
+      }
+    }
+
+    if (hearingIds.length > 0) {
+      const r = await db.select({
+        id: hearings.id, hearingDate: hearings.hearingDate, courtName: hearings.courtName,
+        opponentName: lawCases.opponentName,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      }).from(hearings)
+        .leftJoin(lawCases, eq(hearings.caseId, lawCases.id))
+        .leftJoin(clients, eq(lawCases.clientId, clients.id))
+        .where(inArray(hearings.id, hearingIds));
+      for (const row of r) {
+        byHearing.set(row.id, {
+          clientName: clean(clientDisplayName(row)),
+          opponentName: clean(row.opponentName),
+          hearingDate: clean(row.hearingDate),
+          courtName: clean(row.courtName),
+        });
+      }
+    }
+
+    if (memoIds.length > 0) {
+      const r = await db.select({
+        id: memos.id, currentStage: memos.currentStage, opponentName: lawCases.opponentName,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      }).from(memos)
+        .leftJoin(lawCases, eq(memos.caseId, lawCases.id))
+        .leftJoin(clients, eq(lawCases.clientId, clients.id))
+        .where(inArray(memos.id, memoIds));
+      for (const row of r) {
+        byMemo.set(row.id, {
+          clientName: clean(clientDisplayName(row)),
+          opponentName: clean(row.opponentName),
+          // currentStage is nullable on memos (pre-Phase-9 rows have none).
+          stageLabel: row.currentStage
+            ? (MemoStageLabels[row.currentStage as MemoStageValue] || clean(row.currentStage))
+            : undefined,
+        });
+      }
+    }
+
+    if (consultationIds.length > 0) {
+      const r = await db.select({
+        id: consultations.id, title: consultations.title, currentStage: consultations.currentStage,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      }).from(consultations).leftJoin(clients, eq(consultations.clientId, clients.id))
+        .where(inArray(consultations.id, consultationIds));
+      for (const row of r) {
+        byConsultation.set(row.id, {
+          // title is NULLABLE — same fallback the entity-link-picker uses.
+          primary: clean(row.title),
+          clientName: clean(clientDisplayName(row)),
+          stageLabel: ConsultationStageLabels[row.currentStage as ConsultationStageValue] || clean(row.currentStage),
+          // No opponentName — consultations have no such column.
+        });
+      }
+    }
+
+    if (fieldTaskIds.length > 0) {
+      // A field task links to AT MOST ONE of four entities, all optional. Four
+      // left joins in ONE query beat four round trips; the first non-empty name
+      // wins, in the same precedence the task-create form offers them.
+      const linkedClient = alias(clients, "ft_linked_client");
+      const r = await db.select({
+        id: fieldTasks.id,
+        caseNumber: lawCases.caseNumber,
+        consultationTitle: consultations.title,
+        consultationNumber: consultations.consultationNumber,
+        contractNumber: contracts.contractNumber,
+        clientType: linkedClient.clientType,
+        clientIndividualName: linkedClient.individualName,
+        clientCompanyName: linkedClient.companyName,
+      }).from(fieldTasks)
+        .leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+        .leftJoin(consultations, eq(fieldTasks.consultationId, consultations.id))
+        .leftJoin(contracts, eq(fieldTasks.contractId, contracts.id))
+        .leftJoin(linkedClient, eq(fieldTasks.clientId, linkedClient.id))
+        .where(inArray(fieldTasks.id, fieldTaskIds));
+      for (const row of r) {
+        const name =
+          clean(row.caseNumber)
+          ?? clean(row.consultationTitle) ?? clean(row.consultationNumber)
+          ?? clean(row.contractNumber)
+          ?? clean(clientDisplayName(row));
+        if (name) byFieldTask.set(row.id, { primary: name });
+      }
+    }
+
+    const mapFor = (t: string | null): Map<string, NotificationLinkedContext> | null =>
+      t === "case" ? byCase
+      : t === "hearing" ? byHearing
+      : t === "memo" ? byMemo
+      : t === "consultation" ? byConsultation
+      : t === "field_task" ? byFieldTask
+      : null; // "task" carries a delegation id — nothing to resolve.
+
+    return rows.map((n) => {
+      const m = mapFor(n.relatedType);
+      const ctx = m && n.relatedId ? m.get(n.relatedId) : undefined;
+      // Drop an all-empty object so the client's `linkedContext &&` guard is
+      // enough and it never renders an empty container.
+      if (!ctx || Object.values(ctx).every(v => v === undefined)) return n;
+      return { ...n, linkedContext: ctx };
+    });
   }
 
   async createNotification(data: Partial<Notification>): Promise<Notification> {
