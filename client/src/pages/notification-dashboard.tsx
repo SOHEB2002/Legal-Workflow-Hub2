@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
-import { BarChart3, Bell, CheckCircle, ArrowUpCircle, Users, TrendingUp, AlertTriangle } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { BarChart3, Bell, CheckCircle, TrendingUp, AlertTriangle } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -9,23 +9,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { useNotifications } from "@/lib/notifications-context";
 import { useAuth } from "@/lib/auth-context";
-import { useDepartments } from "@/lib/departments-context";
-import { useCases } from "@/lib/cases-context";
-import { useConsultations } from "@/lib/consultations-context";
 import {
   NotificationPriority,
   NotificationPriorityLabels,
-  NotificationStatus,
   NotificationTypeLabels,
 } from "@shared/schema";
 import { cn } from "@/lib/utils";
@@ -45,16 +33,29 @@ function getPriorityColor(priority: string): string {
   }
 }
 
+// OWN-ONLY. GET /api/notifications now returns the caller's own notifications
+// for every role, so `notifications` here is this user's inbox — not the firm's.
+//
+// Four sections were removed with that change because each one only meant
+// anything ACROSS users and is structurally dead on a single recipient:
+//   • "الموظفون الأبطأ في الاستجابة" — grouped by recipientId across users;
+//     own-only collapses it to one row, the viewer.
+//   • "القضايا/الاستشارات الأكثر تنبيهاً" — counted every recipient's alerts
+//     per case; own-only counts only what this user was told about, which is
+//     not "most alerted".
+//   • the department filter — filtered by the RECIPIENT's department; with one
+//     recipient it can only ever match all or nothing.
+//   • the escalated statistic — NotificationStatus.ESCALATED has no reachable
+//     writer (the only two, escalateNotification and checkAndEscalate in
+//     notifications-context, have zero callers), so it was always 0.
+//
+// What remains are per-notification aggregates with no cross-user term, so each
+// still computes correctly on a single recipient's rows.
 export default function NotificationDashboardPage() {
-  const { permissions, users } = useAuth();
+  const { user } = useAuth();
   const { notifications } = useNotifications();
-  const { departments } = useDepartments();
-  const { cases } = useCases();
-  const { consultations } = useConsultations();
-  const allUsers = users;
 
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("month");
-  const [departmentFilter, setDepartmentFilter] = useState<string>("all");
 
   const getDateFilter = (period: PeriodFilter): Date => {
     const now = new Date();
@@ -72,28 +73,20 @@ export default function NotificationDashboardPage() {
 
   const filteredNotifications = useMemo(() => {
     const dateFilter = getDateFilter(periodFilter);
-    let filtered = notifications.filter(n => new Date(n.createdAt) >= dateFilter);
-    
-    if (departmentFilter !== "all") {
-      const deptUserIds = allUsers.filter(u => u.departmentId === departmentFilter).map(u => u.id);
-      filtered = filtered.filter(n => deptUserIds.includes(n.recipientId));
-    }
-    
-    return filtered;
-  }, [notifications, periodFilter, departmentFilter, allUsers]);
+    return notifications.filter(n => new Date(n.createdAt) >= dateFilter);
+  }, [notifications, periodFilter]);
 
   const stats = useMemo(() => {
     const total = filteredNotifications.length;
     const read = filteredNotifications.filter(n => n.isRead).length;
     const responded = filteredNotifications.filter(n => n.response).length;
     const requiresResponse = filteredNotifications.filter(n => n.requiresResponse).length;
-    const escalated = filteredNotifications.filter(n => n.status === NotificationStatus.ESCALATED).length;
-    
+
     const readTimes = filteredNotifications
       .filter(n => n.isRead && n.readAt)
       .map(n => new Date(n.readAt!).getTime() - new Date(n.createdAt).getTime());
     const avgReadTime = readTimes.length > 0 ? readTimes.reduce((a, b) => a + b, 0) / readTimes.length : 0;
-    
+
     const responseTimes = filteredNotifications
       .filter(n => n.response)
       .map(n => new Date(n.response!.respondedAt).getTime() - new Date(n.createdAt).getTime());
@@ -105,7 +98,6 @@ export default function NotificationDashboardPage() {
       readRate: total > 0 ? ((read / total) * 100).toFixed(1) : "0",
       responded,
       responseRate: requiresResponse > 0 ? ((responded / requiresResponse) * 100).toFixed(1) : "0",
-      escalated,
       avgReadTimeMinutes: Math.round(avgReadTime / 60000),
       avgResponseTimeMinutes: Math.round(avgResponseTime / 60000),
     };
@@ -127,64 +119,6 @@ export default function NotificationDashboardPage() {
     return Object.entries(counts);
   }, [filteredNotifications]);
 
-  const slowestResponders = useMemo(() => {
-    const userResponseTimes: Record<string, { total: number; count: number; name: string }> = {};
-    
-    filteredNotifications.forEach(n => {
-      if (n.requiresResponse) {
-        const recipient = allUsers.find(u => u.id === n.recipientId);
-        if (!recipient) return;
-        
-        if (!userResponseTimes[n.recipientId]) {
-          userResponseTimes[n.recipientId] = { total: 0, count: 0, name: recipient.name };
-        }
-        userResponseTimes[n.recipientId].count++;
-        
-        if (n.response) {
-          const responseTime = new Date(n.response.respondedAt).getTime() - new Date(n.createdAt).getTime();
-          userResponseTimes[n.recipientId].total += responseTime;
-        }
-      }
-    });
-    
-    return Object.entries(userResponseTimes)
-      .map(([id, data]) => ({
-        id,
-        name: data.name,
-        avgTime: data.count > 0 ? data.total / data.count : 0,
-        pending: filteredNotifications.filter(n => n.recipientId === id && n.requiresResponse && !n.response).length,
-      }))
-      .sort((a, b) => b.pending - a.pending || b.avgTime - a.avgTime)
-      .slice(0, 5);
-  }, [filteredNotifications, allUsers]);
-
-  const mostAlertedItems = useMemo(() => {
-    const itemCounts: Record<string, { type: string; count: number; name: string }> = {};
-    
-    filteredNotifications.forEach(n => {
-      if (n.relatedId && n.relatedType) {
-        const key = `${n.relatedType}-${n.relatedId}`;
-        if (!itemCounts[key]) {
-          let name = "";
-          if (n.relatedType === "case") {
-            const c = cases.find(c => c.id === n.relatedId);
-            name = c?.caseNumber || "غير معروف";
-          } else if (n.relatedType === "consultation") {
-            const c = consultations.find(c => c.id === n.relatedId);
-            name = c?.consultationNumber || "غير معروف";
-          }
-          itemCounts[key] = { type: n.relatedType, count: 0, name };
-        }
-        itemCounts[key].count++;
-      }
-    });
-    
-    return Object.entries(itemCounts)
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 5)
-      .map(([key, data]) => ({ key, ...data }));
-  }, [filteredNotifications, cases, consultations]);
-
   const formatTime = (minutes: number): string => {
     if (minutes < 60) return `${minutes} دقيقة`;
     const hours = Math.floor(minutes / 60);
@@ -192,10 +126,20 @@ export default function NotificationDashboardPage() {
     return `${hours} ساعة ${mins > 0 ? `و ${mins} دقيقة` : ""}`;
   };
 
-  if (!permissions.canSendNotifications) {
+  // Page gate — branch_manager ONLY. Was permissions.canSendNotifications, which
+  // admits five roles. Shape copied from the reports page (pages/reports.tsx),
+  // this codebase's existing page-level role guard.
+  const allowedRoles = ["branch_manager"];
+  if (!user || !allowedRoles.includes(user.role)) {
     return (
-      <div className="p-6 text-center">
-        <p className="text-muted-foreground">ليس لديك صلاحية الوصول لهذه الصفحة</p>
+      <div className="flex items-center justify-center h-full p-8">
+        <Card className="max-w-md w-full">
+          <CardContent className="flex flex-col items-center gap-4 py-8">
+            <AlertTriangle className="h-12 w-12 text-destructive" />
+            <h2 className="text-xl font-bold">غير مصرح بالوصول</h2>
+            <p className="text-muted-foreground text-center">ليس لديك صلاحية الوصول إلى صفحة إحصائيات الإشعارات</p>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -206,8 +150,8 @@ export default function NotificationDashboardPage() {
         <div className="flex items-center gap-3">
           <BarChart3 className="w-8 h-8 text-accent" />
           <div>
-            <h1 className="text-2xl font-bold">لوحة إحصائيات الإشعارات</h1>
-            <p className="text-muted-foreground">تحليل شامل لإشعارات النظام</p>
+            <h1 className="text-2xl font-bold">إحصائيات إشعاراتي</h1>
+            <p className="text-muted-foreground">تحليل الإشعارات الواردة إليك</p>
           </div>
         </div>
         <div className="flex gap-3">
@@ -222,21 +166,10 @@ export default function NotificationDashboardPage() {
               <SelectItem value="all">الكل</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={departmentFilter} onValueChange={setDepartmentFilter}>
-            <SelectTrigger className="w-40" data-testid="select-department">
-              <SelectValue placeholder="القسم" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">كل الأقسام</SelectItem>
-              {departments.map(d => (
-                <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
             <CardTitle className="text-sm font-medium">إجمالي الإشعارات</CardTitle>
@@ -266,16 +199,6 @@ export default function NotificationDashboardPage() {
           <CardContent>
             <div className="text-2xl font-bold">{stats.responseRate}%</div>
             <p className="text-xs text-muted-foreground">متوسط وقت الرد: {formatTime(stats.avgResponseTimeMinutes)}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-            <CardTitle className="text-sm font-medium">الإشعارات المصعّدة</CardTitle>
-            <ArrowUpCircle className="w-4 h-4 text-destructive" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-destructive">{stats.escalated}</div>
           </CardContent>
         </Card>
       </div>
@@ -335,94 +258,6 @@ export default function NotificationDashboardPage() {
                   </div>
                 ))}
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Users className="w-5 h-5" />
-              الموظفون الأبطأ في الاستجابة
-            </CardTitle>
-            <CardDescription>الموظفون الذين لديهم إشعارات معلقة أو بطيئون في الرد</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {slowestResponders.length === 0 ? (
-              <p className="text-muted-foreground text-center py-4">لا توجد بيانات</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>الموظف</TableHead>
-                    <TableHead>معلقة</TableHead>
-                    <TableHead>متوسط وقت الرد</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {slowestResponders.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell className="font-medium">{item.name}</TableCell>
-                      <TableCell>
-                        {item.pending > 0 ? (
-                          <Badge variant="outline" className="bg-yellow-50 text-yellow-700">
-                            {item.pending}
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">0</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatTime(Math.round(item.avgTime / 60000))}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5" />
-              القضايا/الاستشارات الأكثر تنبيهاً
-            </CardTitle>
-            <CardDescription>العناصر التي تحتاج اهتماماً خاصاً</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {mostAlertedItems.length === 0 ? (
-              <p className="text-muted-foreground text-center py-4">لا توجد بيانات</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>النوع</TableHead>
-                    <TableHead>الرقم</TableHead>
-                    <TableHead>عدد التنبيهات</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {mostAlertedItems.map((item) => (
-                    <TableRow key={item.key}>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {item.type === "case" ? "قضية" : "استشارة"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-medium">{item.name}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="bg-red-50 text-red-700">
-                          {item.count}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
             )}
           </CardContent>
         </Card>

@@ -12964,27 +12964,32 @@ export async function registerRoutes(
   app.get("/api/notifications", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
-      const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-      // Admin roles previously fetched the entire notifications table with getAllNotifications(),
-      // which grows unboundedly (scheduler + workflow actions create many rows). The default
-      // is now the 200 most recent. Pass ?all=true only when the full history is needed
-      // (e.g., the notification management dashboard). Viewer reads the
-      // same global list as branch_manager but cannot mark/dismiss.
-      const notificationList = adminRoles.includes(user.role)
-        ? req.query.all === "true"
-          ? await storage.getAllNotifications()
-          : await storage.getRecentNotifications(200)
-        : await storage.getNotificationsByRecipient(user.id);
+      // EVERY role reads ONLY its own notifications — no role branch, no ?all=true.
+      //
+      // This route used to hand a FIRM-WIDE list to five roles (branch_manager,
+      // admin_support, cases_review_head, consultations_review_head, viewer): the
+      // 200 most recent, or the ENTIRE table when the caller passed ?all=true.
+      // Every field came with it, including the Arabic message body and any
+      // `response` text another user had written, so five roles could read every
+      // user's mail. The scope was never documented as deliberate anywhere.
+      //
+      // The client already filtered to `recipientId === userId` everywhere it
+      // displayed notifications (getMyNotifications / getUnreadCount /
+      // getUrgentCount in notifications-context), so the extra rows were fetched
+      // and then discarded — except on the stats dashboard, which is rescoped in
+      // the same batch.
+      //
+      // This also FIXES an admin-facing bug: the 200-row firm-wide cap was applied
+      // BEFORE the client's own-recipient filter, so on a busy firm an admin's own
+      // notifications could fall outside the newest 200 and silently vanish from
+      // both the bell badge and the notifications page. Own-only has no such window.
+      //
+      // ⚠ storage.getAllNotifications() is deliberately LEFT IN PLACE: four
+      // scheduler jobs (checkUnupdatedHearings, checkUpcomingHearingReminders,
+      // checkLegalDeadlines, checkContactFollowUps) call it for their
+      // notificationExists dedup. It is no longer reachable over HTTP.
+      const notificationList = await storage.getNotificationsByRecipient(user.id);
       res.json(notificationList);
-    } catch (error) {
-      res.status(500).json({ error: "حدث خطأ في جلب الإشعارات" });
-    }
-  });
-
-  app.get("/api/notifications/user/:userId", requireAuth, async (req, res) => {
-    try {
-      const notifications = await storage.getNotificationsByRecipient(String(req.params.userId));
-      res.json(notifications);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الإشعارات" });
     }
