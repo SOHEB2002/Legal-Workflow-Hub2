@@ -31,8 +31,7 @@ import {
 import { useNotifications } from "@/lib/notifications-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
-import { useCases } from "@/lib/cases-context";
-import { useConsultations } from "@/lib/consultations-context";
+import { EntityLinkPicker, type LinkType } from "@/components/entity-link-picker";
 import { useToast } from "@/hooks/use-toast";
 import {
   NotificationType,
@@ -72,11 +71,22 @@ const MANUAL_SEND_TYPES: NotificationTypeValue[] = [
   NotificationType.ESCALATION,        // تصعيد
 ];
 
+// The link targets a NOTIFICATION may carry — a subset of the picker's full set.
+// See the types= comment at the call site for why عقد / عميل are withheld.
+type NotificationLinkType = Extract<LinkType, "none" | "case" | "consultation">;
+const NOTIFICATION_LINK_TYPES: NotificationLinkType[] = ["none", "case", "consultation"];
+
+// The picker can only emit a type we passed in `types`, so this narrowing is
+// provably safe; the membership check makes it safe at runtime too rather than
+// asserting blindly.
+const asNotificationLinkType = (t: LinkType): NotificationLinkType =>
+  (NOTIFICATION_LINK_TYPES as LinkType[]).includes(t) ? (t as NotificationLinkType) : "none";
+
 interface SendNotificationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   prefilledRecipientId?: string;
-  prefilledRelatedType?: "case" | "consultation" | "task";
+  prefilledRelatedType?: NotificationLinkType;
   prefilledRelatedId?: string;
   prefilledTitle?: string;
   prefilledMessage?: string;
@@ -94,8 +104,6 @@ export function SendNotificationDialog({
   const { user, users } = useAuth();
   const { sendNotification, sendBulkNotification, getTemplates } = useNotifications();
   const { departments } = useDepartments();
-  const { cases } = useCases();
-  const { consultations } = useConsultations();
   const { toast } = useToast();
 
   const allUsers = users.filter(u => u.id !== user?.id && u.isActive);
@@ -134,7 +142,7 @@ export function SendNotificationDialog({
   const [priority, setPriority] = useState<NotificationPriorityValue>(NotificationPriority.MEDIUM);
   const [title, setTitle] = useState(prefilledTitle || "");
   const [message, setMessage] = useState(prefilledMessage || "");
-  const [relatedType, setRelatedType] = useState<"case" | "consultation" | "task" | "">(prefilledRelatedType || "");
+  const [relatedType, setRelatedType] = useState<NotificationLinkType>(prefilledRelatedType || "none");
   const [relatedId, setRelatedId] = useState(prefilledRelatedId || "");
   const [selectedTemplate, setSelectedTemplate] = useState("");
 
@@ -171,7 +179,7 @@ export function SendNotificationDialog({
     setPriority(NotificationPriority.MEDIUM);
     setTitle("");
     setMessage("");
-    setRelatedType("");
+    setRelatedType("none");
     setRelatedId("");
     setSelectedTemplate("");
   };
@@ -186,7 +194,7 @@ export function SendNotificationDialog({
       message,
       senderId: user.id,
       senderName: user.name,
-      relatedType: relatedType || null,
+      relatedType: relatedType === "none" ? null : relatedType,
       // requiresResponse / scheduledAt / autoEscalateAfterHours are no longer
       // sent from this dialog — their controls are gone (see the commit
       // message). The COLUMNS are untouched and server-side producers still set
@@ -446,38 +454,24 @@ export function SendNotificationDialog({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label>ربط بـ (اختياري)</Label>
-              <Select value={relatedType} onValueChange={(v) => { setRelatedType(v as "case" | "consultation" | "task" | ""); setRelatedId(""); }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="اختر النوع" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="case">قضية</SelectItem>
-                  <SelectItem value="consultation">استشارة</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {relatedType && (
-              <div>
-                <Label>{relatedType === "case" ? "القضية" : "الاستشارة"}</Label>
-                <Select value={relatedId} onValueChange={setRelatedId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="اختر" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {relatedType === "case" && cases.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.caseNumber}</SelectItem>
-                    ))}
-                    {relatedType === "consultation" && consultations.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.consultationNumber}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
+          {/* The SAME control the مهامي general-task create form uses, extracted
+              to components/entity-link-picker. Replaces two plain Selects: an
+              unsearchable type select and an unsearchable entity select that
+              listed every case or consultation with no filter. Gains search and
+              two more link targets (عقد / عميل). */}
+          <EntityLinkPicker
+            linkType={relatedType}
+            linkId={relatedId}
+            onChange={(t, id) => { setRelatedType(asNotificationLinkType(t)); setRelatedId(id); }}
+            label="ربط بـ (اختياري)"
+            // Narrower than my-tasks: Notification.relatedType is typed
+            // case/consultation/task/field_task/hearing/memo, and the cascade
+            // cleanup in storage only deletes notifications for case /
+            // consultation / hearing / memo. A contract- or client-linked
+            // notification would be off-type AND never cleaned up, so those two
+            // are withheld here rather than widening the shared type.
+            types={NOTIFICATION_LINK_TYPES}
+          />
 
         </div>
 
