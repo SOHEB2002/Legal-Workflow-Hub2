@@ -222,14 +222,10 @@ interface NotificationsContextType {
   markAsRead: (id: string) => Promise<void>;
   markAllAsRead: (userId: string) => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
-  archiveOldNotifications: (daysOld: number) => void;
   getUnreadCount: (userId: string) => number;
   getMyNotifications: (userId: string, filters?: NotificationFilters) => Notification[];
   respondToNotification: (id: string, responseType: ResponseTypeValue | string, message: string) => Promise<void>;
   getNotificationResponses: (senderId: string) => Notification[];
-  checkAndEscalate: () => void;
-  escalateNotification: (id: string, escalateToUserId: string) => Promise<void>;
-  getEscalatedNotifications: (userId: string) => Notification[];
   getUserPreferences: (userId: string) => UserNotificationPreferences;
   updateUserPreferences: (userId: string, prefs: Partial<UserNotificationPreferences>) => void;
   getTemplates: () => NotificationTemplate[];
@@ -614,22 +610,6 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     }
   }, [refetchNotifications]);
 
-  const archiveOldNotifications = useCallback((daysOld: number) => {
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
-    const cutoffStr = cutoffDate.toISOString();
-    
-    const toArchive = notifications.filter(
-      n => n.createdAt < cutoffStr && n.status !== NotificationStatus.ARCHIVED
-    );
-    toArchive.forEach(n => {
-      apiRequest("PATCH", `/api/notifications/${n.id}`, {
-        status: NotificationStatus.ARCHIVED,
-      }).catch(() => {});
-    });
-    refetchNotifications();
-  }, [notifications, refetchNotifications]);
-
   // Server COUNT(*), not a filter over the loaded window — see fetchUnreadCount.
   // The userId argument is kept so every call site is unchanged; the server
   // already scopes the count to the authenticated user, and the only caller
@@ -804,48 +784,6 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const getNotificationResponses = useCallback((senderId: string): Notification[] => {
     return notifications.filter(n => n.senderId === senderId && n.response !== null);
-  }, [notifications]);
-
-  const checkAndEscalate = useCallback(() => {
-    const now = new Date();
-    const toEscalate = notifications.filter(n => {
-      if (n.status === NotificationStatus.SENT && !n.isRead && n.autoEscalateAfterHours > 0) {
-        const createdAt = new Date(n.createdAt);
-        const hoursDiff = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60);
-        return hoursDiff >= n.autoEscalateAfterHours;
-      }
-      return false;
-    });
-    toEscalate.forEach(n => {
-      apiRequest("PATCH", `/api/notifications/${n.id}`, {
-        status: NotificationStatus.ESCALATED,
-        escalationLevel: n.escalationLevel + 1,
-      }).catch(() => {});
-    });
-    if (toEscalate.length > 0) {
-      refetchNotifications();
-    }
-  }, [notifications, refetchNotifications]);
-
-  const escalateNotification = useCallback(async (id: string, escalateToUserId: string) => {
-    const notification = notifications.find(n => n.id === id);
-    try {
-      await apiRequest("PATCH", `/api/notifications/${id}`, {
-        status: NotificationStatus.ESCALATED,
-        escalatedTo: escalateToUserId,
-        escalationLevel: (notification?.escalationLevel || 0) + 1,
-      });
-      await refetchNotifications();
-    } catch (err) {
-      // escalate notification failed silently
-    }
-  }, [notifications, refetchNotifications]);
-
-  const getEscalatedNotifications = useCallback((userId: string): Notification[] => {
-    return notifications.filter(n => 
-      (n.recipientId === userId || n.escalatedTo === userId) && 
-      n.status === NotificationStatus.ESCALATED
-    );
   }, [notifications]);
 
   const getUserPreferences = useCallback((userId: string): UserNotificationPreferences => {
@@ -1025,14 +963,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       markAsRead,
       markAllAsRead,
       deleteNotification,
-      archiveOldNotifications,
       getUnreadCount,
       getMyNotifications,
       respondToNotification,
       getNotificationResponses,
-      checkAndEscalate,
-      escalateNotification,
-      getEscalatedNotifications,
       getUserPreferences,
       updateUserPreferences,
       getTemplates,
