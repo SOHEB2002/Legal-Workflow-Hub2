@@ -12981,15 +12981,6 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/notifications/user/:userId", requireAuth, async (req, res) => {
-    try {
-      const notifications = await storage.getNotificationsByRecipient(String(req.params.userId));
-      res.json(notifications);
-    } catch (error) {
-      res.status(500).json({ error: "حدث خطأ في جلب الإشعارات" });
-    }
-  });
-
   // Phase 5 A1/H2 — the only fields a notification's owner (or an admin) may
   // mutate via PATCH. Mirrors updateNotificationSchema; deliberately excludes
   // the identity/routing/content danger set.
