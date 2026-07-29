@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react";
-import { Send, Calendar as CalendarIcon, AlertTriangle, Users } from "lucide-react";
+import { Send, Users, Search, Check, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import {
   Dialog,
   DialogContent,
@@ -20,25 +19,74 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { useNotifications } from "@/lib/notifications-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
-import { useCases } from "@/lib/cases-context";
-import { useConsultations } from "@/lib/consultations-context";
+import { EntityLinkPicker, type LinkType } from "@/components/entity-link-picker";
 import { useToast } from "@/hooks/use-toast";
 import {
   NotificationType,
   NotificationTypeLabels,
   NotificationPriority,
   NotificationPriorityLabels,
+  UserRoleLabels,
 } from "@shared/schema";
-import type { NotificationTypeValue, NotificationPriorityValue } from "@shared/schema";
+import type { NotificationTypeValue, NotificationPriorityValue, User } from "@shared/schema";
+
+// The نوع الإشعار options a HUMAN picks when sending by hand.
+//
+// The dropdown used to list all 58 NotificationType members. A census of every
+// producer (server routes + scheduler + client triggers) shows only 21 are ever
+// emitted, and most of those 21 are machine provenance — delegation_*,
+// weekly_report / monthly_report, legal_deadline_*, hearing_update_overdue,
+// contact_followup_overdue. Offering those to a person invites mislabelling a
+// hand-written message as a system event.
+//
+// These five are the distinct INTENTS someone actually has when messaging a
+// colleague. Nothing in the codebase branches on `type` — it drives a display
+// label and a filter option — so this list is cosmetic and reversible, and the
+// enum and label map are untouched (historical rows and other code depend on
+// them).
+// ⚠ Must remain a SUPERSET of every type used by the قالب جاهز templates
+// (defaultTemplates in notifications-context): handleTemplateSelect calls
+// setNotificationType(template.type), and a value with no matching SelectItem
+// renders the trigger blank. CASE_DELAY and ASSIGNMENT are here for that reason
+// as much as their own — both are legitimate things a person sends about.
+const MANUAL_SEND_TYPES: NotificationTypeValue[] = [
+  NotificationType.GENERAL_ALERT,     // تنبيه عام — the default catch-all
+  NotificationType.TASK_REMINDER,     // تذكير بمهمة
+  NotificationType.ASSIGNMENT,        // إسناد مهمة        (template "إسناد مهمة جديدة")
+  NotificationType.RESPONSE_REQUEST,  // طلب رد            (template "مطلوب تحديث حالة")
+  NotificationType.DEADLINE_WARNING,  // تحذير موعد نهائي  (templates "تذكير موعد جلسة" / "مراجعة عاجلة")
+  NotificationType.CASE_DELAY,        // تأخر قضية         (template "تنبيه تأخر")
+  NotificationType.ESCALATION,        // تصعيد
+];
+
+// The link targets a NOTIFICATION may carry — a subset of the picker's full set.
+// See the types= comment at the call site for why عقد / عميل are withheld.
+type NotificationLinkType = Extract<LinkType, "none" | "case" | "consultation">;
+const NOTIFICATION_LINK_TYPES: NotificationLinkType[] = ["none", "case", "consultation"];
+
+// The picker can only emit a type we passed in `types`, so this narrowing is
+// provably safe; the membership check makes it safe at runtime too rather than
+// asserting blindly.
+const asNotificationLinkType = (t: LinkType): NotificationLinkType =>
+  (NOTIFICATION_LINK_TYPES as LinkType[]).includes(t) ? (t as NotificationLinkType) : "none";
 
 interface SendNotificationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   prefilledRecipientId?: string;
-  prefilledRelatedType?: "case" | "consultation" | "task";
+  prefilledRelatedType?: NotificationLinkType;
   prefilledRelatedId?: string;
   prefilledTitle?: string;
   prefilledMessage?: string;
@@ -54,32 +102,53 @@ export function SendNotificationDialog({
   prefilledMessage,
 }: SendNotificationDialogProps) {
   const { user, users } = useAuth();
-  const { sendNotification, sendBulkNotification, getTemplates, scheduleNotification } = useNotifications();
+  const { sendNotification, sendBulkNotification, getTemplates } = useNotifications();
   const { departments } = useDepartments();
-  const { cases } = useCases();
-  const { consultations } = useConsultations();
   const { toast } = useToast();
 
   const allUsers = users.filter(u => u.id !== user?.id && u.isActive);
   const templates = getTemplates();
 
+  // Recipient search shared by both pickers. Matches the memo case-picker
+  // precedent, which likewise searches more than the primary label (it matches
+  // caseNumber + opponentName + plaintiffName) — here name + role + department,
+  // because in a 10-role firm "who is the labour dept head again?" is the
+  // commonest way a sender actually looks someone up.
+  const selectableUsers = allUsers.filter(u => u.id);
+
+  const userSubtitle = (u: User): string => {
+    const roleLabel = UserRoleLabels[u.role] || u.role;
+    const deptName = departments.find(d => d.id === u.departmentId)?.name;
+    return deptName ? `${roleLabel} — ${deptName}` : roleLabel;
+  };
+
+  const userHaystack = (u: User): string =>
+    `${u.name} ${UserRoleLabels[u.role] || u.role} ${departments.find(d => d.id === u.departmentId)?.name || ""}`.toLowerCase();
+
+  // cmdk passes the CommandItem's `value` (the user id) — resolve then match.
+  const userMatchesSearch = (value: string, search: string): number => {
+    const u = selectableUsers.find(x => x.id === value);
+    if (!u) return 0;
+    return userHaystack(u).includes(search.toLowerCase()) ? 1 : 0;
+  };
+
   const [recipientMode, setRecipientMode] = useState<"single" | "multiple" | "department">("single");
   const [recipientId, setRecipientId] = useState(prefilledRecipientId || "");
+  const [recipientComboOpen, setRecipientComboOpen] = useState(false);
+  const [recipientSearch, setRecipientSearch] = useState("");
   const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
   const [selectedDepartment, setSelectedDepartment] = useState("");
   const [notificationType, setNotificationType] = useState<NotificationTypeValue>(NotificationType.GENERAL_ALERT);
   const [priority, setPriority] = useState<NotificationPriorityValue>(NotificationPriority.MEDIUM);
   const [title, setTitle] = useState(prefilledTitle || "");
   const [message, setMessage] = useState(prefilledMessage || "");
-  const [relatedType, setRelatedType] = useState<"case" | "consultation" | "task" | "">(prefilledRelatedType || "");
+  const [relatedType, setRelatedType] = useState<NotificationLinkType>(prefilledRelatedType || "none");
   const [relatedId, setRelatedId] = useState(prefilledRelatedId || "");
-  const [requiresResponse, setRequiresResponse] = useState(false);
-  const [enableSchedule, setEnableSchedule] = useState(false);
-  const [scheduledDate, setScheduledDate] = useState("");
-  const [scheduledTime, setScheduledTime] = useState("12:00");
-  const [enableAutoEscalate, setEnableAutoEscalate] = useState(false);
-  const [autoEscalateHours, setAutoEscalateHours] = useState("24");
   const [selectedTemplate, setSelectedTemplate] = useState("");
+
+  const filteredMultiUsers = recipientSearch.trim()
+    ? allUsers.filter(u => userHaystack(u).includes(recipientSearch.trim().toLowerCase()))
+    : allUsers;
 
   useEffect(() => {
     if (prefilledRecipientId) setRecipientId(prefilledRecipientId);
@@ -103,20 +172,15 @@ export function SendNotificationDialog({
   const resetForm = () => {
     setRecipientMode("single");
     setRecipientId("");
+    setRecipientSearch("");
     setSelectedRecipients([]);
     setSelectedDepartment("");
     setNotificationType(NotificationType.GENERAL_ALERT);
     setPriority(NotificationPriority.MEDIUM);
     setTitle("");
     setMessage("");
-    setRelatedType("");
+    setRelatedType("none");
     setRelatedId("");
-    setRequiresResponse(false);
-    setEnableSchedule(false);
-    setScheduledDate("");
-    setScheduledTime("12:00");
-    setEnableAutoEscalate(false);
-    setAutoEscalateHours("24");
     setSelectedTemplate("");
   };
 
@@ -130,11 +194,12 @@ export function SendNotificationDialog({
       message,
       senderId: user.id,
       senderName: user.name,
-      relatedType: relatedType || null,
+      relatedType: relatedType === "none" ? null : relatedType,
+      // requiresResponse / scheduledAt / autoEscalateAfterHours are no longer
+      // sent from this dialog — their controls are gone (see the commit
+      // message). The COLUMNS are untouched and server-side producers still set
+      // requiresResponse: true; only the manual-send path stops offering them.
       relatedId: relatedId || null,
-      requiresResponse,
-      scheduledAt: enableSchedule && scheduledDate ? `${scheduledDate}T${scheduledTime}` : null,
-      autoEscalateAfterHours: enableAutoEscalate ? parseInt(autoEscalateHours) : 0,
       isAutomatic: false,
       relatedStage: null,
       workflowTriggerId: null,
@@ -146,12 +211,7 @@ export function SendNotificationDialog({
           toast({ title: "يرجى اختيار المستلم", variant: "destructive" });
           return;
         }
-        if (enableSchedule && scheduledDate) {
-          const scheduledAtStr = `${scheduledDate}T${scheduledTime}`;
-          scheduleNotification({ ...baseNotification, recipientId, status: "pending" }, scheduledAtStr);
-        } else {
-          sendNotification({ ...baseNotification, recipientId });
-        }
+        sendNotification({ ...baseNotification, recipientId });
       } else if (recipientMode === "multiple") {
         if (selectedRecipients.length === 0) {
           toast({ title: "يرجى اختيار المستلمين", variant: "destructive" });
@@ -226,31 +286,88 @@ export function SendNotificationDialog({
           {recipientMode === "single" && (
             <div>
               <Label>المستلم</Label>
-              <Select value={recipientId} onValueChange={setRecipientId}>
-                <SelectTrigger data-testid="select-recipient">
-                  <SelectValue placeholder="اختر المستلم" />
-                </SelectTrigger>
-                <SelectContent>
-                  {allUsers.filter(u => u.id).map(u => (
-                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Searchable combobox — the Popover + Command pattern already used
+                  for the القضية picker in the memo create dialog (pages/memos.tsx).
+                  Was a plain Select, which is unusable against the full roster.
+                  Like that precedent, the filter matches SEVERAL fields, not just
+                  the primary one: name, role label and department name. */}
+              <Popover open={recipientComboOpen} onOpenChange={setRecipientComboOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={recipientComboOpen}
+                    data-testid="select-recipient"
+                    className="w-full justify-between font-normal text-right"
+                  >
+                    <span className="truncate">
+                      {recipientId
+                        ? (allUsers.find(u => u.id === recipientId)?.name || "اختر المستلم")
+                        : "اختر المستلم"}
+                    </span>
+                    <ChevronsUpDown className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[380px] p-0" align="start" dir="rtl">
+                  <Command filter={(value, search) => userMatchesSearch(value, search)}>
+                    <CommandInput placeholder="ابحث بالاسم أو الدور أو القسم..." />
+                    <CommandList>
+                      <CommandEmpty>لا توجد نتائج</CommandEmpty>
+                      <CommandGroup>
+                        {selectableUsers.map(u => (
+                          <CommandItem
+                            key={u.id}
+                            value={u.id}
+                            onSelect={(val) => { setRecipientId(val); setRecipientComboOpen(false); }}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium">{u.name}</span>
+                              <span className="text-xs text-muted-foreground">{userSubtitle(u)}</span>
+                            </div>
+                            {recipientId === u.id && <Check className="h-4 w-4 shrink-0 text-primary" />}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
           )}
 
           {recipientMode === "multiple" && (
             <div>
               <Label>المستلمين ({selectedRecipients.length} مختار)</Label>
-              <div className="border rounded-md p-2 max-h-32 overflow-y-auto mt-2 space-y-1">
-                {allUsers.map(u => (
+              {/* Multi-select gets the SAME search, but keeps its checkbox list —
+                  Command/CommandItem is a single-select idiom and the user must be
+                  able to see and keep several ticks at once. A plain filter box above
+                  the existing list gives the same "type to narrow" behaviour without
+                  changing the selection model. */}
+              <div className="relative mt-2">
+                <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  value={recipientSearch}
+                  onChange={(e) => setRecipientSearch(e.target.value)}
+                  placeholder="ابحث بالاسم أو الدور أو القسم..."
+                  className="pr-9"
+                  data-testid="input-recipient-search"
+                />
+              </div>
+              <div className="border rounded-md p-2 max-h-40 overflow-y-auto mt-2 space-y-1">
+                {filteredMultiUsers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-2">لا توجد نتائج</p>
+                ) : filteredMultiUsers.map(u => (
                   <div key={u.id} className="flex items-center gap-2">
                     <Checkbox
                       id={`user-${u.id}`}
                       checked={selectedRecipients.includes(u.id)}
                       onCheckedChange={() => toggleRecipient(u.id)}
                     />
-                    <label htmlFor={`user-${u.id}`} className="text-sm cursor-pointer">{u.name}</label>
+                    <label htmlFor={`user-${u.id}`} className="text-sm cursor-pointer flex-1">
+                      {u.name}
+                      <span className="text-xs text-muted-foreground mr-2">{userSubtitle(u)}</span>
+                    </label>
                   </div>
                 ))}
               </div>
@@ -295,8 +412,8 @@ export function SendNotificationDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(NotificationTypeLabels).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                  {MANUAL_SEND_TYPES.map(t => (
+                    <SelectItem key={t} value={t}>{NotificationTypeLabels[t]}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -337,101 +454,25 @@ export function SendNotificationDialog({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label>ربط بـ (اختياري)</Label>
-              <Select value={relatedType} onValueChange={(v) => { setRelatedType(v as "case" | "consultation" | "task" | ""); setRelatedId(""); }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="اختر النوع" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="case">قضية</SelectItem>
-                  <SelectItem value="consultation">استشارة</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {relatedType && (
-              <div>
-                <Label>{relatedType === "case" ? "القضية" : "الاستشارة"}</Label>
-                <Select value={relatedId} onValueChange={setRelatedId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="اختر" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {relatedType === "case" && cases.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.caseNumber}</SelectItem>
-                    ))}
-                    {relatedType === "consultation" && consultations.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.consultationNumber}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
+          {/* The SAME control the مهامي general-task create form uses, extracted
+              to components/entity-link-picker. Replaces two plain Selects: an
+              unsearchable type select and an unsearchable entity select that
+              listed every case or consultation with no filter. Gains search and
+              two more link targets (عقد / عميل). */}
+          <EntityLinkPicker
+            linkType={relatedType}
+            linkId={relatedId}
+            onChange={(t, id) => { setRelatedType(asNotificationLinkType(t)); setRelatedId(id); }}
+            label="ربط بـ (اختياري)"
+            // Narrower than my-tasks: Notification.relatedType is typed
+            // case/consultation/task/field_task/hearing/memo, and the cascade
+            // cleanup in storage only deletes notifications for case /
+            // consultation / hearing / memo. A contract- or client-linked
+            // notification would be off-type AND never cleaned up, so those two
+            // are withheld here rather than widening the shared type.
+            types={NOTIFICATION_LINK_TYPES}
+          />
 
-          <div className="space-y-3 pt-2 border-t">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="requires-response"
-                checked={requiresResponse}
-                onCheckedChange={(c) => setRequiresResponse(!!c)}
-              />
-              <label htmlFor="requires-response" className="text-sm cursor-pointer">طلب رد من المستلم</label>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="enable-schedule"
-                checked={enableSchedule}
-                onCheckedChange={(c) => setEnableSchedule(!!c)}
-              />
-              <label htmlFor="enable-schedule" className="text-sm cursor-pointer flex items-center gap-1">
-                <CalendarIcon className="w-4 h-4" />
-                جدولة الإرسال
-              </label>
-            </div>
-            {enableSchedule && (
-              <div className="mt-2 flex gap-2 items-center">
-                <HijriDatePicker
-                  value={scheduledDate}
-                  onChange={setScheduledDate}
-                  placeholder="اختر التاريخ"
-                  className="flex-1"
-                  data-testid="input-scheduled-date"
-                />
-                <Input
-                  type="time"
-                  value={scheduledTime}
-                  onChange={(e) => setScheduledTime(e.target.value)}
-                  className="w-28"
-                  dir="ltr"
-                />
-              </div>
-            )}
-
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="enable-escalate"
-                checked={enableAutoEscalate}
-                onCheckedChange={(c) => setEnableAutoEscalate(!!c)}
-              />
-              <label htmlFor="enable-escalate" className="text-sm cursor-pointer flex items-center gap-1">
-                <AlertTriangle className="w-4 h-4" />
-                تصعيد تلقائي بعد
-              </label>
-              {enableAutoEscalate && (
-                <Input
-                  type="number"
-                  value={autoEscalateHours}
-                  onChange={(e) => setAutoEscalateHours(e.target.value)}
-                  className="w-20 h-8"
-                  min="1"
-                />
-              )}
-              {enableAutoEscalate && <span className="text-sm">ساعة</span>}
-            </div>
-          </div>
         </div>
 
         <DialogFooter className="mt-4">

@@ -190,10 +190,10 @@ interface NotificationsContextType {
   rules: NotificationRule[];
   isLoading: boolean;
   refetchNotifications: () => Promise<void>;
-  sendNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo">) => Promise<Notification>;
-  sendBulkNotification: (recipientIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">) => Promise<Notification[]>;
+  sendNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours">) => Promise<Notification>;
+  sendBulkNotification: (recipientIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours" | "recipientId">) => Promise<Notification[]>;
   scheduleNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "escalationLevel" | "escalatedTo">, scheduledAt: string) => Promise<Notification>;
-  sendToTeam: (departmentId: string, userIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">) => Promise<Notification[]>;
+  sendToTeam: (departmentId: string, userIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours" | "recipientId">) => Promise<Notification[]>;
   markAsRead: (id: string) => Promise<void>;
   markAllAsRead: (userId: string) => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
@@ -411,11 +411,15 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   }, [rules]);
 
   const sendNotification = useCallback(async (
-    notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo">
+    notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours">
   ): Promise<Notification> => {
     const res = await apiRequest("POST", "/api/notifications", {
       ...notificationData,
-      status: notificationData.scheduledAt ? NotificationStatus.PENDING : NotificationStatus.SENT,
+      // Always SENT — the manual send dialog no longer offers scheduling, and
+      // nothing ever consumed scheduledAt anyway (no job reads it), so a
+      // "pending" row would simply have been delivered immediately under a
+      // misleading status.
+      status: NotificationStatus.SENT,
       isRead: false,
       readAt: null,
       response: null,
@@ -430,7 +434,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
   const sendBulkNotification = useCallback(async (
     recipientIds: string[],
-    notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">
+    notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours" | "recipientId">
   ): Promise<Notification[]> => {
     const promises = recipientIds.map(async (recipientId) => {
       try {
@@ -478,7 +482,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const sendToTeam = useCallback(async (
     _departmentId: string,
     userIds: string[],
-    notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "recipientId">
+    notificationData: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours" | "recipientId">
   ): Promise<Notification[]> => {
     return sendBulkNotification(userIds, notificationData);
   }, [sendBulkNotification]);
