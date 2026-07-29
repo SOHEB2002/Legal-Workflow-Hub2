@@ -56,6 +56,9 @@ export default function NotificationsPage() {
     getMyNotifications,
     markAsRead,
     getEscalatedNotifications,
+    hasMoreNotifications,
+    isLoadingMore,
+    loadMoreNotifications,
   } = useNotifications();
   const { toast } = useToast();
 
@@ -377,6 +380,30 @@ export default function NotificationsPage() {
                     ))}
                   </TableBody>
                 </Table>
+              )}
+
+              {/* LOAD MORE + the scope statement.
+                  The tabs and the three filters run over the LOADED rows, not
+                  the server. Silently omitting an old unread notification from
+                  غير مقروءة is the worst failure mode of a capped list, so the
+                  scope is stated in the UI instead of being left to be
+                  discovered. Hidden entirely once everything is loaded — a user
+                  whose whole history fits in one page never sees any of it. */}
+              {hasMoreNotifications && (
+                <div className="p-4 border-t flex flex-col items-center gap-2">
+                  <p className="text-xs text-muted-foreground text-center">
+                    التبويبات والفلاتر تعمل على الإشعارات المحمّلة حالياً — حمّل المزيد للبحث في الإشعارات الأقدم.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { void loadMoreNotifications(); }}
+                    disabled={isLoadingMore}
+                    data-testid="button-load-more-notifications"
+                  >
+                    {isLoadingMore ? "جارٍ التحميل..." : "تحميل المزيد"}
+                  </Button>
+                </div>
               )}
             </TabsContent>
           </Tabs>

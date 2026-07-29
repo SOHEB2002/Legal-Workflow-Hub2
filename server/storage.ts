@@ -147,7 +147,7 @@ export interface IStorage {
   // Notifications
   getAllNotifications(): Promise<Notification[]>;
   getRecentNotifications(limit: number): Promise<Notification[]>;
-  getNotificationsByRecipient(recipientId: string): Promise<Notification[]>;
+  getNotificationsByRecipient(recipientId: string, opts?: { limit?: number; offset?: number }): Promise<Notification[]>;
   createNotification(data: Partial<Notification>): Promise<Notification>;
   updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
   markAllNotificationsRead(recipientId: string): Promise<number>;
@@ -2162,13 +2162,20 @@ export class DatabaseStorage implements IStorage {
   // index-only would need a composite (recipient_id, created_at DESC), which is
   // additive DDL and belongs in a deliberate index batch, not here.
   //
-  // Still NO LIMIT, deliberately: notifications are never deleted, so a bare
-  // limit would silently hide old ones with no way to reach them. See the
-  // commit message for the pagination options.
-  async getNotificationsByRecipient(recipientId: string): Promise<Notification[]> {
-    const result = await db.select().from(notifications)
+  // PAGING IS OPTIONAL. With no opts the behaviour is unchanged — everything,
+  // newest first — which is what the stats dashboard needs. The notifications
+  // LIST passes a window. LIMIT/OFFSET are applied in SQL; fetching everything
+  // and slicing in JS would defeat the entire point.
+  async getNotificationsByRecipient(
+    recipientId: string,
+    opts?: { limit?: number; offset?: number },
+  ): Promise<Notification[]> {
+    const base = db.select().from(notifications)
       .where(eq(notifications.recipientId, recipientId))
       .orderBy(desc(notifications.createdAt));
+    const result = opts?.limit !== undefined
+      ? await base.limit(opts.limit).offset(opts.offset ?? 0)
+      : await base;
     return result.map(mapDbNotification);
   }
 

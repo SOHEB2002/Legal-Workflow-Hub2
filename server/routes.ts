@@ -12988,10 +12988,41 @@ export async function registerRoutes(
       // scheduler jobs (checkUnupdatedHearings, checkUpcomingHearingReminders,
       // checkLegalDeadlines, checkContactFollowUps) call it for their
       // notificationExists dedup. It is no longer reachable over HTTP.
-      const notificationList = await storage.getNotificationsByRecipient(user.id);
+      // OPTIONAL PAGING. No ?limit → everything, exactly as before: the stats
+      // dashboard aggregates over a user's whole history and must not silently
+      // become "the last N". The list passes a window and grows it with
+      // "load more". The response stays a bare ARRAY — no envelope — so the
+      // client contract is unchanged; "is there more?" is answered by whether a
+      // FULL page came back, which needs no total.
+      const rawLimit = Number(req.query.limit);
+      const rawOffset = Number(req.query.offset);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : undefined;
+      const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+      const notificationList = await storage.getNotificationsByRecipient(
+        user.id,
+        limit === undefined ? undefined : { limit, offset },
+      );
       res.json(notificationList);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الإشعارات" });
+    }
+  });
+
+  // The caller's OWN unread count, straight from SQL.
+  //
+  // Exists because the bell badge counted unread by filtering the client-side
+  // array. Once that array is capped by paging, the filter can only see the
+  // loaded window and the badge silently undercounts — the one number in the
+  // product a user is entitled to trust. storage.getUnreadNotificationCount is
+  // a COUNT(*) that was already written (it backed the dashboard aggregate);
+  // this simply exposes it. Always scoped to req.user — no id parameter, so
+  // there is nothing to enumerate.
+  app.get("/api/notifications/unread-count", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const count = await storage.getUnreadNotificationCount(req.user!.id);
+      res.json({ count });
+    } catch (error) {
+      res.status(500).json({ error: "حدث خطأ في جلب عدد الإشعارات" });
     }
   });
 
