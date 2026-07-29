@@ -29,6 +29,16 @@ const TEMPLATES_STORAGE_KEY = "lawfirm_notification_templates_v2";
 const PREFERENCES_STORAGE_KEY = "lawfirm_notification_preferences";
 const RULES_STORAGE_KEY = "lawfirm_notification_rules";
 
+// One page of the notification list.
+//
+// 30, not the app's DEFAULT_PAGE_SIZE of 15: this list is a chronological feed
+// scrolled in one column, not a seven-column table, and 15 would put the
+// heaviest recipient (branch_manager, ~7-10/week) behind "load more" every
+// fortnight. 30 covers roughly a month for them and the entire history for a
+// typical lawyer, so most users never see the control at all — while still
+// bounding a fetch that previously returned the user's whole life.
+const NOTIFICATIONS_PAGE_SIZE = 30;
+
 export interface WorkflowNotificationEvent {
   type: NotificationTypeValue;
   entityType: "case" | "consultation";
@@ -201,6 +211,10 @@ interface NotificationsContextType {
   rules: NotificationRule[];
   isLoading: boolean;
   refetchNotifications: () => Promise<void>;
+  /** True when a full page came back, i.e. there are probably older rows. */
+  hasMoreNotifications: boolean;
+  isLoadingMore: boolean;
+  loadMoreNotifications: () => Promise<void>;
   sendNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours">) => Promise<Notification>;
   sendBulkNotification: (recipientIds: string[], notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "status" | "escalationLevel" | "escalatedTo" | "requiresResponse" | "scheduledAt" | "autoEscalateAfterHours" | "recipientId">) => Promise<Notification[]>;
   scheduleNotification: (notification: Omit<Notification, "id" | "createdAt" | "updatedAt" | "isRead" | "readAt" | "response" | "escalationLevel" | "escalatedTo">, scheduledAt: string) => Promise<Notification>;
@@ -332,8 +346,35 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const [isLoading, setIsLoading] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevCountRef = useRef<number>(0);
+  // How many rows the user has chosen to have loaded. A REF, not state: the
+  // poll reads it without needing to be re-created, and — importantly — it is
+  // NOT derived from notifications.length, so a WebSocket prepend cannot inflate
+  // the next poll's window.
+  const loadedCountRef = useRef<number>(NOTIFICATIONS_PAGE_SIZE);
+  const [hasMoreNotifications, setHasMoreNotifications] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [serverUnreadCount, setServerUnreadCount] = useState(0);
 
-  const fetchNotifications = useCallback(async () => {
+  // The unread badge comes from SQL, never from the loaded array.
+  //
+  // getUnreadCount used to filter `notifications` client-side. With the list
+  // capped that filter can only see the loaded window, so the badge would
+  // silently undercount — and the badge is the one number a user is entitled
+  // to trust. GET /api/notifications/unread-count is a COUNT(*) over ALL the
+  // caller's rows, independent of paging.
+  const fetchUnreadCount = useCallback(async () => {
+    const authToken = localStorage.getItem("lawfirm_token");
+    if (!authToken) { setServerUnreadCount(0); return; }
+    try {
+      const res = await apiRequest("GET", "/api/notifications/unread-count");
+      const body = await res.json();
+      if (typeof body?.count === "number") setServerUnreadCount(body.count);
+    } catch {
+      // Leave the previous value rather than flashing 0 on a transient failure.
+    }
+  }, []);
+
+  const fetchNotifications = useCallback(async (countOverride?: number) => {
     const authToken = localStorage.getItem("lawfirm_token");
     if (!authToken) {
       setNotifications([]);
@@ -344,10 +385,25 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       // apiRequest carries the shared single-flight refresh + 401 retry. The
       // raw fetch here silently 401'd after a JWT rotation, freezing the badge
       // counter until the user navigated or reloaded.
-      const res = await apiRequest("GET", "/api/notifications");
+      // ALWAYS anchored at the newest row (offset 0) and sized to how much the
+      // user has chosen to load. Re-fetching the whole loaded WINDOW rather
+      // than appending an offset page is what makes the poll safe:
+      //   • it can never shrink the list back to one page (the poll asks for
+      //     loadedCount, not PAGE_SIZE);
+      //   • there is no cursor or running offset to drift, so a notification
+      //     arriving between two polls cannot duplicate or skip a row — the
+      //     next poll simply takes the newest N again;
+      //   • a WebSocket-prepended row is reconciled by the next poll instead of
+      //     corrupting a page boundary.
+      // Cost is bounded by what the user asked for, not by their history.
+      const count = countOverride ?? loadedCountRef.current;
+      const res = await apiRequest("GET", `/api/notifications?limit=${count}&offset=0`);
       const data = await res.json();
       const prevCount = prevCountRef.current;
       setNotifications(data);
+      // A FULL page came back → there is probably more behind it. Short page →
+      // we have reached the end. This is why the response needs no total.
+      setHasMoreNotifications(data.length >= count);
       if (prevCount > 0 && data.length > prevCount) {
         setHasNewNotifications(true);
       }
@@ -357,11 +413,27 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     } finally {
       setIsLoading(false);
     }
-  }, []);
+    // The unread BADGE must not depend on the loaded window — see
+    // fetchUnreadCount.
+    void fetchUnreadCount();
+  }, [fetchUnreadCount]);
 
   const refetchNotifications = useCallback(async () => {
     await fetchNotifications();
   }, [fetchNotifications]);
+
+  // Grow the window by one page and re-read it.
+  const loadMoreNotifications = useCallback(async () => {
+    if (isLoadingMore) return;
+    setIsLoadingMore(true);
+    const next = loadedCountRef.current + NOTIFICATIONS_PAGE_SIZE;
+    loadedCountRef.current = next;
+    try {
+      await fetchNotifications(next);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [fetchNotifications, isLoadingMore]);
 
   // WebSocket handler: real-time notification updates
   const handleWSEvent = useCallback((event: WSEvent) => {
@@ -558,9 +630,15 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     refetchNotifications();
   }, [notifications, refetchNotifications]);
 
+  // Server COUNT(*), not a filter over the loaded window — see fetchUnreadCount.
+  // The userId argument is kept so every call site is unchanged; the server
+  // already scopes the count to the authenticated user, and the only caller
+  // passes that same user. A different id falls back to the local count, which
+  // is all the old implementation could ever have done anyway.
   const getUnreadCount = useCallback((userId: string): number => {
+    if (user && userId === user.id) return serverUnreadCount;
     return notifications.filter(n => n.recipientId === userId && !n.isRead && n.status !== NotificationStatus.ARCHIVED).length;
-  }, [notifications]);
+  }, [notifications, serverUnreadCount, user]);
 
   const getUrgentCount = useCallback((userId: string): number => {
     return notifications.filter(n => 
@@ -937,6 +1015,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       rules,
       isLoading,
       refetchNotifications,
+      hasMoreNotifications,
+      isLoadingMore,
+      loadMoreNotifications,
       sendNotification,
       sendBulkNotification,
       scheduleNotification,

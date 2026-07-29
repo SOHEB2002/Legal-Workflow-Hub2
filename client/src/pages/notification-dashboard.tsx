@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { BarChart3, Bell, CheckCircle, TrendingUp, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,13 +9,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useNotifications } from "@/lib/notifications-context";
 import { useAuth } from "@/lib/auth-context";
+import { apiRequest } from "@/lib/queryClient";
 import {
   NotificationPriority,
   NotificationPriorityLabels,
   NotificationTypeLabels,
 } from "@shared/schema";
+import type { Notification as AppNotification } from "@shared/schema";
 import { cn } from "@/lib/utils";
 
 type PeriodFilter = "today" | "week" | "month" | "all";
@@ -53,9 +54,38 @@ function getPriorityColor(priority: string): string {
 // still computes correctly on a single recipient's rows.
 export default function NotificationDashboardPage() {
   const { user } = useAuth();
-  const { notifications } = useNotifications();
 
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("month");
+
+  // ⚠ This page reads its OWN unbounded copy, not the shared context array.
+  //
+  // The notifications list is now paged (30 rows, grown by "load more"), and
+  // this page aggregates — read rate, response rate, average times, breakdowns.
+  // Computing those over a capped window would silently turn "إحصائيات
+  // إشعاراتي" into "statistics for the last 30", which is worse than wrong
+  // because nothing on screen would say so.
+  //
+  // GET /api/notifications with NO ?limit still returns everything for the
+  // caller, so this needs no new endpoint and no server aggregate — one extra
+  // request, on one page, for one role (branch_manager). If the volume ever
+  // makes that unreasonable, the honest fix is a server-side aggregate, not a
+  // silent cap.
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("GET", "/api/notifications");
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data)) setNotifications(data);
+      } catch {
+        // Leave the previous value; the tiles simply show what they have.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
 
   const getDateFilter = (period: PeriodFilter): Date => {
     const now = new Date();
