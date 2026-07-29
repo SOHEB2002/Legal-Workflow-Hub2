@@ -21,7 +21,7 @@ import {
   NotificationPriority,
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
-import { cn } from "@/lib/utils";
+import { cn, notificationDisplayMessage } from "@/lib/utils";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 
 interface RespondDialogProps {
@@ -97,7 +97,7 @@ export function RespondDialog({ open, onOpenChange, notification }: RespondDialo
               </Badge>
             </div>
             <h4 className="font-semibold">{notification.title}</h4>
-            <p className="text-sm text-muted-foreground">{notification.message?.replace(/\[DEPT_ID:[^\]]*\]/g, "").trim()}</p>
+            <p className="text-sm text-muted-foreground">{notificationDisplayMessage(notification.message)}</p>
             <p className="text-xs text-muted-foreground">
               من: {notification.senderName} • <DualDateDisplay date={notification.createdAt} compact />
             </p>

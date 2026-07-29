@@ -33,7 +33,7 @@ import {
   ResponseTypeLabels,
 } from "@shared/schema";
 import type { Notification, ResponseTypeValue } from "@shared/schema";
-import { cn } from "@/lib/utils";
+import { cn, notificationDisplayMessage } from "@/lib/utils";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
 import { Link } from "wouter";
 
@@ -288,7 +288,17 @@ export default function NotificationsPage() {
                         <TableCell>
                           <div>
                             <p className="font-medium bidi-override">{notification.title}</p>
-                            <p className="text-sm text-muted-foreground truncate max-w-xs bidi-override">{notification.message}</p>
+                            {/* title= carries the FULL text on hover — the same idiom the
+                                response message on this row already used. Without it the
+                                message was clipped to one line with no way to read it:
+                                the row has no click handler and there is no detail view,
+                                so the only path to the full text was the respond dialog. */}
+                            <p
+                              className="text-sm text-muted-foreground truncate max-w-xs bidi-override"
+                              title={notificationDisplayMessage(notification.message)}
+                            >
+                              {notificationDisplayMessage(notification.message)}
+                            </p>
                           </div>
                         </TableCell>
                         <TableCell>

@@ -14,7 +14,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Link } from "wouter";
 import { NotificationPriority, NotificationPriorityLabels, NotificationTypeLabels } from "@shared/schema";
 import type { Notification } from "@shared/schema";
-import { cn } from "@/lib/utils";
+import { cn, notificationDisplayMessage } from "@/lib/utils";
 import { formatRelativeArabic } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -92,7 +92,15 @@ function NotificationItem({ notification, onMarkAsRead }: NotificationItemProps)
               </span>
             </div>
             <p className="font-medium text-sm truncate bidi-override">{notification.title}</p>
-            <p className="text-xs text-muted-foreground truncate mt-0.5 bidi-override">{notification.message}</p>
+            {/* title= carries the FULL text on hover. The dropdown item's only
+                click handler marks as read, so without this the message was
+                unreadable here too. Same idiom as the notifications list. */}
+            <p
+              className="text-xs text-muted-foreground truncate mt-0.5 bidi-override"
+              title={notificationDisplayMessage(notification.message)}
+            >
+              {notificationDisplayMessage(notification.message)}
+            </p>
             <div className="flex items-center gap-2 mt-1.5">
               {notification.senderName && (
                 <span className="text-xs text-muted-foreground">
