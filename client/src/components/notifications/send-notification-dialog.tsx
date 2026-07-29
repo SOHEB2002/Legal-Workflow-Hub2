@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Send, Calendar as CalendarIcon, AlertTriangle, Users } from "lucide-react";
+import { Send, Calendar as CalendarIcon, AlertTriangle, Users, Search, Check, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +20,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { useNotifications } from "@/lib/notifications-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -31,8 +40,9 @@ import {
   NotificationTypeLabels,
   NotificationPriority,
   NotificationPriorityLabels,
+  UserRoleLabels,
 } from "@shared/schema";
-import type { NotificationTypeValue, NotificationPriorityValue } from "@shared/schema";
+import type { NotificationTypeValue, NotificationPriorityValue, User } from "@shared/schema";
 
 interface SendNotificationDialogProps {
   open: boolean;
@@ -63,8 +73,33 @@ export function SendNotificationDialog({
   const allUsers = users.filter(u => u.id !== user?.id && u.isActive);
   const templates = getTemplates();
 
+  // Recipient search shared by both pickers. Matches the memo case-picker
+  // precedent, which likewise searches more than the primary label (it matches
+  // caseNumber + opponentName + plaintiffName) — here name + role + department,
+  // because in a 10-role firm "who is the labour dept head again?" is the
+  // commonest way a sender actually looks someone up.
+  const selectableUsers = allUsers.filter(u => u.id);
+
+  const userSubtitle = (u: User): string => {
+    const roleLabel = UserRoleLabels[u.role] || u.role;
+    const deptName = departments.find(d => d.id === u.departmentId)?.name;
+    return deptName ? `${roleLabel} — ${deptName}` : roleLabel;
+  };
+
+  const userHaystack = (u: User): string =>
+    `${u.name} ${UserRoleLabels[u.role] || u.role} ${departments.find(d => d.id === u.departmentId)?.name || ""}`.toLowerCase();
+
+  // cmdk passes the CommandItem's `value` (the user id) — resolve then match.
+  const userMatchesSearch = (value: string, search: string): number => {
+    const u = selectableUsers.find(x => x.id === value);
+    if (!u) return 0;
+    return userHaystack(u).includes(search.toLowerCase()) ? 1 : 0;
+  };
+
   const [recipientMode, setRecipientMode] = useState<"single" | "multiple" | "department">("single");
   const [recipientId, setRecipientId] = useState(prefilledRecipientId || "");
+  const [recipientComboOpen, setRecipientComboOpen] = useState(false);
+  const [recipientSearch, setRecipientSearch] = useState("");
   const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
   const [selectedDepartment, setSelectedDepartment] = useState("");
   const [notificationType, setNotificationType] = useState<NotificationTypeValue>(NotificationType.GENERAL_ALERT);
@@ -80,6 +115,10 @@ export function SendNotificationDialog({
   const [enableAutoEscalate, setEnableAutoEscalate] = useState(false);
   const [autoEscalateHours, setAutoEscalateHours] = useState("24");
   const [selectedTemplate, setSelectedTemplate] = useState("");
+
+  const filteredMultiUsers = recipientSearch.trim()
+    ? allUsers.filter(u => userHaystack(u).includes(recipientSearch.trim().toLowerCase()))
+    : allUsers;
 
   useEffect(() => {
     if (prefilledRecipientId) setRecipientId(prefilledRecipientId);
@@ -103,6 +142,7 @@ export function SendNotificationDialog({
   const resetForm = () => {
     setRecipientMode("single");
     setRecipientId("");
+    setRecipientSearch("");
     setSelectedRecipients([]);
     setSelectedDepartment("");
     setNotificationType(NotificationType.GENERAL_ALERT);
@@ -226,31 +266,88 @@ export function SendNotificationDialog({
           {recipientMode === "single" && (
             <div>
               <Label>المستلم</Label>
-              <Select value={recipientId} onValueChange={setRecipientId}>
-                <SelectTrigger data-testid="select-recipient">
-                  <SelectValue placeholder="اختر المستلم" />
-                </SelectTrigger>
-                <SelectContent>
-                  {allUsers.filter(u => u.id).map(u => (
-                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Searchable combobox — the Popover + Command pattern already used
+                  for the القضية picker in the memo create dialog (pages/memos.tsx).
+                  Was a plain Select, which is unusable against the full roster.
+                  Like that precedent, the filter matches SEVERAL fields, not just
+                  the primary one: name, role label and department name. */}
+              <Popover open={recipientComboOpen} onOpenChange={setRecipientComboOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={recipientComboOpen}
+                    data-testid="select-recipient"
+                    className="w-full justify-between font-normal text-right"
+                  >
+                    <span className="truncate">
+                      {recipientId
+                        ? (allUsers.find(u => u.id === recipientId)?.name || "اختر المستلم")
+                        : "اختر المستلم"}
+                    </span>
+                    <ChevronsUpDown className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[380px] p-0" align="start" dir="rtl">
+                  <Command filter={(value, search) => userMatchesSearch(value, search)}>
+                    <CommandInput placeholder="ابحث بالاسم أو الدور أو القسم..." />
+                    <CommandList>
+                      <CommandEmpty>لا توجد نتائج</CommandEmpty>
+                      <CommandGroup>
+                        {selectableUsers.map(u => (
+                          <CommandItem
+                            key={u.id}
+                            value={u.id}
+                            onSelect={(val) => { setRecipientId(val); setRecipientComboOpen(false); }}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium">{u.name}</span>
+                              <span className="text-xs text-muted-foreground">{userSubtitle(u)}</span>
+                            </div>
+                            {recipientId === u.id && <Check className="h-4 w-4 shrink-0 text-primary" />}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
           )}
 
           {recipientMode === "multiple" && (
             <div>
               <Label>المستلمين ({selectedRecipients.length} مختار)</Label>
-              <div className="border rounded-md p-2 max-h-32 overflow-y-auto mt-2 space-y-1">
-                {allUsers.map(u => (
+              {/* Multi-select gets the SAME search, but keeps its checkbox list —
+                  Command/CommandItem is a single-select idiom and the user must be
+                  able to see and keep several ticks at once. A plain filter box above
+                  the existing list gives the same "type to narrow" behaviour without
+                  changing the selection model. */}
+              <div className="relative mt-2">
+                <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  value={recipientSearch}
+                  onChange={(e) => setRecipientSearch(e.target.value)}
+                  placeholder="ابحث بالاسم أو الدور أو القسم..."
+                  className="pr-9"
+                  data-testid="input-recipient-search"
+                />
+              </div>
+              <div className="border rounded-md p-2 max-h-40 overflow-y-auto mt-2 space-y-1">
+                {filteredMultiUsers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-2">لا توجد نتائج</p>
+                ) : filteredMultiUsers.map(u => (
                   <div key={u.id} className="flex items-center gap-2">
                     <Checkbox
                       id={`user-${u.id}`}
                       checked={selectedRecipients.includes(u.id)}
                       onCheckedChange={() => toggleRecipient(u.id)}
                     />
-                    <label htmlFor={`user-${u.id}`} className="text-sm cursor-pointer">{u.name}</label>
+                    <label htmlFor={`user-${u.id}`} className="text-sm cursor-pointer flex-1">
+                      {u.name}
+                      <span className="text-xs text-muted-foreground mr-2">{userSubtitle(u)}</span>
+                    </label>
                   </div>
                 ))}
               </div>
