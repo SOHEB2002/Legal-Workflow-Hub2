@@ -2147,8 +2147,28 @@ export class DatabaseStorage implements IStorage {
     return result.map(mapDbNotification);
   }
 
+  // ORDER BY createdAt DESC — newest first, at the SQL level.
+  //
+  // This had no ordering at all, so the row order was whatever the plan
+  // happened to produce and could differ between two identical polls. That
+  // became the hot path for EVERY user on every poll once notification reads
+  // were scoped to the recipient, and it is a precondition for any future
+  // LIMIT/pagination: "the first N" is meaningless without a defined order.
+  //
+  // ⚠ The sort is NOT index-only. notifications_created_at_idx is on
+  // (created_at) alone and notifications_recipient_idx on (recipient_id) alone,
+  // so Postgres filters on the recipient index and then sorts that subset —
+  // cheap, because the subset is one user's rows, not the table. Making it
+  // index-only would need a composite (recipient_id, created_at DESC), which is
+  // additive DDL and belongs in a deliberate index batch, not here.
+  //
+  // Still NO LIMIT, deliberately: notifications are never deleted, so a bare
+  // limit would silently hide old ones with no way to reach them. See the
+  // commit message for the pagination options.
   async getNotificationsByRecipient(recipientId: string): Promise<Notification[]> {
-    const result = await db.select().from(notifications).where(eq(notifications.recipientId, recipientId));
+    const result = await db.select().from(notifications)
+      .where(eq(notifications.recipientId, recipientId))
+      .orderBy(desc(notifications.createdAt));
     return result.map(mapDbNotification);
   }
 

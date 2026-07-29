@@ -14,7 +14,18 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "./auth-context";
 import { useWebSocket, type WSEvent } from "./useWebSocket";
 
-const TEMPLATES_STORAGE_KEY = "lawfirm_notification_templates";
+// ⚠ VERSIONED KEY. getStoredTemplates returns the stored copy whenever the key
+// exists, and a useEffect writes the templates to localStorage on first mount —
+// so every existing user already has a byte-for-byte snapshot of the OLD
+// tokenised defaults persisted, and editing defaultTemplates alone would never
+// reach them. Bumping the key is what makes the new defaults take effect.
+//
+// Discarding the stored copy costs nothing here: addTemplate / updateTemplate /
+// deleteTemplate have ZERO consumers — there is no UI anywhere to create, edit
+// or delete a template — so the stored value can only ever be a copy of the
+// shipped defaults. Nobody has customised anything. If a template editor is
+// ever built, this key must be bumped with a real merge instead.
+const TEMPLATES_STORAGE_KEY = "lawfirm_notification_templates_v2";
 const PREFERENCES_STORAGE_KEY = "lawfirm_notification_preferences";
 const RULES_STORAGE_KEY = "lawfirm_notification_rules";
 
@@ -226,12 +237,24 @@ interface NotificationsContextType {
 
 const NotificationsContext = createContext<NotificationsContextType | undefined>(undefined);
 
+// Starter messages for the قالب جاهز picker in the send dialog.
+//
+// ⚠ NO PLACEHOLDER TOKENS. These used to embed {caseName}, {deadline} and
+// {consultationNumber}, and NOTHING ever substituted them: handleTemplateSelect
+// copies template.message verbatim into the textarea, so the recipient received
+// the literal "{deadline}". (The only substitution machinery in the codebase,
+// in triggerWorkflowNotification, works on RULES, uses an entirely different
+// token set — {entityName}, {stage}, … — and has zero callers.)
+//
+// Each message is now a complete sentence that stands on its own. The sender
+// adds the specifics in the editable textarea, which is what they were doing
+// anyway when they noticed the token.
 const defaultTemplates: NotificationTemplate[] = [
   {
     id: "1",
     name: "تنبيه تأخر",
     title: "تنبيه تأخر في الإنجاز",
-    message: "يرجى الإسراع في إنجاز {caseName}",
+    message: "يُرجى الإسراع في إنجاز العمل المطلوب وتحديث الحالة في أقرب وقت.",
     type: NotificationType.CASE_DELAY,
     priority: NotificationPriority.HIGH,
   },
@@ -239,7 +262,7 @@ const defaultTemplates: NotificationTemplate[] = [
     id: "2",
     name: "تذكير موعد جلسة",
     title: "تذكير بموعد الجلسة",
-    message: "تذكير: موعد الجلسة {deadline}",
+    message: "نذكّركم بموعد الجلسة القادمة، يُرجى الاستعداد وتجهيز المستندات اللازمة.",
     type: NotificationType.DEADLINE_WARNING,
     priority: NotificationPriority.URGENT,
   },
@@ -247,7 +270,7 @@ const defaultTemplates: NotificationTemplate[] = [
     id: "3",
     name: "مطلوب تحديث حالة",
     title: "مطلوب تحديث حالة القضية",
-    message: "مطلوب: تحديث حالة القضية رقم {consultationNumber}",
+    message: "يُرجى تحديث حالة القضية وإفادتنا بآخر المستجدات.",
     type: NotificationType.RESPONSE_REQUEST,
     priority: NotificationPriority.MEDIUM,
   },
@@ -255,7 +278,7 @@ const defaultTemplates: NotificationTemplate[] = [
     id: "4",
     name: "مراجعة عاجلة",
     title: "مراجعة مستند عاجلة",
-    message: "عاجل: مراجعة مستند قبل {deadline}",
+    message: "مطلوب مراجعة المستند بشكل عاجل قبل الموعد المحدد.",
     type: NotificationType.DEADLINE_WARNING,
     priority: NotificationPriority.URGENT,
   },
@@ -263,7 +286,7 @@ const defaultTemplates: NotificationTemplate[] = [
     id: "5",
     name: "إسناد مهمة جديدة",
     title: "تم إسناد مهمة جديدة",
-    message: "تم إسناد مهمة جديدة إليك: {caseName}",
+    message: "تم إسناد مهمة جديدة إليك، يُرجى الاطلاع عليها والبدء بتنفيذها.",
     type: NotificationType.ASSIGNMENT,
     priority: NotificationPriority.MEDIUM,
   },
