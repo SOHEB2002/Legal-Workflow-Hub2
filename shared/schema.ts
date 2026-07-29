@@ -5024,6 +5024,68 @@ export function isFirmFuture(day: string | null | undefined): boolean {
   return !!d && d > firmToday();
 }
 
+// The offset Asia/Riyadh was running at a given instant, in milliseconds.
+// Derived from Intl rather than hard-coded to +03:00 so this stays correct if
+// the zone's rules ever change — the same reason firmToday goes through Intl
+// instead of adding three hours by hand.
+function firmZoneOffsetMs(utcMs: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: FirmTimeZone,
+    hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(utcMs));
+  const part = (type: string): number => Number(parts.find((p) => p.type === type)?.value);
+  // hour12:false renders midnight as "24" in some engines — normalise it.
+  const wallClockAsUtc = Date.UTC(
+    part("year"), part("month") - 1, part("day"),
+    part("hour") % 24, part("minute"), part("second"),
+  );
+  return wallClockAsUtc - utcMs;
+}
+
+// 🔴 THE BUG THIS REPLACES — the date+time counterpart of the date-only fix
+// above, and the same two-calendar mistake. server/scheduler.ts did:
+//     const d = new Date("2026-07-28"); d.setHours(10, 30);
+// new Date("YYYY-MM-DD") is UTC MIDNIGHT, and setHours then writes the hours in
+// SERVER-LOCAL time. On Replit's UTC host that yields 10:30 UTC = 13:30 Riyadh,
+// so every hearing reminder and every 8/24/48h late-hearing escalation fired
+// three hours off. hearings.hearing_time is a bare wall-clock "HH:mm" written by
+// an <input type="time"> — it means the firm's clock, so it must be resolved in
+// the firm's zone, never the host's.
+//
+// STRICT BY DESIGN: returns null when EITHER part is missing or malformed, so a
+// caller has to decide what a data anomaly means rather than silently inheriting
+// a default. (The old code was inconsistent about exactly this — an empty time
+// became 09:00 while an unparseable time became 00:00.) Accepts "H:mm" and
+// "HH:mm"; nothing validates the stored format.
+/** A stored "YYYY-MM-DD" + "HH:mm" resolved to the instant it names in the firm's timezone. */
+export function firmDateTimeToInstant(
+  day: string | null | undefined,
+  time: string | null | undefined,
+): Date | null {
+  const dayMatch = String(day || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dayMatch) return null;
+  const timeMatch = String(time || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!timeMatch) return null;
+
+  const [year, month, dayOfMonth] = [Number(dayMatch[1]), Number(dayMatch[2]), Number(dayMatch[3])];
+  const [hours, minutes] = [Number(timeMatch[1]), Number(timeMatch[2])];
+  if (month < 1 || month > 12 || dayOfMonth < 1 || dayOfMonth > 31) return null;
+  if (hours > 23 || minutes > 59) return null;
+
+  // Read the wall-clock as if it were UTC, then subtract the zone's offset at
+  // that instant. Re-checked once: on a DST boundary the offset at the guessed
+  // instant can differ from the offset at the real one. Riyadh has no DST, so
+  // the second pass is a no-op there — it is here so the helper is correct for
+  // FirmTimeZone's value, not for today's value of it.
+  const wallClockAsUtc = Date.UTC(year, month - 1, dayOfMonth, hours, minutes);
+  const firstPass = wallClockAsUtc - firmZoneOffsetMs(wallClockAsUtc);
+  const secondPassOffset = firmZoneOffsetMs(firstPass);
+  const instant = wallClockAsUtc - secondPassOffset;
+  return isNaN(instant) ? null : new Date(instant);
+}
+
 export function findPrimaryJudgmentHearing<
   T extends { result?: string | null; judgmentFinal?: boolean | null; hearingDate?: string | null },
 >(hearings: T[]): T | null {

@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
-import { SettlementLinkMissingClosureReason } from "@shared/schema";
+import { SettlementLinkMissingClosureReason, firmDateTimeToInstant } from "@shared/schema";
 
 export function startScheduler() {
   console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
@@ -42,22 +42,40 @@ export function startScheduler() {
   });
 }
 
+// The wall-clock this scheduler assumes when a hearing's own time is unusable.
+// PRESERVED from the previous implementation rather than changed: returning null
+// instead would SKIP the hearing, silently suppressing its reminder and its
+// 8/24/48h escalation — the coverage loss would land on exactly the rows whose
+// data is already broken. 09:00 is also the safer of the two values the old code
+// produced, since a later assumed time makes an escalation fire later, never
+// early.
+const FALLBACK_HEARING_TIME = "09:00";
+
+// Resolve a hearing's date + time to a real instant IN THE FIRM'S TIMEZONE.
+//
+// 🔴 Was: `new Date(dateStr)` (UTC midnight) followed by `date.setHours(...)`
+// (SERVER-local) — two different calendars in two lines, so on the UTC
+// production host every reminder and every escalation was off by the Riyadh
+// offset. firmDateTimeToInstant does it in one calendar; see its comment in
+// shared/schema.ts. Thresholds, recipients, dedup and titles are untouched.
+//
+// It also unifies a silent inconsistency: an EMPTY time used to become 09:00,
+// but an UNPARSEABLE one fell through with no setHours call at all and became
+// 00:00. Both now take the same documented fallback, and — unlike before — the
+// fallback is logged instead of being invisible.
 function parseHearingDateTime(dateStr: string, timeStr: string | null): Date | null {
-  try {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return null;
-    if (timeStr) {
-      const timeParts = timeStr.match(/(\d{1,2}):(\d{2})/);
-      if (timeParts) {
-        date.setHours(parseInt(timeParts[1]), parseInt(timeParts[2]));
-      }
-    } else {
-      date.setHours(9, 0, 0, 0);
-    }
-    return date;
-  } catch {
-    return null;
-  }
+  const exact = firmDateTimeToInstant(dateStr, timeStr);
+  if (exact) return exact;
+
+  // Distinguish a bad DATE (nothing to salvage — behaves as before: skipped)
+  // from a bad TIME (recoverable via the documented fallback).
+  const fallback = firmDateTimeToInstant(dateStr, FALLBACK_HEARING_TIME);
+  if (!fallback) return null;
+  console.warn(
+    `[scheduler] hearing_time is missing or malformed (${JSON.stringify(timeStr)}) ` +
+    `for hearing date ${dateStr} — assuming ${FALLBACK_HEARING_TIME} Asia/Riyadh.`,
+  );
+  return fallback;
 }
 
 // Synchronous helper — accepts a pre-fetched array so callers can batch
@@ -136,8 +154,10 @@ async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotif
 
     const lawyer = allUsers.find((u: any) => u.id === hearingOwnerId);
     if (lawyer?.departmentId) {
+      // !!u.departmentId — a null/"" dept must never match; u.isActive mirrors
+      // checkStruckOffExpiry's lookup, so a deactivated head stops being paged.
       const deptHead = allUsers.find(
-        (u: any) => u.departmentId === lawyer.departmentId && u.role === "department_head"
+        (u: any) => !!u.departmentId && u.departmentId === lawyer.departmentId && u.role === "department_head" && u.isActive
       );
       if (deptHead) recipientIds.push(deptHead.id);
     }
@@ -439,7 +459,9 @@ async function checkLegalDeadlines() {
 
           const recipients = [recipientId];
           if (caseInfo?.departmentId) {
-            const deptHead = allUsers.find((u: any) => u.departmentId === caseInfo.departmentId && u.role === "department_head");
+            // !!u.departmentId — a null/"" dept must never match; u.isActive mirrors
+            // checkStruckOffExpiry's lookup, so a deactivated head stops being paged.
+            const deptHead = allUsers.find((u: any) => !!u.departmentId && u.departmentId === caseInfo.departmentId && u.role === "department_head" && u.isActive);
             if (deptHead) recipients.push(deptHead.id);
           }
           const branchManager = allUsers.find((u: any) => u.role === "branch_manager");
