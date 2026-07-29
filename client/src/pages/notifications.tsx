@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, CheckCheck, Trash2, Send, Filter, ArrowUpCircle, Eye, MessageSquare } from "lucide-react";
+import { Bell, CheckCheck, Send, Filter, ArrowUpCircle, Eye, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -55,7 +55,6 @@ export default function NotificationsPage() {
   const {
     getMyNotifications,
     markAsRead,
-    deleteNotification,
     getEscalatedNotifications,
   } = useNotifications();
   const { toast } = useToast();
@@ -125,12 +124,6 @@ export default function NotificationsPage() {
   const handleBulkMarkAsRead = () => {
     selectedIds.forEach(id => markAsRead(id));
     toast({ title: `تم تحديد ${selectedIds.length} إشعار كمقروء` });
-    setSelectedIds([]);
-  };
-
-  const handleBulkDelete = () => {
-    selectedIds.forEach(id => deleteNotification(id));
-    toast({ title: `تم حذف ${selectedIds.length} إشعار` });
     setSelectedIds([]);
   };
 
@@ -241,10 +234,6 @@ export default function NotificationsPage() {
                   <Button size="sm" variant="outline" onClick={handleBulkMarkAsRead}>
                     <CheckCheck className="w-4 h-4 ml-1" />
                     تحديد كمقروء ({selectedIds.length})
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleBulkDelete}>
-                    <Trash2 className="w-4 h-4 ml-1" />
-                    حذف ({selectedIds.length})
                   </Button>
                 </div>
               )}
@@ -360,14 +349,6 @@ export default function NotificationsPage() {
                               data-testid={`button-respond-${notification.id}`}
                             >
                               <MessageSquare className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => deleteNotification(notification.id)}
-                              data-testid={`button-delete-${notification.id}`}
-                            >
-                              <Trash2 className="w-4 h-4 text-destructive" />
                             </Button>
                           </div>
                         </TableCell>
