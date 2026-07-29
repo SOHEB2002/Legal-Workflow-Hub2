@@ -95,6 +95,7 @@ export default function NotificationsPage() {
     getMyNotifications,
     markAsRead,
     getUnreadCount,
+    setTabFilter,
     hasMoreNotifications,
     isLoadingMore,
     loadMoreNotifications,
@@ -115,15 +116,9 @@ export default function NotificationsPage() {
   const getFilteredNotifications = (): Notification[] => {
     let notifications = getMyNotifications(userId);
 
-    switch (activeTab) {
-      case "unread":
-        notifications = notifications.filter(n => !n.isRead);
-        break;
-      case "requires_response":
-        notifications = notifications.filter(n => n.requiresResponse && !n.response);
-        break;
-    }
-
+    // NO TAB FILTERING HERE ANY MORE — the two tabs are applied in SQL
+    // (?unread / ?requiresResponse) so they see the user's whole history, not
+    // just the loaded window. Type and priority remain client-side by decision.
     if (typeFilter !== "all") {
       notifications = notifications.filter(n => n.type === typeFilter);
     }
@@ -140,6 +135,19 @@ export default function NotificationsPage() {
   // once the list became paged meant the header and the bell badge, both on
   // screen at once, could disagree. getUnreadCount is the server COUNT(*).
   const unreadCount = getUnreadCount(userId);
+
+  // Changing tab now re-queries the SERVER. setTabFilter also resets paging to
+  // one page — see its comment; carrying a three-page window into a narrow tab
+  // would ask for matching rows that mostly do not exist.
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    setSelectedIds([]); // the previous tab's selection does not belong to this one
+    void setTabFilter(
+      tab === "unread" ? { unread: true }
+      : tab === "requires_response" ? { requiresResponse: true }
+      : {},
+    );
+  };
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -215,7 +223,7 @@ export default function NotificationsPage() {
 
       <Card>
         <CardContent className="p-0">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <div className="border-b px-4 pt-4">
               <TabsList className="w-full justify-start">
                 <TabsTrigger value="all" data-testid="tab-all">الكل</TabsTrigger>
@@ -439,8 +447,11 @@ export default function NotificationsPage() {
                   whose whole history fits in one page never sees any of it. */}
               {hasMoreNotifications && (
                 <div className="p-4 border-t flex flex-col items-center gap-2">
+                  {/* Narrowed: the TABS are now applied server-side and see the
+                      whole history, so only النوع and الأولوية are limited to
+                      the loaded rows. */}
                   <p className="text-xs text-muted-foreground text-center">
-                    التبويبات والفلاتر تعمل على الإشعارات المحمّلة حالياً — حمّل المزيد للبحث في الإشعارات الأقدم.
+                    فلتَرا النوع والأولوية يعملان على الإشعارات المحمّلة حالياً — حمّل المزيد لتشملهما الإشعارات الأقدم.
                   </p>
                   <Button
                     variant="outline"

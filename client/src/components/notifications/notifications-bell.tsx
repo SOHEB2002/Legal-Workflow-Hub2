@@ -139,7 +139,7 @@ function NotificationItem({ notification, onMarkAsRead }: NotificationItemProps)
 export function NotificationsBell() {
   const { user } = useAuth();
   const { 
-    getMyNotifications, 
+    getBellNotifications,
     getUnreadCount, 
     getUrgentCount, 
     markAsRead, 
@@ -155,7 +155,9 @@ export function NotificationsBell() {
   const lastToastNotifRef = useRef<string>("");
 
   const userId = user?.id || "";
-  const notifications = getMyNotifications(userId).slice(0, 5);
+  // getBellNotifications, not getMyNotifications: the bell shows the newest
+  // rows UNFILTERED, regardless of which tab the notifications page is on.
+  const notifications = getBellNotifications(userId).slice(0, 5);
   const unreadCount = getUnreadCount(userId);
   const urgentCount = getUrgentCount(userId);
   const preferences = getUserPreferences(userId);
@@ -177,7 +179,7 @@ export function NotificationsBell() {
         playNotificationSound();
       }
 
-      const latestUnread = getMyNotifications(userId).find(n => !n.isRead);
+      const latestUnread = getBellNotifications(userId).find(n => !n.isRead);
       if (latestUnread && latestUnread.id !== lastToastNotifRef.current) {
         lastToastNotifRef.current = latestUnread.id;
         const priorityLabel = NotificationPriorityLabels[latestUnread.priority] || "";
@@ -192,7 +194,7 @@ export function NotificationsBell() {
       
       setHasNewNotifications(false);
     }
-  }, [hasNewNotifications, preferences.enableSound, unreadCount, setHasNewNotifications, playNotificationSound, userId, getMyNotifications, toast]);
+  }, [hasNewNotifications, preferences.enableSound, unreadCount, setHasNewNotifications, playNotificationSound, userId, getBellNotifications, toast]);
 
   if (!user) return null;
 
