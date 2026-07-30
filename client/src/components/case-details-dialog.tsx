@@ -8,8 +8,6 @@ import {
   UserPlus,
   ClipboardCheck,
   Bell,
-  Paperclip,
-  Trash2,
   ExternalLink,
   AlertTriangle,
   ArrowLeftRight,
@@ -24,7 +22,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SmartInput } from "@/components/ui/smart-input";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -83,7 +80,7 @@ import {
   weAreTheAppellant,
   ClosureReasonLabels,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, PriorityType, Attachment, ClosureReasonValue } from "@shared/schema";
+import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue } from "@shared/schema";
 
 // Stages that mark a REAL trip through internal review. Moved here verbatim with
 // the dialog — the actions tab's "إرجاع من المراجعة الداخلية" block is its only
@@ -306,62 +303,13 @@ export function CaseDetailsDialog({
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
   const [registrationDialogType, setRegistrationDialogType] = useState<"" | "taradi" | "mohr">("");
   const [registrationNumberInput, setRegistrationNumberInput] = useState("");
-  const [caseAttachments, setCaseAttachments] = useState<Attachment[]>([]);
-  const [attachmentForm, setAttachmentForm] = useState({ fileName: "", fileUrl: "" });
-  const [isLoadingAttachments, setIsLoadingAttachments] = useState(false);
-
-  const fetchAttachments = async (caseId: string) => {
-    setIsLoadingAttachments(true);
-    try {
-      const res = await apiRequest("GET", `/api/attachments/case/${caseId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCaseAttachments(data);
-      }
-    } catch (e) {
-      // attachment fetch failed silently
-    } finally {
-      setIsLoadingAttachments(false);
-    }
-  };
-
-  const addAttachment = async () => {
-    if (!selectedCase || !user || !attachmentForm.fileName.trim() || !attachmentForm.fileUrl.trim()) return;
-    try {
-      await apiRequest("POST", "/api/attachments", {
-        entityType: "case",
-        entityId: selectedCase.id,
-        fileName: attachmentForm.fileName.trim(),
-        fileUrl: attachmentForm.fileUrl.trim(),
-        uploadedBy: user.id,
-      });
-      setAttachmentForm({ fileName: "", fileUrl: "" });
-      fetchAttachments(selectedCase.id);
-      toast({ title: "تم إضافة المرفق بنجاح" });
-    } catch (e) {
-      toast({ title: "فشل إضافة المرفق", variant: "destructive" });
-    }
-  };
-
-  const deleteAttachment = async (attachmentId: string) => {
-    if (!selectedCase) return;
-    try {
-      await apiRequest("DELETE", `/api/attachments/${attachmentId}`);
-      fetchAttachments(selectedCase.id);
-      toast({ title: "تم حذف المرفق" });
-    } catch (e) {
-      toast({ title: "فشل حذف المرفق", variant: "destructive" });
-    }
-  };
-
-  // Attachments + comments are loaded when the dialog OPENS for a case. On the
-  // cases page these two fetches used to fire inside openDetailsDialog; they move
-  // here with the state they feed, so any host (cases page or hub) gets the same
-  // loaded dialog without having to remember to prime it.
+  // Comments are loaded when the dialog OPENS for a case. On the cases page this
+  // fetch used to fire inside openDetailsDialog; it moves here with the state it
+  // feeds, so any host (cases page or hub) gets the same loaded dialog without
+  // having to remember to prime it.
   const openCaseId = open && selectedCase ? selectedCase.id : null;
   useEffect(() => {
     if (!openCaseId) return;
-    fetchAttachments(openCaseId);
     fetchComments(openCaseId);
   }, [openCaseId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -649,11 +597,10 @@ export function CaseDetailsDialog({
               </div>
 
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="grid w-full grid-cols-5 lg:grid-cols-9">
+                <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
                   <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
                   <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
-                  <TabsTrigger value="attachments" data-testid="tab-attachments">المرفقات</TabsTrigger>
                   <TabsTrigger value="comments" data-testid="tab-comments">التعليقات</TabsTrigger>
                   <TabsTrigger value="activity" data-testid="tab-activity">النشاط</TabsTrigger>
                   <TabsTrigger value="notes" data-testid="tab-notes">ملاحظات</TabsTrigger>
@@ -1325,90 +1272,6 @@ export function CaseDetailsDialog({
                   ) : (
                     <p className="text-muted-foreground text-center py-8">لا يوجد سجل للمراحل</p>
                   )}
-                </TabsContent>
-
-                <TabsContent value="attachments" className="mt-4">
-                  <div className="space-y-4">
-                    <div className="border rounded-lg p-4 space-y-3">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <Paperclip className="w-4 h-4" />
-                        إضافة مرفق جديد
-                      </h4>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <Label>اسم الملف</Label>
-                          <SmartInput
-                            inputType="text"
-                            data-testid="input-attachment-name"
-                            placeholder="مثال: عقد التأسيس"
-                            value={attachmentForm.fileName}
-                            onChange={(e) => setAttachmentForm({ ...attachmentForm, fileName: e.target.value })}
-                          />
-                        </div>
-                        <div>
-                          <Label>رابط الملف (URL)</Label>
-                          <SmartInput
-                            inputType="code"
-                            data-testid="input-attachment-url"
-                            placeholder="https://drive.google.com/..."
-                            value={attachmentForm.fileUrl}
-                            onChange={(e) => setAttachmentForm({ ...attachmentForm, fileUrl: e.target.value })}
-                          />
-                        </div>
-                      </div>
-                      <Button
-                        data-testid="button-add-attachment"
-                        onClick={addAttachment}
-                        disabled={!attachmentForm.fileName.trim() || !attachmentForm.fileUrl.trim()}
-                        size="sm"
-                      >
-                        <Plus className="w-4 h-4 ml-2" />
-                        إضافة مرفق
-                      </Button>
-                    </div>
-
-                    {isLoadingAttachments ? (
-                      <p className="text-center text-muted-foreground py-4">جارٍ تحميل المرفقات...</p>
-                    ) : caseAttachments.length === 0 ? (
-                      <p className="text-muted-foreground text-center py-4">لا توجد مرفقات</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {caseAttachments.map((att) => (
-                          <div key={att.id} className="flex items-center justify-between p-3 border rounded-lg" data-testid={`attachment-item-${att.id}`}>
-                            <div className="flex items-center gap-3 flex-1 min-w-0">
-                              <Paperclip className="w-4 h-4 text-muted-foreground shrink-0" />
-                              <div className="min-w-0">
-                                <p className="font-medium truncate">{att.fileName}</p>
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                                  <span>{users.find(u => u.id === att.uploadedBy)?.name || "غير معروف"}</span>
-                                  <span>-</span>
-                                  <DualDateDisplay date={att.createdAt} showTime compact />
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                data-testid={`button-open-attachment-${att.id}`}
-                                onClick={() => window.open(att.fileUrl, "_blank")}
-                              >
-                                <ExternalLink className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                data-testid={`button-delete-attachment-${att.id}`}
-                                onClick={() => deleteAttachment(att.id)}
-                              >
-                                <Trash2 className="w-4 h-4 text-destructive" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
                 </TabsContent>
 
                 <TabsContent value="comments" className="mt-4">
