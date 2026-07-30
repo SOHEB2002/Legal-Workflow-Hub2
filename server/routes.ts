@@ -1,4 +1,7 @@
-import type { Express, Request } from "express";
+// ExpressResponse is aliased because the bare name `Response` resolves to the
+// DOM fetch Response in this file's lib set — streamAttachmentToResponse needs
+// the Express one (headersSent / writableEnded / pipe target).
+import type { Express, Request, Response as ExpressResponse } from "express";
 import { type Server } from "http";
 import { storage, type CaseNumberField, type ReopenLifecycleFlags } from "./storage";
 import {
@@ -178,16 +181,22 @@ import {
 } from "./acting-context";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
 
-// Contract attachments live in Replit Object Storage now — the
-// previous ./uploads/contracts/<id>/<file> layout was on the
-// container's ephemeral disk, and every Autoscale restart / scale
-// event / republish wiped the lot while leaving the DB rows pointing
+// Attachments live in Replit Object Storage — the previous
+// ./uploads/contracts/<id>/<file> layout was on the container's
+// ephemeral disk, and every Autoscale restart / scale event /
+// republish wiped the lot while leaving the DB rows pointing
 // at vanished paths. The client constructor itself doesn't talk to
 // the bucket; getBucket() runs lazily on first request, so this is
 // safe even if REPLIT_OBJECT_STORAGE_BUCKET_ID isn't wired up at
 // module load (the request handler surfaces a 500 with the actual
 // error message in that case).
-const contractObjectStore = new ObjectStorageClient();
+//
+// ONE client for ALL attachment entities (contracts, case judgment deeds,
+// hearing minutes). There is a single bucket — the per-entity separation is
+// the key PREFIX, not the client — so a second instance would add a second
+// lazy bucket handshake for nothing. Renamed from contractObjectStore when
+// the deed/minutes surfaces were added; no behavioural change.
+const attachmentObjectStore = new ObjectStorageClient();
 
 // Object-Storage key prefixes, one per attachment-bearing entity. The prefix
 // is also the bucket "folder", so keys are self-describing:
@@ -244,9 +253,56 @@ function makeObjectKey(prefix: string, parentId: string, originalName: string): 
 function makeContractObjectKey(contractId: string, originalName: string): string {
   return makeObjectKey(OBJECT_KEY_PREFIXES.contract, contractId, originalName);
 }
-// makeCaseDeedObjectKey / makeHearingMinutesObjectKey land with their call
-// sites in the routes commit — declaring them here first would trip the
-// project's `tsc --noUnusedLocals` gate, which is clean and stays clean.
+
+function makeCaseDeedObjectKey(caseId: string, originalName: string): string {
+  return makeObjectKey(OBJECT_KEY_PREFIXES.case, caseId, originalName);
+}
+
+function makeHearingMinutesObjectKey(hearingId: string, originalName: string): string {
+  return makeObjectKey(OBJECT_KEY_PREFIXES.hearing, hearingId, originalName);
+}
+
+// Streams an attachment blob from Object Storage to the response. Extracted
+// verbatim from the contracts download handler so all three surfaces share ONE
+// implementation of the error translation, which is subtle: SDK stream errors
+// arrive on the readable as StreamRequestError, and we can only switch to a
+// JSON envelope while NO bytes have gone out — once the body has started, all
+// we can do is end the response and let the client see a short read. The
+// caller sets the Content-* headers before calling; this owns the body.
+function streamAttachmentToResponse(
+  store: ObjectStorageClient,
+  att: { id: string; filePath: string },
+  res: ExpressResponse,
+  ctx: string,
+): void {
+  const stream = store.downloadAsStream(att.filePath);
+  stream.on("error", (err: any) => {
+    const requestError = typeof err?.getRequestError === "function" ? err.getRequestError() : null;
+    const statusCode = requestError?.statusCode;
+    console.error(`[${ctx}] object storage stream failed:`, {
+      attachmentId: att.id,
+      key: att.filePath,
+      status: statusCode,
+      message: err?.message,
+    });
+    if (!res.headersSent) {
+      const status = statusCode === 404 ? 410 : 500;
+      res.status(status).json({
+        error: status === 410
+          ? "الملف مفقود — يرجى إعادة الرفع من جديد"
+          : `فشل تحميل الملف من التخزين السحابي: ${err?.message || "خطأ غير معروف"}`,
+      });
+    } else {
+      res.end();
+    }
+  });
+  // Client disconnected mid-download — tear the upstream stream down so we
+  // don't keep paging bytes from Object Storage for a dead socket.
+  res.on("close", () => {
+    if (!res.writableEnded) stream.destroy();
+  });
+  stream.pipe(res);
+}
 
 interface AuthRequest extends Request {
   user?: {
@@ -426,6 +482,35 @@ function canEditCaseData(user: CaseActorIdentity, caseData?: any, ctx?: ActingCo
 function canActOnMohrSettlement(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
   return caseActorIdentities(user, caseData, ctx).some((u) =>
     u.role === "branch_manager"
+    || (u.role === "department_head" && !!u.departmentId && u.departmentId === caseData.departmentId)
+    || isAssignedLawyer({ id: u.id }, caseData));
+}
+
+// Judgment-deed (صك) FILE attachment gate: branch_manager | admin_support |
+// department_head scoped to the case's OWN department | assigned lawyer.
+// Delegation-aware through the same caseActorIdentities expansion.
+//
+// ⚠ A NEW SIBLING HELPER, deliberately NOT `canActOnMohrSettlement || admin_support`
+// and deliberately NOT an edit to that helper. canActOnMohrSettlement is this
+// exact set MINUS admin_support, and that exclusion is the owner's explicit,
+// documented call (see the note above it). It is SHARED by the MOHR settlement
+// actions, POST /api/cases/:id/reopen — where admin_support "can CLOSE a case
+// but not reopen one" — and POST /api/cases/:id/appeal-outcome. Adding
+// admin_support there to serve this feature would silently widen all three.
+// This follows the tiered-widening precedent: build a new helper, leave the
+// existing one untouched, nobody loses or gains access anywhere else.
+//
+// NOTE the deliberate asymmetry with the deed RECEIPT DATE endpoint
+// (POST /api/cases/:id/judgment-deed), which keeps canActOnMohrSettlement and
+// so still excludes admin_support. Recording the date starts the objection
+// clock and creates/re-dates the لائحة اعتراضية memo — a legal act. Filing the
+// PDF that arrived from the court is clerical, and admin_support is who
+// receives and files it. Same shape as the existing MOHR/stage asymmetry.
+function canAttachCaseJudgmentDeed(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) =>
+    u.role === "branch_manager"
+    || u.role === "admin_support"
+    // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
     || (u.role === "department_head" && !!u.departmentId && u.departmentId === caseData.departmentId)
     || isAssignedLawyer({ id: u.id }, caseData));
 }
@@ -7532,7 +7617,7 @@ export async function registerRoutes(
       // nothing left to delete and are skipped.
       for (const att of attachments) {
         if (att.filePath && isAttachmentObjectKey(att.filePath)) {
-          contractObjectStore.delete(att.filePath, { ignoreNotFound: true }).catch((e) => {
+          attachmentObjectStore.delete(att.filePath, { ignoreNotFound: true }).catch((e) => {
             console.warn(`[contracts/delete] failed to delete object ${att.filePath}:`, e?.message || e);
           });
         }
@@ -8991,7 +9076,7 @@ export async function registerRoutes(
         // uploadFromFilename uses @google-cloud/storage's resumable
         // upload internally, so the bytes never sit in Node's heap —
         // unlike the previous uploadFromBytes(file.buffer) call.
-        const uploadResult = await contractObjectStore.uploadFromFilename(objectKey, file.path);
+        const uploadResult = await attachmentObjectStore.uploadFromFilename(objectKey, file.path);
         if (!uploadResult.ok) {
           console.error("[contracts/attachments POST] object storage upload failed:", {
             objectKey,
@@ -9022,7 +9107,7 @@ export async function registerRoutes(
         // correctness issue.
         if (replaced && replaced.filePath && replaced.filePath !== attachment.filePath) {
           if (isAttachmentObjectKey(replaced.filePath)) {
-            contractObjectStore.delete(replaced.filePath, { ignoreNotFound: true }).catch((e) => {
+            attachmentObjectStore.delete(replaced.filePath, { ignoreNotFound: true }).catch((e) => {
               console.error("[contracts/attachments POST] failed to delete replaced object:", {
                 key: replaced.filePath,
                 error: e,
@@ -9133,41 +9218,10 @@ export async function registerRoutes(
       if (att.fileSize) {
         res.setHeader("Content-Length", String(att.fileSize));
       }
-      // Stream from Object Storage straight to the client. Errors are
-      // emitted on the readable as StreamRequestError; we translate
-      // them to a JSON error iff no bytes (and therefore no headers)
-      // have gone out yet, otherwise we just end the response — once
-      // the body has started we can't switch to a JSON envelope.
-      const stream = contractObjectStore.downloadAsStream(att.filePath);
-      stream.on("error", (err: any) => {
-        const requestError = typeof err?.getRequestError === "function" ? err.getRequestError() : null;
-        const statusCode = requestError?.statusCode;
-        console.error("[contracts download] object storage stream failed:", {
-          attachmentId: att.id,
-          key: att.filePath,
-          status: statusCode,
-          message: err?.message,
-        });
-        if (!res.headersSent) {
-          const status = statusCode === 404 ? 410 : 500;
-          res.status(status).json({
-            error: status === 410
-              ? "الملف مفقود — يرجى إعادة الرفع من جديد"
-              : `فشل تحميل الملف من التخزين السحابي: ${err?.message || "خطأ غير معروف"}`,
-          });
-        } else {
-          // Headers already flushed (some bytes shipped) — best we can
-          // do is terminate the response so the client sees a short read.
-          res.end();
-        }
-      });
-      // If the client disconnects mid-download, tear the upstream
-      // stream down so we don't keep paging bytes from Object Storage
-      // for a dead socket.
-      res.on("close", () => {
-        if (!res.writableEnded) stream.destroy();
-      });
-      stream.pipe(res);
+      // Stream from Object Storage straight to the client. Body + error
+      // translation moved verbatim into streamAttachmentToResponse so the
+      // contract, deed and minutes downloads share one implementation.
+      streamAttachmentToResponse(attachmentObjectStore, att, res, "contracts download");
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -9213,7 +9267,7 @@ export async function registerRoutes(
       // object doesn't fail the response after the row is already
       // deleted; best-effort either way.
       if (deleted.filePath && isAttachmentObjectKey(deleted.filePath)) {
-        contractObjectStore.delete(deleted.filePath, { ignoreNotFound: true }).catch((e) => {
+        attachmentObjectStore.delete(deleted.filePath, { ignoreNotFound: true }).catch((e) => {
           console.error("[contracts/attachments DELETE] failed to delete object:", {
             key: deleted.filePath,
             error: e,
@@ -9230,6 +9284,434 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error: any) {
       console.error("[contracts/attachments DELETE] error:", error);
+      res.status(500).json({ error: error.message || "فشل حذف المرفق" });
+    }
+  });
+
+  // ==================== Judgment deed (صك) — case attachment ====================
+  // Four routes mirroring the contract attachment block above: upload, get,
+  // download, delete. Same multer instance (contractUpload — 50MB cap, same
+  // MIME allowlist, same disk-staging), same Object-Storage-BEFORE-DB ordering,
+  // same temp-file unlink in `finally`, same latin1→UTF-8 filename repair, same
+  // RFC-5987 Content-Disposition, same stream-error translation.
+  //
+  // ONE deed per case: there is no slotKey and no "additional" list. A
+  // re-upload REPLACES, enforced by the unique index on case_attachments.case_id
+  // and executed in storage.createCaseAttachment's single transaction.
+  //
+  // The deed FILE and the deed RECEIPT DATE are separate, on purpose. The date
+  // (POST /api/cases/:id/judgment-deed) starts the objection clock and
+  // creates/re-dates the لائحة اعتراضية memo. These routes only carry the PDF.
+  // NOTHING here is stage-gated and nothing blocks a transition — batch 1 is
+  // storage + routes + UI only.
+
+  app.post(
+    "/api/cases/:id/deed-attachment",
+    requireAuth,
+    (req, res, next) => contractUpload.single("file")(req, res, (err) => {
+      if (!err) return next();
+      console.error("[cases/deed-attachment POST] multer error:", {
+        code: (err as any)?.code,
+        message: (err as any)?.message,
+        field: (err as any)?.field,
+        caseId: req.params?.id,
+      });
+      unlinkContractTemp((req as any).file?.path, "cases/deed-attachment POST (multer error)");
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "حجم الملف يتجاوز الحد المسموح (50MB)" });
+      }
+      return res.status(400).json({ error: "فشل تحميل الملف" });
+    }),
+    async (req: AuthRequest, res) => {
+      const file = (req as any).file as
+        | { originalname: string; path: string; filename: string; size: number; mimetype: string }
+        | undefined;
+      const tempPath = file?.path;
+      try {
+        const reqUser = req.user;
+        if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+        const lawCase = await storage.getCaseById(String(req.params.id));
+        if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+        if (!canAttachCaseJudgmentDeed(reqUser, lawCase, req.actingContext)) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لإرفاق صك الحكم" });
+        }
+        if (!file) {
+          // No file = fileFilter rejected the mimetype (multer skips rejected
+          // files silently instead of erroring). Log the attempt so we can tell
+          // "forgot to attach" from "uploaded a .heic".
+          console.error("[cases/deed-attachment POST] no file in request", {
+            caseId: req.params?.id,
+            multipartFields: Object.keys(req.body || {}),
+          });
+          return res.status(400).json({ error: "الملف مطلوب أو نوعه غير مسموح" });
+        }
+        // Multer parses the multipart filename as latin1 (busboy default), so
+        // Arabic names round-trip into mojibake. Re-decode BEFORE persisting.
+        try {
+          file.originalname = Buffer.from(file.originalname, "latin1").toString("utf8");
+        } catch {
+          // Defensive only — Buffer.from never throws on a string input.
+        }
+
+        // Object Storage FIRST, DB row second, so a failed upload cannot leave
+        // a row pointing at nothing.
+        const objectKey = makeCaseDeedObjectKey(lawCase.id, file.originalname);
+        const uploadResult = await attachmentObjectStore.uploadFromFilename(objectKey, file.path);
+        if (!uploadResult.ok) {
+          console.error("[cases/deed-attachment POST] object storage upload failed:", {
+            objectKey,
+            error: uploadResult.error,
+          });
+          return res.status(500).json({
+            error: `فشل رفع الملف إلى التخزين السحابي: ${uploadResult.error?.message || "خطأ غير معروف"}`,
+          });
+        }
+
+        const { attachment, replaced } = await storage.createCaseAttachment({
+          caseId: lawCase.id,
+          fileName: file.originalname,
+          filePath: objectKey,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          uploadedBy: reqUser.id,
+        });
+
+        // Drop the displaced blob AFTER the transaction commits. Best-effort:
+        // a failed delete leaves a billable orphan, not a correctness problem.
+        if (replaced && replaced.filePath && replaced.filePath !== attachment.filePath) {
+          if (isAttachmentObjectKey(replaced.filePath)) {
+            attachmentObjectStore.delete(replaced.filePath, { ignoreNotFound: true }).catch((e) => {
+              console.error("[cases/deed-attachment POST] failed to delete replaced object:", {
+                key: replaced.filePath,
+                error: e,
+              });
+            });
+          }
+        }
+
+        await logCaseActivityActing(req, {
+          caseId: lawCase.id,
+          userId: reqUser.id,
+          userName: reqUser.name || reqUser.id,
+          actionType: replaced ? "judgment_deed_file_replaced" : "judgment_deed_file_attached",
+          title: replaced
+            ? `استبدال ملف صك الحكم — ${replaced.fileName} ← ${file.originalname}`
+            : `إرفاق ملف صك الحكم — ${file.originalname}`,
+          details: JSON.stringify({
+            fileName: file.originalname,
+            oldFileName: replaced?.fileName ?? null,
+            fileSize: file.size,
+          }),
+        });
+
+        res.status(201).json({ attachment, replaced });
+      } catch (error: any) {
+        console.error("[cases/deed-attachment POST] error:", error);
+        res.status(500).json({ error: error.message || "فشل رفع المرفق" });
+      } finally {
+        unlinkContractTemp(tempPath, "cases/deed-attachment POST");
+      }
+    },
+  );
+
+  // Returns { attachment } — null when nothing is attached yet. Read gate is
+  // canModifyCase (view-level), deliberately WIDER than the write gate above:
+  // anyone who can open the case can see whether its صك is on file.
+  app.get("/api/cases/:id/deed-attachment", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!canModifyCase(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية عرض هذه القضية" });
+      }
+      const att = await storage.getCaseAttachment(lawCase.id);
+      // `missing` mirrors the contracts convention: runtime-derived, never
+      // stored. Always false for these rows in practice (there is no legacy
+      // disk-path era for this table), but the field keeps the client's
+      // rendering logic identical across all three attachment surfaces.
+      res.json({ attachment: att ? { ...att, missing: !isAttachmentObjectKey(att.filePath) } : null });
+    } catch (error: any) {
+      console.error("[cases/deed-attachment GET] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/cases/:id/deed-attachment/download", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (!canModifyCase(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
+      }
+      const att = await storage.getCaseAttachment(lawCase.id);
+      if (!att) return res.status(404).json({ error: "المرفق غير موجود" });
+      if (!isAttachmentObjectKey(att.filePath)) {
+        return res.status(410).json({ error: "الملف مفقود — يرجى إعادة الرفع من جديد" });
+      }
+      const safeAscii = att.fileName.replace(/[^\x20-\x7E]/g, "_");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(att.fileName)}`,
+      );
+      res.setHeader("Content-Type", att.mimeType || "application/octet-stream");
+      if (att.fileSize) res.setHeader("Content-Length", String(att.fileSize));
+      streamAttachmentToResponse(attachmentObjectStore, att, res, "cases/deed-attachment download");
+    } catch (error: any) {
+      console.error("[cases/deed-attachment download] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/cases/:id/deed-attachment", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      // Same gate as upload — whoever may attach the deed may replace or remove it.
+      if (!canAttachCaseJudgmentDeed(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لحذف صك الحكم" });
+      }
+      const att = await storage.getCaseAttachment(lawCase.id);
+      if (!att) return res.status(404).json({ error: "المرفق غير موجود" });
+      const deleted = await storage.deleteCaseAttachment(att.id);
+      if (!deleted) return res.status(404).json({ error: "المرفق غير موجود" });
+      if (deleted.filePath && isAttachmentObjectKey(deleted.filePath)) {
+        attachmentObjectStore.delete(deleted.filePath, { ignoreNotFound: true }).catch((e) => {
+          console.error("[cases/deed-attachment DELETE] failed to delete object:", {
+            key: deleted.filePath,
+            error: e,
+          });
+        });
+      }
+      await logCaseActivityActing(req, {
+        caseId: lawCase.id,
+        userId: reqUser.id,
+        userName: reqUser.name || reqUser.id,
+        actionType: "judgment_deed_file_deleted",
+        title: `حذف ملف صك الحكم — ${deleted.fileName}`,
+        details: JSON.stringify({ fileName: deleted.fileName }),
+      });
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[cases/deed-attachment DELETE] error:", error);
+      res.status(500).json({ error: error.message || "فشل حذف المرفق" });
+    }
+  });
+
+  // ==================== Hearing minutes (ضبط الجلسة) — hearing attachment ====================
+  // Same four routes, same mechanics. Gate is canActOnHearing AS-IS on all four
+  // (attending lawyer / branch_manager / admin_support, delegation-aware).
+  //
+  // ⚠ DELIBERATELY NOT department-scoped. Hearings carry no departmentId, so
+  // scoping a department_head would mean resolving the department through the
+  // parent case — the known-large open item that kept hearings out of the
+  // 2026-07-28 tiered permissions widening. Out of scope here by instruction;
+  // these routes therefore use the SAME actor set as every other hearing
+  // action (result, report, close, cancel), which is the consistent choice.
+  //
+  // ⚠ NOT related to hearings.hearing_minutes — an unused TEXT column from a
+  // Feb-2026 agent batch that would hold pasted transcript text, not a file.
+  // Left untouched.
+  //
+  // Hearings have NO activity log of their own; these routes log to the PARENT
+  // CASE's timeline with relatedEntityType "hearing", exactly as the existing
+  // hearing cancel / flag / report-edit routes already do. No new log table.
+
+  app.post(
+    "/api/hearings/:id/minutes-attachment",
+    requireAuth,
+    (req, res, next) => contractUpload.single("file")(req, res, (err) => {
+      if (!err) return next();
+      console.error("[hearings/minutes-attachment POST] multer error:", {
+        code: (err as any)?.code,
+        message: (err as any)?.message,
+        field: (err as any)?.field,
+        hearingId: req.params?.id,
+      });
+      unlinkContractTemp((req as any).file?.path, "hearings/minutes-attachment POST (multer error)");
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "حجم الملف يتجاوز الحد المسموح (50MB)" });
+      }
+      return res.status(400).json({ error: "فشل تحميل الملف" });
+    }),
+    async (req: AuthRequest, res) => {
+      const file = (req as any).file as
+        | { originalname: string; path: string; filename: string; size: number; mimetype: string }
+        | undefined;
+      const tempPath = file?.path;
+      try {
+        const reqUser = req.user;
+        if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+        const hearing = await storage.getHearingById(String(req.params.id));
+        if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
+        if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لإرفاق ضبط الجلسة" });
+        }
+        if (!file) {
+          console.error("[hearings/minutes-attachment POST] no file in request", {
+            hearingId: req.params?.id,
+            multipartFields: Object.keys(req.body || {}),
+          });
+          return res.status(400).json({ error: "الملف مطلوب أو نوعه غير مسموح" });
+        }
+        try {
+          file.originalname = Buffer.from(file.originalname, "latin1").toString("utf8");
+        } catch {
+          // Defensive only.
+        }
+
+        const objectKey = makeHearingMinutesObjectKey(hearing.id, file.originalname);
+        const uploadResult = await attachmentObjectStore.uploadFromFilename(objectKey, file.path);
+        if (!uploadResult.ok) {
+          console.error("[hearings/minutes-attachment POST] object storage upload failed:", {
+            objectKey,
+            error: uploadResult.error,
+          });
+          return res.status(500).json({
+            error: `فشل رفع الملف إلى التخزين السحابي: ${uploadResult.error?.message || "خطأ غير معروف"}`,
+          });
+        }
+
+        const { attachment, replaced } = await storage.createHearingAttachment({
+          hearingId: hearing.id,
+          fileName: file.originalname,
+          filePath: objectKey,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          uploadedBy: reqUser.id,
+        });
+
+        if (replaced && replaced.filePath && replaced.filePath !== attachment.filePath) {
+          if (isAttachmentObjectKey(replaced.filePath)) {
+            attachmentObjectStore.delete(replaced.filePath, { ignoreNotFound: true }).catch((e) => {
+              console.error("[hearings/minutes-attachment POST] failed to delete replaced object:", {
+                key: replaced.filePath,
+                error: e,
+              });
+            });
+          }
+        }
+
+        // Parent-case timeline — the same choice the cancel and flag endpoints
+        // make, with the same relatedEntity pair. Wrapped so a logging failure
+        // never fails an upload that already succeeded.
+        if (hearing.caseId) {
+          try {
+            await logCaseActivityActing(req, {
+              caseId: hearing.caseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: replaced ? "hearing_minutes_replaced" : "hearing_minutes_attached",
+              title: replaced
+                ? `استبدال ملف ضبط الجلسة — ${replaced.fileName} ← ${file.originalname}`
+                : `إرفاق ملف ضبط الجلسة — ${file.originalname}`,
+              relatedEntityType: "hearing",
+              relatedEntityId: hearing.id,
+            });
+          } catch (e) {
+            console.error("[hearings/minutes-attachment POST] logCaseActivity failed", e);
+          }
+        }
+
+        res.status(201).json({ attachment, replaced });
+      } catch (error: any) {
+        console.error("[hearings/minutes-attachment POST] error:", error);
+        res.status(500).json({ error: error.message || "فشل رفع المرفق" });
+      } finally {
+        unlinkContractTemp(tempPath, "hearings/minutes-attachment POST");
+      }
+    },
+  );
+
+  app.get("/api/hearings/:id/minutes-attachment", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const hearing = await storage.getHearingById(String(req.params.id));
+      if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
+      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية عرض هذه الجلسة" });
+      }
+      const att = await storage.getHearingAttachment(hearing.id);
+      res.json({ attachment: att ? { ...att, missing: !isAttachmentObjectKey(att.filePath) } : null });
+    } catch (error: any) {
+      console.error("[hearings/minutes-attachment GET] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/hearings/:id/minutes-attachment/download", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const hearing = await storage.getHearingById(String(req.params.id));
+      if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
+      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
+      }
+      const att = await storage.getHearingAttachment(hearing.id);
+      if (!att) return res.status(404).json({ error: "المرفق غير موجود" });
+      if (!isAttachmentObjectKey(att.filePath)) {
+        return res.status(410).json({ error: "الملف مفقود — يرجى إعادة الرفع من جديد" });
+      }
+      const safeAscii = att.fileName.replace(/[^\x20-\x7E]/g, "_");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(att.fileName)}`,
+      );
+      res.setHeader("Content-Type", att.mimeType || "application/octet-stream");
+      if (att.fileSize) res.setHeader("Content-Length", String(att.fileSize));
+      streamAttachmentToResponse(attachmentObjectStore, att, res, "hearings/minutes-attachment download");
+    } catch (error: any) {
+      console.error("[hearings/minutes-attachment download] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/hearings/:id/minutes-attachment", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const hearing = await storage.getHearingById(String(req.params.id));
+      if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
+      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لحذف ضبط الجلسة" });
+      }
+      const att = await storage.getHearingAttachment(hearing.id);
+      if (!att) return res.status(404).json({ error: "المرفق غير موجود" });
+      const deleted = await storage.deleteHearingAttachment(att.id);
+      if (!deleted) return res.status(404).json({ error: "المرفق غير موجود" });
+      if (deleted.filePath && isAttachmentObjectKey(deleted.filePath)) {
+        attachmentObjectStore.delete(deleted.filePath, { ignoreNotFound: true }).catch((e) => {
+          console.error("[hearings/minutes-attachment DELETE] failed to delete object:", {
+            key: deleted.filePath,
+            error: e,
+          });
+        });
+      }
+      if (hearing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: hearing.caseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            actionType: "hearing_minutes_deleted",
+            title: `حذف ملف ضبط الجلسة — ${deleted.fileName}`,
+            relatedEntityType: "hearing",
+            relatedEntityId: hearing.id,
+          });
+        } catch (e) {
+          console.error("[hearings/minutes-attachment DELETE] logCaseActivity failed", e);
+        }
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[hearings/minutes-attachment DELETE] error:", error);
       res.status(500).json({ error: error.message || "فشل حذف المرفق" });
     }
   });
