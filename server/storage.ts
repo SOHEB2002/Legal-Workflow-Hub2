@@ -554,6 +554,12 @@ export interface IStorage {
   getCaseAttachmentById(id: string): Promise<CaseAttachment | undefined>;
   deleteCaseAttachment(id: string): Promise<CaseAttachment | undefined>;
 
+  // Presence-only lookups for the DERIVED list indicators. Each returns the set
+  // of parent ids that HAVE a file — one query, no per-row lookup, and only the
+  // id column is read (never the file metadata, which no list needs).
+  getCaseIdsWithDeedAttachment(): Promise<Set<string>>;
+  getHearingIdsWithMinutesAttachment(): Promise<Set<string>>;
+
   createHearingAttachment(input: {
     hearingId: string;
     fileName: string;
@@ -6698,6 +6704,30 @@ export class DatabaseStorage implements IStorage {
     if (rows.length === 0) return undefined;
     await db.delete(caseAttachments).where(eq(caseAttachments.id, id));
     return mapDbCaseAttachment(rows[0]);
+  }
+
+  // ---- Derived attachment-presence sets (list enrichment) ----
+  // ONE query each, selecting ONLY the parent-id column, returned as a Set for
+  // O(1) membership during the in-memory stamp. Follows the fa454d4 enrichment
+  // idiom: one batched read + a lookup structure + a single map over the rows
+  // the endpoint already returns — never a per-row query.
+  //
+  // Deliberately UNFILTERED rather than `WHERE parent_id IN (…the page's ids)`.
+  // Both tables hold AT MOST ONE row per parent and only for parents that
+  // actually have a file, so the whole id column is strictly smaller than the
+  // list the caller is already returning — while an IN(…) list would carry
+  // thousands of bind parameters, since neither /api/cases nor /api/hearings is
+  // paginated server-side today. If either endpoint ever gains real server-side
+  // pagination, this takes the page's ids and adds an inArray filter; that is a
+  // one-line change here and nothing else moves.
+  async getCaseIdsWithDeedAttachment(): Promise<Set<string>> {
+    const rows = await db.select({ caseId: caseAttachments.caseId }).from(caseAttachments);
+    return new Set(rows.map((r) => r.caseId));
+  }
+
+  async getHearingIdsWithMinutesAttachment(): Promise<Set<string>> {
+    const rows = await db.select({ hearingId: hearingAttachments.hearingId }).from(hearingAttachments);
+    return new Set(rows.map((r) => r.hearingId));
   }
 
   async createHearingAttachment(input: {
