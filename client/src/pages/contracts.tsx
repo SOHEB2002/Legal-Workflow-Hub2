@@ -50,7 +50,14 @@ import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
-import { apiRequest, refreshAuthToken } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import {
+  uploadAttachmentRaw,
+  downloadAttachment as downloadAttachmentShared,
+  previewAttachment as previewAttachmentShared,
+  formatFileSize,
+  canPreview,
+} from "@/lib/attachment-client";
 import { extractApiError, cn } from "@/lib/utils";
 import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
 import { pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
@@ -611,7 +618,11 @@ export default function ContractsPage() {
       let done = 0;
       const results = await Promise.all(uploads.map(async (u) => {
         try {
-          await uploadAttachmentRaw(created!.id, u.file, u.slotKey, u.description);
+          await uploadAttachmentRaw(
+            `/api/contracts/${created!.id}/attachments`,
+            u.file,
+            { slotKey: u.slotKey, description: u.description },
+          );
           return { ok: true as const, label: u.label };
         } catch (err: any) {
           return { ok: false as const, label: u.label, error: err?.message || String(err) };
@@ -699,78 +710,6 @@ export default function ContractsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
-  // Low-level POST — throws on failure, no UI side effects. Used by the
-  // create-dialog flow (which batches multiple uploads in parallel and
-  // wants to aggregate failures itself) and wrapped by uploadAttachment
-  // below for the details-dialog flow.
-  //
-  // Multipart uploads can't go through apiRequest (which sets a
-  // JSON Content-Type); we hand-roll the fetch but still need the
-  // bearer token AND the CSRF token — same protection that the
-  // shared queryClient.apiRequest applies. Letting the browser
-  // pick the multipart Content-Type (with its boundary) is
-  // critical: setting it manually breaks parsing on the server.
-  //
-  // 401 + 403 are recovered transparently: a stale JWT (401) or a
-  // stale CSRF token (403 — 4h TTL while sessions are typically
-  // longer) was the silent cause of "uploads suddenly stop working
-  // until I refresh the page". The refresh goes through queryClient's
-  // single-flight refreshAuthToken — sharing the in-flight promise with
-  // apiRequest's 401 path and auth-context's scheduled refresh, so a
-  // concurrent refresh can't consume the rotation token out from under
-  // us (same race class fixed in Phase 0) — then the upload replays
-  // once. After that one retry, any non-2xx surfaces with the server's
-  // error message AND the HTTP status logged to console for support
-  // triage.
-  const uploadAttachmentRaw = async (
-    contractId: string,
-    file: File,
-    slotKey: string | null,
-    description: string | null = null,
-  ): Promise<void> => {
-    const buildHeaders = (): Record<string, string> => {
-      const token = localStorage.getItem("lawfirm_token");
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      const headers: Record<string, string> = {};
-      if (token) headers.Authorization = `Bearer ${token}`;
-      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-      return headers;
-    };
-    const buildFormData = (): FormData => {
-      // Re-create per attempt — a consumed FormData can't be safely
-      // re-sent. File objects survive multiple reads, so this is cheap.
-      const fd = new FormData();
-      fd.append("file", file);
-      if (slotKey) fd.append("slotKey", slotKey);
-      if (description) fd.append("description", description);
-      return fd;
-    };
-    let res = await fetch(`/api/contracts/${contractId}/attachments`, {
-      method: "POST",
-      headers: buildHeaders(),
-      body: buildFormData(),
-      credentials: "same-origin",
-    });
-    if ((res.status === 401 || res.status === 403) && (await refreshAuthToken()).ok) {
-      res = await fetch(`/api/contracts/${contractId}/attachments`, {
-        method: "POST",
-        headers: buildHeaders(),
-        body: buildFormData(),
-        credentials: "same-origin",
-      });
-    }
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      // Surface to console so the user can hand a real diagnostic to
-      // support instead of just "فشل الرفع". Includes the HTTP status,
-      // contract id, slot key, and the server's Arabic error message.
-      console.error(
-        "[contracts upload] failed",
-        { status: res.status, contractId, slotKey, fileName: file.name, body: errBody },
-      );
-      throw new Error(errBody?.error || `فشل رفع الملف (${res.status})`);
-    }
-  };
 
   const uploadAttachment = async (
     contractId: string,
@@ -779,7 +718,7 @@ export default function ContractsPage() {
   ) => {
     setUploadingSlot(slotKey || "additional");
     try {
-      await uploadAttachmentRaw(contractId, file, slotKey);
+      await uploadAttachmentRaw(`/api/contracts/${contractId}/attachments`, file, { slotKey });
       await fetchAttachments(contractId);
       await fetchActivities(contractId);
       toast({ title: "تم رفع الملف بنجاح" });
@@ -801,115 +740,22 @@ export default function ContractsPage() {
     }
   };
 
-  const downloadAttachment = (contractId: string, attachmentId: string) => {
-    // Simple anchor-driven download — the server returns
-    // Content-Disposition: attachment so the browser saves rather
-    // than navigates. Token-bearing fetch isn't an option for the
-    // streaming endpoint, so the cookie/jwt-via-bearer fallback on
-    // /uploads doesn't apply; we open the URL directly and rely on
-    // the requireAuth middleware honoring the session cookie. Most
-    // deployments here use bearer tokens, so we open in a new tab
-    // and let the user re-auth if needed.
-    const token = localStorage.getItem("lawfirm_token");
-    const url = `/api/contracts/${contractId}/attachments/${attachmentId}/download`;
-    if (token) {
-      // Bearer-token fetch + blob download.
-      fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-        .then(async (r) => {
-          if (!r.ok) {
-            // Surface the actual server error (404 "ملف غير موجود على
-            // القرص" vs 404 "المرفق غير موجود" vs 403 "صلاحية" etc.)
-            // rather than a useless generic "فشل التحميل".
-            const errBody = await r.json().catch(() => ({}));
-            console.error(
-              "[contracts download] failed",
-              { status: r.status, contractId, attachmentId, body: errBody },
-            );
-            throw new Error(errBody?.error || `فشل التحميل (${r.status})`);
-          }
-          const blob = await r.blob();
-          const cd = r.headers.get("Content-Disposition") || "";
-          const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="([^"]+)"/);
-          const fileName = m ? decodeURIComponent(m[1]) : "download";
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = fileName;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(a.href);
-        })
-        .catch((err) => toast({
-          title: "فشل التحميل",
-          description: err?.message || String(err),
-          variant: "destructive",
-        }));
-    } else {
-      window.open(url, "_blank");
-    }
-  };
+  // Contract-shaped wrappers over the shared helpers in lib/attachment-client.
+  // The transport (auth headers, the single-flight 401/403 replay, the blob
+  // plumbing, the CSP-safe new-tab preview) lives there and is shared with the
+  // judgment-deed and hearing-minutes surfaces; only the endpoint differs.
+  const downloadAttachment = (contractId: string, attachmentId: string) =>
+    downloadAttachmentShared(
+      `/api/contracts/${contractId}/attachments/${attachmentId}/download`,
+      (description) => toast({ title: "فشل التحميل", description, variant: "destructive" }),
+    );
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  };
-
-  // Browser-native preview is reliable for PDFs and images. Office
-  // formats (.doc/.docx/.xls/.xlsx) need an external viewer; we
-  // disable the button with a tooltip in those cases rather than
-  // shipping a half-broken Google-Docs-Viewer fallback that would
-  // require public file URLs.
-  const PREVIEWABLE_MIMES = new Set([
-    "application/pdf",
-    "image/jpeg",
-    "image/png",
-  ]);
-  const canPreview = (mime: string): boolean => PREVIEWABLE_MIMES.has(mime);
-
-  // Fetches the file as a blob (so we can attach the auth + CSRF
-  // headers — window.open can't), creates a blob URL, and opens it
-  // in a new tab. The blob URL's lack of Content-Disposition lets
-  // the browser inline-render PDFs and images even though the
-  // download endpoint streams with `attachment`. We deliberately
-  // don't revoke the URL — there's no reliable "tab closed" signal,
-  // and the blob is freed when the tab unloads anyway.
-  const previewAttachment = async (contractId: string, attachmentId: string, mimeType: string) => {
-    if (!canPreview(mimeType)) return;
-    try {
-      const token = localStorage.getItem("lawfirm_token");
-      const csrfToken = localStorage.getItem("lawfirm_csrf_token");
-      const headers: Record<string, string> = {};
-      if (token) headers.Authorization = `Bearer ${token}`;
-      if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
-      const res = await fetch(
-        `/api/contracts/${contractId}/attachments/${attachmentId}/download`,
-        { headers, credentials: "same-origin" },
-      );
-      if (!res.ok) {
-        // The 404s users were hitting after deploy were "ملف غير موجود
-        // على القرص" — ephemeral storage drops uploaded files on
-        // redeploy. Surface the server's actual message so the user
-        // (and support) can tell that from "attachment row missing" or
-        // a permission failure.
-        const errBody = await res.json().catch(() => ({}));
-        console.error(
-          "[contracts preview] failed",
-          { status: res.status, contractId, attachmentId, mimeType, body: errBody },
-        );
-        throw new Error(errBody?.error || `فشل تحميل المعاينة (${res.status})`);
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
-    } catch (err: any) {
-      toast({
-        title: "فشل عرض الملف",
-        description: err?.message || String(err),
-        variant: "destructive",
-      });
-    }
-  };
+  const previewAttachment = (contractId: string, attachmentId: string, mimeType: string) =>
+    previewAttachmentShared(
+      `/api/contracts/${contractId}/attachments/${attachmentId}/download`,
+      mimeType,
+      (description) => toast({ title: "فشل عرض الملف", description, variant: "destructive" }),
+    );
 
   const canDeleteAttachment = (a: ContractAttachment, contract: Contract): boolean => {
     if (!user) return false;

@@ -46,7 +46,9 @@ import {
   Calendar,
   ArrowLeftRight,
   Pencil,
+  Paperclip,
 } from "lucide-react";
+import { SingleAttachmentControl } from "@/components/single-attachment-control";
 
 // SHARED hearing-details dialog. The body was moved VERBATIM out of
 // hearings.tsx (its detail Dialog + the WorkflowStep helper it is the only
@@ -126,6 +128,25 @@ export function HearingDetailsDialog({
     if (!isOwnDeptHead && !isCaseLawyer) return false;
     return isFirmToday(detailHearing.hearingDate);
   })();
+
+  // CLIENT MIRROR of canActOnHearing (server/routes.ts) — attending lawyer /
+  // branch_manager / admin_support. Gates attaching, replacing and deleting the
+  // ضبط الجلسة file, the same set the server enforces on those routes.
+  //
+  // Deliberately NOT department-scoped: hearings carry no departmentId, so a
+  // department_head would have to be resolved through the parent case — the
+  // known-large open item that kept hearings out of the tiered permissions
+  // widening. Out of scope; this matches every other hearing action.
+  const canAttachHearingMinutes =
+    !!user && !!detailHearing && (
+      user.role === "branch_manager"
+      || user.role === "admin_support"
+      || (!!detailHearing.attendingLawyerId && detailHearing.attendingLawyerId === user.id)
+    );
+
+  // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
+  // control's own fetch (onAttachedChange) so the dialog issues no second read.
+  const [minutesAttached, setMinutesAttached] = useState(false);
 
   // PHASE 2 — inline correction of the two no-cascade result fields. Self-contained
   // (own state + apiRequest) rather than an injected action, so it works in BOTH
@@ -633,6 +654,36 @@ export function HearingDetailsDialog({
                     onAction={actions ? () => actions.onMarkContactCompleted(detailHearing) : undefined}
                     actionDisabled={submitting}
                   />
+                  {/* إرفاق ضبط الجلسة — the court's own minutes document.
+                      Positioned after client contact and before the close.
+
+                      NO actionLabel and NO onAction ON PURPOSE. Attaching needs
+                      a file picker, not a button, so the affordance lives in the
+                      control rendered directly beneath — and this step stays
+                      read-only, exactly like "إنشاء المهام التلقائية" above.
+                      That also sidesteps the documented WorkflowStep trap: a
+                      step's actionLabel must evaluate to undefined once its own
+                      `done` holds, or it renders a live-looking button on a
+                      finished step. With no actionLabel at all, there is
+                      nothing to go stale.
+
+                      ⚠ THE CLOSE GATE BELOW IS DELIBERATELY UNCHANGED. Minutes
+                      do NOT block closing a hearing in this batch. */}
+                  <WorkflowStep
+                    done={minutesAttached}
+                    label="إرفاق ضبط الجلسة"
+                    icon={<Paperclip className="w-4 h-4" />}
+                    disabled={!detailHearing.result}
+                  />
+                  {detailHearing.result && (
+                    <SingleAttachmentControl
+                      endpoint={`/api/hearings/${detailHearing.id}/minutes-attachment`}
+                      label="ملف ضبط الجلسة"
+                      emptyHint="لم يُرفق الضبط بعد"
+                      canEdit={canAttachHearingMinutes}
+                      onAttachedChange={setMinutesAttached}
+                    />
+                  )}
                   <WorkflowStep
                     done={detailHearing.status === HearingStatus.COMPLETED && detailHearing.reportCompleted}
                     label="إغلاق الجلسة"
