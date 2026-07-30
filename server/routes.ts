@@ -18,7 +18,6 @@ import {
   GeneralTaskEventType,
   type FieldTask,
   type Hearing,
-  insertAttachmentSchema,
   insertMemoSchema,
   hearingResultSchema,
   hearingReportSchema,
@@ -13336,42 +13335,22 @@ export async function registerRoutes(
   });
 
   // ==================== Attachments ====================
-
-  app.post("/api/attachments", requireAuth, async (req, res) => {
-    try {
-      const data = insertAttachmentSchema.parse(req.body);
-      const attachment = await storage.createAttachment(data);
-      res.status(201).json(attachment);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: error.errors });
-      }
-      res.status(500).json({ error: "حدث خطأ في إضافة المرفق" });
-    }
-  });
-
-  app.get("/api/attachments/:entityType/:entityId", requireAuth, async (req, res) => {
-    try {
-      const entityType = String(req.params.entityType);
-      const entityId = String(req.params.entityId);
-      const list = await storage.getAttachmentsByEntity(entityType, entityId);
-      res.json(list);
-    } catch (error) {
-      res.status(500).json({ error: "حدث خطأ في جلب المرفقات" });
-    }
-  });
-
-  app.delete("/api/attachments/:id", requireAuth, requireRole("branch_manager"), async (req, res) => {
-    try {
-      const deleted = await storage.deleteAttachment(String(req.params.id));
-      if (!deleted) {
-        return res.status(404).json({ error: "المرفق غير موجود" });
-      }
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "حدث خطأ في حذف المرفق" });
-    }
-  });
+  // The URL-bookmark attachments feature (POST /api/attachments,
+  // GET /api/attachments/:entityType/:entityId, DELETE /api/attachments/:id)
+  // was REMOVED — it stored pasted external links (a Drive URL typed into the
+  // case المرفقات tab), never files, and the firm did not use it. Removing it
+  // also closed three live holes: the GET had requireAuth and NOTHING else
+  // (any authenticated user, including a viewer, could enumerate any case's or
+  // consultation's attachment list by id), the POST had no authority check at
+  // all and took `uploadedBy` from the request body (spoofable), and fileUrl
+  // was only validated by zod's .url(), which accepts javascript:/data: — then
+  // handed straight to window.open with no scheme allowlist.
+  //
+  // The `attachments` TABLE IS DELIBERATELY KEPT with its rows (additive-only
+  // rule — no migration). The cascade-cleanup deletes in storage.deleteCase and
+  // storage.deleteConsultation still reference it and must stay; they use
+  // db.delete(attachments) directly, not the removed storage methods.
+  // Real file upload lives on contracts (contract_attachments + Object Storage).
 
   // ==================== Support Tickets ====================
 

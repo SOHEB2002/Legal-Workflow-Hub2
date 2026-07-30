@@ -1,6 +1,6 @@
 import {
   type User, type LawCase, type Client, type Consultation, type Hearing,
-  type FieldTask, type GeneralTaskEvent, type ContactLog, type Notification, type DepartmentInfo, type Attachment, type Memo,
+  type FieldTask, type GeneralTaskEvent, type ContactLog, type Notification, type DepartmentInfo, type Memo,
   type SupportTicket,
   type CaseActivity, type InsertCaseActivity,
   type CaseNote, type InsertCaseNote,
@@ -176,11 +176,6 @@ export interface IStorage {
   createMemo(data: Partial<Memo>): Promise<Memo>;
   updateMemo(id: string, data: Partial<Memo>): Promise<Memo | undefined>;
   deleteMemo(id: string): Promise<boolean>;
-
-  // Attachments
-  getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]>;
-  createAttachment(data: Partial<Attachment>): Promise<Attachment>;
-  deleteAttachment(id: string): Promise<boolean>;
 
   // Support Tickets
   getAllSupportTickets(): Promise<SupportTicket[]>;
@@ -3105,56 +3100,6 @@ export class DatabaseStorage implements IStorage {
       const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
       return updated ? mapDbMemo(updated) : undefined;
     });
-  }
-
-  // ==================== Attachments ====================
-
-  async getAttachmentsByEntity(entityType: string, entityId: string): Promise<Attachment[]> {
-    const result = await db.select().from(attachments)
-      .where(and(eq(attachments.entityType, entityType), eq(attachments.entityId, entityId)));
-    return result
-      .map(a => ({
-        id: a.id,
-        entityType: a.entityType,
-        entityId: a.entityId,
-        fileName: a.fileName,
-        fileUrl: a.fileUrl,
-        fileType: a.fileType || "",
-        fileSize: a.fileSize || 0,
-        uploadedBy: a.uploadedBy,
-        createdAt: toISOString(a.createdAt),
-      }));
-  }
-
-  async createAttachment(data: Partial<Attachment>): Promise<Attachment> {
-    const id = data.id || randomUUID();
-    const result = await db.insert(attachments).values({
-      id,
-      entityType: data.entityType!,
-      entityId: data.entityId!,
-      fileName: data.fileName!,
-      fileUrl: data.fileUrl!,
-      fileType: data.fileType || "",
-      fileSize: data.fileSize || 0,
-      uploadedBy: data.uploadedBy!,
-    }).returning();
-    const a = result[0];
-    return {
-      id: a.id,
-      entityType: a.entityType,
-      entityId: a.entityId,
-      fileName: a.fileName,
-      fileUrl: a.fileUrl,
-      fileType: a.fileType || "",
-      fileSize: a.fileSize || 0,
-      uploadedBy: a.uploadedBy,
-      createdAt: toISOString(a.createdAt),
-    };
-  }
-
-  async deleteAttachment(id: string): Promise<boolean> {
-    const result = await db.delete(attachments).where(eq(attachments.id, id)).returning();
-    return result.length > 0;
   }
 
   // ==================== Support Tickets ====================
