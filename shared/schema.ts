@@ -6342,6 +6342,7 @@ export const MyTaskKind = {
   HEARING_ATTEND: "hearing_attend",       // upcoming hearing to attend
   HEARING_UNRECORDED: "hearing_unrecorded", // hearing date passed, result not recorded
   HEARING_REPORT: "hearing_report",       // result recorded, report not completed
+  HEARING_MINUTES: "hearing_minutes",     // result recorded, ضبط الجلسة file not attached
   MEMO_PENDING: "memo_pending",           // assigned memo not yet filed
   REVIEW_PENDING: "review_pending",       // internal/committee review awaiting this reviewer
   COLLECTION: "collection",               // collection (تحصيل) field task, incl. unassigned ""

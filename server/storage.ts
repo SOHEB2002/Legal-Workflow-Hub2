@@ -3898,7 +3898,21 @@ export class DatabaseStorage implements IStorage {
     // here degrades to "no hearing tasks this run" and never throws out of
     // getMyTasks to empty the whole feed.
     try {
-      const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND ${hearings.reportCompleted} = false))`;
+      // 🔴 THE PRE-FILTER. This decides which hearings are even CONSIDERED, so a
+      // task whose rows it excludes can never appear no matter what the loop
+      // below does. It used to read:
+      //   (status = 'قادمة' OR (result non-empty AND reportCompleted = false))
+      // — which drops every hearing whose report is already written. A
+      // minutes task on such a hearing would therefore have been invisible
+      // forever, while typechecking perfectly.
+      //
+      // WIDENED with a second disjunct inside the result-recorded arm: a
+      // result-recorded hearing now qualifies if it still needs a REPORT **OR**
+      // is missing its ضبط file. Note this deliberately does NOT relax to "every
+      // hearing that ever had a result" — the missing-minutes test is pushed
+      // into SQL, so a fully-completed hearing (report written, ضبط attached)
+      // is still excluded and history does not accumulate in the feed.
+      const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND (${hearings.reportCompleted} = false OR ${hearingAttachments.id} IS NULL)))`;
       const where = firmWideScoped
         ? hActionable
         : deptHeadScoped
@@ -3912,8 +3926,14 @@ export class DatabaseStorage implements IStorage {
         attendingLawyerId: hearings.attendingLawyerId, caseNumber: lawCases.caseNumber,
         agencyVerificationAckAt: hearings.agencyVerificationAckAt,
         clientIndividualName: clients.individualName, clientCompanyName: clients.companyName,
+        // NULL when no ضبط is attached — the whole minutes signal. Safe to LEFT
+        // JOIN here: hearing_attachments carries a UNIQUE index on hearing_id, so
+        // it can contribute AT MOST ONE row and cannot fan out the result set
+        // (which would have silently duplicated every other hearing task).
+        minutesAttachmentId: hearingAttachments.id,
       }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
-        .leftJoin(clients, eq(lawCases.clientId, clients.id)).where(where);
+        .leftJoin(clients, eq(lawCases.clientId, clients.id))
+        .leftJoin(hearingAttachments, eq(hearingAttachments.hearingId, hearings.id)).where(where);
       // Agency-verification candidates are collected here and GROUPED after the
       // loop (same client + same lawyer + same pre-hearing window → ONE task);
       // every other hearing task stays per-hearing exactly as before.
@@ -3922,6 +3942,22 @@ export class DatabaseStorage implements IStorage {
       for (const r of rows) {
         const ownerId = r.attendingLawyerId || "";
         const ownerScope = scopeOf(ownerId);
+        // 🔴 A STANDALONE `if`, deliberately OUTSIDE the if/else-if chain below.
+        // That chain is exclusive — the first arm that matches wins — so putting
+        // minutes inside it would mean a hearing that needs BOTH a report and a
+        // ضبط emits only the report, and the minutes task would silently never
+        // appear for exactly the hearings that most need it (freshly recorded
+        // ones). Kept independent, both tasks emit for the same hearing.
+        //
+        // Ownership is IDENTICAL to the sibling hearing tasks: the attending
+        // lawyer, `|| ""` when unset, with scopeOf("") deciding the pool
+        // behaviour. No fallback is invented here — whatever the existing
+        // hearing tasks do with an empty attendingLawyerId, this does too.
+        if (r.result && !r.minutesAttachmentId) {
+          tasks.push({ id: `hearing_minutes:${r.id}`, kind: MyTaskKind.HEARING_MINUTES,
+            title: `إرفاق ضبط الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
+            caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "record" });
+        }
         if (r.result && r.reportCompleted === false) {
           tasks.push({ id: `hearing_report:${r.id}`, kind: MyTaskKind.HEARING_REPORT,
             title: `كتابة تقرير الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
