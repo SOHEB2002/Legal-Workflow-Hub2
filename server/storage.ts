@@ -16,6 +16,7 @@ import {
   type ConsultationActivity,
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   type Contract, type ContractAttachment, type ContractActivity,
+  type CaseAttachment, type HearingAttachment,
   CaseStatus, CaseStage, CaseClassification, ClosureReason, ConsultationStage, ConsultationStatus,
   ConsultationType, resolveConsultationType,
   ConsultationCategory, type ConsultationCategoryValue,
@@ -33,6 +34,7 @@ import {
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationActivityLog,
   contracts, contractAttachments, contractActivityLog,
+  caseAttachments, hearingAttachments,
   memoActivityLog, generalTaskEvents,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
@@ -534,6 +536,36 @@ export interface IStorage {
   getContractAttachmentBySlot(contractId: string, slotKey: string): Promise<ContractAttachment | undefined>;
   deleteContractAttachment(id: string): Promise<ContractAttachment | undefined>;
 
+  // Judgment-deed (صك) and hearing-minutes (ضبط الجلسة) attachments. Same shape
+  // as the contract methods above, minus the slot dimension: exactly ONE file
+  // per parent (a plain unique index on the parent id enforces it), so the
+  // "create" call is always a create-or-replace and always returns the
+  // displaced row when there was one — the route layer needs it both to log
+  // "replaced" vs "added" and to delete the displaced blob after commit.
+  createCaseAttachment(input: {
+    caseId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    uploadedBy: string;
+  }): Promise<{ attachment: CaseAttachment; replaced: CaseAttachment | null }>;
+  getCaseAttachment(caseId: string): Promise<CaseAttachment | undefined>;
+  getCaseAttachmentById(id: string): Promise<CaseAttachment | undefined>;
+  deleteCaseAttachment(id: string): Promise<CaseAttachment | undefined>;
+
+  createHearingAttachment(input: {
+    hearingId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    uploadedBy: string;
+  }): Promise<{ attachment: HearingAttachment; replaced: HearingAttachment | null }>;
+  getHearingAttachment(hearingId: string): Promise<HearingAttachment | undefined>;
+  getHearingAttachmentById(id: string): Promise<HearingAttachment | undefined>;
+  deleteHearingAttachment(id: string): Promise<HearingAttachment | undefined>;
+
   // Initialization
   initializeDefaultData(): Promise<void>;
 }
@@ -910,6 +942,34 @@ function mapDbContractAttachment(row: any): ContractAttachment {
     fileSize: typeof row.fileSize === "number" ? row.fileSize : Number(row.fileSize ?? 0),
     mimeType: row.mimeType,
     description: row.description ?? null,
+    uploadedBy: row.uploadedBy,
+    uploadedAt: toISOString(row.uploadedAt),
+  };
+}
+
+// fileSize is bigint(mode:"number") — the same defensive Number() coercion as
+// mapDbContractAttachment, since some drivers hand bigints back as strings.
+function mapDbCaseAttachment(row: any): CaseAttachment {
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    fileName: row.fileName,
+    filePath: row.filePath,
+    fileSize: typeof row.fileSize === "number" ? row.fileSize : Number(row.fileSize ?? 0),
+    mimeType: row.mimeType,
+    uploadedBy: row.uploadedBy,
+    uploadedAt: toISOString(row.uploadedAt),
+  };
+}
+
+function mapDbHearingAttachment(row: any): HearingAttachment {
+  return {
+    id: row.id,
+    hearingId: row.hearingId,
+    fileName: row.fileName,
+    filePath: row.filePath,
+    fileSize: typeof row.fileSize === "number" ? row.fileSize : Number(row.fileSize ?? 0),
+    mimeType: row.mimeType,
     uploadedBy: row.uploadedBy,
     uploadedAt: toISOString(row.uploadedAt),
   };
@@ -6571,6 +6631,133 @@ export class DatabaseStorage implements IStorage {
     if (rows.length === 0) return undefined;
     await db.delete(contractAttachments).where(eq(contractAttachments.id, id));
     return mapDbContractAttachment(rows[0]);
+  }
+
+  // ==================== Case deed / hearing minutes attachments ====================
+  // Both families mirror createContractAttachment's transaction shape verbatim:
+  // select the existing row → capture it as `replaced` → delete it → insert the
+  // new one, all inside ONE db.transaction. The delete-then-insert order is not
+  // incidental: the unique index on the parent id would reject the insert if the
+  // prior row were still there.
+
+  async createCaseAttachment(input: {
+    caseId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    uploadedBy: string;
+  }): Promise<{ attachment: CaseAttachment; replaced: CaseAttachment | null }> {
+    return await db.transaction(async (tx) => {
+      let replaced: CaseAttachment | null = null;
+      const existing = await tx.select().from(caseAttachments)
+        .where(eq(caseAttachments.caseId, input.caseId));
+      if (existing.length > 0) {
+        replaced = mapDbCaseAttachment(existing[0]);
+        await tx.delete(caseAttachments).where(eq(caseAttachments.id, existing[0].id));
+      }
+      const id = randomUUID();
+      const now = new Date();
+      await tx.insert(caseAttachments).values({
+        id,
+        caseId: input.caseId,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now,
+      });
+      const attachment: CaseAttachment = {
+        id,
+        caseId: input.caseId,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now.toISOString(),
+      };
+      return { attachment, replaced };
+    });
+  }
+
+  async getCaseAttachment(caseId: string): Promise<CaseAttachment | undefined> {
+    const rows = await db.select().from(caseAttachments)
+      .where(eq(caseAttachments.caseId, caseId));
+    return rows[0] ? mapDbCaseAttachment(rows[0]) : undefined;
+  }
+
+  async getCaseAttachmentById(id: string): Promise<CaseAttachment | undefined> {
+    const rows = await db.select().from(caseAttachments).where(eq(caseAttachments.id, id));
+    return rows[0] ? mapDbCaseAttachment(rows[0]) : undefined;
+  }
+
+  async deleteCaseAttachment(id: string): Promise<CaseAttachment | undefined> {
+    const rows = await db.select().from(caseAttachments).where(eq(caseAttachments.id, id));
+    if (rows.length === 0) return undefined;
+    await db.delete(caseAttachments).where(eq(caseAttachments.id, id));
+    return mapDbCaseAttachment(rows[0]);
+  }
+
+  async createHearingAttachment(input: {
+    hearingId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    uploadedBy: string;
+  }): Promise<{ attachment: HearingAttachment; replaced: HearingAttachment | null }> {
+    return await db.transaction(async (tx) => {
+      let replaced: HearingAttachment | null = null;
+      const existing = await tx.select().from(hearingAttachments)
+        .where(eq(hearingAttachments.hearingId, input.hearingId));
+      if (existing.length > 0) {
+        replaced = mapDbHearingAttachment(existing[0]);
+        await tx.delete(hearingAttachments).where(eq(hearingAttachments.id, existing[0].id));
+      }
+      const id = randomUUID();
+      const now = new Date();
+      await tx.insert(hearingAttachments).values({
+        id,
+        hearingId: input.hearingId,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now,
+      });
+      const attachment: HearingAttachment = {
+        id,
+        hearingId: input.hearingId,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now.toISOString(),
+      };
+      return { attachment, replaced };
+    });
+  }
+
+  async getHearingAttachment(hearingId: string): Promise<HearingAttachment | undefined> {
+    const rows = await db.select().from(hearingAttachments)
+      .where(eq(hearingAttachments.hearingId, hearingId));
+    return rows[0] ? mapDbHearingAttachment(rows[0]) : undefined;
+  }
+
+  async getHearingAttachmentById(id: string): Promise<HearingAttachment | undefined> {
+    const rows = await db.select().from(hearingAttachments).where(eq(hearingAttachments.id, id));
+    return rows[0] ? mapDbHearingAttachment(rows[0]) : undefined;
+  }
+
+  async deleteHearingAttachment(id: string): Promise<HearingAttachment | undefined> {
+    const rows = await db.select().from(hearingAttachments).where(eq(hearingAttachments.id, id));
+    if (rows.length === 0) return undefined;
+    await db.delete(hearingAttachments).where(eq(hearingAttachments.id, id));
+    return mapDbHearingAttachment(rows[0]);
   }
 
   // ==================== Initialize Default Data ====================
