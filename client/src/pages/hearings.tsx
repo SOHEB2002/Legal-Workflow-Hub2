@@ -73,7 +73,9 @@ import {
   UserCog,
   Search,
   Flag,
+  Paperclip,
 } from "lucide-react";
+import { isHearingMissingMinutes } from "@/lib/attachment-indicators";
 import { useHearings } from "@/lib/hearings-context";
 import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
@@ -171,6 +173,14 @@ export default function HearingsPage() {
   );
   const [filterLawyer, setFilterLawyer] = usePersistedFilter<string>(
     "hearings", "lawyer", "all", anyString,
+  );
+  // "ضبط الجلسة" presence. Same usePersistedFilter shape as the three above, so
+  // it persists across navigation exactly like them. Two states only — "all"
+  // and "missing" — because "attached" is not a question anyone asks: the point
+  // of this filter is finding the outstanding work without scrolling a
+  // date-ordered calendar.
+  const [filterMinutes, setFilterMinutes] = usePersistedFilter<string>(
+    "hearings", "minutes", "all", oneOf(["missing"], "all"),
   );
   const [advFilters, setAdvFilters] = usePersistedFilter<AdvancedHearingsFilters>(
     "hearings", "adv", EMPTY_HEARINGS_ADV_FILTERS,
@@ -563,6 +573,10 @@ export default function HearingsPage() {
         const lawyerId = getLawyerForHearing(h);
         if (lawyerId !== filterLawyer) return false;
       }
+      // Shares isHearingMissingMinutes with the cases-page badge and the row
+      // badge below, so filter and indicator can never disagree about what
+      // "missing" means.
+      if (filterMinutes === "missing" && !isHearingMissingMinutes(h)) return false;
 
       // Advanced filters (all AND'd; empty arrays / strings = no constraint)
       if (advFilters.hearingTypes.length && !advFilters.hearingTypes.includes(h.hearingType)) return false;
@@ -1015,6 +1029,15 @@ export default function HearingsPage() {
                 ))}
               </SelectContent>
             </Select>
+            <Select value={filterMinutes} onValueChange={setFilterMinutes}>
+              <SelectTrigger className="w-40" data-testid="select-filter-minutes">
+                <SelectValue placeholder="ضبط الجلسة" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الجلسات</SelectItem>
+                <SelectItem value="missing">بانتظار الضبط</SelectItem>
+              </SelectContent>
+            </Select>
             <HearingsAdvancedFilters
               filters={advFilters}
               onChange={setAdvFilters}
@@ -1223,6 +1246,26 @@ export default function HearingsPage() {
                               {hearing.opponentResponseRequired && (
                                 <Badge variant="outline" className="text-xs border-orange-500 text-orange-600 dark:text-orange-400">
                                   مطلوب رد من الخصم
+                                </Badge>
+                              )}
+                              {/* "ضبط ناقص" — same outline-badge shape as its two
+                                  neighbours, in the sky tone the cases-page
+                                  "ضبط جلسة ناقص" badge uses so the two read as one
+                                  signal across pages. Deliberately a badge in the
+                                  EXISTING stack rather than a new column or a tenth
+                                  icon button — this page is already dense and the
+                                  brief was filter-only restructuring-wise.
+                                  Shown to everyone: like the flag, it is a state of
+                                  the hearing, not a personal action. */}
+                              {isHearingMissingMinutes(hearing) && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs border-sky-500 text-sky-600 dark:text-sky-400"
+                                  data-testid={`badge-missing-minutes-${hearing.id}`}
+                                  title="سُجّلت نتيجة الجلسة ولم يُرفق ضبط الجلسة بعد"
+                                >
+                                  <Paperclip className="w-3 h-3 ml-1" />
+                                  ضبط ناقص
                                 </Badge>
                               )}
                               {/* "جلسة مُعلَّمة" — same outline-badge shape as the

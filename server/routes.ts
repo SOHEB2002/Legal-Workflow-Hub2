@@ -2694,6 +2694,11 @@ export async function registerRoutes(
   app.get("/api/cases", requireAuth, async (req, res) => {
     try {
       const allCases = await storage.getAllCases();
+      // ONE extra query for the whole response, not one per case — the
+      // hasReturnedFromReview enrichment idiom, extended. Returns the set of
+      // case ids that have a صك file so the map below can stamp a derived
+      // boolean; nothing about the attachment itself travels to the list.
+      const deedAttached = await storage.getCaseIdsWithDeedAttachment();
       // Strip stageHistory from list responses — it can be 20-50 entries
       // per case and is only needed in the case detail view (GET
       // /api/cases/:id). Replace it with a derived boolean the cases-table
@@ -2707,6 +2712,13 @@ export async function registerRoutes(
           stageHistory.some((t: any) =>
             t?.stage === "مراجعة_داخلية" || t?.stage === "مراجعة_داخلية_للتظلم"
           ),
+        // DERIVED, never stored. There is no has_deed_attachment column and no
+        // clearing code: the badge that reads this goes away the instant a file
+        // row exists, and comes back the instant it is deleted, because the
+        // value is recomputed from case_attachments on every list read. Present
+        // ONLY on this list response — it is not on the LawCase interface, so
+        // it can never reach an insert or update path.
+        hasDeedAttachment: deedAttached.has(c.id),
       }));
       res.json(stripped);
     } catch (error) {
@@ -10651,7 +10663,14 @@ export async function registerRoutes(
   app.get("/api/hearings", requireAuth, async (req, res) => {
     try {
       const hearings = await storage.getAllHearings();
-      res.json(hearings);
+      // Same enrichment shape as GET /api/cases: ONE extra query, a Set, one
+      // in-memory stamp. DERIVED, never stored — no has_minutes column, no
+      // clearing code. This list is loaded app-wide by hearings-context and is
+      // already what the cases page's "رد خصم" badge reads, so the case-level
+      // "missing minutes" indicator rides along on THIS query and costs the
+      // cases page no request of its own.
+      const minutesAttached = await storage.getHearingIdsWithMinutesAttachment();
+      res.json(hearings.map((h) => ({ ...h, hasMinutesAttachment: minutesAttached.has(h.id) })));
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب الجلسات" });
     }

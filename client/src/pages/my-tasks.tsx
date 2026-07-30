@@ -14,7 +14,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Clock, Archive, Send, Eye, Briefcase,
+  ChevronDown, ChevronLeft, ListChecks, Clock, Archive, Send, Eye, Briefcase, Paperclip,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -83,6 +83,14 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   hearing_attend: { icon: Gavel, label: "حضور جلسة" },
   hearing_unrecorded: { icon: AlertTriangle, label: "جلسة دون تسجيل نتيجة" },
   hearing_report: { icon: FileText, label: "تقرير جلسة" },
+  // Deliberately NOT in PINNED_KINDS, unlike its three hearing siblings. The
+  // ضبط is issued by the court on its own schedule, so this task can sit open
+  // legitimately for a while; pinning it would park a permanent row in the
+  // urgent section. It also has no getActionConfig case on purpose — attaching
+  // needs a file picker, which the inline action dialog has no mode for, so it
+  // falls to the `default: return null` arm (same as hearing_attend and
+  // hearing_unrecorded) and the user opens the hearing, where the control lives.
+  hearing_minutes: { icon: Paperclip, label: "ضبط جلسة" },
   memo_pending: { icon: FileText, label: "مذكرة" },
   review_pending: { icon: ClipboardCheck, label: "مراجعة" },
   collection: { icon: FileSignature, label: "خطاب تحصيل" },
