@@ -111,6 +111,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError, cn } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseDetailsDialog } from "@/components/case-details-dialog";
+import { SingleAttachmentControl } from "@/components/single-attachment-control";
 import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { useHearings } from "@/lib/hearings-context";
@@ -473,6 +474,17 @@ export default function CasesPage() {
 
   const canRecordJudgmentDeed = (c: LawCase): boolean =>
     c.currentStage === "محكوم_حكم_ابتدائي" && canActOnCaseWorkflow(c);
+
+  // Mirror of the server's canAttachCaseJudgmentDeed (routes.ts) — the gate on
+  // uploading / replacing / deleting the صك FILE. It is canActOnCaseWorkflow
+  // PLUS admin_support, and that one-role difference is deliberate: recording
+  // the receipt DATE starts the objection clock and creates the لائحة اعتراضية
+  // (a legal act, admin_support excluded), whereas filing the PDF that arrived
+  // from the court is clerical and admin_support is who receives it. Kept as a
+  // separate function rather than widening canActOnCaseWorkflow, which also
+  // gates the appeal-outcome and opponent-response actions.
+  const canAttachDeed = (c: LawCase): boolean =>
+    (!!user && user.role === "admin_support") || canActOnCaseWorkflow(c);
 
   // isCasePaused now comes from case-stage-utils — the same helper the extracted
   // details dialog uses for its paused banner (identical `!!c.pausedAt` rule).
@@ -3092,6 +3104,19 @@ export default function CasesPage() {
                     الافتراضي 30 يوماً. للقضاء المستعجل استخدم 10 أيام.
                   </p>
                 </div>
+                {/* The صك FILE. Independent of the date above: it uploads
+                    immediately to its own endpoint rather than riding along
+                    with this dialog's save, so a lawyer can file the PDF
+                    without re-entering the date and vice-versa. The date is
+                    what starts the objection clock; this is the document
+                    itself. Nothing here gates saving the dialog — the deed is
+                    not mandatory in this batch. */}
+                <SingleAttachmentControl
+                  endpoint={`/api/cases/${deedCase.id}/deed-attachment`}
+                  label="ملف صك الحكم"
+                  emptyHint="لم يُرفق الصك بعد — يمكن رفعه الآن أو لاحقاً"
+                  canEdit={canAttachDeed(deedCase)}
+                />
                 {deedDate && Number(deedWindowDays) > 0 && (
                   <div className="rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/20 p-3 text-blue-800 dark:text-blue-300">
                     <p className="text-xs">

@@ -675,6 +675,77 @@ export const hearings = pgTable("hearings", {
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
+// ==================== مرفق الصك / ضبط الجلسة ====================
+// The judgment deed (صك الحكم) on a case, and the minutes (ضبط الجلسة) on a
+// hearing. Both MIRROR contract_attachments — the only real file-upload
+// mechanism in this app. The row stores the Object-Storage KEY in file_path;
+// never the bytes, and never a URL. Key shape: makeCaseDeedObjectKey /
+// makeHearingMinutesObjectKey in server/routes.ts.
+//
+// ⚠ APPLIED MANUALLY — `db:push` / drizzle-kit NOT run. Both DBs (dev heliumdb
+// AND prod neondb) must have these tables BEFORE this code serves traffic
+// against them: drizzle builds an explicit column list from the declaration, so
+// a missing table or a mismatched column name breaks EVERY read that touches
+// it, not just the new feature. The exact DDL is in the commit message; run it
+// on dev → confirm the app loads → run it on prod → deploy.
+//
+// ONE FILE PER PARENT, enforced in the DB by a PLAIN unique index on the parent
+// id. contract_attachments needs a PARTIAL unique index (…WHERE slot_key IS NOT
+// NULL) only because it holds two KINDS of row: designated slots, which are
+// single-file, and free "additional" attachments, which use slot_key=NULL and
+// accumulate without limit. Neither table below has slots or free attachments —
+// exactly one صك per case and one ضبط per hearing — so the partial predicate
+// would have nothing to exclude, and a plain UNIQUE is both correct and
+// stricter. One index also suffices for BOTH jobs here: a unique b-tree on the
+// parent id IS the lookup index, which is why there is no separate
+// *_case_idx / *_hearing_idx (contract_attachments needs two only because its
+// unique index is partial and two-column).
+//
+// FK IS ACTIVE (uncommented), matching contract_attachments_contract_id_fkey
+// rather than the commented Batch-M style. The Batch-M FKs are commented for a
+// reason that does not apply here: they were RETROFITTED onto large existing
+// tables, where the validating ADD CONSTRAINT scanned every row and timed out
+// the deploy (see the law_cases note). These are brand-new, EMPTY tables whose
+// FK is created inline in the CREATE TABLE — zero rows to validate, nothing to
+// time out, no orphan risk — exactly the contract_attachments situation. And
+// because the DDL below is applied by hand to BOTH DBs, there is no dev/prod
+// FK drift for Republish to turn into a DROP.
+export const caseAttachments = pgTable("case_attachments", {
+  id:         varchar("id", { length: 255 }).primaryKey(),
+  caseId:     varchar("case_id", { length: 255 }).notNull(),
+  fileName:   varchar("file_name", { length: 500 }).notNull(),
+  filePath:   varchar("file_path", { length: 1000 }).notNull(),
+  fileSize:   bigint("file_size", { mode: "number" }).notNull(),
+  mimeType:   varchar("mime_type", { length: 100 }).notNull(),
+  uploadedBy: varchar("uploaded_by", { length: 255 }).notNull(),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+}, (t) => ({
+  caseFk: foreignKey({
+    name: "case_attachments_case_id_fkey",
+    columns: [t.caseId],
+    foreignColumns: [lawCases.id],
+  }).onDelete("cascade"),
+  caseUniqueIdx: uniqueIndex("case_attachments_case_unique_idx").on(t.caseId),
+}));
+
+export const hearingAttachments = pgTable("hearing_attachments", {
+  id:         varchar("id", { length: 255 }).primaryKey(),
+  hearingId:  varchar("hearing_id", { length: 255 }).notNull(),
+  fileName:   varchar("file_name", { length: 500 }).notNull(),
+  filePath:   varchar("file_path", { length: 1000 }).notNull(),
+  fileSize:   bigint("file_size", { mode: "number" }).notNull(),
+  mimeType:   varchar("mime_type", { length: 100 }).notNull(),
+  uploadedBy: varchar("uploaded_by", { length: 255 }).notNull(),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+}, (t) => ({
+  hearingFk: foreignKey({
+    name: "hearing_attachments_hearing_id_fkey",
+    columns: [t.hearingId],
+    foreignColumns: [hearings.id],
+  }).onDelete("cascade"),
+  hearingUniqueIdx: uniqueIndex("hearing_attachments_hearing_unique_idx").on(t.hearingId),
+}));
+
 export const fieldTasks = pgTable("field_tasks", {
   id: varchar("id", { length: 255 }).primaryKey(),
   title: varchar("title", { length: 255 }).notNull(),
@@ -3487,6 +3558,40 @@ export interface ContractAttachment {
   // underlying file is gone and the UI surfaces a re-upload prompt
   // instead of preview/download buttons. New rows from the
   // Object-Storage path always report missing=false.
+  missing?: boolean;
+}
+
+// The judgment deed (صك) on a case. Mirrors ContractAttachment minus the two
+// contract-only fields: no slotKey (there is exactly ONE deed per case, so
+// there is nothing to key a slot on) and no description (not in scope — the
+// deed's metadata lives on the case: judgmentDeedReceivedDate +
+// objectionWindowDays). `missing` follows the ContractAttachment convention
+// exactly: runtime-derived on the GET response, never stored.
+export interface CaseAttachment {
+  id: string;
+  caseId: string;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  missing?: boolean;
+}
+
+// The minutes (ضبط الجلسة) on a hearing. Same shape as CaseAttachment, keyed
+// on the hearing. NOT related to hearings.hearing_minutes — that is an unused
+// TEXT column declared by an agent batch in Feb 2026 and never wired to
+// anything; it would hold pasted transcript text, not a file. Left untouched.
+export interface HearingAttachment {
+  id: string;
+  hearingId: string;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedBy: string;
+  uploadedAt: string;
   missing?: boolean;
 }
 
