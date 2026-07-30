@@ -189,23 +189,64 @@ import { Client as ObjectStorageClient } from "@replit/object-storage";
 // error message in that case).
 const contractObjectStore = new ObjectStorageClient();
 
-const CONTRACT_OBJECT_KEY_PREFIX = "contracts/";
+// Object-Storage key prefixes, one per attachment-bearing entity. The prefix
+// is also the bucket "folder", so keys are self-describing:
+//   contracts/<contractId>/<uuid>.pdf
+//   cases/<caseId>/<uuid>.pdf          — the judgment deed (صك)
+//   hearings/<hearingId>/<uuid>.pdf    — the minutes (ضبط الجلسة)
+const OBJECT_KEY_PREFIXES = {
+  contract: "contracts/",
+  case:     "cases/",
+  hearing:  "hearings/",
+} as const;
+
+const ALL_OBJECT_KEY_PREFIXES: readonly string[] = Object.values(OBJECT_KEY_PREFIXES);
 
 // Single source of truth for "is this row pointing at a fresh
 // Object-Storage upload or a legacy disk path?". New rows store the
-// object key ("contracts/<contractId>/<uuid>.pdf") in filePath;
-// pre-migration rows still hold the disk path
-// ("./uploads/contracts/..." or "uploads/contracts/...") whose
-// underlying file is gone. The download handler returns 410 for
-// legacy paths and the list response flags them as missing.
-function isContractObjectKey(filePath: string): boolean {
-  return typeof filePath === "string" && filePath.startsWith(CONTRACT_OBJECT_KEY_PREFIX);
+// object key (see the prefixes above) in filePath; pre-migration
+// CONTRACT rows still hold the disk path ("./uploads/contracts/..." or
+// "uploads/contracts/...") whose underlying file is gone. The download
+// handlers return 410 for legacy paths and the list responses flag them
+// as missing.
+//
+// 🔴 WHY THIS IS THE RISKIEST FUNCTION IN THE ATTACHMENT FEATURE, and why
+// widening it is nevertheless SAFE FOR CONTRACTS:
+//   • Fail direction. An UNRECOGNISED prefix returns false, which every call
+//     site reads as "legacy dead disk path". If a cases/ or hearings/ key were
+//     not recognised, uploads would appear to succeed and then every file would
+//     render as missing, download would 410, and delete would silently orphan
+//     the blob — while typechecking cleanly and passing any test that only
+//     asserts a 201 on upload. Hence one shared function, never a per-entity copy.
+//   • Contract behaviour is BYTE-IDENTICAL after the widening. A contract row's
+//     filePath is written by exactly one code path (makeContractObjectKey), so
+//     it is either "contracts/…" (true before and after) or a legacy
+//     "uploads/contracts/…" / "./uploads/contracts/…" (false before and after —
+//     neither starts with "cases/" or "hearings/", so no legacy path can be
+//     newly promoted to "real"). Adding prefixes can only ever change the
+//     verdict for a path that STARTS with one of the new prefixes, and no
+//     contract row can.
+function isAttachmentObjectKey(filePath: string): boolean {
+  return typeof filePath === "string"
+    && ALL_OBJECT_KEY_PREFIXES.some((prefix) => filePath.startsWith(prefix));
+}
+
+// ONE key builder, three thin wrappers — so the extension sanitisation and the
+// randomUUID basename are shared by construction rather than copy-pasted per
+// entity (a divergent sanitiser would be exactly the kind of silent drift the
+// note above warns about). The regex strips everything outside [A-Za-z0-9.]
+// from the extension; the basename never derives from user input.
+function makeObjectKey(prefix: string, parentId: string, originalName: string): string {
+  const ext = path.extname(originalName).replace(/[^a-zA-Z0-9.]/g, "");
+  return `${prefix}${parentId}/${randomUUID()}${ext}`;
 }
 
 function makeContractObjectKey(contractId: string, originalName: string): string {
-  const ext = path.extname(originalName).replace(/[^a-zA-Z0-9.]/g, "");
-  return `${CONTRACT_OBJECT_KEY_PREFIX}${contractId}/${randomUUID()}${ext}`;
+  return makeObjectKey(OBJECT_KEY_PREFIXES.contract, contractId, originalName);
 }
+// makeCaseDeedObjectKey / makeHearingMinutesObjectKey land with their call
+// sites in the routes commit — declaring them here first would trip the
+// project's `tsc --noUnusedLocals` gate, which is clean and stays clean.
 
 interface AuthRequest extends Request {
   user?: {
@@ -7490,7 +7531,7 @@ export async function registerRoutes(
       // not correctness. Legacy disk-path rows (pre-migration) have
       // nothing left to delete and are skipped.
       for (const att of attachments) {
-        if (att.filePath && isContractObjectKey(att.filePath)) {
+        if (att.filePath && isAttachmentObjectKey(att.filePath)) {
           contractObjectStore.delete(att.filePath, { ignoreNotFound: true }).catch((e) => {
             console.warn(`[contracts/delete] failed to delete object ${att.filePath}:`, e?.message || e);
           });
@@ -8931,7 +8972,7 @@ export async function registerRoutes(
           // still replace freely regardless.
           if (rawSlot === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW) {
             const existing = await storage.getContractAttachmentBySlot(contract.id, rawSlot);
-            if (existing && isContractObjectKey(existing.filePath)) {
+            if (existing && isAttachmentObjectKey(existing.filePath)) {
               return res.status(409).json({
                 error: "العقد محل المراجعة لا يمكن استبداله بعد رفعه. احذفه أولاً إذا كان لديك الصلاحية.",
               });
@@ -8980,7 +9021,7 @@ export async function registerRoutes(
         // a failed delete just leaves a billable orphan, not a
         // correctness issue.
         if (replaced && replaced.filePath && replaced.filePath !== attachment.filePath) {
-          if (isContractObjectKey(replaced.filePath)) {
+          if (isAttachmentObjectKey(replaced.filePath)) {
             contractObjectStore.delete(replaced.filePath, { ignoreNotFound: true }).catch((e) => {
               console.error("[contracts/attachments POST] failed to delete replaced object:", {
                 key: replaced.filePath,
@@ -9048,7 +9089,7 @@ export async function registerRoutes(
       const slots: Record<string, any> = {};
       const additional: any[] = [];
       for (const a of all) {
-        const enriched = { ...a, missing: !isContractObjectKey(a.filePath) };
+        const enriched = { ...a, missing: !isAttachmentObjectKey(a.filePath) };
         if (a.slotKey) slots[a.slotKey] = enriched;
         else additional.push(enriched);
       }
@@ -9076,7 +9117,7 @@ export async function registerRoutes(
       // is not recoverable. Return 410 Gone with the recovery copy the
       // UI knows how to render (re-upload affordance) — don't bother
       // hitting Object Storage with a key that was never there.
-      if (!isContractObjectKey(att.filePath)) {
+      if (!isAttachmentObjectKey(att.filePath)) {
         return res.status(410).json({
           error: "الملف مفقود — يرجى إعادة الرفع من جديد",
         });
@@ -9171,7 +9212,7 @@ export async function registerRoutes(
       // change — no-op for those. ignoreNotFound:true so a missing
       // object doesn't fail the response after the row is already
       // deleted; best-effort either way.
-      if (deleted.filePath && isContractObjectKey(deleted.filePath)) {
+      if (deleted.filePath && isAttachmentObjectKey(deleted.filePath)) {
         contractObjectStore.delete(deleted.filePath, { ignoreNotFound: true }).catch((e) => {
           console.error("[contracts/attachments DELETE] failed to delete object:", {
             key: deleted.filePath,
