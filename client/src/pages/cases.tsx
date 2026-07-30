@@ -28,6 +28,7 @@ import {
   RotateCcw,
   MoreHorizontal,
   Archive,
+  Paperclip,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -112,6 +113,7 @@ import { extractApiError, cn } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseDetailsDialog } from "@/components/case-details-dialog";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
+import { isAwaitingJudgmentDeedFile, caseHasHearingMissingMinutes } from "@/lib/attachment-indicators";
 import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { useHearings } from "@/lib/hearings-context";
@@ -1696,6 +1698,42 @@ export default function CasesPage() {
                         >
                           <FileText className="w-2.5 h-2.5 ml-1" />
                           بانتظار استلام الصك
+                        </Badge>
+                      )}
+                      {/* Deed state 2 of 3 — the receipt date IS recorded but the
+                          صك file itself hasn't been filed. AMBER, not purple: the
+                          purple badge above means "still waiting on the court",
+                          which is outside our control, whereas this one is a task
+                          sitting on our own desk. Mutually exclusive with it by
+                          construction (that one needs the date empty, this one
+                          needs it filled), so a case never shows both.
+                          Self-clearing: hasDeedAttachment is recomputed from
+                          case_attachments on every list read. */}
+                      {isAwaitingJudgmentDeedFile(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-awaiting-deed-file-${c.id}`}
+                          title="سُجّل تاريخ استلام الصك ولم تُرفق نسخة الصك بعد"
+                        >
+                          <Paperclip className="w-2.5 h-2.5 ml-1" />
+                          بانتظار إرفاق الصك
+                        </Badge>
+                      )}
+                      {/* A hearing on this case has its result recorded but no
+                          ضبط attached. Reads the SAME in-memory hearings list the
+                          "رد خصم" badge above uses (getHearingsByCase), so no
+                          extra request. Self-clearing for the same reason as the
+                          deed badge — hasMinutesAttachment is derived per read. */}
+                      {caseHasHearingMissingMinutes(getHearingsByCase(c.id)) && (
+                        <Badge
+                          variant="outline"
+                          className="border-sky-500 bg-sky-500/10 text-sky-700 dark:text-sky-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-missing-minutes-${c.id}`}
+                          title="سُجّلت نتيجة جلسة ولم يُرفق ضبط الجلسة بعد"
+                        >
+                          <Paperclip className="w-2.5 h-2.5 ml-1" />
+                          ضبط جلسة ناقص
                         </Badge>
                       )}
                     </div>
