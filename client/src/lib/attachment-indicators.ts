@@ -1,3 +1,5 @@
+import { hearingProducesNoMinutes } from "@shared/schema";
+
 // DERIVED attachment indicators. Same house pattern as isAwaitingJudgmentDeed
 // (cases.tsx) and caseHasReturnedFromReview (case-stage-utils.ts): computed
 // from data the page already holds, never stored, and self-clearing because
@@ -38,13 +40,15 @@ export function isAwaitingJudgmentDeedFile(c: {
   return !c.hasDeedAttachment;
 }
 
-// "This case reached the first-instance judgment stage" — the CLIENT half of the
-// server's caseReachedPrimaryJudgment (shared/schema.ts).
+// "This case reached A JUDGMENT STAGE" — any of محكوم_حكم_ابتدائي /
+// منظورة_استئناف / محكوم_حكم_نهائي. The CLIENT half of the server's
+// caseReachedJudgmentStage (shared/schema.ts); see the long note there for why it
+// covers all three rather than first-instance alone.
 //
 // ⚠ IT READS A DERIVED LIST FIELD RATHER THAN CALLING THE SHARED HELPER, and it
 // has to: GET /api/cases STRIPS stageHistory from every row, so the client
 // physically cannot run the shared stageHistory test. The server therefore stamps
-// `reachedPrimaryJudgment` on the list response — computed with the shared helper,
+// `reachedJudgmentStage` on the list response — computed with the shared helper,
 // from the history, immediately BEFORE it is stripped — so the two sides still
 // share one rule even though only one of them can evaluate it. Same derived-field
 // idiom as hasDeedAttachment, and it costs no extra query.
@@ -54,8 +58,8 @@ export function isAwaitingJudgmentDeedFile(c: {
 // (TS2559). One required field that LawCase really has makes the structural match
 // legal while still keeping the derived field off the interface — the same reason
 // isAwaitingJudgmentDeedFile above carries `currentStage`.
-export function caseReachedJudgment(c: { id: string; reachedPrimaryJudgment?: boolean }): boolean {
-  return !!c.reachedPrimaryJudgment;
+export function caseReachedJudgment(c: { id: string; reachedJudgmentStage?: boolean }): boolean {
+  return !!c.reachedJudgmentStage;
 }
 
 // Structural accessor for the صك presence flag, for the GATES rather than the
@@ -68,16 +72,24 @@ export function caseHasDeedAttachment(c: { id: string; hasDeedAttachment?: boole
   return !!c.hasDeedAttachment;
 }
 
-// The case has MOVED PAST محكوم_حكم_ابتدائي and still owes its صك.
+// The case is at a judgment stage OTHER than محكوم_حكم_ابتدائي — i.e.
+// منظورة_استئناف or محكوم_حكم_نهائي — and still owes its صك.
 //
-// WHY THIS EXISTS: three automatic cascades are deliberately NOT blocked (the
-// objection filing, a court hearing listed at the judgment stage, and a hearing
-// result), so a case can legitimately reach منظورة_استئناف or محكوم_حكم_نهائي
-// with no deed on file — and legacy cases predating the gate are already there.
-// Without this badge those cases would be INVISIBLE: isAwaitingJudgmentDeedFile
-// only fires at محكوم_حكم_ابتدائي, so the moment a case moves on its indicator
-// disappeared while the close gate silently held it. That is the "wedged with no
-// actor" failure the whole design is trying to avoid.
+// WHY THIS EXISTS: a case can reach those stages with no deed on file by several
+// routes — three automatic cascades are deliberately not blocked (objection
+// filing, a court hearing listed at the judgment stage, a hearing result), and
+// 🔴 THE COMMONEST ROUTE OF ALL is a first-instance ruling marked NOT objectionable,
+// which goes STRAIGHT to محكوم_حكم_نهائي without ever visiting محكوم_حكم_ابتدائي.
+// Production confirmed that is 8 of 8 final-judgment cases, not an edge case.
+// Without this badge those cases are INVISIBLE: isAwaitingJudgmentDeedFile only
+// fires at محكوم_حكم_ابتدائي, so a case that skipped or left that stage shows
+// nothing while the close gate silently holds it — the "wedged with no actor"
+// failure the whole design exists to avoid.
+//
+// This is ALSO the case's only route to the late-attach affordance
+// (canAttachDeedLate), which is what makes the gate satisfiable at all. Widening
+// the gate without widening THIS would have re-created the batch-3 bug: a
+// requirement with no way to meet it.
 //
 // Same wording as isAwaitingJudgmentDeedFile ("بانتظار إرفاق الصك") — it is the
 // same state, so it gets the same words rather than a new vocabulary.
@@ -86,12 +98,12 @@ export function caseHasDeedAttachment(c: { id: string; hasDeedAttachment?: boole
 // currentStage === محكوم_حكم_ابتدائي, this one excludes it.
 export function isPostJudgmentCaseMissingDeed(c: {
   currentStage: string;
-  reachedPrimaryJudgment?: boolean;
+  reachedJudgmentStage?: boolean;
   hasDeedAttachment?: boolean;
 }): boolean {
   // Never reached judgment → the deed was never recordable → silent. This is the
   // same positive test the server gates on, so badge and gate agree exactly.
-  if (!c.reachedPrimaryJudgment) return false;
+  if (!c.reachedJudgmentStage) return false;
   // Still AT the judgment stage → owned by the two existing badges.
   if (c.currentStage === "محكوم_حكم_ابتدائي") return false;
   // Already closed or archived → the gate no longer applies, and nagging about a
@@ -106,8 +118,14 @@ export function isPostJudgmentCaseMissingDeed(c: {
 // never drift apart.
 export function isHearingMissingMinutes(h: {
   result?: string | null;
+  hearingType?: string | null;
   hasMinutesAttachment?: boolean;
 }): boolean {
+  // جلسات الصلح والتسوية issue no ضبط at all, so they can never be "missing" one.
+  // FIRST, before the result test: a settlement hearing must stay silent on every
+  // surface regardless of what its result says. Shared with the server halves via
+  // schema.ts — see the note there for why hearing_type is the authoritative term.
+  if (hearingProducesNoMinutes(h)) return false;
   if (!String(h.result || "").trim()) return false;
   return !h.hasMinutesAttachment;
 }
@@ -116,7 +134,7 @@ export function isHearingMissingMinutes(h: {
 // Reads the app-wide hearings list that the page already holds (the same list
 // the "رد خصم" badge reads via getHearingsByCase), so this costs no request.
 export function caseHasHearingMissingMinutes(
-  hearings: Array<{ result?: string | null; hasMinutesAttachment?: boolean }>,
+  hearings: Array<{ result?: string | null; hearingType?: string | null; hasMinutesAttachment?: boolean }>,
 ): boolean {
   return hearings.some(isHearingMissingMinutes);
 }

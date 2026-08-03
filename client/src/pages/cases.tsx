@@ -395,7 +395,7 @@ export default function CasesPage() {
     // server refuses this close for EVERY role while the deed is missing (the
     // محكوم_حكم_ابتدائي guard in PATCH runs before the early-close shortcut, and
     // the judgment-case close guard covers the later stages), so no button here
-    // could succeed. Keyed on reachedPrimaryJudgment, the derived list field that
+    // could succeed. Keyed on reachedJudgmentStage, the derived list field that
     // carries the SAME stageHistory test the server applies.
     if (caseReachedJudgment(c) && !caseHasDeedAttachment(c)) return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;

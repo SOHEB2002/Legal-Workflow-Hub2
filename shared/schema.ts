@@ -2630,6 +2630,36 @@ export const HearingType = {
 
 export type HearingTypeValue = typeof HearingType[keyof typeof HearingType];
 
+// A hearing that produces NO court ضبط, so the minutes requirement must not
+// apply to it (owner decision 2026-08-04). جلسات الصلح والتسوية are conducted on
+// the settlement platforms, not by a court, and issue no minutes document.
+//
+// KEYED ON hearing_type, the authoritative PER-HEARING column — not on the case's
+// stage, not on isSettlementCase, and not on caseType:
+//   • the case moves on while the hearing record stays, so a stage-derived test
+//     would misread a past settlement hearing on a now-court case;
+//   • isSettlementCase is case-level, and a settlement case can later hold real
+//     court hearings;
+//   • caseType is free text, and trusting it is a DOCUMENTED BUG in this codebase
+//     (the L5 labor fix replaced exactly that test with a department lookup).
+// hearing_type is already load-bearing server-side — POST /api/hearings branches
+// on it to choose between the مداولة_الصلح transition and the court promotion —
+// so this reuses an existing decision rather than inventing a parallel one.
+//
+// ⚠ معين IS NOT EXCLUDED (owner answer 2026-08-04): معين hearings DO produce a
+// ضبط. They carry hearingType "محكمة" — the معين stages are deliberately absent
+// from the create-form's settlement-stage list — so they stay required by
+// construction, with no term needed here. Do not add them.
+//
+// SHARED, and it must stay shared: the minutes rule has THREE separate
+// implementations (the client predicate behind badge/badge/filter, the my-tasks
+// SQL emission, and the hearing close gate). This lives in shared/schema.ts
+// rather than client/lib so the server halves can import it too — a client-only
+// helper would have left two of the five surfaces to drift.
+export function hearingProducesNoMinutes(h: { hearingType?: string | null }): boolean {
+  return h.hearingType === HearingType.TARADI || h.hearingType === HearingType.SETTLEMENT;
+}
+
 // ==================== أنواع المذكرات ====================
 export const MemoType = {
   LAWSUIT_DRAFT: "تحرير_دعوى",
@@ -3370,7 +3400,7 @@ export interface ContractSlotRule {
 //     life with nobody having ever seen its ruling. Different thing, different
 //     answer.
 // Those gates are enforced in server/routes.ts on the case-stage and hearing-close
-// routes, keyed on caseReachedPrimaryJudgment (above). checkRequiredSlotsForTransition
+// routes, keyed on caseReachedJudgmentStage (above). checkRequiredSlotsForTransition
 // and every requiredBeforeLeavingStage in this table are deliberately UNTOUCHED by
 // them and stay a permanent no-op by data.
 //
@@ -5352,38 +5382,55 @@ function stageWasReached(c: OutcomeCaseInput, stage: string): boolean {
 }
 
 // ==================== THE صك (JUDGMENT DEED) SCOPE TEST ====================
-// "This case reached the FIRST-INSTANCE JUDGMENT stage" — the single scope test
-// for every judgment-deed gate (owner decision 2026-08-03: a case that reached
-// judgment may not advance past it, nor close, until the court's صك is on file).
-// Hoisted here so the client and the server share ONE rule and the UI can never
-// offer an action the endpoint rejects.
+// "This case reached A JUDGMENT STAGE" — the single scope test for every
+// judgment-deed gate (a case with a judgment may not advance past it, nor close,
+// until the court's صك is on file). Hoisted here so the client and the server
+// share ONE rule and the UI can never offer an action the endpoint rejects.
 //
-// WHY stageHistory AND NOT the two alternatives — this choice is load-bearing:
-//   • currentStage alone is TOO NARROW. The close gates fire at محكوم_حكم_نهائي,
-//     one stage LATER, and on a case that went to appeal and came back it is
-//     later still (محكوم_حكم_ابتدائي → منظورة_استئناف → محكوم_حكم_نهائي). History
-//     is the only term that survives those moves, which is exactly why it is the
-//     right test for an already-advanced case.
-//   • the presence of a JUDGMENT HEARING is TOO WIDE. A منظورة ruling the lawyer
-//     marked NOT objectionable goes STRAIGHT to محكوم_حكم_نهائي and never visits
-//     محكوم_حكم_ابتدائي, so it is never offered the صك receipt step at all.
-//     Gating it would demand a document the app gives nobody a way to file, and
-//     would wedge the case permanently.
-// So the test is precisely "was the deed ever recordable on this case".
+// 🔴 WIDENED 2026-08-04 FROM FIRST-INSTANCE ONLY, AND RENAMED because the old name
+// (caseReachedJudgmentStage) became a lie the moment it covered three stages.
+// It used to test محكوم_حكم_ابتدائي alone, on the reasoning that a صك only exists
+// where an objection window does. THE OWNER HAS CORRECTED THAT PREMISE: a صك is
+// issued for EVERY ruling, including non-objectionable first-instance rulings and
+// appeal rulings. Coupling the deed to the objection window was an incomplete
+// model.
+// Production proved how badly: 8 of 8 cases at محكوم_حكم_نهائي had NEVER passed
+// through محكوم_حكم_ابتدائي, so every single final-judgment case fell outside the
+// old test — no badge, no gate, and no way to attach a deed at all.
+// The path they take: منظورة + a ruling the lawyer marks NOT objectionable →
+// isFinal → straight to محكوم_حكم_نهائي in ONE stage write (routes.ts, the
+// judgment branch). محكوم_حكم_ابتدائي is never written and never enters history.
 //
-// SCOPE GUARANTEE (the thing the owner asked to be sure of): settlement
-// (مداولة_الصلح / تحصيل / أغلق_طلب_الصلح), strike-off (مشطوبة) and
-// no-client-response (استكمال_البيانات) closures never enter this stage, so they
-// return false here and are untouched by construction — not by an exclusion list
+// WHY stageHistory AND NOT currentStage: the gates fire at different stages than
+// the one the judgment was recorded on — the close gates at محكوم_حكم_نهائي, and
+// later still on a case that went to appeal and came back
+// (محكوم_حكم_ابتدائي → منظورة_استئناف → محكوم_حكم_نهائي). History is the only term
+// that survives those moves.
+//
+// 🔴 SCOPE GUARANTEE — this CANNOT capture a non-judgment case, and the proof is
+// structural rather than a promise: these three stages are written by exactly FOUR
+// code paths (moveCaseFromPrimaryJudgment, the isFinal judgment branch, the
+// hearing-creation appeal carve-out, and the objection-memo hook) and EVERY ONE of
+// them means a ruling exists. No settlement, strike-off, no-client-response or
+// archival path can write any of them. So settlement (مداولة_الصلح / تحصيل /
+// أغلق_طلب_الصلح), strike-off (مشطوبة) and no-response (استكمال_البيانات) closures
+// return false here and are untouched — by construction, not by an exclusion list
 // that could drift.
+//
+// ⚠ ONE KNOWN FALSE NEGATIVE, unchanged by the widening: a case whose
+// stage_history was never populated (the pre-2026-07-28 seed never wrote it — the
+// same gap that broke deriveCurrentCaseNumber and the terminal progress bar) reads
+// false even if it genuinely held a judgment. Data-shaped, not logic-shaped.
 //
 // Same shape as the deriveCurrentCaseNumber "reachedSettlement" precedent, which
 // also asks stageHistory whether a stage was ever visited.
-export function caseReachedPrimaryJudgment(c: {
+export function caseReachedJudgmentStage(c: {
   currentStage?: string | null;
   stageHistory?: Array<{ stage?: string | null } | null> | null;
 }): boolean {
-  return stageWasReached(c, CaseStage.PRIMARY_JUDGMENT);
+  return stageWasReached(c, CaseStage.PRIMARY_JUDGMENT)
+    || stageWasReached(c, CaseStage.APPEAL_PENDING)
+    || stageWasReached(c, CaseStage.FINAL_JUDGMENT);
 }
 
 export function resolveCaseOutcome(
