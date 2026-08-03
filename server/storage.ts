@@ -34,7 +34,7 @@ import {
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationActivityLog,
   contracts, contractAttachments, contractActivityLog,
-  caseAttachments, hearingAttachments,
+  caseAttachments, hearingAttachments, hearingProducesNoMinutes,
   memoActivityLog, generalTaskEvents,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
@@ -3912,7 +3912,16 @@ export class DatabaseStorage implements IStorage {
       // hearing that ever had a result" — the missing-minutes test is pushed
       // into SQL, so a fully-completed hearing (report written, ضبط attached)
       // is still excluded and history does not accumulate in the feed.
-      const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND (${hearings.reportCompleted} = false OR ${hearingAttachments.id} IS NULL)))`;
+      //
+      // ⚠ THE MINUTES DISJUNCT IS TYPE-SCOPED (owner decision 2026-08-04):
+      // جلسات الصلح والتسوية issue no ضبط, so a missing one must not pull them
+      // into the feed. Scoped to the MINUTES arm only — a settlement hearing
+      // still owes its REPORT, so the reportCompleted disjunct stays untouched.
+      // COALESCE because hearing_type is nullable and legacy rows predate the
+      // column's default; NULL means محكمة, exactly as mapDbHearing coalesces it.
+      // (A bare NOT IN would evaluate to NULL on those rows and silently drop
+      // their minutes task.)
+      const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND (${hearings.reportCompleted} = false OR (${hearingAttachments.id} IS NULL AND COALESCE(${hearings.hearingType}, 'محكمة') NOT IN ('تراضي', 'تسوية_ودية')))))`;
       const where = firmWideScoped
         ? hActionable
         : deptHeadScoped
@@ -3931,6 +3940,9 @@ export class DatabaseStorage implements IStorage {
         // it can contribute AT MOST ONE row and cannot fan out the result set
         // (which would have silently duplicated every other hearing task).
         minutesAttachmentId: hearingAttachments.id,
+        // Needed by the loop's own minutes guard below — the SQL pre-filter alone
+        // is NOT sufficient. See that guard for why.
+        hearingType: hearings.hearingType,
       }).from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
         .leftJoin(clients, eq(lawCases.clientId, clients.id))
         .leftJoin(hearingAttachments, eq(hearingAttachments.hearingId, hearings.id)).where(where);
@@ -3953,7 +3965,13 @@ export class DatabaseStorage implements IStorage {
         // lawyer, `|| ""` when unset, with scopeOf("") deciding the pool
         // behaviour. No fallback is invented here — whatever the existing
         // hearing tasks do with an empty attendingLawyerId, this does too.
-        if (r.result && !r.minutesAttachmentId) {
+        // 🔴 THE SQL PRE-FILTER IS NOT ENOUGH ON ITS OWN, and this is the trap:
+        // its minutes disjunct is type-scoped, but a settlement hearing whose
+        // REPORT is still unwritten enters the loop through the OTHER disjunct.
+        // Without this guard that row would reach the test below and emit a
+        // minutes task for a hearing that can never have minutes. Both terms are
+        // required; neither is redundant.
+        if (r.result && !r.minutesAttachmentId && !hearingProducesNoMinutes(r)) {
           tasks.push({ id: `hearing_minutes:${r.id}`, kind: MyTaskKind.HEARING_MINUTES,
             title: `إرفاق ضبط الجلسة — قضية ${r.caseNumber}`, entityType: "hearing", entityId: r.id,
             caseId: r.caseId, ownerId, ownerScope, dueDate: r.date, isOverdue: false, actionHint: "record" });

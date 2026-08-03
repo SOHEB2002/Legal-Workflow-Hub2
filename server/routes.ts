@@ -84,6 +84,7 @@ import {
   DefaultObjectionWindowDays,
   findPrimaryJudgmentHearing,
   caseReachedPrimaryJudgment,
+  hearingProducesNoMinutes,
   // judgmentDirectionOf / weAreTheAppellant are no longer imported here: with
   // the aa1e5c3 direction restriction removed, the SERVER no longer constrains
   // the appeal outcome by judgment direction. Both remain exported from
@@ -12581,7 +12582,11 @@ export async function registerRoutes(
       // hearing that ruled / settled / was struck off is already "closed" by
       // status and never reaches this route — this gate effectively governs
       // POSTPONED hearings, the ones a human still closes by hand.
-      if (!(await storage.getHearingAttachment(hearingId))) {
+      // جلسات الصلح والتسوية issue no ضبط, so they are exempt (owner decision
+      // 2026-08-04) — same shared predicate the badges, the filter and the
+      // my-tasks emission use, so a settlement hearing that shows no "مطلوب
+      // إرفاق ضبط الجلسة" badge is never blocked here either.
+      if (!hearingProducesNoMinutes(hearing) && !(await storage.getHearingAttachment(hearingId))) {
         return res.status(400).json({ error: "يجب إرفاق ضبط الجلسة قبل إغلاق الجلسة" });
       }
 

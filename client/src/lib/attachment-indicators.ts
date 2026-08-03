@@ -1,3 +1,5 @@
+import { hearingProducesNoMinutes } from "@shared/schema";
+
 // DERIVED attachment indicators. Same house pattern as isAwaitingJudgmentDeed
 // (cases.tsx) and caseHasReturnedFromReview (case-stage-utils.ts): computed
 // from data the page already holds, never stored, and self-clearing because
@@ -106,8 +108,14 @@ export function isPostJudgmentCaseMissingDeed(c: {
 // never drift apart.
 export function isHearingMissingMinutes(h: {
   result?: string | null;
+  hearingType?: string | null;
   hasMinutesAttachment?: boolean;
 }): boolean {
+  // جلسات الصلح والتسوية issue no ضبط at all, so they can never be "missing" one.
+  // FIRST, before the result test: a settlement hearing must stay silent on every
+  // surface regardless of what its result says. Shared with the server halves via
+  // schema.ts — see the note there for why hearing_type is the authoritative term.
+  if (hearingProducesNoMinutes(h)) return false;
   if (!String(h.result || "").trim()) return false;
   return !h.hasMinutesAttachment;
 }
@@ -116,7 +124,7 @@ export function isHearingMissingMinutes(h: {
 // Reads the app-wide hearings list that the page already holds (the same list
 // the "رد خصم" badge reads via getHearingsByCase), so this costs no request.
 export function caseHasHearingMissingMinutes(
-  hearings: Array<{ result?: string | null; hasMinutesAttachment?: boolean }>,
+  hearings: Array<{ result?: string | null; hearingType?: string | null; hasMinutesAttachment?: boolean }>,
 ): boolean {
   return hearings.some(isHearingMissingMinutes);
 }

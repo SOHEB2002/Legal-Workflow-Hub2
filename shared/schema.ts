@@ -2630,6 +2630,36 @@ export const HearingType = {
 
 export type HearingTypeValue = typeof HearingType[keyof typeof HearingType];
 
+// A hearing that produces NO court ضبط, so the minutes requirement must not
+// apply to it (owner decision 2026-08-04). جلسات الصلح والتسوية are conducted on
+// the settlement platforms, not by a court, and issue no minutes document.
+//
+// KEYED ON hearing_type, the authoritative PER-HEARING column — not on the case's
+// stage, not on isSettlementCase, and not on caseType:
+//   • the case moves on while the hearing record stays, so a stage-derived test
+//     would misread a past settlement hearing on a now-court case;
+//   • isSettlementCase is case-level, and a settlement case can later hold real
+//     court hearings;
+//   • caseType is free text, and trusting it is a DOCUMENTED BUG in this codebase
+//     (the L5 labor fix replaced exactly that test with a department lookup).
+// hearing_type is already load-bearing server-side — POST /api/hearings branches
+// on it to choose between the مداولة_الصلح transition and the court promotion —
+// so this reuses an existing decision rather than inventing a parallel one.
+//
+// ⚠ معين IS NOT EXCLUDED (owner answer 2026-08-04): معين hearings DO produce a
+// ضبط. They carry hearingType "محكمة" — the معين stages are deliberately absent
+// from the create-form's settlement-stage list — so they stay required by
+// construction, with no term needed here. Do not add them.
+//
+// SHARED, and it must stay shared: the minutes rule has THREE separate
+// implementations (the client predicate behind badge/badge/filter, the my-tasks
+// SQL emission, and the hearing close gate). This lives in shared/schema.ts
+// rather than client/lib so the server halves can import it too — a client-only
+// helper would have left two of the five surfaces to drift.
+export function hearingProducesNoMinutes(h: { hearingType?: string | null }): boolean {
+  return h.hearingType === HearingType.TARADI || h.hearingType === HearingType.SETTLEMENT;
+}
+
 // ==================== أنواع المذكرات ====================
 export const MemoType = {
   LAWSUIT_DRAFT: "تحرير_دعوى",
