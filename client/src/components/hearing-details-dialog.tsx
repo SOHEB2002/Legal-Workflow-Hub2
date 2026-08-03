@@ -682,6 +682,21 @@ export function HearingDetailsDialog({
                       emptyHint="لم يُرفق الضبط بعد"
                       canEdit={canAttachHearingMinutes}
                       onAttachedChange={setMinutesAttached}
+                      // The control re-reads its OWN endpoint after an upload or
+                      // delete, which is why this step's done-state flips — but
+                      // the badges live on the LIST response's derived
+                      // hasMinutesAttachment, and uploadAttachmentRaw is a raw
+                      // fetch that touches no cache (apiRequest wouldn't either;
+                      // invalidation is always explicit here). Without this the
+                      // "مطلوب إرفاق ضبط الجلسة" badge stayed lit on both pages
+                      // until something else happened to refetch.
+                      //
+                      // ONE key clears BOTH surfaces: the hearings-page badge and
+                      // the cases-page badge read the same app-wide
+                      // ["/api/hearings"] query (hearings-context) — the cases
+                      // page via getHearingsByCase. Same idiom as saveResultEdit
+                      // above.
+                      onChanged={() => { queryClient.invalidateQueries({ queryKey: ["/api/hearings"] }); }}
                     />
                   )}
                   <WorkflowStep

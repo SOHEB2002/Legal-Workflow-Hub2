@@ -1733,7 +1733,7 @@ export default function CasesPage() {
                           title="سُجّلت نتيجة جلسة ولم يُرفق ضبط الجلسة بعد"
                         >
                           <Paperclip className="w-2.5 h-2.5 ml-1" />
-                          ضبط جلسة ناقص
+                          إرفاق ضبط الجلسة
                         </Badge>
                       )}
                     </div>
@@ -3154,6 +3154,21 @@ export default function CasesPage() {
                   label="ملف صك الحكم"
                   emptyHint="لم يُرفق الصك بعد — يمكن رفعه الآن أو لاحقاً"
                   canEdit={canAttachDeed(deedCase)}
+                  // Same defect the minutes control had: the upload is a raw
+                  // fetch that touches no cache, so the derived
+                  // hasDeedAttachment on the cases list stayed false and the
+                  // "بانتظار إرفاق الصك" badge stayed lit after attaching. The
+                  // file uploads independently of this dialog's حفظ, so it needs
+                  // its OWN refresh — the save button's refresh below can't
+                  // cover it (the user may attach and never press حفظ).
+                  // The two-step is the page's idiom: invalidateQueries for any
+                  // react-query reader of /api/cases, refreshCases for
+                  // cases-context's own useState list, which is what the badge
+                  // actually renders from.
+                  onChanged={async () => {
+                    await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                    await refreshCases();
+                  }}
                 />
                 {deedDate && Number(deedWindowDays) > 0 && (
                   <div className="rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/20 p-3 text-blue-800 dark:text-blue-300">

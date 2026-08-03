@@ -90,7 +90,10 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   // needs a file picker, which the inline action dialog has no mode for, so it
   // falls to the `default: return null` arm (same as hearing_attend and
   // hearing_unrecorded) and the user opens the hearing, where the control lives.
-  hearing_minutes: { icon: Paperclip, label: "ضبط جلسة" },
+  // Masdar form, matching the server-generated item title
+  // ("إرفاق ضبط الجلسة — قضية X") and the sibling action chips
+  // ("إسناد مهمة", "اعتماد نتيجة مهمة").
+  hearing_minutes: { icon: Paperclip, label: "إرفاق ضبط الجلسة" },
   memo_pending: { icon: FileText, label: "مذكرة" },
   review_pending: { icon: ClipboardCheck, label: "مراجعة" },
   collection: { icon: FileSignature, label: "خطاب تحصيل" },

@@ -1035,7 +1035,11 @@ export default function HearingsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">كل الجلسات</SelectItem>
-                <SelectItem value="missing">بانتظار الضبط</SelectItem>
+                {/* Mirrors the deed family's "بانتظار إرفاق الصك" exactly, so the
+                    two attachment dimensions read as one idiom. The trigger
+                    placeholder above stays the bare dimension name ("ضبط الجلسة")
+                    — a filter category is a noun, not an action. */}
+                <SelectItem value="missing">بانتظار إرفاق الضبط</SelectItem>
               </SelectContent>
             </Select>
             <HearingsAdvancedFilters
@@ -1248,10 +1252,15 @@ export default function HearingsPage() {
                                   مطلوب رد من الخصم
                                 </Badge>
                               )}
-                              {/* "ضبط ناقص" — same outline-badge shape as its two
-                                  neighbours, in the sky tone the cases-page
-                                  "ضبط جلسة ناقص" badge uses so the two read as one
-                                  signal across pages. Deliberately a badge in the
+                              {/* "مطلوب إرفاق ضبط الجلسة" — same outline-badge shape
+                                  as its two neighbours, in the sky tone the
+                                  cases-page badge uses so the two read as one
+                                  signal across pages. The cases page carries the
+                                  SHORT form ("إرفاق ضبط الجلسة") because its badge
+                                  stack is 10px and dense; this row has the space
+                                  for the full مطلوب form, which is also what makes
+                                  it read as a required action rather than a defect
+                                  — matching "مطلوب رد من الخصم" directly above. Deliberately a badge in the
                                   EXISTING stack rather than a new column or a tenth
                                   icon button — this page is already dense and the
                                   brief was filter-only restructuring-wise.
@@ -1265,7 +1274,7 @@ export default function HearingsPage() {
                                   title="سُجّلت نتيجة الجلسة ولم يُرفق ضبط الجلسة بعد"
                                 >
                                   <Paperclip className="w-3 h-3 ml-1" />
-                                  ضبط ناقص
+                                  مطلوب إرفاق ضبط الجلسة
                                 </Badge>
                               )}
                               {/* "جلسة مُعلَّمة" — same outline-badge shape as the
