@@ -83,6 +83,7 @@ import {
   opponentResponseSchema,
   DefaultObjectionWindowDays,
   findPrimaryJudgmentHearing,
+  caseReachedPrimaryJudgment,
   // judgmentDirectionOf / weAreTheAppellant are no longer imported here: with
   // the aa1e5c3 direction restriction removed, the SERVER no longer constrains
   // the appeal outcome by judgment direction. Both remain exported from
@@ -2013,6 +2014,21 @@ async function promoteCaseOnObjectionFiled(
     if (memo.memoType !== MemoType.OBJECTION) return;
     const lawCase = await storage.getCaseById(memo.caseId);
     if (!lawCase || lawCase.currentStage !== "محكوم_حكم_ابتدائي") return;
+    // ⚠ NO صك GATE HERE, DELIBERATELY (owner-reported decision 2026-08-03).
+    // This is an AUTOMATIC cascade, not a request to advance: the لائحة اعتراضية
+    // has ALREADY been filed with the court, so the case IS on appeal whatever we
+    // record. Three reasons a block would be wrong here:
+    //   1. it is unsurfaceable — this helper is best-effort inside a try/catch, so
+    //      the memo filing would succeed and the case would silently stay behind,
+    //      leaving memo and case desynchronised with nobody told why;
+    //   2. failing the filing instead is worse — an objection has a legal deadline,
+    //      and refusing to record it because a PDF is not uploaded risks the
+    //      deadline itself;
+    //   3. it is nearly unreachable in practice — this memo only EXISTS because
+    //      POST /judgment-deed created it when the receipt was recorded, and the
+    //      file control sits in that same dialog with the صك in the lawyer's hand.
+    // The deed is still required before the case can CLOSE, which is the control
+    // that actually matters.
     await moveCaseFromPrimaryJudgment(req, lawCase, "منظورة_استئناف", {
       actorId: actor.id,
       actorName: actor.name || actor.id,
@@ -2028,6 +2044,37 @@ async function promoteCaseOnObjectionFiled(
 // findPrimaryJudgmentHearing moved to shared/schema.ts — the cases UI needs the
 // IDENTICAL rule to render the appeal-outcome branch, and two copies would drift
 // into the UI offering a button the server rejects.
+
+// ==================== THE صك (JUDGMENT DEED) GATE ====================
+// Owner decision 2026-08-03: a case that reached محكوم_حكم_ابتدائي may not be
+// advanced past it, nor closed, until the court's صك is attached. The SCOPE test
+// is caseReachedPrimaryJudgment (shared/schema.ts) — see the long note there for
+// why it asks stageHistory rather than the current stage or a judgment hearing,
+// and for the guarantee that settlement / strike-off / no-response closures are
+// untouched by construction.
+//
+// 🔴 WHERE THE GATE IS AND IS NOT APPLIED — the line, and why it is drawn here:
+// the deed requirement controls OUR OWN administrative progression, NOT the
+// recording of facts that already happened in the world.
+//   BLOCKED (a human is asking us to move the case on / end it):
+//     • PATCH /api/cases/:id leaving محكوم_حكم_ابتدائي  — both edges + early-close
+//     • POST  /api/cases/:id/appeal-outcome              — all three outcomes
+//     • every close of a judgment case (see the close gates)
+//   ALLOWED, DELIBERATELY (a cascade recording an external event that already
+//   occurred — blocking these would make our record diverge from reality and, as
+//   each runs inside a swallowed try/catch, would wedge the case with no actor
+//   and no error surface; each site carries its own note):
+//     • promoteCaseOnObjectionFiled — WE filed the objection; the case IS on appeal
+//     • POST /api/hearings at محكوم_حكم_ابتدائي — the court listed an appeal session
+//     • POST /api/hearings/:id/result — the court ruled / struck the case off
+// The protection is not lost by allowing those three: the case still cannot
+// CLOSE without the deed, which is the end-of-life control the owner asked for.
+//
+// One query against the same table the derived hasDeedAttachment list field
+// reads, so this can never disagree with the badge the user is looking at.
+async function isJudgmentDeedMissing(caseId: string): Promise<boolean> {
+  return !(await storage.getCaseAttachment(caseId));
+}
 
 // Is this field task one of the two POST-JUDGMENT tasks whose completion ends
 // the case? Matched on the title prefix, the same discriminator getMyTasks uses
@@ -2077,6 +2124,28 @@ async function maybeCloseCaseAfterPostJudgmentTasks(
     if (postJudgment.length === 0) return;
     const allResolved = postJudgment.every((t) => t.status === "مكتمل" || t.status === "ملغي");
     if (!allResolved) return;
+
+    // 🔴 صك GATE ON THE AUTOMATIC CLOSE (owner decision 2026-08-03). The close
+    // does not fire while the deed is missing; the case rests where it is,
+    // visibly awaiting the صك, and closes on the NEXT evaluation once the file is
+    // attached — or by hand.
+    //
+    // ⚠ "THE NEXT EVALUATION" ONLY EXISTS BECAUSE ONE WAS ADDED. This helper is
+    // EVENT-DRIVEN, not polled: its only two callers are field-task completions.
+    // By the time this branch is reached every post-judgment task is ALREADY
+    // resolved, so no further completion event can occur and this would have
+    // fired once and never again — the case would never close at all. POST
+    // /api/cases/:id/deed-attachment therefore calls this helper after a
+    // successful upload, which is the evaluation that lets the deferred close
+    // land. Do not remove that call believing it redundant.
+    //
+    // Scoped by caseReachedPrimaryJudgment: a case at تحصيل by the SETTLEMENT or
+    // GRIEVANCE route never visited the judgment stage, so it is unaffected and
+    // still auto-closes exactly as before.
+    if (caseReachedPrimaryJudgment(lawCase) && await isJudgmentDeedMissing(caseId)) {
+      console.warn("[post-judgment auto-close] deferred — صك not attached", { caseId });
+      return;
+    }
 
     const now = new Date().toISOString();
     const stageHistory = Array.isArray(lawCase.stageHistory) ? lawCase.stageHistory : [];
@@ -2719,6 +2788,13 @@ export async function registerRoutes(
         // ONLY on this list response — it is not on the LawCase interface, so
         // it can never reach an insert or update path.
         hasDeedAttachment: deedAttached.has(c.id),
+        // DERIVED, never stored, and computed HERE because this is the last point
+        // at which stageHistory still exists — the destructure above strips it.
+        // Uses the SHARED caseReachedPrimaryJudgment so the client's صك gates
+        // (canEarlyCloseCase, the appeal-outcome buttons) apply byte-for-byte the
+        // same rule the server enforces, on a list that cannot evaluate it itself.
+        // No extra query: the history is already in hand.
+        reachedPrimaryJudgment: caseReachedPrimaryJudgment({ currentStage: c.currentStage, stageHistory }),
       }));
       res.json(stripped);
     } catch (error) {
@@ -3467,6 +3543,54 @@ export async function registerRoutes(
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
+        // ============ صك SEAL — CLOSING A CASE THAT REACHED JUDGMENT ============
+        // Owner decision 2026-08-03. Broader than the stage seal below, which only
+        // covers a case still sitting AT محكوم_حكم_ابتدائي: this one follows the
+        // case forward, so a judgment case closing from محكوم_حكم_نهائي — or from
+        // منظورة_استئناف after appeal-and-back — is caught too. Placed before both
+        // the تحصيل block and validateStageTransition so it covers the ordinary
+        // edges AND the early-close shortcut in one guard, for every role.
+        //
+        // 🔴 SCOPE IS THE WHOLE POINT: caseReachedPrimaryJudgment reads
+        // stageHistory, so a case closed by SETTLEMENT, STRIKE-OFF or
+        // NO-CLIENT-RESPONSE — none of which ever visit the judgment stage —
+        // returns false and closes exactly as it does today. Getting this wrong
+        // would break legitimate closures, so it is a positive test for "this case
+        // had a judgment", never an exclusion list.
+        if (
+          req.body.currentStage === "مقفلة"
+          && existing.currentStage !== "مقفلة"
+          && caseReachedPrimaryJudgment(existing)
+          && await isJudgmentDeedMissing(existing.id)
+        ) {
+          return res.status(400).json({
+            error: "يجب إرفاق صك الحكم قبل إغلاق قضية صدر فيها حكم",
+          });
+        }
+
+        // ==================== صك SEAL — LEAVING محكوم_حكم_ابتدائي ====================
+        // Owner decision 2026-08-03. Placed BEFORE validateStageTransition so it
+        // covers every way this PATCH can move the case off the judgment stage in
+        // one place: the محكوم_حكم_ابتدائي → منظورة_استئناف edge, the
+        // محكوم_حكم_ابتدائي → مقفلة edge, AND the early-close shortcut, which
+        // bypasses the transition table entirely for four roles. Sealed for EVERY
+        // role, branch_manager included — the deed is a fact about the file, not a
+        // permission.
+        //
+        // ONLY at محكوم_حكم_ابتدائي: a case that never reached judgment does not
+        // enter this branch at all, so settlement, strike-off and no-response
+        // movements are byte-for-byte unaffected.
+        if (
+          existing.currentStage === "محكوم_حكم_ابتدائي"
+          && req.body.currentStage
+          && req.body.currentStage !== "محكوم_حكم_ابتدائي"
+          && await isJudgmentDeedMissing(existing.id)
+        ) {
+          return res.status(400).json({
+            error: "يجب إرفاق صك الحكم قبل نقل القضية من مرحلة الحكم الابتدائي",
+          });
+        }
+
         // ==================== تحصيل SEAL + ZERO-TASK ESCAPE ====================
         // A case at تحصيل closes AUTOMATICALLY when its collection/execution tasks
         // are resolved (maybeCloseCaseAfterPostJudgmentTasks). Manual close from
@@ -6400,6 +6524,17 @@ export async function registerRoutes(
       }
       if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
+      }
+
+      // صك SEAL. All three outcomes leave محكوم_حكم_ابتدائي, so all three are
+      // gated — including no_appeal, which ends the objection window and makes the
+      // ruling final. Recording that the deadline lapsed on a صك we never received
+      // is precisely the state the owner is preventing. The stage check above
+      // already guarantees we only reach here from the judgment stage.
+      if (await isJudgmentDeedMissing(lawCase.id)) {
+        return res.status(400).json({
+          error: "يجب إرفاق صك الحكم قبل تسجيل نتيجة مهلة الاعتراض",
+        });
       }
 
       // NO DIRECTION CHECK. The aa1e5c3 rejection of opponent_appealed for a
@@ -9416,6 +9551,19 @@ export async function registerRoutes(
           }),
         });
 
+        // 🔴 THE DEFERRED-CLOSE RE-EVALUATION. Load-bearing, not redundant.
+        // maybeCloseCaseAfterPostJudgmentTasks is EVENT-DRIVEN — its only other
+        // callers are field-task completions — and it now declines to close while
+        // the صك is missing. A case whose collection/execution tasks were ALL
+        // resolved before the deed arrived has no further completion event coming,
+        // so without this call the deferred close would never fire and the case
+        // would sit at محكوم_حكم_نهائي forever. Attaching the deed IS the event.
+        // Self-gating and best-effort exactly like every other caller: it no-ops
+        // unless the case is on the right stage with all post-judgment tasks
+        // resolved, and it swallows its own errors, so it can never fail an
+        // upload that already succeeded.
+        await maybeCloseCaseAfterPostJudgmentTasks(req, lawCase.id, reqUser);
+
         res.status(201).json({ attachment, replaced });
       } catch (error: any) {
         console.error("[cases/deed-attachment POST] error:", error);
@@ -10807,6 +10955,14 @@ export async function registerRoutes(
                 "مؤرشفة",
                 "مقفلة",
               ]);
+              // ⚠ NO صك GATE ON THIS PROMOTION, DELIBERATELY (2026-08-03). The
+              // court has LISTED AN APPEAL SESSION — an external fact that has
+              // already happened. Refusing to promote would leave the case
+              // recorded as still at first instance while a hearing sits on it,
+              // and the refusal would have to either fail the hearing creation (so
+              // the session cannot be diarised at all) or be swallowed here with
+              // no actor and no error surface. Both are worse than a case that is
+              // truthfully on appeal owing a document. The close gate still holds.
               const isOpponentAppeal = currentStage === "محكوم_حكم_ابتدائي";
               const courtTargetStage = isOpponentAppeal ? "منظورة_استئناف" : "منظورة";
               const promoteClassification = caseForStage.caseClassification === "قيد_الدراسة";
@@ -11724,6 +11880,31 @@ export async function registerRoutes(
               // and this closure — so the record reads truthfully as "final
               // judgment against us, then closed", not as a case that teleported
               // to مقفلة.
+              // 🔴 صك GATE ON THIS AUTOMATIC CLOSE (owner decision 2026-08-03).
+              // The judgment stage was already written above and PERSISTS; only
+              // the closure is deferred. The case rests at محكوم_حكم_نهائي
+              // awaiting its صك and closes by hand once the file is attached.
+              //
+              // ⚠ NOTE THE ASYMMETRY WITH THE POST-JUDGMENT AUTO-CLOSE: a ضدنا
+              // final judgment creates NO collection or execution task, so there
+              // is no task-completion event and the deed-attachment re-evaluation
+              // (which routes through maybeCloseCaseAfterPostJudgmentTasks, and
+              // that helper requires at least one post-judgment task) does NOT
+              // pick this one up. Closing it is therefore a MANUAL step, which is
+              // acceptable precisely because the case is not hidden: it rests on a
+              // stage that is visible in the list and carries the
+              // "بانتظار إرفاق الصك" badge added in this commit.
+              //
+              // SCOPE: only when the case actually reached محكوم_حكم_ابتدائي. An
+              // appeal ruling did (history keeps it); a first-instance ruling the
+              // lawyer marked NOT objectionable reaches isFinal WITHOUT ever
+              // visiting that stage, was never offered a صك step, and so still
+              // auto-closes exactly as before.
+              if (caseReachedPrimaryJudgment(existingCase) && await isJudgmentDeedMissing(effectiveCaseId)) {
+                console.warn("[hearing-result] ضدنا auto-close deferred — صك not attached", {
+                  caseId: effectiveCaseId,
+                });
+              } else {
               const closedAtIso = new Date().toISOString();
               const closingHistory = Array.isArray(caseUpdate.stageHistory)
                 ? caseUpdate.stageHistory
@@ -11759,6 +11940,7 @@ export async function registerRoutes(
                 previousValue: "محكوم_حكم_نهائي",
                 newValue: "مقفلة",
               });
+              } // end صك gate on the ضدنا auto-close
             }
           } else {
             // === PRIMARY (ابتدائي) JUDGMENTS ===
@@ -12389,6 +12571,18 @@ export async function registerRoutes(
       }
       if (!hearing.contactCompleted) {
         return res.status(400).json({ error: "يجب تأكيد الاتصال بالعميل قبل إغلاق الجلسة" });
+      }
+      // The third condition, beside the two above (owner decision 2026-08-03): the
+      // court's ضبط must be on file before the session is closed off.
+      //
+      // ⚠ NARROWER IN PRACTICE THAN IT LOOKS, and worth knowing before reading a
+      // bug report about it: recording a result ALREADY sets status to تمت for
+      // every result except موعد_جديد, which sets مؤجلة (routes.ts ~11400). So a
+      // hearing that ruled / settled / was struck off is already "closed" by
+      // status and never reaches this route — this gate effectively governs
+      // POSTPONED hearings, the ones a human still closes by hand.
+      if (!(await storage.getHearingAttachment(hearingId))) {
+        return res.status(400).json({ error: "يجب إرفاق ضبط الجلسة قبل إغلاق الجلسة" });
       }
 
       const updated = await storage.updateHearing(hearingId, {

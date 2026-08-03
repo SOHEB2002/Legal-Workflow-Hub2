@@ -3356,6 +3356,24 @@ export interface ContractSlotRule {
 // 🔴 NO ATTACHMENT GATES A STAGE TRANSITION ON CONTRACTS. Owner decision — every
 // requiredBeforeLeavingStage in this table is null, on every type, permanently.
 //
+// ⚠ THIS RULE HAS NOT BEEN OVERTURNED — but it is CONTRACTS-SPECIFIC, and there
+// is now a deliberate, owner-approved exception ELSEWHERE. Do not read the case
+// judgment-deed (صك) gate or the hearing-minutes (ضبط) gate added 2026-08-03 as
+// a precedent for re-arming anything here.
+//   • A CONTRACT attachment is the FIRM'S OWN WORK PRODUCT. Its absence means
+//     "we haven't finished yet", which is what the stage itself already says —
+//     so gating on it only builds a wall in front of our own people, and moving
+//     the wall one stage later just moved where they hit it (see below).
+//   • A JUDGMENT DEED and a HEARING'S MINUTES are documents ISSUED BY THE COURT.
+//     Their absence is an externally-caused FACT about the record, not a measure
+//     of our progress, and the owner's concern is a case reaching the end of its
+//     life with nobody having ever seen its ruling. Different thing, different
+//     answer.
+// Those gates are enforced in server/routes.ts on the case-stage and hearing-close
+// routes, keyed on caseReachedPrimaryJudgment (above). checkRequiredSlotsForTransition
+// and every requiredBeforeLeavingStage in this table are deliberately UNTOUCHED by
+// them and stay a permanent no-op by data.
+//
 // The rules used to be:
 //   مراجعة_عقد  العقد محل المراجعة  → blocked leaving استلام   (cleared 8f106b2)
 //   مراجعة_عقد  دراسة المراجعة      → blocked leaving تحرير     (cleared here)
@@ -5331,6 +5349,41 @@ function stageWasReached(c: OutcomeCaseInput, stage: string): boolean {
   if (c.currentStage === stage) return true;
   return Array.isArray(c.stageHistory)
     && c.stageHistory.some((entry) => entry?.stage === stage);
+}
+
+// ==================== THE صك (JUDGMENT DEED) SCOPE TEST ====================
+// "This case reached the FIRST-INSTANCE JUDGMENT stage" — the single scope test
+// for every judgment-deed gate (owner decision 2026-08-03: a case that reached
+// judgment may not advance past it, nor close, until the court's صك is on file).
+// Hoisted here so the client and the server share ONE rule and the UI can never
+// offer an action the endpoint rejects.
+//
+// WHY stageHistory AND NOT the two alternatives — this choice is load-bearing:
+//   • currentStage alone is TOO NARROW. The close gates fire at محكوم_حكم_نهائي,
+//     one stage LATER, and on a case that went to appeal and came back it is
+//     later still (محكوم_حكم_ابتدائي → منظورة_استئناف → محكوم_حكم_نهائي). History
+//     is the only term that survives those moves, which is exactly why it is the
+//     right test for an already-advanced case.
+//   • the presence of a JUDGMENT HEARING is TOO WIDE. A منظورة ruling the lawyer
+//     marked NOT objectionable goes STRAIGHT to محكوم_حكم_نهائي and never visits
+//     محكوم_حكم_ابتدائي, so it is never offered the صك receipt step at all.
+//     Gating it would demand a document the app gives nobody a way to file, and
+//     would wedge the case permanently.
+// So the test is precisely "was the deed ever recordable on this case".
+//
+// SCOPE GUARANTEE (the thing the owner asked to be sure of): settlement
+// (مداولة_الصلح / تحصيل / أغلق_طلب_الصلح), strike-off (مشطوبة) and
+// no-client-response (استكمال_البيانات) closures never enter this stage, so they
+// return false here and are untouched by construction — not by an exclusion list
+// that could drift.
+//
+// Same shape as the deriveCurrentCaseNumber "reachedSettlement" precedent, which
+// also asks stageHistory whether a stage was ever visited.
+export function caseReachedPrimaryJudgment(c: {
+  currentStage?: string | null;
+  stageHistory?: Array<{ stage?: string | null } | null> | null;
+}): boolean {
+  return stageWasReached(c, CaseStage.PRIMARY_JUDGMENT);
 }
 
 export function resolveCaseOutcome(

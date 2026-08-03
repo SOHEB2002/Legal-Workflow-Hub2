@@ -153,6 +153,19 @@ export interface CaseDetailsActions {
   // computed by the host so visibility equals authorization.
   canRecordJudgmentDeed: boolean;
   onRecordJudgmentDeed: () => void;
+  // LATE صك FILING — the case has already moved past محكوم_حكم_ابتدائي (via one of
+  // the three automatic cascades that are deliberately not blocked, or it predates
+  // the gate) and still owes its صك, which now BLOCKS its closure.
+  //
+  // 🔴 THIS IS WHAT KEEPS THE CLOSE GATE SATISFIABLE. The صك control otherwise
+  // lives only inside the "تسجيل استلام الصك" dialog, which is gated on
+  // محكوم_حكم_ابتدائي — so without this affordance a case past that stage would be
+  // held closed by a requirement the UI gave nobody any way to meet. FILE ONLY: the
+  // receipt DATE and the objection window are not offered, because the server's
+  // /judgment-deed endpoint still 400s off-stage and the objection window is long
+  // over by the time a case is here.
+  canAttachDeedLate: boolean;
+  onAttachDeedLate: () => void;
   // The two manual routes out of محكوم_حكم_ابتدائي (appeal path). Same rule the
   // server enforces on POST /api/cases/:id/appeal-outcome.
   canRecordAppealOutcome: boolean;
@@ -1769,6 +1782,19 @@ export function CaseDetailsDialog({
                         <Button size="sm" variant="outline" className="border-purple-500 text-purple-600 hover:bg-purple-50" data-testid={`button-judgment-deed-${selectedCase.id}`} onClick={() => { actions.onRecordJudgmentDeed(); }}>
                           <FileText className="w-4 h-4 ml-1" />
                           {selectedCase.judgmentDeedReceivedDate ? "تعديل" : "تسجيل"}
+                        </Button>
+                      </div>
+                    )}
+                    {actions?.canAttachDeedLate && (
+                      <div className="flex items-center justify-between p-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+                        <div>
+                          <p className="font-medium text-sm text-amber-700 dark:text-amber-400">إرفاق صك الحكم</p>
+                          <p className="text-xs text-muted-foreground">
+                            صدر حكم في القضية ولم تُرفق نسخة الصك — لا يمكن إغلاق القضية قبل إرفاقه
+                          </p>
+                        </div>
+                        <Button size="sm" variant="outline" className="border-amber-500 text-amber-600 hover:bg-amber-50" data-testid={`button-attach-deed-late-${selectedCase.id}`} onClick={() => { actions.onAttachDeedLate(); }}>
+                          <FileText className="w-4 h-4 ml-1" />إرفاق
                         </Button>
                       </div>
                     )}

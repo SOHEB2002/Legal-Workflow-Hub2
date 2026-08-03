@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -147,6 +147,12 @@ export function HearingDetailsDialog({
   // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
   // control's own fetch (onAttachedChange) so the dialog issues no second read.
   const [minutesAttached, setMinutesAttached] = useState(false);
+  // Reset when the dialog switches hearings. The attach control refetches on
+  // endpoint change, but until that resolves the PREVIOUS hearing's answer would
+  // linger — and now that this value gates the close button, a stale `true` would
+  // briefly offer "إغلاق" on a hearing with no ضبط. False is the safe direction:
+  // it withholds the button until the real answer arrives.
+  useEffect(() => { setMinutesAttached(false); }, [detailHearing?.id]);
 
   // PHASE 2 — inline correction of the two no-cascade result fields. Self-contained
   // (own state + apiRequest) rather than an injected action, so it works in BOTH
@@ -667,8 +673,10 @@ export function HearingDetailsDialog({
                       finished step. With no actionLabel at all, there is
                       nothing to go stale.
 
-                      ⚠ THE CLOSE GATE BELOW IS DELIBERATELY UNCHANGED. Minutes
-                      do NOT block closing a hearing in this batch. */}
+                      ⚠ AS OF BATCH 3 THE CLOSE GATE BELOW DOES DEPEND ON THIS
+                      STEP — minutes are now the third condition for closing a
+                      hearing, beside the report and the client contact. The
+                      earlier note saying they never block a close is superseded. */}
                   <WorkflowStep
                     done={minutesAttached}
                     label="إرفاق ضبط الجلسة"
@@ -703,8 +711,14 @@ export function HearingDetailsDialog({
                     done={detailHearing.status === HearingStatus.COMPLETED && detailHearing.reportCompleted}
                     label="إغلاق الجلسة"
                     icon={<Lock className="w-4 h-4" />}
-                    disabled={!detailHearing.reportCompleted || !detailHearing.contactCompleted}
-                    actionLabel={detailHearing.reportCompleted && detailHearing.contactCompleted && detailHearing.status !== HearingStatus.COMPLETED ? "إغلاق" : undefined}
+                    // THE THIRD CONDITION, mirroring the server's close gate
+                    // (POST /api/hearings/:id/close) in BOTH expressions so no
+                    // "إغلاق" button can render only to 400. minutesAttached is
+                    // the attach control's own fetch above, reported through
+                    // onAttachedChange — the dialog issues no second read for it,
+                    // and it flips the instant a file is uploaded or deleted.
+                    disabled={!detailHearing.reportCompleted || !detailHearing.contactCompleted || !minutesAttached}
+                    actionLabel={detailHearing.reportCompleted && detailHearing.contactCompleted && minutesAttached && detailHearing.status !== HearingStatus.COMPLETED ? "إغلاق" : undefined}
                     onAction={actions ? () => actions.onCloseHearing(detailHearing) : undefined}
                     actionDisabled={submitting}
                   />
