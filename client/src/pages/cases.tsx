@@ -118,6 +118,7 @@ import {
   caseHasHearingMissingMinutes,
   caseHasDeedAttachment,
   caseReachedJudgment,
+  isPostJudgmentCaseMissingDeed,
 } from "@/lib/attachment-indicators";
 import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
@@ -650,6 +651,12 @@ export default function CasesPage() {
   const [deedDate, setDeedDate] = useState("");
   const [deedWindowDays, setDeedWindowDays] = useState("30");
   const [deedSubmitting, setDeedSubmitting] = useState(false);
+  // FILE-ONLY mode for the صك dialog: the case is already PAST محكوم_حكم_ابتدائي,
+  // so the receipt date and objection window are neither editable (the server's
+  // /judgment-deed endpoint 400s off-stage) nor meaningful (the objection window is
+  // long over). Only the attachment control renders — which is what unblocks the
+  // close gate.
+  const [deedFileOnly, setDeedFileOnly] = useState(false);
   const [showReopenDialog, setShowReopenDialog] = useState(false);
   const [reopenCase, setReopenCase] = useState<LawCase | null>(null);
   const [reopenTargetStage, setReopenTargetStage] = useState("");
@@ -1732,6 +1739,24 @@ export default function CasesPage() {
                           بانتظار إرفاق الصك
                         </Badge>
                       )}
+                      {/* The SAME state one stage later. A case can legitimately
+                          reach منظورة_استئناف / محكوم_حكم_نهائي still owing its صك
+                          — three automatic cascades are deliberately not blocked —
+                          and the close gate then holds it there. Without this the
+                          hold would be invisible: the badge above stops at
+                          محكوم_حكم_ابتدائي. Same words, same amber, because it is
+                          the same task on the same desk. */}
+                      {isPostJudgmentCaseMissingDeed(c) && (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] px-1 py-0"
+                          data-testid={`badge-post-judgment-missing-deed-${c.id}`}
+                          title="صدر حكم في القضية ولم تُرفق نسخة الصك — لا يمكن إغلاق القضية قبل إرفاقه"
+                        >
+                          <Paperclip className="w-2.5 h-2.5 ml-1" />
+                          بانتظار إرفاق الصك
+                        </Badge>
+                      )}
                       {/* A hearing on this case has its result recorded but no
                           ضبط attached. Reads the SAME in-memory hearings list the
                           "رد خصم" badge above uses (getHearingsByCase), so no
@@ -2495,8 +2520,21 @@ export default function CasesPage() {
           onWeAppealed: () => { setAppealOutcomeKind("we_appealed"); setAppealOutcomeCase(selectedCase); },
           onOpponentAppealed: () => { setAppealOutcomeKind("opponent_appealed"); setAppealOutcomeCase(selectedCase); },
           onNoAppeal: () => { setAppealOutcomeKind("no_appeal"); setAppealOutcomeCase(selectedCase); },
+          // Late صك filing on a case already past محكوم_حكم_ابتدائي. Opens the SAME
+          // dialog in FILE-ONLY mode (deedFileOnly) rather than a second dialog:
+          // one attachment control, one endpoint, one set of permissions. The role
+          // half is canAttachDeed — the clerical gate that includes admin_support,
+          // since receiving and filing the court's paperwork is exactly their job.
+          canAttachDeedLate:
+            isPostJudgmentCaseMissingDeed(selectedCase) && canAttachDeed(selectedCase),
+          onAttachDeedLate: () => {
+            setDeedFileOnly(true);
+            setDeedCase(selectedCase);
+            setShowDeedDialog(true);
+          },
           canRecordJudgmentDeed: canRecordJudgmentDeed(selectedCase),
           onRecordJudgmentDeed: () => {
+            setDeedFileOnly(false);
             setDeedCase(selectedCase);
             // Prefill with whatever the case already carries so a correction
             // opens on the current values rather than blank.
@@ -3128,16 +3166,22 @@ export default function CasesPage() {
         open={showDeedDialog}
         onOpenChange={(open) => {
           setShowDeedDialog(open);
-          if (!open) { setDeedCase(null); setDeedDate(""); setDeedWindowDays("30"); }
+          if (!open) { setDeedCase(null); setDeedDate(""); setDeedWindowDays("30"); setDeedFileOnly(false); }
         }}
       >
         <DialogContent className="max-w-md" dir="rtl">
           <DialogHeader>
-            <DialogTitle>تسجيل استلام الصك</DialogTitle>
+            <DialogTitle>{deedFileOnly ? "إرفاق صك الحكم" : "تسجيل استلام الصك"}</DialogTitle>
           </DialogHeader>
           {deedCase && (
             <>
               <div className="space-y-4">
+                {deedFileOnly && (
+                  <p className="text-xs text-muted-foreground">
+                    صدر حكم في هذه القضية ولم تُرفق نسخة الصك. أرفق الصك لإتاحة إغلاق القضية.
+                  </p>
+                )}
+                {!deedFileOnly && (
                 <div>
                   <Label>تاريخ استلام الصك <span className="text-red-500">*</span></Label>
                   <HijriDatePicker
@@ -3146,6 +3190,8 @@ export default function CasesPage() {
                     data-testid="input-deed-received-date"
                   />
                 </div>
+                )}
+                {!deedFileOnly && (
                 <div>
                   <Label>مهلة الاعتراض (بالأيام) <span className="text-red-500">*</span></Label>
                   <Input
@@ -3160,6 +3206,7 @@ export default function CasesPage() {
                     الافتراضي 30 يوماً. للقضاء المستعجل استخدم 10 أيام.
                   </p>
                 </div>
+                )}
                 {/* The صك FILE. Independent of the date above: it uploads
                     immediately to its own endpoint rather than riding along
                     with this dialog's save, so a lawyer can file the PDF
@@ -3188,7 +3235,7 @@ export default function CasesPage() {
                     await refreshCases();
                   }}
                 />
-                {deedDate && Number(deedWindowDays) > 0 && (
+                {!deedFileOnly && deedDate && Number(deedWindowDays) > 0 && (
                   <div className="rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/20 p-3 text-blue-800 dark:text-blue-300">
                     <p className="text-xs">
                       مهلة الاعتراض تنتهي في:{" "}
@@ -3209,7 +3256,13 @@ export default function CasesPage() {
                 )}
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setShowDeedDialog(false)}>إلغاء</Button>
+                <Button variant="outline" onClick={() => setShowDeedDialog(false)}>
+                  {/* FILE-ONLY mode uploads immediately through the control above,
+                      so there is nothing left to save and the حفظ button below is
+                      not rendered — this becomes a plain dismiss. */}
+                  {deedFileOnly ? "إغلاق" : "إلغاء"}
+                </Button>
+                {!deedFileOnly && (
                 <Button
                   data-testid="button-confirm-deed"
                   disabled={
@@ -3242,6 +3295,7 @@ export default function CasesPage() {
                 >
                   حفظ
                 </Button>
+                )}
               </DialogFooter>
             </>
           )}

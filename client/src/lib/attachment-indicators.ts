@@ -68,6 +68,39 @@ export function caseHasDeedAttachment(c: { id: string; hasDeedAttachment?: boole
   return !!c.hasDeedAttachment;
 }
 
+// The case has MOVED PAST محكوم_حكم_ابتدائي and still owes its صك.
+//
+// WHY THIS EXISTS: three automatic cascades are deliberately NOT blocked (the
+// objection filing, a court hearing listed at the judgment stage, and a hearing
+// result), so a case can legitimately reach منظورة_استئناف or محكوم_حكم_نهائي
+// with no deed on file — and legacy cases predating the gate are already there.
+// Without this badge those cases would be INVISIBLE: isAwaitingJudgmentDeedFile
+// only fires at محكوم_حكم_ابتدائي, so the moment a case moves on its indicator
+// disappeared while the close gate silently held it. That is the "wedged with no
+// actor" failure the whole design is trying to avoid.
+//
+// Same wording as isAwaitingJudgmentDeedFile ("بانتظار إرفاق الصك") — it is the
+// same state, so it gets the same words rather than a new vocabulary.
+//
+// MUTUALLY EXCLUSIVE with both deed badges by construction: those two require
+// currentStage === محكوم_حكم_ابتدائي, this one excludes it.
+export function isPostJudgmentCaseMissingDeed(c: {
+  currentStage: string;
+  reachedPrimaryJudgment?: boolean;
+  hasDeedAttachment?: boolean;
+}): boolean {
+  // Never reached judgment → the deed was never recordable → silent. This is the
+  // same positive test the server gates on, so badge and gate agree exactly.
+  if (!c.reachedPrimaryJudgment) return false;
+  // Still AT the judgment stage → owned by the two existing badges.
+  if (c.currentStage === "محكوم_حكم_ابتدائي") return false;
+  // Already closed or archived → the gate no longer applies, and nagging about a
+  // document on a finished file is noise. (A case can only BE closed with the
+  // deed attached, so in practice this arm only catches pre-gate history.)
+  if (c.currentStage === "مقفلة" || c.currentStage === "مؤرشفة") return false;
+  return !c.hasDeedAttachment;
+}
+
 // A single hearing whose result is recorded but whose ضبط is not attached.
 // Shared by the case-level badge and the hearings-page filter so the two can
 // never drift apart.
