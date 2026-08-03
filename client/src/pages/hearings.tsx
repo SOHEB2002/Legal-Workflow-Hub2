@@ -744,8 +744,10 @@ export default function HearingsPage() {
                                   if (!selected) return;
                                   // "المترافع" first — same chain as the server.
                                   const autoLawyer = selected.litigatorId || selected.primaryLawyerId || selected.responsibleLawyerId || "";
-                                  // Auto-derive hearing type: settlement/conciliation stages → TARADI,
-                                  // labor case type → SETTLEMENT (tasweya), otherwise COURT.
+                                  // Auto-derive the hearing type. A DEFAULT ONLY — the
+                                  // "نوع الجلسة" select below stays fully editable, so a
+                                  // user can still record a settlement hearing on a
+                                  // court-stage case, or the reverse.
                                   const stage = selected.currentStage;
                                   const settlementStages = new Set([
                                     "مداولة_الصلح",
@@ -753,11 +755,34 @@ export default function HearingsPage() {
                                     "قيد_التدقيق_في_تراضي",
                                     "رفع_بمنصة_تراضي",
                                   ]);
+                                  // 🔴 THE STAGE DECIDES COURT-vs-SETTLEMENT; the
+                                  // DEPARTMENT only picks WHICH settlement platform.
+                                  //
+                                  // It used to be `else if (caseType === "عمالي")`,
+                                  // which applied at ANY stage — so a labor case's
+                                  // genuine COURT hearing defaulted to تسوية_ودية.
+                                  // Harmless while the type only labelled the row;
+                                  // once settlement hearings became EXEMPT from the
+                                  // ضبط requirement it would have silently exempted
+                                  // every labor court hearing.
+                                  //
+                                  // That branch was also unreachable for its own
+                                  // purpose: the labor settlement stage IS مداولة_الصلح,
+                                  // which the settlementStages test catches first — so
+                                  // it could never type a real labor settlement hearing
+                                  // and only ever fired where it was wrong.
+                                  //
+                                  // Signal is the RESOLVED DEPARTMENT NAME, never
+                                  // caseType — the documented L5 precedent (caseType is
+                                  // free-text user input; case-progress-bar.tsx says
+                                  // "DO NOT pass the case's caseType field"), and the
+                                  // same resolution the mohr_number prompt uses.
+                                  const deptName = getDepartmentName(selected.departmentId || "");
                                   let autoType: HearingTypeValue = HearingType.COURT;
                                   if (settlementStages.has(stage)) {
-                                    autoType = HearingType.TARADI;
-                                  } else if (selected.caseType === "عمالي") {
-                                    autoType = HearingType.SETTLEMENT;
+                                    autoType = deptName === "عمالي"
+                                      ? HearingType.SETTLEMENT  // الودية / MOHR
+                                      : HearingType.TARADI;     // منصة تراضي
                                   }
                                   setFormData(prev => ({
                                     ...prev,
