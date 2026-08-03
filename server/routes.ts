@@ -12572,6 +12572,18 @@ export async function registerRoutes(
       if (!hearing.contactCompleted) {
         return res.status(400).json({ error: "يجب تأكيد الاتصال بالعميل قبل إغلاق الجلسة" });
       }
+      // The third condition, beside the two above (owner decision 2026-08-03): the
+      // court's ضبط must be on file before the session is closed off.
+      //
+      // ⚠ NARROWER IN PRACTICE THAN IT LOOKS, and worth knowing before reading a
+      // bug report about it: recording a result ALREADY sets status to تمت for
+      // every result except موعد_جديد, which sets مؤجلة (routes.ts ~11400). So a
+      // hearing that ruled / settled / was struck off is already "closed" by
+      // status and never reaches this route — this gate effectively governs
+      // POSTPONED hearings, the ones a human still closes by hand.
+      if (!(await storage.getHearingAttachment(hearingId))) {
+        return res.status(400).json({ error: "يجب إرفاق ضبط الجلسة قبل إغلاق الجلسة" });
+      }
 
       const updated = await storage.updateHearing(hearingId, {
         status: HearingStatus.COMPLETED,
