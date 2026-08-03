@@ -38,6 +38,36 @@ export function isAwaitingJudgmentDeedFile(c: {
   return !c.hasDeedAttachment;
 }
 
+// "This case reached the first-instance judgment stage" — the CLIENT half of the
+// server's caseReachedPrimaryJudgment (shared/schema.ts).
+//
+// ⚠ IT READS A DERIVED LIST FIELD RATHER THAN CALLING THE SHARED HELPER, and it
+// has to: GET /api/cases STRIPS stageHistory from every row, so the client
+// physically cannot run the shared stageHistory test. The server therefore stamps
+// `reachedPrimaryJudgment` on the list response — computed with the shared helper,
+// from the history, immediately BEFORE it is stripped — so the two sides still
+// share one rule even though only one of them can evaluate it. Same derived-field
+// idiom as hasDeedAttachment, and it costs no extra query.
+//
+// `id` is an ANCHOR, not a value this reads: an all-optional parameter type has
+// NO property in common with LawCase and TypeScript rejects the call outright
+// (TS2559). One required field that LawCase really has makes the structural match
+// legal while still keeping the derived field off the interface — the same reason
+// isAwaitingJudgmentDeedFile above carries `currentStage`.
+export function caseReachedJudgment(c: { id: string; reachedPrimaryJudgment?: boolean }): boolean {
+  return !!c.reachedPrimaryJudgment;
+}
+
+// Structural accessor for the صك presence flag, for the GATES rather than the
+// badges. Exists so callers can read hasDeedAttachment without it ever being
+// declared on LawCase — see the module header for why that matters. A case whose
+// list response predates the field reads as "no deed", which is the SAFE
+// direction for a gate: it refuses rather than lets something through.
+// `id` is the same TS2559 anchor as caseReachedJudgment above.
+export function caseHasDeedAttachment(c: { id: string; hasDeedAttachment?: boolean }): boolean {
+  return !!c.hasDeedAttachment;
+}
+
 // A single hearing whose result is recorded but whose ضبط is not attached.
 // Shared by the case-level badge and the hearings-page filter so the two can
 // never drift apart.

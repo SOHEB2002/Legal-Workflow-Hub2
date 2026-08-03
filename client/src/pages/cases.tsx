@@ -113,7 +113,12 @@ import { extractApiError, cn } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseDetailsDialog } from "@/components/case-details-dialog";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { isAwaitingJudgmentDeedFile, caseHasHearingMissingMinutes } from "@/lib/attachment-indicators";
+import {
+  isAwaitingJudgmentDeedFile,
+  caseHasHearingMissingMinutes,
+  caseHasDeedAttachment,
+  caseReachedJudgment,
+} from "@/lib/attachment-indicators";
 import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
 import { useHearings } from "@/lib/hearings-context";
@@ -385,6 +390,13 @@ export default function CasesPage() {
     // (the transition rule is removed and the early-close shortcut excludes it).
     // Hidden for everyone, branch_manager included, so no button can 403.
     if (c.currentStage === "تحصيل") return false;
+    // صك SEAL — same shape as the تحصيل seal above, and for the same reason: the
+    // server refuses this close for EVERY role while the deed is missing (the
+    // محكوم_حكم_ابتدائي guard in PATCH runs before the early-close shortcut, and
+    // the judgment-case close guard covers the later stages), so no button here
+    // could succeed. Keyed on reachedPrimaryJudgment, the derived list field that
+    // carries the SAME stageHistory test the server applies.
+    if (caseReachedJudgment(c) && !caseHasDeedAttachment(c)) return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
     if (
       user.role === "department_head" &&
@@ -2473,7 +2485,13 @@ export default function CasesPage() {
             setOpponentResponseAnswer("");
             setOpponentResponseCase(selectedCase);
           },
-          canRecordAppealOutcome: canRecordJudgmentDeed(selectedCase),
+          // صك SEAL — mirrors the server's gate on POST /appeal-outcome, which
+          // 400s all three outcomes while the deed is missing. Hidden rather than
+          // shown-and-rejected: visibility == authorization. The "تسجيل استلام
+          // الصك" action right below deliberately stays visible — it is where the
+          // user goes to satisfy this, and hiding it would leave a dead end.
+          canRecordAppealOutcome:
+            canRecordJudgmentDeed(selectedCase) && caseHasDeedAttachment(selectedCase),
           onWeAppealed: () => { setAppealOutcomeKind("we_appealed"); setAppealOutcomeCase(selectedCase); },
           onOpponentAppealed: () => { setAppealOutcomeKind("opponent_appealed"); setAppealOutcomeCase(selectedCase); },
           onNoAppeal: () => { setAppealOutcomeKind("no_appeal"); setAppealOutcomeCase(selectedCase); },
