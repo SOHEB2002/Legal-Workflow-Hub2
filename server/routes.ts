@@ -83,7 +83,7 @@ import {
   opponentResponseSchema,
   DefaultObjectionWindowDays,
   findPrimaryJudgmentHearing,
-  caseReachedPrimaryJudgment,
+  caseReachedJudgmentStage,
   hearingProducesNoMinutes,
   // judgmentDirectionOf / weAreTheAppellant are no longer imported here: with
   // the aa1e5c3 direction restriction removed, the SERVER no longer constrains
@@ -2049,7 +2049,7 @@ async function promoteCaseOnObjectionFiled(
 // ==================== THE صك (JUDGMENT DEED) GATE ====================
 // Owner decision 2026-08-03: a case that reached محكوم_حكم_ابتدائي may not be
 // advanced past it, nor closed, until the court's صك is attached. The SCOPE test
-// is caseReachedPrimaryJudgment (shared/schema.ts) — see the long note there for
+// is caseReachedJudgmentStage (shared/schema.ts) — see the long note there for
 // why it asks stageHistory rather than the current stage or a judgment hearing,
 // and for the guarantee that settlement / strike-off / no-response closures are
 // untouched by construction.
@@ -2140,10 +2140,10 @@ async function maybeCloseCaseAfterPostJudgmentTasks(
     // successful upload, which is the evaluation that lets the deferred close
     // land. Do not remove that call believing it redundant.
     //
-    // Scoped by caseReachedPrimaryJudgment: a case at تحصيل by the SETTLEMENT or
+    // Scoped by caseReachedJudgmentStage: a case at تحصيل by the SETTLEMENT or
     // GRIEVANCE route never visited the judgment stage, so it is unaffected and
     // still auto-closes exactly as before.
-    if (caseReachedPrimaryJudgment(lawCase) && await isJudgmentDeedMissing(caseId)) {
+    if (caseReachedJudgmentStage(lawCase) && await isJudgmentDeedMissing(caseId)) {
       console.warn("[post-judgment auto-close] deferred — صك not attached", { caseId });
       return;
     }
@@ -2791,11 +2791,13 @@ export async function registerRoutes(
         hasDeedAttachment: deedAttached.has(c.id),
         // DERIVED, never stored, and computed HERE because this is the last point
         // at which stageHistory still exists — the destructure above strips it.
-        // Uses the SHARED caseReachedPrimaryJudgment so the client's صك gates
-        // (canEarlyCloseCase, the appeal-outcome buttons) apply byte-for-byte the
-        // same rule the server enforces, on a list that cannot evaluate it itself.
-        // No extra query: the history is already in hand.
-        reachedPrimaryJudgment: caseReachedPrimaryJudgment({ currentStage: c.currentStage, stageHistory }),
+        // Uses the SHARED caseReachedJudgmentStage so the client's صك gates
+        // (canEarlyCloseCase, the appeal-outcome buttons, the late-attach
+        // affordance) apply byte-for-byte the same rule the server enforces, on a
+        // list that cannot evaluate it itself. No extra query: history is in hand.
+        // Renamed with the helper — it now covers all three judgment stages, so
+        // "primary" would have been wrong on the wire as well as in the code.
+        reachedJudgmentStage: caseReachedJudgmentStage({ currentStage: c.currentStage, stageHistory }),
       }));
       res.json(stripped);
     } catch (error) {
@@ -3552,7 +3554,7 @@ export async function registerRoutes(
         // the تحصيل block and validateStageTransition so it covers the ordinary
         // edges AND the early-close shortcut in one guard, for every role.
         //
-        // 🔴 SCOPE IS THE WHOLE POINT: caseReachedPrimaryJudgment reads
+        // 🔴 SCOPE IS THE WHOLE POINT: caseReachedJudgmentStage reads
         // stageHistory, so a case closed by SETTLEMENT, STRIKE-OFF or
         // NO-CLIENT-RESPONSE — none of which ever visit the judgment stage —
         // returns false and closes exactly as it does today. Getting this wrong
@@ -3561,7 +3563,7 @@ export async function registerRoutes(
         if (
           req.body.currentStage === "مقفلة"
           && existing.currentStage !== "مقفلة"
-          && caseReachedPrimaryJudgment(existing)
+          && caseReachedJudgmentStage(existing)
           && await isJudgmentDeedMissing(existing.id)
         ) {
           return res.status(400).json({
@@ -3569,26 +3571,38 @@ export async function registerRoutes(
           });
         }
 
-        // ==================== صك SEAL — LEAVING محكوم_حكم_ابتدائي ====================
-        // Owner decision 2026-08-03. Placed BEFORE validateStageTransition so it
-        // covers every way this PATCH can move the case off the judgment stage in
-        // one place: the محكوم_حكم_ابتدائي → منظورة_استئناف edge, the
-        // محكوم_حكم_ابتدائي → مقفلة edge, AND the early-close shortcut, which
-        // bypasses the transition table entirely for four roles. Sealed for EVERY
-        // role, branch_manager included — the deed is a fact about the file, not a
+        // ============ صك SEAL — LEAVING ANY JUDGMENT STAGE ============
+        // Placed BEFORE validateStageTransition so it covers every way this PATCH
+        // can move the case off a judgment stage in one place: the table edges
+        // (ابتدائي → استئناف, استئناف → نهائي, استئناف → مشطوبة, and the two
+        // → مقفلة edges) AND the early-close shortcut, which bypasses the
+        // transition table entirely for four roles. Sealed for EVERY role,
+        // branch_manager included — the deed is a fact about the file, not a
         // permission.
         //
-        // ONLY at محكوم_حكم_ابتدائي: a case that never reached judgment does not
-        // enter this branch at all, so settlement, strike-off and no-response
-        // movements are byte-for-byte unaffected.
+        // 🔴 WIDENED 2026-08-04 from محكوم_حكم_ابتدائي alone to all THREE judgment
+        // stages, matching caseReachedJudgmentStage. Keyed on the CURRENT stage
+        // rather than the history helper on purpose: this gate is about the move
+        // being made right now, and a case sitting on a judgment stage is exactly
+        // the one whose exit we mean to hold. The close gate above is the one that
+        // needs history, because it fires on cases that have already moved.
+        //
+        // SCOPE UNCHANGED IN SPIRIT: a case that never reached judgment is not on
+        // any of these stages, so settlement, strike-off and no-response movements
+        // are byte-for-byte unaffected.
+        const JUDGMENT_STAGES_REQUIRING_DEED: string[] = [
+          "محكوم_حكم_ابتدائي",
+          "منظورة_استئناف",
+          "محكوم_حكم_نهائي",
+        ];
         if (
-          existing.currentStage === "محكوم_حكم_ابتدائي"
+          JUDGMENT_STAGES_REQUIRING_DEED.includes(existing.currentStage)
           && req.body.currentStage
-          && req.body.currentStage !== "محكوم_حكم_ابتدائي"
+          && req.body.currentStage !== existing.currentStage
           && await isJudgmentDeedMissing(existing.id)
         ) {
           return res.status(400).json({
-            error: "يجب إرفاق صك الحكم قبل نقل القضية من مرحلة الحكم الابتدائي",
+            error: "يجب إرفاق صك الحكم قبل نقل القضية من مرحلة الحكم",
           });
         }
 
@@ -11896,12 +11910,19 @@ export async function registerRoutes(
               // stage that is visible in the list and carries the
               // "بانتظار إرفاق الصك" badge added in this commit.
               //
-              // SCOPE: only when the case actually reached محكوم_حكم_ابتدائي. An
-              // appeal ruling did (history keeps it); a first-instance ruling the
-              // lawyer marked NOT objectionable reaches isFinal WITHOUT ever
-              // visiting that stage, was never offered a صك step, and so still
-              // auto-closes exactly as before.
-              if (caseReachedPrimaryJudgment(existingCase) && await isJudgmentDeedMissing(effectiveCaseId)) {
+              // 🔴 NO SCOPE TEST HERE, AND THAT IS THE FIX — it used to call
+              // caseReachedJudgmentStage(existingCase) and that was WRONG, not
+              // merely redundant. existingCase is read at the top of the handler
+              // (:11594), BEFORE this branch writes محكوم_حكم_نهائي, so for a
+              // first-instance ruling marked NOT objectionable — a case still at
+              // منظورة with no judgment stage anywhere in its history — the test
+              // returned FALSE and the case auto-closed with no deed. That is
+              // precisely the 8-of-8 production population this batch is fixing,
+              // so the widened helper alone would NOT have covered it.
+              // Reaching this branch already means a judgment was just recorded
+              // (result === حكم, isFinal, ضدنا), so scope is true by construction
+              // and asking a stale copy of the row could only ever get it wrong.
+              if (await isJudgmentDeedMissing(effectiveCaseId)) {
                 console.warn("[hearing-result] ضدنا auto-close deferred — صك not attached", {
                   caseId: effectiveCaseId,
                 });
