@@ -49,7 +49,7 @@ export function isHearingMissingMinutes(h: {
   return !h.hasMinutesAttachment;
 }
 
-// "ضبط جلسة ناقص" — ANY hearing on the case has a result but no minutes.
+// "إرفاق ضبط الجلسة" — ANY hearing on the case has a result but no minutes.
 // Reads the app-wide hearings list that the page already holds (the same list
 // the "رد خصم" badge reads via getHearingsByCase), so this costs no request.
 export function caseHasHearingMissingMinutes(
