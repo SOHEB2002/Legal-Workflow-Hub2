@@ -274,10 +274,6 @@ export function HearingDetailsDialog({
                     <p className="text-xs text-muted-foreground">المحكمة</p>
                     <p className="font-medium"><BidiText>{detailHearing.courtName}</BidiText></p>
                   </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">الدائرة</p>
-                    <p className="font-medium"><LtrInline>{detailHearing.courtRoom || "-"}</LtrInline></p>
-                  </div>
                   {/* نوع الجلسة — hearing_type is AUTHORITATIVE and drives real
                       behaviour (the ضبط requirement, and the auto stage
                       transition on creation), yet it had no display anywhere.

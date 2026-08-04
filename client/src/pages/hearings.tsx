@@ -224,7 +224,6 @@ export default function HearingsPage() {
     hearingDate: "",
     hearingTime: "",
     courtName: "",
-    courtRoom: "",
     notes: "",
     attendingLawyerId: "",
   });
@@ -235,7 +234,6 @@ export default function HearingsPage() {
     hearingTime: "",
     hearingType: HearingType.COURT as HearingTypeValue,
     courtName: "",
-    courtRoom: "",
     notes: "",
     responseRequired: false,
     attendingLawyerId: "",
@@ -298,7 +296,6 @@ export default function HearingsPage() {
       hearingTime: "",
       hearingType: HearingType.COURT,
       courtName: "",
-      courtRoom: "",
       notes: "",
       responseRequired: false,
       attendingLawyerId: "",
@@ -477,7 +474,6 @@ export default function HearingsPage() {
       hearingDate: hearing.hearingDate || "",
       hearingTime: hearing.hearingTime || "",
       courtName: hearing.courtName || "",
-      courtRoom: hearing.courtRoom || "",
       notes: hearing.notes || "",
       attendingLawyerId: hearing.attendingLawyerId || "",
     });
@@ -886,16 +882,6 @@ export default function HearingsPage() {
                   placeholder="اسم المحكمة"
                 />
               </div>
-              <div>
-                <Label>رقم الدائرة</Label>
-                <SmartInput
-                  inputType="code"
-                  data-testid="input-court-room"
-                  value={formData.courtRoom}
-                  onChange={(e) => setFormData({ ...formData, courtRoom: e.target.value })}
-                  placeholder="مثال: الدائرة 5"
-                />
-              </div>
               {formData.caseId && formData.caseId !== "none" && (
                 <div>
                   <Label>المحامي المكلف بالحضور</Label>
@@ -1249,9 +1235,6 @@ export default function HearingsPage() {
                               <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
                                 <MapPin className="w-3 h-3 shrink-0" />
                                 <BidiText>{hearing.courtName}</BidiText>
-                                {hearing.courtRoom && (
-                                  <span>- <LtrInline>{hearing.courtRoom}</LtrInline></span>
-                                )}
                               </div>
                               {/* نوع الجلسة, but ONLY when it is NOT محكمة.
                                   محكمة is the default and very nearly every row,
@@ -1630,15 +1613,6 @@ export default function HearingsPage() {
                 placeholder=""
                 value={editFormData.courtName}
                 onChange={(e) => setEditFormData({ ...editFormData, courtName: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label>رقم الدائرة</Label>
-              <Input
-                data-testid="input-edit-court-room"
-                value={editFormData.courtRoom}
-                onChange={(e) => setEditFormData({ ...editFormData, courtRoom: e.target.value })}
-                placeholder="مثال: الدائرة 5"
               />
             </div>
             {editDialogHearing?.caseId && editDialogHearing.caseId !== "none" && (
