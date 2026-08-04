@@ -1282,8 +1282,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteUser(id: string): Promise<boolean> {
+    // The departing user's OWN notifications go with them (owner decision), and
+    // notifications_recipient_id_fkey is ON DELETE CASCADE anyway, so this line
+    // and the constraint agree.
     await db.delete(notifications).where(eq(notifications.recipientId, id));
-    await db.delete(notifications).where(eq(notifications.senderId, id));
+    // 🔴 THE senderId DELETE IS GONE, DELIBERATELY. It destroyed notifications
+    // OTHER people had RECEIVED, purely because the sender was removed — those
+    // rows are the RECIPIENTS' records, not the sender's, and a recipient losing
+    // history they never had any say over is data loss, not cleanup.
+    //
+    // SAFE AS A CODE-ONLY CHANGE: there is NO database constraint on sender_id.
+    // Verified against script/apply-fk-constraints.sql — notifications has
+    // exactly ONE FK, notifications_recipient_id_fkey (recipient_id → users.id,
+    // CASCADE). sender_id is a plain NOT NULL varchar with no FK, so an orphaned
+    // sender_id is already a state this schema permits and produces.
+    //
+    // AND THE READ PATHS ALREADY HANDLE IT — this is not a new class of row:
+    //   • DISPLAY reads the denormalised sender_name column (NOT NULL), never a
+    //     join, so the deleted person's name still renders everywhere the sender
+    //     is shown (notifications page, bell, respond dialog).
+    //   • The "can I reply to this?" predicate is senderResolvesToUser — "does
+    //     sender_id match a users row", NOT `=== "system"` — precisely so that a
+    //     since-deleted sender is classified with the automated producers. Such a
+    //     row degrades to acknowledgement-only ("تم الاطلاع") instead of offering
+    //     a reply that the recipient FK would reject.
     await db.delete(delegationsTable).where(eq(delegationsTable.fromUserId, id));
     await db.delete(delegationsTable).where(eq(delegationsTable.toUserId, id));
     await db.delete(supportTickets).where(eq(supportTickets.submittedBy, id));

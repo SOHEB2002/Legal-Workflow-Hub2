@@ -106,6 +106,7 @@ import {
   CONCLUDED_FILTER_VALUE,
   MemoType,
   MemoTypeLabels,
+  caseNotificationRecipientId,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1286,15 +1287,15 @@ export default function CasesPage() {
 
   const openReminderDialog = (caseItem: LawCase) => {
     setReminderCaseId(caseItem.id);
-    const defaultRecipient = caseItem.responsibleLawyerId || caseItem.primaryLawyerId || "";
+    const defaultRecipient = caseNotificationRecipientId(caseItem);
     setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "", recipientId: defaultRecipient });
     setShowReminderDialog(true);
   };
 
   const reminderCase = reminderCaseId ? getCaseById(reminderCaseId) : null;
-  const reminderHasDefaultRecipient = !!(reminderCase?.responsibleLawyerId || reminderCase?.primaryLawyerId);
+  const reminderHasDefaultRecipient = !!caseNotificationRecipientId(reminderCase);
   const reminderDeptLawyers = reminderCase
-    ? users.filter(u => u.canBeAssignedCases && u.departmentId === reminderCase.departmentId && u.id !== (reminderCase.responsibleLawyerId || reminderCase.primaryLawyerId))
+    ? users.filter(u => u.canBeAssignedCases && u.departmentId === reminderCase.departmentId && u.id !== caseNotificationRecipientId(reminderCase))
     : [];
 
   const handleSendReminder = async () => {
@@ -2557,7 +2558,7 @@ export default function CasesPage() {
           ),
           onTransfer: () => openTransferDialog(selectedCase),
           canRemind: !!permissions.canSendReminders
-            && !!(selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId),
+            && !!caseNotificationRecipientId(selectedCase),
           onReminder: () => openReminderDialog(selectedCase),
         } : undefined}
       />

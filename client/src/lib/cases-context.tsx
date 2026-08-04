@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
-import { CaseStatus, Priority, CaseStage, CaseClassification, getStagesForClassification } from "@shared/schema";
+import { CaseStatus, Priority, CaseStage, CaseClassification, getStagesForClassification, caseNotificationRecipientId } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
@@ -483,7 +483,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     await updateCase(id, prevUpdateData);
 
     if (prevStage === CaseStage.TAKING_NOTES) {
-      const responsibleId = lawCase.responsibleLawyerId || lawCase.primaryLawyerId;
+      const responsibleId = caseNotificationRecipientId(lawCase);
       if (responsibleId) {
         notifyCaseReturnedForRevision(lawCase.id, lawCase.caseNumber, responsibleId, notes).catch(() => {});
       }

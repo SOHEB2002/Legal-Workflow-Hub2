@@ -1953,6 +1953,39 @@ export interface CaseStageTransition {
   notes: string;
 }
 
+// ==================== مستلم إشعارات/مهام القضية ====================
+//
+// THE canonical "which lawyer do we notify / assign this to" answer for a case
+// (owner decision 2026-08-04): responsibleLawyerId FIRST, then primaryLawyerId.
+//
+// law_cases carries FOUR assignment fields — primaryLawyerId, responsibleLawyerId,
+// assignedLawyers (jsonb) and litigatorId — and different call sites picked
+// different orders, so "the lawyer for this case" meant different people
+// depending on which code you were standing in. This fixes ONE of those
+// questions: RECIPIENT resolution for notifications and tasks. It is deliberately
+// NOT a general "who owns this case" accessor.
+//
+// ⚠ IT DOES NOT REPLACE THE OTHER TWO ORDERS, WHICH ARE DELIBERATE:
+//   • litigatorId || primaryLawyerId || responsibleLawyerId — sets a hearing's
+//     attendingLawyerId at creation (POST /api/hearings). المترافع wins because
+//     that field is about who APPEARS IN COURT, and canActOnHearing is keyed on
+//     it. Documented at the call site; untouched.
+//   • hearing.attendingLawyerId || <case lawyer> — the hearing reminders and the
+//     صك task. A "لديك جلسة" message must reach whoever actually attends, which
+//     the hearing row already records. Untouched.
+//
+// UNASSIGNED CASES RETURN "" — the system's unassigned sentinel (memos.assigned_to
+// is NOT NULL). Callers keep whatever they already do with an empty recipient;
+// this helper deliberately invents NO fallback (no dept-head, no branch manager).
+export function caseNotificationRecipientId(
+  lawCase:
+    | { responsibleLawyerId?: string | null; primaryLawyerId?: string | null }
+    | null
+    | undefined,
+): string {
+  return lawCase?.responsibleLawyerId || lawCase?.primaryLawyerId || "";
+}
+
 // ==================== أسباب الإغلاق ====================
 export const ClosureReason = {
   CONTRACT_NOT_RENEWED: "عدم_تجديد_العقد",

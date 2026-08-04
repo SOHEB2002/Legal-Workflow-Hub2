@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
-import { SettlementLinkMissingClosureReason, firmDateTimeToInstant } from "@shared/schema";
+import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId } from "@shared/schema";
 
 export function startScheduler() {
   console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
@@ -709,7 +709,7 @@ async function checkNajizReviewReminders() {
       const reminders = remindersByCase.get(caseItem.id) ?? [];
 
       if (caseItem.currentStage === "قيد_التدقيق_في_ناجز") {
-        const assignee = caseItem.responsibleLawyerId || caseItem.primaryLawyerId || "";
+        const assignee = caseNotificationRecipientId(caseItem);
         if (!assignee) continue; // no responsible lawyer to remind
 
         // When did the case enter this stage? Use the LAST matching stageHistory
