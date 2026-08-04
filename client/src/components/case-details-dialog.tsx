@@ -69,7 +69,7 @@ import { formatTimeAmPm } from "@/lib/date-utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { canWriteHearingMinutes, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment } from "@/lib/attachment-indicators";
+import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment } from "@/lib/attachment-indicators";
 import { extractApiError } from "@/lib/utils";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
@@ -1335,7 +1335,7 @@ export function CaseDetailsDialog({
                                           empty upload box or a dead button. canEdit
                                           then hides upload/replace/delete inside. */}
                                       {!hearingProducesNoMinutes(hearing)
-                                        && (canWriteHearingMinutes(user, hearing)
+                                        && (isHearingActor(user, hearing)
                                             || (canViewHearingMinutes(user) && hearingHasMinutes(hearing))) && (
                                         <Popover>
                                           <PopoverTrigger asChild>
@@ -1357,7 +1357,7 @@ export function CaseDetailsDialog({
                                               endpoint={`/api/hearings/${hearing.id}/minutes-attachment`}
                                               label="ملف ضبط الجلسة"
                                               emptyHint="لم يُرفق الضبط بعد"
-                                              canEdit={canWriteHearingMinutes(user, hearing)}
+                                              canEdit={isHearingActor(user, hearing)}
                                               // THE SYNC GUARANTEE. Byte-identical to
                                               // the hearing dialog's own onChanged
                                               // (the ffadb50 fix): uploadAttachmentRaw

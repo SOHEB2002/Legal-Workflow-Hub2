@@ -23,6 +23,7 @@ import { extractApiError } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   MemoType,
   MemoStatusLabels,
@@ -51,7 +52,7 @@ import {
   Paperclip,
 } from "lucide-react";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { canWriteHearingMinutes, canViewHearingMinutes, hearingHasMinutes } from "@/lib/attachment-indicators";
+import { isHearingActor, canViewHearingMinutes, hearingHasMinutes } from "@/lib/attachment-indicators";
 
 // SHARED hearing-details dialog. The body was moved VERBATIM out of
 // hearings.tsx (its detail Dialog + the WorkflowStep helper it is the only
@@ -139,7 +140,7 @@ export function HearingDetailsDialog({
   // department_head would have to be resolved through the parent case — the
   // known-large open item that kept hearings out of the tiered permissions
   // widening. Out of scope; this matches every other hearing action.
-  // Now the SHARED canWriteHearingMinutes (lib/attachment-indicators) rather than
+  // Now the SHARED isHearingActor (lib/attachment-indicators) rather than
   // an inline copy — the case-details dialog needs the identical rule for its own
   // ضبط control, and two copies of it would drift.
   //
@@ -148,7 +149,7 @@ export function HearingDetailsDialog({
   // canActOnHearing, so this predicate no longer answers "may this user see the
   // file" — canViewHearingMinutes does. Passing this one to canEdit is what keeps
   // the two halves apart.
-  const canAttachHearingMinutes = canWriteHearingMinutes(user, detailHearing);
+  const canAttachHearingMinutes = isHearingActor(user, detailHearing);
 
   // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
   // control's own fetch (onAttachedChange) so the dialog issues no second read.
@@ -190,6 +191,31 @@ export function HearingDetailsDialog({
   const showMinutesControl =
     minutesRequired && !!detailHearing?.result
     && (canAttachHearingMinutes || (canViewHearingMinutes(user) && minutesOnFile));
+
+  // "مطلوب رد من الخصم" toggle. Self-contained (own state + apiRequest) rather
+  // than an injected action, so it works in BOTH hosts — the hearings page and the
+  // case-details dialog, which passes no actions at all.
+  const [savingOpponentResponse, setSavingOpponentResponse] = useState(false);
+  const saveOpponentResponseRequired = async (required: boolean) => {
+    if (!detailHearing) return;
+    setSavingOpponentResponse(true);
+    try {
+      // EXPLICIT boolean, never an implicit flip — a stale view cannot invert
+      // state it did not see.
+      await apiRequest("POST", `/api/hearings/${detailHearing.id}/opponent-response-required`, { required });
+      // The ffadb50 precedent. "مطلوب رد من الخصم" is rendered from the app-wide
+      // ["/api/hearings"] list on FIVE surfaces — the cases-page badge and its
+      // sort term, the case-details badge, the hearings row, and two memos-page
+      // badges — so this one key updates every one of them at once, including
+      // this dialog, which reads detailHearing from that same list.
+      await queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
+      toast({ title: required ? "تم تعليم: مطلوب رد من الخصم" : "تم إلغاء: مطلوب رد من الخصم" });
+    } catch (err) {
+      toast({ title: "تعذّر تحديث حالة رد الخصم", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setSavingOpponentResponse(false);
+    }
+  };
 
   // (minutesSatisfied lived here and went with the close step — it had no other
   // consumer. minutesOnFile stays: it drives the minutes step's done-state and
@@ -571,7 +597,20 @@ export function HearingDetailsDialog({
                     {detailHearing.result === "موعد_جديد" && (() => {
                       const hearingMemoRequired = !!detailHearing.memoRequired;
                       const opponentResponseRequired = !!detailHearing.opponentResponseRequired;
-                      if (!hearingMemoRequired && !opponentResponseRequired) return null;
+                      // 🔴 THE "nothing to show" EARLY RETURN IS GONE, and it had to
+                      // go: the opponent-response TOGGLE lives in this block, so
+                      // hiding the block whenever the flag is off made it impossible
+                      // to ever turn the flag ON — the control existed only once it
+                      // was already unnecessary.
+                      //
+                      // ⚠ THIS IS NOT THE WIDENING THAT WAS DECLINED. The outer
+                      // `result === "موعد_جديد"` condition is UNTOUCHED (owner
+                      // confirmed the opponent only responds after a postponement),
+                      // so this block still appears for exactly the same hearings as
+                      // before. Only its emptiness-check changed: a postponed hearing
+                      // with nothing outstanding now renders the block with just the
+                      // toggle, instead of rendering nothing.
+                      const canToggleOpponentResponse = isHearingActor(user, detailHearing);
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
                       const caseMemos = getMemosByCase(detailHearing.caseId);
                       const directMatches = caseMemos.filter((m) => m.hearingId === detailHearing.id);
@@ -601,11 +640,38 @@ export function HearingDetailsDialog({
                               )}
                             </div>
                           )}
-                          {opponentResponseRequired && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm">مطلوب رد من الخصم</span>
-                            </div>
-                          )}
+                          {/* مطلوب رد من الخصم — now a TOGGLE, not a read-out.
+                              The opponent sometimes responds after the session, and
+                              until now this could only be set while recording the
+                              result (the result-details edit route explicitly
+                              refuses the field).
+                              🔴 THE SAME CONTROL CLEARS IT. Switching it off posts
+                              required:false — there is no separate hidden path, which
+                              is the standing rule for this flag after the
+                              set-and-never-cleared bug (55fc32b → 54cf108).
+                              Read-only for anyone outside canActOnHearing, so the
+                              state is still visible to everyone who can open the
+                              hearing. */}
+                          <div className="flex items-center justify-between gap-2">
+                            <Label htmlFor="opponent-response-toggle" className="text-sm cursor-pointer">
+                              مطلوب رد من الخصم
+                            </Label>
+                            {canToggleOpponentResponse ? (
+                              <Switch
+                                id="opponent-response-toggle"
+                                checked={opponentResponseRequired}
+                                disabled={savingOpponentResponse}
+                                data-testid="switch-opponent-response-required"
+                                onCheckedChange={(checked) => saveOpponentResponseRequired(!!checked)}
+                              />
+                            ) : (
+                              <Badge variant="outline" className={opponentResponseRequired
+                                ? "border-orange-500 text-orange-600 dark:text-orange-400"
+                                : "text-muted-foreground"}>
+                                {opponentResponseRequired ? "نعم" : "لا"}
+                              </Badge>
+                            )}
+                          </div>
                         </div>
                       );
                     })()}
