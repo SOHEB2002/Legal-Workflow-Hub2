@@ -29,11 +29,13 @@ import {
   FieldTaskStatus,
   HearingStatusLabels,
   HearingStatus,
+  HearingType,
+  HearingTypeLabels,
   HearingResultLabels,
   ObjectionStatusLabels,
   isFirmToday,
 } from "@shared/schema";
-import type { Hearing, ObjectionStatusValue, HearingStatusValue } from "@shared/schema";
+import type { Hearing, ObjectionStatusValue, HearingStatusValue, HearingTypeValue } from "@shared/schema";
 import {
   Scale,
   FileText,
@@ -275,6 +277,29 @@ export function HearingDetailsDialog({
                   <div>
                     <p className="text-xs text-muted-foreground">الدائرة</p>
                     <p className="font-medium"><LtrInline>{detailHearing.courtRoom || "-"}</LtrInline></p>
+                  </div>
+                  {/* نوع الجلسة — hearing_type is AUTHORITATIVE and drives real
+                      behaviour (the ضبط requirement, and the auto stage
+                      transition on creation), yet it had no display anywhere.
+                      That invisibility is how 14 mistyped hearings went unnoticed
+                      in production, so it renders as a BADGE — the same shape as
+                      "الحالة" two cells below — rather than as plain text, and a
+                      non-court type is tone-marked so it cannot be skimmed past. */}
+                  <div>
+                    <p className="text-xs text-muted-foreground">نوع الجلسة</p>
+                    <Badge
+                      variant="outline"
+                      className={
+                        detailHearing.hearingType === HearingType.COURT
+                          ? "text-xs"
+                          : "text-xs border-teal-500 text-teal-600 dark:text-teal-400"
+                      }
+                      data-testid={`badge-hearing-type-${detailHearing.id}`}
+                    >
+                      {HearingTypeLabels[detailHearing.hearingType as HearingTypeValue]
+                        || detailHearing.hearingType
+                        || HearingTypeLabels[HearingType.COURT]}
+                    </Badge>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">القضية</p>
