@@ -1064,7 +1064,11 @@ export default function CasesPage() {
           : classificationFilter === CONCLUDED_FILTER_VALUE
           ? concluded
           : c.caseClassification === classificationFilter && !concluded;
-      const matchesLawyer = lawyerFilter === "all" || c.primaryLawyerId === lawyerFilter;
+      // BOTH fields — the filter tested primaryLawyerId alone, so picking a lawyer
+      // hid every case that carries them only as responsibleLawyerId.
+      const matchesLawyer = lawyerFilter === "all"
+        || c.primaryLawyerId === lawyerFilter
+        || c.responsibleLawyerId === lawyerFilter;
       const matchesAdvPriority =
         advFilters.priorities.length === 0 || advFilters.priorities.includes(c.priority);
       const matchesAdvStage =

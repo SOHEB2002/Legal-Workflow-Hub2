@@ -932,7 +932,10 @@ async function checkStruckOffExpiry() {
       try {
         const allUsers = await storage.getAllUsers();
         const notifyIds: string[] = [];
-        if (caseItem.primaryLawyerId) notifyIds.push(caseItem.primaryLawyerId);
+        // primary first, responsible as fallback — a responsible-only case used to
+        // notify the department head alone, never the lawyer actually on it.
+        const struckOffLawyerId = caseItem.primaryLawyerId || caseItem.responsibleLawyerId;
+        if (struckOffLawyerId) notifyIds.push(struckOffLawyerId);
         const deptHead = allUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
         if (deptHead) notifyIds.push(deptHead.id);
 

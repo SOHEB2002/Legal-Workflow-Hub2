@@ -358,7 +358,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     cases.filter((c) => c.departmentId === departmentId);
 
   const getCasesByLawyer = (lawyerId: string) =>
-    cases.filter((c) => c.assignedLawyers.includes(lawyerId) || c.primaryLawyerId === lawyerId);
+    cases.filter((c) =>
+      c.assignedLawyers.includes(lawyerId)
+      || c.primaryLawyerId === lawyerId
+      // responsibleLawyerId was missing entirely, so a responsible-only case did
+      // not count as one of that lawyer's cases.
+      || c.responsibleLawyerId === lawyerId);
 
   const getActiveCases = () =>
     cases.filter((c) => c.status !== CaseStatus.CLOSED);

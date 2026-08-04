@@ -4039,7 +4039,12 @@ export async function registerRoutes(
         "departmentId" in req.body &&
         req.body.departmentId &&
         req.body.departmentId !== existing.departmentId &&
+        // "no simultaneous lawyer assignment" must consider BOTH fields: a body
+        // that moved the case AND set responsibleLawyerId was previously treated
+        // as a bare transfer, so the clear-out below wiped the lawyer the same
+        // request had just assigned.
         !req.body.primaryLawyerId &&
+        !req.body.responsibleLawyerId &&
         !req.body.assignedLawyers;
 
       // Capture pre-transfer values BEFORE we mutate req.body so the activity
