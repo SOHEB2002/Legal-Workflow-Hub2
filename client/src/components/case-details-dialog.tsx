@@ -614,7 +614,21 @@ export function CaseDetailsDialog({
                 />
               </div>
 
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+              {/* 🔴 dir="rtl" IS LOAD-BEARING, NOT DECORATION. Radix Tabs.Root
+                  resolves its direction as `localDir || globalDir || "ltr"`
+                  (@radix-ui/react-direction) and then STAMPS a literal dir
+                  attribute onto its own div. With no dir prop here and no
+                  DirectionProvider anywhere in this app, that resolved to "ltr" —
+                  so an explicit dir="ltr" sat BETWEEN the DialogContent's
+                  dir="rtl" and everything in the tabs, flipping the whole panel
+                  to LTR. The visible symptom was the الجلسات table reading
+                  الإجراءات-first from the right edge; the cause was never the
+                  column order, which is why reordering would have been the wrong
+                  fix (it would have left header text and cell alignment mirrored).
+                  The list pages get this right for free by not being inside Tabs.
+                  reports.tsx:1024 and support.tsx:256 already pass dir="rtl" for
+                  exactly this reason — this follows that precedent. */}
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full" dir="rtl">
                 <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
                   <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
                   <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
@@ -1248,12 +1262,16 @@ export function CaseDetailsDialog({
                                 <TableHead className="text-right">الوقت</TableHead>
                                 <TableHead className="text-right">المحكمة</TableHead>
                                 <TableHead className="text-right">الحالة</TableHead>
-                                {/* LAST in DOM = far LEFT under dir="rtl", which is
-                                    the app-wide convention for the actions column
-                                    (cases, contracts, memos, consultations and the
-                                    hearings page all place it last and label it
-                                    "الإجراءات"). This table was the only one using
-                                    the bare "إجراءات". */}
+                                {/* LAST in DOM = far LEFT, matching the app-wide
+                                    convention for the actions column (cases,
+                                    contracts, memos, consultations and the hearings
+                                    page all place it last, labelled "الإجراءات").
+                                    ⚠ This only became TRUE ON SCREEN once the Tabs
+                                    root was given dir="rtl" — see the note there.
+                                    Before that the whole panel rendered LTR and this
+                                    column painted at the far RIGHT, which is what the
+                                    owner reported. The DOM order was always right;
+                                    the direction was not. */}
                                 {/* 60px → 96px: the cell now holds TWO 32px icon
                                     buttons (view + ضبط) and would have squeezed or
                                     wrapped at the old width. Still the narrowest
