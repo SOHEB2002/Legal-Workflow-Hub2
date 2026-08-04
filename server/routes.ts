@@ -2077,39 +2077,22 @@ async function isJudgmentDeedMissing(caseId: string): Promise<boolean> {
   return !(await storage.getCaseAttachment(caseId));
 }
 
-// ==================== THE ضبط GATE ON CASE CLOSURE ====================
-// Owner decision 2026-08-04: the ضبط is mandatory on EVERY court hearing that has
-// a recorded result — not only judgment hearings — and enforcement MOVED here from
-// the hearing close action, which is being removed in the companion commit.
+// ⚠ findHearingMissingMinutes STOOD HERE and was DELETED with the case-close ضبط
+// gate it served (owner decision 2026-08-05, reverting e52e4ad — 83 cases would
+// have been blocked on deploy, so the backlog gets attached first).
 //
-// Returns the FIRST offending hearing, or null when the case is clear. Returning
-// the row rather than a boolean is deliberate: a case can hold many hearings, and
-// "attach the minutes" with no date and no court is unactionable, so the caller
-// names the session in its 400.
+// It was deleted rather than kept-with-a-comment for one concrete reason: this
+// project holds `tsc --noUnusedLocals` at ZERO as a standing regression gate, and
+// an unreferenced module-level function fails it (TS6133, verified). The only ways
+// to keep it were to `export` it — dead code hidden behind an export, exactly what
+// an audit flags — or to weaken the gate. Both are worse than deleting something
+// that is one paste away from returning.
 //
-// THE PREDICATE — a hearing must have its ضبط when ALL of:
-//   • it has a RECORDED RESULT — no result means the session has not happened (or
-//     was not recorded), so there is nothing to have minutes of;
-//   • it is NOT تراضي / تسوية_ودية — the shared hearingProducesNoMinutes, the same
-//     term the badges, the filter, the my-tasks emission and the (now removed)
-//     hearing close gate use. جلسات الصلح والتسوية issue no ضبط at all;
-//   • it is NOT ملغية — you cannot obtain minutes for a session that was
-//     cancelled. Belt-and-braces: recording a result sets تمت/مؤجلة, so a
-//     cancelled row normally has no result and the first term already excludes it.
-//
-// COST: one getHearingsByCase, plus ONE getHearingIdsWithMinutesAttachment (a Set)
-// only when there is at least one candidate — so a case with no court hearings
-// pays a single query and a case with none resulted pays nothing extra.
-async function findHearingMissingMinutes(caseId: string): Promise<Hearing | null> {
-  const hearings = await storage.getHearingsByCase(caseId);
-  const candidates = hearings.filter((h) =>
-    !!String(h.result || "").trim()
-    && !hearingProducesNoMinutes(h)
-    && h.status !== HearingStatus.CANCELLED);
-  if (candidates.length === 0) return null;
-  const attached = await storage.getHearingIdsWithMinutesAttachment();
-  return candidates.find((h) => !attached.has(h.id)) ?? null;
-}
+// 🔴 RE-ENABLING IS COPY-PASTE, NOT RE-DERIVATION. The full helper, the gate that
+// called it, the re-enable steps and the backlog-measuring SQL are all recorded in
+// CLAUDE.md under "📎 ATTACHMENTS"; the original code is also in git at e52e4ad.
+// Do not reconstruct the predicate from scratch — the three terms (has a result /
+// not تراضي-تسوية_ودية / not ملغية) each exist for a reason documented there.
 
 // Is this field task one of the two POST-JUDGMENT tasks whose completion ends
 // the case? Matched on the title prefix, the same discriminator getMyTasks uses
@@ -3623,48 +3606,17 @@ export async function registerRoutes(
           });
         }
 
-        // ============ ضبط SEAL — CLOSING A CASE WITH RESULTED HEARINGS ============
-        // Owner decision 2026-08-04. Enforcement MOVED here from the hearing close
-        // action (removed in the companion commit), and WIDENED: every court hearing
-        // with a recorded result needs its ضبط, not only judgment hearings.
-        //
-        // 🔴 DELIBERATELY NARROWER IN REACH THAN IT LOOKS — and this placement is
-        // the whole safety argument. It sits in the PATCH handler, so it governs
-        // ONLY USER-INITIATED closes: the table edges to مقفلة, the تحصيل zero-task
-        // escape, and the early-close shortcut. EVERY AUTOMATIC close writes through
-        // storage.updateCase directly and never reaches this code — the
-        // post-judgment auto-close (:2154), the ضدنا final-judgment close (:11974),
-        // the three settlement-failure closes (:12138/:12154/:12200) and both
-        // scheduler closes (scheduler.ts:893 strike-off lapse, :991 settlement-link
-        // lapse) all bypass it.
-        // THAT IS INTENTIONAL, NOT AN OVERSIGHT. Extending the requirement into
-        // those paths would wedge cases silently: they run with no actor, inside
-        // swallowed try/catch blocks, with no error surface — the scheduler ones
-        // especially, where a struck-off case would simply never close and nobody
-        // would ever be told why. A user close can refuse out loud; an automatic
-        // one cannot.
-        //
-        // ⚠ UNLIKE THE صك GATE ABOVE, THIS HAS NO STAGE SCOPE. The صك gate is keyed
-        // on caseReachedJudgmentStage; there is no equivalent "this case had
-        // hearings worth minutes" term, so this applies to any case with a resulted
-        // court hearing — including strike-off and administrative closes. That is
-        // the owner's intent (the ضبط is mandatory on every court hearing), and the
-        // exemption that keeps it safe is per-HEARING, not per-case:
-        // hearingProducesNoMinutes. A case whose only sessions are صلح/تسوية closes
-        // exactly as it does today.
-        //
-        // The 400 NAMES THE SESSION — date and court — because a case can hold many
-        // hearings and an unnamed "attach the minutes" is unactionable.
-        if (req.body.currentStage === "مقفلة" && existing.currentStage !== "مقفلة") {
-          const missingMinutes = await findHearingMissingMinutes(existing.id);
-          if (missingMinutes) {
-            const courtLabel = missingMinutes.courtName || "المحكمة";
-            return res.status(400).json({
-              error: `يجب إرفاق ضبط الجلسة قبل إغلاق القضية — الجلسة بتاريخ ${missingMinutes.hearingDate} (${courtLabel}) لم يُرفق ضبطها`,
-            });
-          }
-        }
-
+        // ⚠ A ضبط GATE STOOD HERE AND WAS REVERTED (owner decision 2026-08-05,
+        // reverting e52e4ad). It refused a case close while any resulted court
+        // hearing was missing its minutes. It worked, but a backlog measurement
+        // returned 83 cases that would have been blocked the moment it deployed,
+        // so the firm chose to attach the backlog FIRST and enable the gate after.
+        // The ضبط is therefore VISIBLE-BUT-OPTIONAL for now: the badges, the
+        // hearings filter, the my-tasks item and the workflow step all still fire.
+        // 🔴 THIS IS INTENDED TO COME BACK. The full predicate, the re-enable steps
+        // and the SQL that measures the remaining backlog are recorded in CLAUDE.md
+        // under "📎 ATTACHMENTS" — do not re-derive them, and do not treat the
+        // absence of a gate here as a decision that minutes are optional forever.
         // ============ صك SEAL — LEAVING ANY JUDGMENT STAGE ============
         // Placed BEFORE validateStageTransition so it covers every way this PATCH
         // can move the case off a judgment stage in one place: the table edges
@@ -12802,9 +12754,15 @@ export async function registerRoutes(
   // and no case cascade, and it was already unreachable for most hearings:
   // recording a result sets the status directly (موعد_جديد → مؤجلة, every other
   // result → تمت), and the button only rendered while status !== تمت. So it
-  // governed POSTPONED hearings alone, and the ضبط requirement it used to enforce
-  // now lives on the CASE close gate (findHearingMissingMinutes), where it covers
-  // every resulted court hearing instead of just that minority.
+  // governed POSTPONED hearings alone.
+  //
+  // ⚠ THE ضبط REQUIREMENT IT USED TO ENFORCE IS CURRENTLY ENFORCED BY NOTHING.
+  // It moved to a case-close gate, which was then REVERTED the next day (owner
+  // decision 2026-08-05: 83 cases would have been blocked on deploy, so the
+  // backlog gets attached first). The ضبط is visible-but-optional for now — every
+  // badge, filter, my-tasks item and workflow step still fires. The re-enable
+  // steps live in CLAUDE.md under "📎 ATTACHMENTS". Restoring a button HERE is
+  // not the way to bring enforcement back.
   //
   // WHY THE ROUTE STAYS: it is the ONLY writer of تمت for a postponed hearing, and
   // two live readers key on that status —
