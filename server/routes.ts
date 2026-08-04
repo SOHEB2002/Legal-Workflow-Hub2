@@ -4027,11 +4027,54 @@ export async function registerRoutes(
         }
       }
 
-      // Ensure lawyer consistency: primaryLawyerId must be in assignedLawyers
-      const finalAssignedLawyers = req.body.assignedLawyers || existing.assignedLawyers || [];
-      const finalPrimaryLawyer = req.body.primaryLawyerId || existing.primaryLawyerId;
-      if (finalPrimaryLawyer && Array.isArray(finalAssignedLawyers) && !finalAssignedLawyers.includes(finalPrimaryLawyer)) {
+      // ── LAWYER CONSISTENCY ────────────────────────────────────────────────
+      // 🔴 REASSIGNING A CASE MUST REVOKE THE PREVIOUS LAWYER'S ACCESS.
+      // This block used to ADD the new primary to assignedLawyers and never
+      // remove anyone, so the reassign dialog (which sends primaryLawyerId alone)
+      // left the case reading `assignedLawyers: [oldLawyer, newLawyer]`. Since
+      // every case permission check is an OR across primaryLawyerId /
+      // responsibleLawyerId / assignedLawyers, the replaced lawyer kept FULL
+      // modify access — and their مهامي rows — indefinitely.
+      const primaryLawyerChanging =
+        req.body.primaryLawyerId !== undefined
+        && (req.body.primaryLawyerId || null) !== (existing.primaryLawyerId || null);
+      const supersededLawyerId = primaryLawyerChanging ? (existing.primaryLawyerId || "") : "";
+
+      // An explicit assignedLawyers in the body is the caller's own COMPLETE
+      // answer and is honoured verbatim — the edit and assign dialogs both send
+      // one, so they already replace the array wholesale.
+      const callerSentAssignedLawyers = Array.isArray(req.body.assignedLawyers);
+      let finalAssignedLawyers: string[] = callerSentAssignedLawyers
+        ? req.body.assignedLawyers
+        : (Array.isArray(existing.assignedLawyers) ? existing.assignedLawyers : []);
+
+      // Prune EXACTLY the superseded lawyer — never the whole array — so a case
+      // with several genuinely assigned lawyers keeps every other one.
+      if (supersededLawyerId && !callerSentAssignedLawyers) {
+        const pruned = finalAssignedLawyers.filter((l: string) => l !== supersededLawyerId);
+        if (pruned.length !== finalAssignedLawyers.length) {
+          finalAssignedLawyers = pruned;
+          req.body.assignedLawyers = pruned;
+        }
+      }
+
+      // Respect an EXPLICIT null (unassigning the case). The old `||` fallback
+      // read through a null body value to the existing lawyer, which would have
+      // re-added the very lawyer just pruned — and, before this change, re-added
+      // a lawyer the caller was trying to clear.
+      const finalPrimaryLawyer = req.body.primaryLawyerId !== undefined
+        ? req.body.primaryLawyerId
+        : existing.primaryLawyerId;
+      if (finalPrimaryLawyer && !finalAssignedLawyers.includes(finalPrimaryLawyer)) {
         req.body.assignedLawyers = [...finalAssignedLawyers, finalPrimaryLawyer];
+      }
+
+      // The legacy responsibleLawyerId column carries its own permission clause.
+      // Once the primary changes it can only be naming the superseded lawyer
+      // (nothing writes it any more — batch 3 commit 1), so clear it. Guarded on
+      // the caller not having sent the field, so an explicit value still wins.
+      if (primaryLawyerChanging && req.body.responsibleLawyerId === undefined) {
+        req.body.responsibleLawyerId = null;
       }
 
       // When a case is transferred to a new department without a simultaneous
