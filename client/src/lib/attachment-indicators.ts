@@ -113,6 +113,35 @@ export function isPostJudgmentCaseMissingDeed(c: {
   return !c.hasDeedAttachment;
 }
 
+// CLIENT MIRROR of canActOnHearing (server/routes.ts) — attending lawyer /
+// branch_manager / admin_support. This one predicate governs BOTH halves of the
+// ضبط file on a hearing, because the server uses the SAME gate for both:
+//   POST/DELETE .../minutes-attachment           → canActOnHearing
+//   GET        .../minutes-attachment/download    → canActOnHearing  (:9829)
+//
+// ⚠ NOTE THE ASYMMETRY WITH THE صك: the deed's DOWNLOAD route is gated on
+// canModifyCase — the view-level rule, deliberately wider than its write gate —
+// so anyone who can open a case may read its صك. The minutes download is NOT
+// widened that way. So a preview button here must be shown to exactly this set
+// and no wider, or it would render for users the server will 403.
+//
+// Deliberately NOT department-scoped: hearings carry no departmentId, so a
+// department_head would have to be resolved through the parent case — the known
+// open item that kept hearings out of the tiered permissions widening.
+//
+// EXPORTED so the hearing-details dialog and the case-details dialog share ONE
+// implementation. Two inline copies of the same four-line rule is exactly the
+// drift this codebase has been bitten by before.
+export function canActOnHearingMinutes(
+  user: { id: string; role: string } | null | undefined,
+  hearing: { attendingLawyerId?: string | null } | null | undefined,
+): boolean {
+  if (!user || !hearing) return false;
+  return user.role === "branch_manager"
+    || user.role === "admin_support"
+    || (!!hearing.attendingLawyerId && hearing.attendingLawyerId === user.id);
+}
+
 // A single hearing whose result is recorded but whose ضبط is not attached.
 // Shared by the case-level badge and the hearings-page filter so the two can
 // never drift apart.

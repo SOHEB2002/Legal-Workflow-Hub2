@@ -52,6 +52,7 @@ import {
   Paperclip,
 } from "lucide-react";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
+import { canActOnHearingMinutes } from "@/lib/attachment-indicators";
 
 // SHARED hearing-details dialog. The body was moved VERBATIM out of
 // hearings.tsx (its detail Dialog + the WorkflowStep helper it is the only
@@ -140,12 +141,10 @@ export function HearingDetailsDialog({
   // department_head would have to be resolved through the parent case — the
   // known-large open item that kept hearings out of the tiered permissions
   // widening. Out of scope; this matches every other hearing action.
-  const canAttachHearingMinutes =
-    !!user && !!detailHearing && (
-      user.role === "branch_manager"
-      || user.role === "admin_support"
-      || (!!detailHearing.attendingLawyerId && detailHearing.attendingLawyerId === user.id)
-    );
+  // Now the SHARED canActOnHearingMinutes (lib/attachment-indicators) rather than
+  // an inline copy — the case-details dialog needs the identical rule for its own
+  // ضبط control, and two copies of it would drift.
+  const canAttachHearingMinutes = canActOnHearingMinutes(user, detailHearing);
 
   // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
   // control's own fetch (onAttachedChange) so the dialog issues no second read.
