@@ -2805,15 +2805,33 @@ export async function registerRoutes(
     }
   });
 
+  // 🔴 READ GATE = requireAuth ONLY (owner rule 2026-08-04: any employee may read
+  // any case). This was the LAST read on cases or hearings still narrower than the
+  // firm-wide list that leads to it, and the mismatch was doing real damage rather
+  // than protecting anything:
+  //   • GET /api/cases (:2764) is requireAuth + getAllCases() with NO scoping, so
+  //     every authenticated user ALREADY holds every case row, and the case-details
+  //     dialog renders from that list with no client gate. Nothing was withheld.
+  //   • This route is called by the dialog ONLY to graft the full stageHistory that
+  //     the list strips (case-details-dialog.tsx:284), and its failure is SWALLOWED.
+  //     So the canViewCase 403 never blocked anyone from opening a case — it just
+  //     made سجل المراحل render EMPTY, with no error, for an out-of-department
+  //     department_head or an unassigned employee. A silent partial failure on data
+  //     the same user could already see in full.
+  // Removed: the canViewCase check and its 403. Nothing else in the handler changed.
+  //
+  // ⚠ canViewCase ITSELF IS NOT DEAD and is deliberately left in place — it still
+  // gates four other call sites, TWO OF WHICH ARE WRITES:
+  //     GET  /api/field-tasks/case/:caseId          (:12718, read)
+  //     GET  /api/field-tasks/:id      parent fallback (:12745, read)
+  //     POST /api/cases/:id/comments                (:14666, WRITE)
+  //     POST /api/cases/:id/notes                   (:14711, WRITE)
+  // Those are untouched by this commit.
   app.get("/api/cases/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) {
         return res.status(404).json({ error: "القضية غير موجودة" });
-      }
-      const user = req.user!;
-      if (!canViewCase(user, caseItem, req.actingContext)) {
-        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه القضية" });
       }
       res.json(caseItem);
     } catch (error) {
@@ -9589,18 +9607,27 @@ export async function registerRoutes(
     },
   );
 
-  // Returns { attachment } — null when nothing is attached yet. Read gate is
-  // canModifyCase (view-level), deliberately WIDER than the write gate above:
-  // anyone who can open the case can see whether its صك is on file.
+  // Returns { attachment } — null when nothing is attached yet.
+  //
+  // 🔴 READ GATE = requireAuth ONLY (owner decision 2026-08-04: every employee may
+  // read any case, any صك and any ضبط). This MATCHES the case read rather than
+  // inventing a rule: GET /api/cases is `requireAuth` + getAllCases() with NO
+  // scoping of any kind, so every authenticated user already receives every case
+  // row. canModifyCase here was strictly NARROWER than the list that leads to it —
+  // it excluded a department_head of another department, an unassigned employee and
+  // every non-admin role — which is why a صك could be invisible on a case the same
+  // user could already open and read.
+  //
+  // ⚠ THE WRITE GATE ABOVE IS UNCHANGED — POST/DELETE still canAttachCaseJudgmentDeed.
+  // Widening the read does not widen anything else; viewer reaches this route and
+  // nothing more, because viewerWriteGuard (server/index.ts:108) 403s every non-GET
+  // from a viewer before any handler runs.
   app.get("/api/cases/:id/deed-attachment", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
-      if (!canModifyCase(reqUser, lawCase, req.actingContext)) {
-        return res.status(403).json({ error: "لا تملك صلاحية عرض هذه القضية" });
-      }
       const att = await storage.getCaseAttachment(lawCase.id);
       // `missing` mirrors the contracts convention: runtime-derived, never
       // stored. Always false for these rows in practice (there is no legacy
@@ -9613,15 +9640,15 @@ export async function registerRoutes(
     }
   });
 
+  // requireAuth ONLY — same owner decision and same reasoning as the metadata
+  // route above; the two must agree or the control fetches a file it cannot then
+  // open. Write routes untouched.
   app.get("/api/cases/:id/deed-attachment/download", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
-      if (!canModifyCase(reqUser, lawCase, req.actingContext)) {
-        return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
-      }
       const att = await storage.getCaseAttachment(lawCase.id);
       if (!att) return res.status(404).json({ error: "المرفق غير موجود" });
       if (!isAttachmentObjectKey(att.filePath)) {
@@ -9809,19 +9836,16 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const hearing = await storage.getHearingById(String(req.params.id));
       if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
-      // Widened with the download route below, and it HAD to be: this is the
-      // metadata read the attachment control issues first, so leaving it narrow
-      // would 403 a read-only viewer before any preview button could render — the
-      // download gate alone would have been useless. Same parent-case resolution,
-      // same orphan fallback. Mirrors the صك's metadata route, which is likewise
-      // canModifyCase and states the same intent.
-      const parentCase = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
-      const mayReadMinutes = parentCase
-        ? canModifyCase(reqUser, parentCase, req.actingContext)
-        : canActOnHearing(reqUser, hearing, req.actingContext);
-      if (!mayReadMinutes) {
-        return res.status(403).json({ error: "لا تملك صلاحية عرض هذه الجلسة" });
-      }
+      // 🔴 READ GATE = requireAuth ONLY (owner decision 2026-08-04). This now
+      // MATCHES the hearing read exactly: GET /api/hearings is requireAuth +
+      // getAllHearings() with no scoping, and GET /api/hearings/:id has no gate at
+      // all — so any authenticated user already receives every hearing row.
+      // The parent-case canModifyCase resolution added a commit earlier is REMOVED
+      // as no longer needed: it was the widest gate available at the time, but it
+      // was still narrower than the hearing read it sits behind, and the owner has
+      // now settled the rule firm-wide. One fewer query per call, too.
+      //
+      // ⚠ WRITE ROUTES UNCHANGED — POST and DELETE still canActOnHearing.
       const att = await storage.getHearingAttachment(hearing.id);
       res.json({ attachment: att ? { ...att, missing: !isAttachmentObjectKey(att.filePath) } : null });
     } catch (error: any) {
@@ -9836,32 +9860,14 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const hearing = await storage.getHearingById(String(req.params.id));
       if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
-      // 🔴 READ GATE WIDENED (owner decision 2026-08-04): the ضبط is viewable by
-      // anyone who can open the parent case, matching the صك — whose download
-      // route is already canModifyCase (:9622). It used to be canActOnHearing,
-      // the same narrow set as the WRITE routes, which is why the case-details
-      // dialog could not offer a preview to a read-only viewer.
+      // 🔴 READ GATE = requireAuth ONLY (owner decision 2026-08-04), matching the
+      // metadata route above and the hearing read itself. Supersedes the
+      // parent-case canModifyCase resolution from the previous commit — see that
+      // route's note. The orphan-hearing fallback goes with it: with no scoping
+      // there is nothing left to scope, so a hearing with no caseId behaves like
+      // any other.
       //
-      // ⚠ THIS IS THE READ ROUTE ONLY. POST and DELETE on
-      // /api/hearings/:id/minutes-attachment still use canActOnHearing and are
-      // deliberately untouched — attaching, replacing and deleting stay with the
-      // attending lawyer / branch_manager / admin_support.
-      //
-      // Hearings carry no departmentId, so the audience is resolved through the
-      // PARENT CASE with the getCaseById(hearing.caseId) precedent already used
-      // throughout this file (canEditHearingRecord, the my-tasks scoping, the
-      // judgment promotion). No new plumbing.
-      //
-      // A hearing with no caseId cannot be scoped that way, so it FALLS BACK to
-      // canActOnHearing — refusing rather than opening up is the safe direction
-      // for an orphan row.
-      const parentCase = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
-      const mayReadMinutes = parentCase
-        ? canModifyCase(reqUser, parentCase, req.actingContext)
-        : canActOnHearing(reqUser, hearing, req.actingContext);
-      if (!mayReadMinutes) {
-        return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
-      }
+      // ⚠ WRITE ROUTES UNCHANGED — POST and DELETE still canActOnHearing.
       const att = await storage.getHearingAttachment(hearing.id);
       if (!att) return res.status(404).json({ error: "المرفق غير موجود" });
       if (!isAttachmentObjectKey(att.filePath)) {

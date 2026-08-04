@@ -128,10 +128,13 @@ export function isPostJudgmentCaseMissingDeed(c: {
 // server now serves, or offering upload to users it still 403s. Both are the
 // visibility != authorization failure this codebase keeps paying for.
 
-// READ half. The client equivalent of "can open this case" — the case-details
-// dialog only renders for a case the user can already see, and the hearing dialog
-// is reached from it, so anyone with the row in hand qualifies. The server is
-// still the authority; this only decides what renders.
+// READ half. Any authenticated user, and that is now EXACT rather than a
+// convenient approximation: as of the 2026-08-04 owner decision the four
+// attachment read routes carry `requireAuth` and nothing else, matching
+// GET /api/cases and GET /api/hearings, which have never had any scoping —
+// getAllCases() / getAllHearings() with no role or department term. So a user
+// holding the row in hand is authorised for its files, server-side, always.
+// The server remains the authority; this only decides what renders.
 export function canViewHearingMinutes(
   user: { id: string; role: string } | null | undefined,
 ): boolean {
