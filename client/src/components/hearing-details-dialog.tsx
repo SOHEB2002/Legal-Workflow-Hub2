@@ -132,24 +132,24 @@ export function HearingDetailsDialog({
     return isFirmToday(detailHearing.hearingDate);
   })();
 
-  // CLIENT MIRROR of canActOnHearing (server/routes.ts) — attending lawyer /
-  // branch_manager / admin_support. Gates attaching, replacing and deleting the
-  // ضبط الجلسة file, the same set the server enforces on those routes.
+  // The hearing's PARENT CASE — needed because hearings carry no departmentId and
+  // the department_head grant is scoped through it. Resolved once and shared by
+  // every gate below rather than looked up per call.
+  const detailParentCase = detailHearing?.caseId ? getCaseById(detailHearing.caseId) : null;
+
+  // CLIENT MIRROR of canActOnHearing (server/routes.ts) via the SHARED
+  // isHearingActor — attending lawyer / branch_manager / admin_support / and, as
+  // of 2026-08-05, the own-department department_head.
   //
-  // Deliberately NOT department-scoped: hearings carry no departmentId, so a
-  // department_head would have to be resolved through the parent case — the
-  // known-large open item that kept hearings out of the tiered permissions
-  // widening. Out of scope; this matches every other hearing action.
-  // Now the SHARED isHearingActor (lib/attachment-indicators) rather than
-  // an inline copy — the case-details dialog needs the identical rule for its own
-  // ضبط control, and two copies of it would drift.
+  // ⚠ THE OLD NOTE HERE SAID "deliberately NOT department-scoped … out of scope".
+  // THAT IS SUPERSEDED: the owner reversed Phase 5 B/M4 and department heads now
+  // hold the FULL hearing action set on their own department's cases, so the
+  // parent case is threaded in and the scope is real.
   //
-  // 🔴 WRITE ONLY. Reading the ضبط widened to the parent case's viewers
-  // (owner decision 2026-08-04) while attach / replace / delete stayed at
-  // canActOnHearing, so this predicate no longer answers "may this user see the
-  // file" — canViewHearingMinutes does. Passing this one to canEdit is what keeps
-  // the two halves apart.
-  const canAttachHearingMinutes = isHearingActor(user, detailHearing);
+  // 🔴 STILL WRITE-ONLY. Reading the ضبط is wider again (canViewHearingMinutes —
+  // any authenticated user), so this predicate answers "may this user CHANGE the
+  // file", not "may they see it". Passing it to canEdit keeps the halves apart.
+  const canAttachHearingMinutes = isHearingActor(user, detailHearing, detailParentCase);
 
   // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
   // control's own fetch (onAttachedChange) so the dialog issues no second read.
@@ -610,7 +610,7 @@ export function HearingDetailsDialog({
                       // before. Only its emptiness-check changed: a postponed hearing
                       // with nothing outstanding now renders the block with just the
                       // toggle, instead of rendering nothing.
-                      const canToggleOpponentResponse = isHearingActor(user, detailHearing);
+                      const canToggleOpponentResponse = isHearingActor(user, detailHearing, detailParentCase);
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
                       const caseMemos = getMemosByCase(detailHearing.caseId);
                       const directMatches = caseMemos.filter((m) => m.hearingId === detailHearing.id);

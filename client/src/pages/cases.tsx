@@ -2508,7 +2508,7 @@ export default function CasesPage() {
           // enough).
           canRecordOpponentResponse:
             getHearingsByCase(selectedCase.id)
-              .some(h => h.opponentResponseRequired && isHearingActor(user, h)),
+              .some(h => h.opponentResponseRequired && isHearingActor(user, h, selectedCase)),
           onOpponentResponseReceived: () => {
             setOpponentResponseAnswer("");
             setOpponentResponseCase(selectedCase);

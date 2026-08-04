@@ -1335,7 +1335,7 @@ export function CaseDetailsDialog({
                                           empty upload box or a dead button. canEdit
                                           then hides upload/replace/delete inside. */}
                                       {!hearingProducesNoMinutes(hearing)
-                                        && (isHearingActor(user, hearing)
+                                        && (isHearingActor(user, hearing, selectedCase)
                                             || (canViewHearingMinutes(user) && hearingHasMinutes(hearing))) && (
                                         <Popover>
                                           <PopoverTrigger asChild>
@@ -1357,7 +1357,7 @@ export function CaseDetailsDialog({
                                               endpoint={`/api/hearings/${hearing.id}/minutes-attachment`}
                                               label="ملف ضبط الجلسة"
                                               emptyHint="لم يُرفق الضبط بعد"
-                                              canEdit={isHearingActor(user, hearing)}
+                                              canEdit={isHearingActor(user, hearing, selectedCase)}
                                               // THE SYNC GUARANTEE. Byte-identical to
                                               // the hearing dialog's own onChanged
                                               // (the ffadb50 fix): uploadAttachmentRaw
