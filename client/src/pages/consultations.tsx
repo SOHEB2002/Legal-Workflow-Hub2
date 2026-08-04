@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { PaginationControls } from "@/components/ui/pagination-controls";
@@ -1938,6 +1938,59 @@ export default function ConsultationsPage() {
 
   const filterLawyers = users.filter(u => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
 
+  // Lawyer options NARROWED BY THE SELECTED DEPARTMENT. Consultations was the only
+  // list page with both filters that still offered every lawyer in the firm:
+  // cases.tsx (departmentFilteredLawyers), hearings.tsx (lawyersForFilter) and
+  // memos-advanced-filters.tsx all already scope theirs. This follows them.
+  //
+  // 🔴 THE NULL-DEPARTMENT GUARD IS EXPLICIT — `!!u.departmentId &&` — per the
+  // documented rule. It cannot bite in this direction (the "all" branch returns
+  // early, so advFilters.departmentId is never ""), but writing the bare equality
+  // here would leave a trap for whoever later reuses this predicate somewhere the
+  // empty case IS reachable. The two precedents omit the guard; this one states it.
+  //
+  // isActive is applied ONLY in the narrowed branch, matching the brief: picking a
+  // department offers its ACTIVE lawyers, while "كل الأقسام" is unchanged and still
+  // lists everyone. ⚠ Consequence worth knowing: an INACTIVE lawyer of the selected
+  // department drops out of the dropdown, so their historical consultations cannot
+  // be filtered by name while that department is selected — clear it to "كل الأقسام"
+  // to reach them. cases.tsx does NOT apply isActive, so the two pages now differ
+  // slightly on that one point.
+  const departmentFilteredLawyers = useMemo(() => {
+    if (!advFilters.departmentId) return filterLawyers;
+    return filterLawyers.filter(
+      u => u.isActive && !!u.departmentId && String(u.departmentId) === advFilters.departmentId,
+    );
+  }, [filterLawyers, advFilters.departmentId]);
+
+  // STALE-SELECTION GUARD. Without it, changing the department to one the selected
+  // lawyer does not belong to leaves an unreachable combination: the list silently
+  // returns nothing and the dropdown still shows the lawyer's name, with no hint
+  // why. Resetting to "كل المحامين" is the same choice cases.tsx and
+  // memos-advanced-filters.tsx make, and it keeps the result set explainable.
+  //
+  // ⚠ GATED ON filterLawyers (users loaded), NOT on departmentFilteredLawyers —
+  // deliberately stronger than the cases.tsx precedent, which returns early when
+  // the NARROWED list is empty. That guard protects a restored value while `users`
+  // is still in flight, but it also means a department with genuinely NO lawyers
+  // never clears a stale selection. Keying on the unnarrowed list separates the two
+  // cases: still loading → leave alone; loaded but the department has nobody →
+  // clear, so the user sees "كل المحامين" over an empty department rather than a
+  // phantom filter.
+  //
+  // This also covers the PERSISTED case (c): departmentId and lawyers live in the
+  // SAME persisted advFilters object, so a saved pair can restore intact with the
+  // lawyer belonging to a different department. This effect runs on mount once
+  // users land and repairs it.
+  useEffect(() => {
+    if (filterLawyers.length === 0) return;
+    const allowed = new Set(departmentFilteredLawyers.map(u => u.id));
+    if (advFilters.lawyers.some(id => !allowed.has(id))) {
+      setAdvFilters({ ...advFilters, lawyers: advFilters.lawyers.filter(id => allowed.has(id)) });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [departmentFilteredLawyers, advFilters.lawyers]);
+
   const filteredConsultations = consultations.filter((consultation) => {
     const q = advFilters.search.trim().toLowerCase();
     if (q) {
@@ -2200,7 +2253,7 @@ export default function ConsultationsPage() {
               filters={advFilters}
               onChange={setAdvFilters}
               departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
-              lawyers={filterLawyers.map((l) => ({ id: l.id, name: l.name }))}
+              lawyers={departmentFilteredLawyers.map((l) => ({ id: l.id, name: l.name }))}
             />
           </div>
         </CardHeader>
@@ -2249,8 +2302,11 @@ export default function ConsultationsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  {/* "كل المحامين" is ALWAYS present, independent of the narrowed
+                      list — so clearing the lawyer filter stays possible even when
+                      the selected department has no lawyers at all. */}
                   <SelectItem value="all">كل المحامين</SelectItem>
-                  {filterLawyers.map((l) => (
+                  {departmentFilteredLawyers.map((l) => (
                     <SelectItem key={l.id} value={l.id}>
                       {l.name}
                     </SelectItem>
