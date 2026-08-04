@@ -163,14 +163,24 @@ export function canViewHearingMinutes(
 // EXPORTED so the hearing-details dialog and the case-details dialog share ONE
 // implementation. Two inline copies of the same four-line rule is exactly the
 // drift this codebase has been bitten by before.
+// 🔴 department_head IS INCLUDED as of 2026-08-05 (owner reversal of Phase 5
+// B/M4) — scoped to the PARENT CASE's department. Hearings carry no departmentId,
+// so the caller passes the parent case; where it cannot be resolved the grant
+// simply does not apply, which is the safe direction.
+// The !!user.departmentId guard is mandatory — without it a head with a null
+// department would match every case with a null department.
 export function isHearingActor(
-  user: { id: string; role: string } | null | undefined,
+  user: { id: string; role: string; departmentId?: string | null } | null | undefined,
   hearing: { attendingLawyerId?: string | null } | null | undefined,
+  parentCase?: { departmentId?: string | null } | null,
 ): boolean {
   if (!user || !hearing) return false;
-  return user.role === "branch_manager"
-    || user.role === "admin_support"
-    || (!!hearing.attendingLawyerId && hearing.attendingLawyerId === user.id);
+  if (user.role === "branch_manager" || user.role === "admin_support") return true;
+  if (!!hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
+  return user.role === "department_head"
+    && !!user.departmentId
+    && !!parentCase?.departmentId
+    && user.departmentId === parentCase.departmentId;
 }
 
 // Structural accessor for the ضبط presence flag — the hearing-side twin of

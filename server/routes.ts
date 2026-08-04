@@ -659,18 +659,41 @@ async function canReferenceRelatedEntity(
   }
 }
 
-function canActOnHearingIdentity(u: { id: string; role: string }, hearing: any): boolean {
-  // Phase 5 B/M4 — department_head removed so the server mirrors the FE
-  // hearing-action contract (hearings.tsx canActOnHearing = attending lawyer /
-  // branch_manager / admin_support). The UI never surfaces a hearing action to
-  // a dept_head, so the earlier global dept_head grant was UI-dead and only
-  // reachable via direct API. viewer is kept per the codebase's
-  // viewer-in-can*-helpers convention; it is inert here — the viewerWriteGuard
-  // 403s every viewer write before the handler, and result/report/close are
-  // the only (write) call sites. Effective write-actors: attending lawyer /
-  // branch_manager / admin_support.
+function canActOnHearingIdentity(
+  u: CaseActorIdentity,
+  hearing: any,
+  parentCase: { departmentId?: string | null } | null,
+): boolean {
+  // 🔴 department_head IS ADMITTED HERE — OWNER REVERSAL, 2026-08-05.
+  //
+  // Phase 5 B/M4 REMOVED department_head from this helper, reasoning that the FE
+  // never surfaced a hearing action to a dept_head so the grant was "UI-dead and
+  // only reachable via direct API". THE OWNER HAS REVERSED THAT DECISION: a
+  // department head is meant to have the FULL hearing action set on their own
+  // department's cases — recording results, the report, client contact,
+  // cancelling, flagging, the ضبط file, and the opponent-response flag. The
+  // frontend mirrors are widened to match, so the grant is no longer UI-dead.
+  // DO NOT RE-REMOVE IT to "restore the Phase 5 mirror" — that mirror is exactly
+  // what changed. See CLAUDE.md, "📎 ATTACHMENTS" / hearing permissions.
+  //
+  // viewer is kept per the codebase's viewer-in-can*-helpers convention; it is
+  // inert — viewerWriteGuard 403s every viewer write before any handler runs.
   if (["branch_manager", "admin_support", "viewer"].includes(u.role)) return true;
   if (hearing.attendingLawyerId && hearing.attendingLawyerId === u.id) return true;
+  // Hearings carry NO departmentId of their own, so the scope is resolved through
+  // the PARENT CASE — the getCaseById(hearing.caseId) precedent already used by
+  // canEditHearingRecord, the my-tasks scoping and the judgment promotion.
+  //
+  // 🔴 THE !!u.departmentId GUARD IS MANDATORY. Without it a dept_head whose own
+  // departmentId is null/"" would match every case whose departmentId is also
+  // empty — legacy rows, "أخرى" assignments, half-configured accounts. This is
+  // the single most repeated permission bug in this codebase.
+  if (
+    u.role === "department_head"
+    && !!u.departmentId
+    && !!parentCase?.departmentId
+    && u.departmentId === parentCase.departmentId
+  ) return true;
   return false;
 }
 // Delegation-aware wrapper — mirrors the canModifyCase idiom (identity fn +
@@ -682,10 +705,32 @@ function canActOnHearingIdentity(u: { id: string; role: string }, hearing: any):
 // NON-delegated allow/deny is unchanged. The distinct attending-lawyer semantics
 // are preserved per-identity (we do NOT fold into canModifyCase, which grants a
 // broader role set and would loosen the gate for non-delegated users too).
-function canActOnHearing(user: { id: string; role: string }, hearing: any, ctx?: ActingContext): boolean {
-  if (!ctx) return canActOnHearingIdentity(user, hearing);
-  return actingIdentitiesFor(ctx, hearing.caseId ?? null)
-    .some((i) => canActOnHearingIdentity({ id: i.userId, role: i.role }, hearing));
+// ⚠ ASYNC AS OF 2026-08-05 — every call site must `await`. It became async because
+// the department_head grant needs the PARENT CASE's departmentId and a hearing
+// carries none.
+//
+// THE PARENT CASE IS FETCHED LAZILY, and that is deliberate: the three existing
+// actor classes (branch_manager / admin_support / attending lawyer) are settled by
+// the in-memory fast path and NEVER trigger a read, so this costs an extra query
+// ONLY when a department_head is the one asking. Callers that already hold the
+// case can pass it as `parentCase` and skip the read entirely.
+async function canActOnHearing(
+  user: CaseActorIdentity,
+  hearing: any,
+  ctx?: ActingContext,
+  parentCase?: { departmentId?: string | null } | null,
+): Promise<boolean> {
+  const identities: CaseActorIdentity[] = ctx
+    ? actingIdentitiesFor(ctx, hearing.caseId ?? null)
+        .map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  // Fast path — no DB touch. Covers every pre-existing actor unchanged.
+  if (identities.some((u) => canActOnHearingIdentity(u, hearing, null))) return true;
+  // Only a department_head can still qualify, and only via the parent case.
+  if (!identities.some((u) => u.role === "department_head" && !!u.departmentId)) return false;
+  const resolved = parentCase ?? (hearing.caseId ? await storage.getCaseById(hearing.caseId) : null);
+  if (!resolved) return false;
+  return identities.some((u) => canActOnHearingIdentity(u, hearing, resolved));
 }
 
 // ==================== HEARING RECORD EDITING (owner-approved 2026-07-28) ====================
@@ -6502,7 +6547,18 @@ export async function registerRoutes(
       // every carrying row) — requiring authority over all of them would let one
       // unrelated hearing block a legitimate clear, and the badge itself is
       // `.some(...)` across the case.
-      if (!flagged.some((h) => canActOnHearing(reqUser, h, req.actingContext))) {
+      // A LOOP, not `.some()` — canActOnHearing is async as of 2026-08-05 and a
+      // sync `.some` would have tested truthy Promises and admitted everyone.
+      // `lawCase` is already loaded here, so it is passed as parentCase and the
+      // department_head branch costs NO extra query on this route.
+      let mayClearOpponentResponse = false;
+      for (const h of flagged) {
+        if (await canActOnHearing(reqUser, h, req.actingContext, lawCase)) {
+          mayClearOpponentResponse = true;
+          break;
+        }
+      }
+      if (!mayClearOpponentResponse) {
         return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
       }
 
@@ -9793,7 +9849,7 @@ export async function registerRoutes(
         if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
         const hearing = await storage.getHearingById(String(req.params.id));
         if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
-        if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+        if (!await canActOnHearing(reqUser, hearing, req.actingContext)) {
           return res.status(403).json({ error: "ليس لديك صلاحية لإرفاق ضبط الجلسة" });
         }
         if (!file) {
@@ -9935,7 +9991,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const hearing = await storage.getHearingById(String(req.params.id));
       if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
-      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+      if (!await canActOnHearing(reqUser, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لحذف ضبط الجلسة" });
       }
       const att = await storage.getHearingAttachment(hearing.id);
@@ -11323,7 +11379,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+      if (!await canActOnHearing(reqUser, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية إلغاء هذه الجلسة" });
       }
       if (hearing.status === HearingStatus.CANCELLED) {
@@ -11496,7 +11552,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+      if (!await canActOnHearing(reqUser, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
 
@@ -11559,7 +11615,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+      if (!await canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       // TIMEZONE FIX — was `new Date(hearingDate)` (UTC) + setHours (server-local),
@@ -12460,7 +12516,7 @@ export async function registerRoutes(
         if (!gate.allowed) {
           return res.status(gate.status).json({ error: gate.error });
         }
-      } else if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+      } else if (!await canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
 
@@ -12647,7 +12703,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+      if (!await canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {
@@ -12691,7 +12747,7 @@ export async function registerRoutes(
       for (const hid of hearingIds) {
         const hearing = await storage.getHearingById(hid);
         if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
-        if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+        if (!await canActOnHearing(req.user!, hearing, req.actingContext)) {
           return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
         }
         loadedHearings.push(hearing);
@@ -12777,7 +12833,7 @@ export async function registerRoutes(
       if (!hearing) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
-      if (!canActOnHearing(req.user!, hearing, req.actingContext)) {
+      if (!await canActOnHearing(req.user!, hearing, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
       }
       if (!hearing.reportCompleted) {

@@ -53,6 +53,7 @@ import {
 } from "lucide-react";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
 import { isHearingActor, canViewHearingMinutes, hearingHasMinutes } from "@/lib/attachment-indicators";
+import { OpponentResponseDialog } from "@/components/opponent-response-dialog";
 
 // SHARED hearing-details dialog. The body was moved VERBATIM out of
 // hearings.tsx (its detail Dialog + the WorkflowStep helper it is the only
@@ -132,24 +133,24 @@ export function HearingDetailsDialog({
     return isFirmToday(detailHearing.hearingDate);
   })();
 
-  // CLIENT MIRROR of canActOnHearing (server/routes.ts) — attending lawyer /
-  // branch_manager / admin_support. Gates attaching, replacing and deleting the
-  // ضبط الجلسة file, the same set the server enforces on those routes.
+  // The hearing's PARENT CASE — needed because hearings carry no departmentId and
+  // the department_head grant is scoped through it. Resolved once and shared by
+  // every gate below rather than looked up per call.
+  const detailParentCase = detailHearing?.caseId ? getCaseById(detailHearing.caseId) : null;
+
+  // CLIENT MIRROR of canActOnHearing (server/routes.ts) via the SHARED
+  // isHearingActor — attending lawyer / branch_manager / admin_support / and, as
+  // of 2026-08-05, the own-department department_head.
   //
-  // Deliberately NOT department-scoped: hearings carry no departmentId, so a
-  // department_head would have to be resolved through the parent case — the
-  // known-large open item that kept hearings out of the tiered permissions
-  // widening. Out of scope; this matches every other hearing action.
-  // Now the SHARED isHearingActor (lib/attachment-indicators) rather than
-  // an inline copy — the case-details dialog needs the identical rule for its own
-  // ضبط control, and two copies of it would drift.
+  // ⚠ THE OLD NOTE HERE SAID "deliberately NOT department-scoped … out of scope".
+  // THAT IS SUPERSEDED: the owner reversed Phase 5 B/M4 and department heads now
+  // hold the FULL hearing action set on their own department's cases, so the
+  // parent case is threaded in and the scope is real.
   //
-  // 🔴 WRITE ONLY. Reading the ضبط widened to the parent case's viewers
-  // (owner decision 2026-08-04) while attach / replace / delete stayed at
-  // canActOnHearing, so this predicate no longer answers "may this user see the
-  // file" — canViewHearingMinutes does. Passing this one to canEdit is what keeps
-  // the two halves apart.
-  const canAttachHearingMinutes = isHearingActor(user, detailHearing);
+  // 🔴 STILL WRITE-ONLY. Reading the ضبط is wider again (canViewHearingMinutes —
+  // any authenticated user), so this predicate answers "may this user CHANGE the
+  // file", not "may they see it". Passing it to canEdit keeps the halves apart.
+  const canAttachHearingMinutes = isHearingActor(user, detailHearing, detailParentCase);
 
   // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
   // control's own fetch (onAttachedChange) so the dialog issues no second read.
@@ -196,6 +197,13 @@ export function HearingDetailsDialog({
   // than an injected action, so it works in BOTH hosts — the hearings page and the
   // case-details dialog, which passes no actions at all.
   const [savingOpponentResponse, setSavingOpponentResponse] = useState(false);
+  // Turning the toggle OFF opens the shared "تسجيل استلام رد الخصم" dialog instead
+  // of clearing silently; this holds the case it was opened for (null = closed).
+  const [opponentResponseCaseId, setOpponentResponseCaseId] = useState<string | null>(null);
+
+  // The SET half. Still takes an explicit boolean (the route is symmetric and a
+  // stale view must never invert state it did not see), but the toggle now only
+  // ever reaches it with `true` — clearing goes through the dialog below.
   const saveOpponentResponseRequired = async (required: boolean) => {
     if (!detailHearing) return;
     setSavingOpponentResponse(true);
@@ -215,6 +223,29 @@ export function HearingDetailsDialog({
     } finally {
       setSavingOpponentResponse(false);
     }
+  };
+
+  // 🔴 OFF ASKS, ON DOES NOT. Clearing this indicator IS the case-level
+  // "تم استلام رد الخصم" action, which has always asked "هل نحتاج للرد على مذكرة
+  // الخصم؟" and creates the auto مذكرة جوابية on نعم. Clearing it here silently
+  // would have been a second, question-free way out of the same state — the same
+  // decision answered on one path and skipped on the other.
+  //   • OFF  → open the shared OpponentResponseDialog, which posts to the EXISTING
+  //            POST /api/cases/:id/opponent-response. NOTHING is written until the
+  //            user answers, so cancelling leaves the flag exactly as it was on
+  //            every hearing.
+  //   • ON   → unchanged: post required:true to the hearing route, no prompt.
+  // ⚠ The case endpoint clears the flag on EVERY flagged hearing of the case, not
+  // only this one. Deliberate — the indicator is `.some(...)` across the case and
+  // the memo it may create is a CASE memo — and the dialog says so explicitly
+  // whenever more than one hearing carries the flag.
+  const onOpponentResponseToggle = (required: boolean) => {
+    if (!detailHearing) return;
+    if (!required) {
+      setOpponentResponseCaseId(detailHearing.caseId);
+      return;
+    }
+    void saveOpponentResponseRequired(true);
   };
 
   // (minutesSatisfied lived here and went with the close step — it had no other
@@ -258,6 +289,7 @@ export function HearingDetailsDialog({
   };
 
   return (
+    <>
       <Dialog open={!!detailHearing} onOpenChange={(open) => !open && onOpenChange(false)}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
@@ -610,7 +642,7 @@ export function HearingDetailsDialog({
                       // before. Only its emptiness-check changed: a postponed hearing
                       // with nothing outstanding now renders the block with just the
                       // toggle, instead of rendering nothing.
-                      const canToggleOpponentResponse = isHearingActor(user, detailHearing);
+                      const canToggleOpponentResponse = isHearingActor(user, detailHearing, detailParentCase);
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
                       const caseMemos = getMemosByCase(detailHearing.caseId);
                       const directMatches = caseMemos.filter((m) => m.hearingId === detailHearing.id);
@@ -662,7 +694,7 @@ export function HearingDetailsDialog({
                                 checked={opponentResponseRequired}
                                 disabled={savingOpponentResponse}
                                 data-testid="switch-opponent-response-required"
-                                onCheckedChange={(checked) => saveOpponentResponseRequired(!!checked)}
+                                onCheckedChange={(checked) => onOpponentResponseToggle(!!checked)}
                               />
                             ) : (
                               <Badge variant="outline" className={opponentResponseRequired
@@ -855,6 +887,15 @@ export function HearingDetailsDialog({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Rendered as a SIBLING of the hearing dialog, not nested inside it — the
+          same shared dialog the case-level "تم استلام رد الخصم" action opens, so
+          both entry points ask one question and hit one endpoint. */}
+      <OpponentResponseDialog
+        caseId={opponentResponseCaseId}
+        onOpenChange={(open) => { if (!open) setOpponentResponseCaseId(null); }}
+      />
+    </>
   );
 }
 

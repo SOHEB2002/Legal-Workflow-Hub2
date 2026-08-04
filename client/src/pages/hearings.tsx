@@ -75,7 +75,7 @@ import {
   Flag,
   Paperclip,
 } from "lucide-react";
-import { isHearingMissingMinutes } from "@/lib/attachment-indicators";
+import { isHearingMissingMinutes, isHearingActor } from "@/lib/attachment-indicators";
 import { useHearings } from "@/lib/hearings-context";
 import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
@@ -1089,8 +1089,17 @@ export default function HearingsPage() {
                 <tbody className="[&_tr:last-child]:border-0">
                   {pagedHearings.map((hearing, idx) => {
                       const caseInfo = getCaseInfo(hearing.caseId);
-                      const isAttendingLawyer = user?.id === hearing.attendingLawyerId;
-                      const canActOnHearing = isAttendingLawyer || user?.role === "branch_manager" || user?.role === "admin_support";
+                      // 🔴 department_head ADDED 2026-08-05 (owner reversal of Phase
+                      // 5 B/M4), scoped to the PARENT CASE's department — hearings
+                      // carry no departmentId of their own. Uses the SHARED
+                      // isHearingActor so this page, the hearing dialog and the case
+                      // dialog cannot drift from each other or from the server.
+                      // The !!departmentId guard lives inside that helper.
+                      const canActOnHearing = isHearingActor(
+                        user,
+                        hearing,
+                        hearing.caseId ? getCaseById(hearing.caseId) : null,
+                      );
                       // FREE WIN — PATCH /api/hearings/:id is gated by canModifyCase
                       // on the PARENT CASE, which has always admitted the own-dept
                       // department_head and the case's assigned lawyers; the UI hid
