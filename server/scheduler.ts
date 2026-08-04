@@ -398,7 +398,14 @@ async function checkLegalDeadlines() {
 
       const daysLeft = (deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
       const caseInfo = deadline.caseId ? caseMap.get(deadline.caseId) : null;
-      const recipientId = caseInfo?.responsibleLawyerId;
+      // 🔴 THE SILENT-DEADLINE BUG. This read responsibleLawyerId ALONE and
+      // `continue`d when it was empty — so a case assigned through the reassign
+      // dialog or مهامي (both write primaryLawyerId only) received NO 7-day,
+      // 3-day or overdue legal-deadline warning at all, silently. Primary first,
+      // responsible as fallback.
+      // Now byte-equivalent to the shared helper, so use it rather than keeping a
+      // second copy of the chain.
+      const recipientId = caseNotificationRecipientId(caseInfo);
       if (!recipientId) continue;
 
       if (daysLeft > 6 && daysLeft <= 7) {
@@ -927,7 +934,10 @@ async function checkStruckOffExpiry() {
       try {
         const allUsers = await storage.getAllUsers();
         const notifyIds: string[] = [];
-        if (caseItem.primaryLawyerId) notifyIds.push(caseItem.primaryLawyerId);
+        // primary first, responsible as fallback — a responsible-only case used to
+        // notify the department head alone, never the lawyer actually on it.
+        const struckOffLawyerId = caseItem.primaryLawyerId || caseItem.responsibleLawyerId;
+        if (struckOffLawyerId) notifyIds.push(struckOffLawyerId);
         const deptHead = allUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
         if (deptHead) notifyIds.push(deptHead.id);
 

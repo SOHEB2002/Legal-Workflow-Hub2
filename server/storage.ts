@@ -3567,6 +3567,14 @@ export class DatabaseStorage implements IStorage {
       teamScoped && ownerId !== uid ? "team" : "self";
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
     const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
+    // "the case HAS a lawyer" and "the case has NONE" — EXACT logical inverses,
+    // defined adjacent so they can never drift apart. Both used to test
+    // primaryLawyerId ALONE, which put a responsible-only case in the WRONG bucket
+    // on BOTH counts at once: excluded from every supervisor work list AND
+    // reported to its department head as unassigned. Same reusable-`sql`-fragment
+    // idiom as assignedToMe above.
+    const hasAnyLawyer = sql`((${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> '') OR (${lawCases.responsibleLawyerId} IS NOT NULL AND ${lawCases.responsibleLawyerId} <> ''))`;
+    const hasNoLawyer = sql`((${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '') AND (${lawCases.responsibleLawyerId} IS NULL OR ${lawCases.responsibleLawyerId} = ''))`;
 
     // Admin_support per-type routing: resolve the owner of the assignable
     // kinds ONCE (identity-independent). Each goes to its mapped
@@ -3621,10 +3629,10 @@ export class DatabaseStorage implements IStorage {
     {
       const where = firmWideScoped
         ? and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
-            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+            hasAnyLawyer)
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
-            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+            hasAnyLawyer)
         : and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
       const rows = await db.select({
@@ -3674,10 +3682,10 @@ export class DatabaseStorage implements IStorage {
       const SETTLEMENT_DIRECTION_STAGE = "توجيه_العميل_بالتسوية";
       const where = firmWideScoped
         ? and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
-            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+            hasAnyLawyer)
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
-            sql`${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> ''`)
+            hasAnyLawyer)
         : and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
       const rows = await db.select({
@@ -3893,12 +3901,12 @@ export class DatabaseStorage implements IStorage {
       for (const h of heads) if (h.departmentId) deptHeadByDept.set(h.departmentId, h.id);
       const unassignedWhere = firmWideScoped
         ? and(
-            sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
+            hasNoLawyer,
             sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
           )
         : and(
             eq(lawCases.departmentId, userDept!),
-            sql`(${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '')`,
+            hasNoLawyer,
             sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
           );
       const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber, departmentId: lawCases.departmentId })

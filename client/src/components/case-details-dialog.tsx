@@ -84,6 +84,7 @@ import {
   weAreTheAppellant,
   ClosureReasonLabels,
   hearingProducesNoMinutes,
+  caseNotificationRecipientId,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue } from "@shared/schema";
 
@@ -658,7 +659,7 @@ export function CaseDetailsDialog({
                     </div>
                     <div>
                       <Label className="text-muted-foreground">المحامي المسؤول</Label>
-                      <p className="font-medium">{getLawyerName(selectedCase.responsibleLawyerId || selectedCase.primaryLawyerId)}</p>
+                      <p className="font-medium">{getLawyerName(caseNotificationRecipientId(selectedCase))}</p>
                       {/* "المترافع" — shown ONLY when the case designates one, and
                           directly under the responsible lawyer, so it is obvious
                           at a glance that someone ELSE appears in court. Absent

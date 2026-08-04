@@ -48,7 +48,19 @@ const migrateCase = (c: LawCase): LawCase => {
   if (!c.stageHistory) {
     c.stageHistory = [{ stage: c.currentStage, timestamp: c.createdAt, userId: c.createdBy, userName: "النظام", notes: "تهجير البيانات" }];
   }
-  if (c.responsibleLawyerId === undefined) {
+  // Keep the in-memory responsibleLawyerId populated from primaryLawyerId, the
+  // field the UI actually sets. The guard was `=== undefined`, which the server
+  // never produces (mapDbCase always returns the column), so it was effectively
+  // dead; a falsy check also covers the NULL and "" rows that primary-only
+  // assignment produces today and that batch 3 will produce for every case.
+  //
+  // ⚠ DELIBERATELY ONE-DIRECTIONAL — primary → responsible, never the reverse.
+  // Filling primaryLawyerId from responsibleLawyerId here would change what the
+  // edit dialog pre-selects (cases.tsx reads caseItem.primaryLawyerId into the
+  // form), so the next save would persist a value the user never chose. That is
+  // a write consequence, and this batch is reads-only. The primary-only READS
+  // are fixed directly instead.
+  if (!c.responsibleLawyerId && c.primaryLawyerId) {
     c.responsibleLawyerId = c.primaryLawyerId;
   }
   if (!c.circuitNumber) {
@@ -322,7 +334,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       reviewDecision: decision,
       reviewNotes: notes,
     });
-    notifyCaseReturnedForRevision(id, lawCase?.caseNumber || "", lawCase?.responsibleLawyerId || lawCase?.primaryLawyerId || null, notes).catch(() => {});
+    // SECOND caller of notifyCaseReturnedForRevision — it had its own inline copy
+    // of the chain, in the OLD responsible-first order, so the two callers could
+    // notify different people about the same event. Both now use the helper.
+    notifyCaseReturnedForRevision(id, lawCase?.caseNumber || "", caseNotificationRecipientId(lawCase) || null, notes).catch(() => {});
   };
 
   const markReadyToSubmit = (id: string) => {
@@ -346,7 +361,12 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     cases.filter((c) => c.departmentId === departmentId);
 
   const getCasesByLawyer = (lawyerId: string) =>
-    cases.filter((c) => c.assignedLawyers.includes(lawyerId) || c.primaryLawyerId === lawyerId);
+    cases.filter((c) =>
+      c.assignedLawyers.includes(lawyerId)
+      || c.primaryLawyerId === lawyerId
+      // responsibleLawyerId was missing entirely, so a responsible-only case did
+      // not count as one of that lawyer's cases.
+      || c.responsibleLawyerId === lawyerId);
 
   const getActiveCases = () =>
     cases.filter((c) => c.status !== CaseStatus.CLOSED);
