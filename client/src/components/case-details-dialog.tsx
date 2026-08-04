@@ -69,7 +69,7 @@ import { formatTimeAmPm } from "@/lib/date-utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { canActOnHearingMinutes } from "@/lib/attachment-indicators";
+import { canActOnHearingMinutes, caseReachedJudgment } from "@/lib/attachment-indicators";
 import { extractApiError } from "@/lib/utils";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
@@ -677,6 +677,34 @@ export function CaseDetailsDialog({
                       <Label className="text-muted-foreground">رقم القضية</Label>
                       <p><LtrInline>{selectedCase.caseNumber || "-"}</LtrInline></p>
                     </div>
+                    {/* صك الحكم — THE READ SURFACE. Until now the deed was
+                        reachable ONLY through the "تسجيل استلام الصك" / late-attach
+                        dialogs, both gated on the WRITE roles, so a user who could
+                        read the case but not attach could not see it at all — even
+                        though the server's DOWNLOAD route is gated on canModifyCase,
+                        the view-level rule. This closes that gap on the read side,
+                        matching the download gate rather than the attach gate.
+                        canEdit={false}: SingleAttachmentControl renders preview and
+                        download whenever a file exists and hides upload/replace/
+                        delete without it, which is exactly the read-only split.
+                        Writing still happens only through the existing dialogs, so
+                        there is no second write path.
+                        Placed in the المعلومات grid beside المحكمة / رقم القضية —
+                        the case's existing court-information section — rather than
+                        in a new panel, and shown only for a case that actually
+                        reached a judgment stage so it never appears on files that
+                        can have no صك. */}
+                    {caseReachedJudgment(selectedCase) && (
+                      <div className="sm:col-span-2">
+                        <Label className="text-muted-foreground">صك الحكم</Label>
+                        <SingleAttachmentControl
+                          endpoint={`/api/cases/${selectedCase.id}/deed-attachment`}
+                          label="ملف صك الحكم"
+                          emptyHint="لم يُرفق الصك بعد"
+                          canEdit={false}
+                        />
+                      </div>
+                    )}
                     <div>
                       <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
                       <p className="font-medium">
