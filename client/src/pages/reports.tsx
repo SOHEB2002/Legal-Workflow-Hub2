@@ -935,7 +935,6 @@ function HearingsReportSection() {
         "التاريخ": formatDateShortArabic(h.hearingDate),
         "الوقت": h.hearingTime || "-",
         "المحكمة": h.courtName || "-",
-        "القاعة": h.courtRoom || "-",
         "الحالة": h.status,
       })),
       "تقرير_الجلسات_القادمة"
@@ -963,7 +962,6 @@ function HearingsReportSection() {
                   <TableHead className="text-right">التاريخ</TableHead>
                   <TableHead className="text-right">الوقت</TableHead>
                   <TableHead className="text-right">المحكمة</TableHead>
-                  <TableHead className="text-right">القاعة</TableHead>
                   <TableHead className="text-right">الحالة</TableHead>
                 </TableRow>
               </TableHeader>
@@ -976,7 +974,6 @@ function HearingsReportSection() {
                     </TableCell>
                     <TableCell>{hearing.hearingTime || "-"}</TableCell>
                     <TableCell>{hearing.courtName || "-"}</TableCell>
-                    <TableCell>{hearing.courtRoom || "-"}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{hearing.status}</Badge>
                     </TableCell>

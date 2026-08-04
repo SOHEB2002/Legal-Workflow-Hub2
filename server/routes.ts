@@ -15418,9 +15418,9 @@ export async function registerRoutes(
     }
     const hearingsList = await storage.getAllHearings();
     const exportData = hearingsList.map(h => ({
-      hearingDate: h.hearingDate, hearingTime: h.hearingTime, courtName: h.courtName, courtRoom: h.courtRoom, status: h.status, result: h.result || "", resultDetails: h.resultDetails || "",
+      hearingDate: h.hearingDate, hearingTime: h.hearingTime, courtName: h.courtName, status: h.status, result: h.result || "", resultDetails: h.resultDetails || "",
     }));
-    const csv = generateCSV(exportData, ["التاريخ", "الوقت", "المحكمة", "القاعة", "الحالة", "النتيجة", "تفاصيل النتيجة"], ["hearingDate", "hearingTime", "courtName", "courtRoom", "status", "result", "resultDetails"]);
+    const csv = generateCSV(exportData, ["التاريخ", "الوقت", "المحكمة", "الحالة", "النتيجة", "تفاصيل النتيجة"], ["hearingDate", "hearingTime", "courtName", "status", "result", "resultDetails"]);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename=hearings-${Date.now()}.csv`);
     res.send("\uFEFF" + csv);

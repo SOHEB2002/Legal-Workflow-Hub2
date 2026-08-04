@@ -29,11 +29,14 @@ import {
   FieldTaskStatus,
   HearingStatusLabels,
   HearingStatus,
+  HearingType,
+  HearingTypeLabels,
+  hearingProducesNoMinutes,
   HearingResultLabels,
   ObjectionStatusLabels,
   isFirmToday,
 } from "@shared/schema";
-import type { Hearing, ObjectionStatusValue, HearingStatusValue } from "@shared/schema";
+import type { Hearing, ObjectionStatusValue, HearingStatusValue, HearingTypeValue } from "@shared/schema";
 import {
   Scale,
   FileText,
@@ -154,6 +157,20 @@ export function HearingDetailsDialog({
   // it withholds the button until the real answer arrives.
   useEffect(() => { setMinutesAttached(false); }, [detailHearing?.id]);
 
+  // Does this hearing owe a ضبط at all? جلسات الصلح والتسوية issue none, so the
+  // whole minutes step — and the attach control beneath it — is hidden for them
+  // rather than shown as a permanently-unmet requirement.
+  //
+  // THE SAME SHARED PREDICATE the badges, the hearings filter, the my-tasks
+  // emission and the server close gate use (shared/schema.ts). This is the SIXTH
+  // consumer and deliberately NOT a sixth implementation — the rule has exactly
+  // one definition.
+  const minutesRequired = !!detailHearing && !hearingProducesNoMinutes(detailHearing);
+  // "Minutes are not standing in the way of closing" — either they were attached,
+  // or this hearing never owed any. See the close step for why the distinction is
+  // load-bearing rather than cosmetic.
+  const minutesSatisfied = !minutesRequired || minutesAttached;
+
   // PHASE 2 — inline correction of the two no-cascade result fields. Self-contained
   // (own state + apiRequest) rather than an injected action, so it works in BOTH
   // hosts: the hearings page and the case-details dialog, which passes no actions.
@@ -272,9 +289,28 @@ export function HearingDetailsDialog({
                     <p className="text-xs text-muted-foreground">المحكمة</p>
                     <p className="font-medium"><BidiText>{detailHearing.courtName}</BidiText></p>
                   </div>
+                  {/* نوع الجلسة — hearing_type is AUTHORITATIVE and drives real
+                      behaviour (the ضبط requirement, and the auto stage
+                      transition on creation), yet it had no display anywhere.
+                      That invisibility is how 14 mistyped hearings went unnoticed
+                      in production, so it renders as a BADGE — the same shape as
+                      "الحالة" two cells below — rather than as plain text, and a
+                      non-court type is tone-marked so it cannot be skimmed past. */}
                   <div>
-                    <p className="text-xs text-muted-foreground">الدائرة</p>
-                    <p className="font-medium"><LtrInline>{detailHearing.courtRoom || "-"}</LtrInline></p>
+                    <p className="text-xs text-muted-foreground">نوع الجلسة</p>
+                    <Badge
+                      variant="outline"
+                      className={
+                        detailHearing.hearingType === HearingType.COURT
+                          ? "text-xs"
+                          : "text-xs border-teal-500 text-teal-600 dark:text-teal-400"
+                      }
+                      data-testid={`badge-hearing-type-${detailHearing.id}`}
+                    >
+                      {HearingTypeLabels[detailHearing.hearingType as HearingTypeValue]
+                        || detailHearing.hearingType
+                        || HearingTypeLabels[HearingType.COURT]}
+                    </Badge>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">القضية</p>
@@ -677,13 +713,15 @@ export function HearingDetailsDialog({
                       STEP — minutes are now the third condition for closing a
                       hearing, beside the report and the client contact. The
                       earlier note saying they never block a close is superseded. */}
+                  {minutesRequired && (
                   <WorkflowStep
                     done={minutesAttached}
                     label="إرفاق ضبط الجلسة"
                     icon={<Paperclip className="w-4 h-4" />}
                     disabled={!detailHearing.result}
                   />
-                  {detailHearing.result && (
+                  )}
+                  {minutesRequired && detailHearing.result && (
                     <SingleAttachmentControl
                       endpoint={`/api/hearings/${detailHearing.id}/minutes-attachment`}
                       label="ملف ضبط الجلسة"
@@ -717,8 +755,17 @@ export function HearingDetailsDialog({
                     // the attach control's own fetch above, reported through
                     // onAttachedChange — the dialog issues no second read for it,
                     // and it flips the instant a file is uploaded or deleted.
-                    disabled={!detailHearing.reportCompleted || !detailHearing.contactCompleted || !minutesAttached}
-                    actionLabel={detailHearing.reportCompleted && detailHearing.contactCompleted && minutesAttached && detailHearing.status !== HearingStatus.COMPLETED ? "إغلاق" : undefined}
+                    // 🔴 minutesSatisfied, NOT minutesAttached — this also FIXES A
+                    // BUG shipped with the settlement exemption. For a تراضي /
+                    // تسوية_ودية hearing the attach control never renders, so
+                    // onAttachedChange never fires and minutesAttached stays false
+                    // FOREVER. The bare term therefore withheld "إغلاق" from every
+                    // settlement hearing permanently — while the SERVER had already
+                    // been changed to allow that close. Visibility must equal
+                    // authorization in both directions, so the client uses the same
+                    // shared predicate the server does.
+                    disabled={!detailHearing.reportCompleted || !detailHearing.contactCompleted || !minutesSatisfied}
+                    actionLabel={detailHearing.reportCompleted && detailHearing.contactCompleted && minutesSatisfied && detailHearing.status !== HearingStatus.COMPLETED ? "إغلاق" : undefined}
                     onAction={actions ? () => actions.onCloseHearing(detailHearing) : undefined}
                     actionDisabled={submitting}
                   />

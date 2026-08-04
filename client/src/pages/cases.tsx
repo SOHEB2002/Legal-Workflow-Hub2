@@ -677,8 +677,6 @@ export default function CasesPage() {
     priority: "متوسط" as PriorityType,
     courtName: "",
     courtCaseNumber: "",
-    judgeName: "",
-    circuitNumber: "",
     opponentName: "",
     opponentLawyer: "",
     opponentPhone: "",
@@ -729,8 +727,6 @@ export default function CasesPage() {
       priority: (caseItem.priority || "متوسط") as PriorityType,
       courtName: caseItem.courtName || "",
       courtCaseNumber: caseItem.courtCaseNumber || "",
-      judgeName: caseItem.judgeName || "",
-      circuitNumber: caseItem.circuitNumber || "",
       opponentName: caseItem.opponentName || "",
       opponentLawyer: caseItem.opponentLawyer || "",
       opponentPhone: caseItem.opponentPhone || "",
@@ -772,8 +768,6 @@ export default function CasesPage() {
         priority: editFormData.priority,
         courtName: editFormData.courtName,
         courtCaseNumber: editFormData.courtCaseNumber,
-        judgeName: editFormData.judgeName,
-        circuitNumber: editFormData.circuitNumber,
         opponentName: editFormData.opponentName,
         opponentLawyer: editFormData.opponentLawyer,
         opponentPhone: editFormData.opponentPhone,
@@ -3621,24 +3615,6 @@ export default function CasesPage() {
                   onChange={(e) => setEditFormData({ ...editFormData, courtName: e.target.value })}
                 />
               </div>
-              <div>
-                <Label>الدائرة</Label>
-                <SmartInput
-                  inputType="code"
-                  data-testid="edit-circuit-number"
-                  value={editFormData.circuitNumber}
-                  onChange={(e) => setEditFormData({ ...editFormData, circuitNumber: e.target.value })}
-                />
-              </div>
-            </div>
-            <div>
-              <Label>القاضي</Label>
-              <SmartInput
-                inputType="text"
-                data-testid="edit-judge-name"
-                value={editFormData.judgeName}
-                onChange={(e) => setEditFormData({ ...editFormData, judgeName: e.target.value })}
-              />
             </div>
 
             {/* === Opponent === */}

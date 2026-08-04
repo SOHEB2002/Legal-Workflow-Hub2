@@ -673,14 +673,6 @@ export function CaseDetailsDialog({
                       <p><LtrInline>{selectedCase.caseNumber || "-"}</LtrInline></p>
                     </div>
                     <div>
-                      <Label className="text-muted-foreground">الدائرة</Label>
-                      <p><LtrInline>{selectedCase.circuitNumber || "-"}</LtrInline></p>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground">القاضي</Label>
-                      <p>{selectedCase.judgeName || "-"}</p>
-                    </div>
-                    <div>
                       <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
                       <p className="font-medium">
                         {(() => {

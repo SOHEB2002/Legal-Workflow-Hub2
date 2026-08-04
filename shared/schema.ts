@@ -2630,6 +2630,16 @@ export const HearingType = {
 
 export type HearingTypeValue = typeof HearingType[keyof typeof HearingType];
 
+// Display labels, mirroring HearingStatusLabels / HearingResultLabels. Two of the
+// three values are already presentable, but تسوية_ودية carries the enum's
+// underscore and must never reach a user that way — which is the whole reason a
+// map exists rather than printing the raw value.
+export const HearingTypeLabels: Record<HearingTypeValue, string> = {
+  "محكمة": "محكمة",
+  "تراضي": "تراضي",
+  "تسوية_ودية": "تسوية ودية",
+};
+
 // A hearing that produces NO court ضبط, so the minutes requirement must not
 // apply to it (owner decision 2026-08-04). جلسات الصلح والتسوية are conducted on
 // the settlement platforms, not by a court, and issue no minutes document.
