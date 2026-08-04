@@ -147,8 +147,13 @@ async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotif
   // alerts to the wrong lawyer as soon as a case designated a المترافع. The
   // hearing's own attendingLawyerId already carries the answer (it is set at
   // creation from litigatorId → primary → responsible), so read it first and keep
-  // the old value as the fallback for legacy rows with no attending lawyer.
-  const hearingOwnerId = hearing.attendingLawyerId || caseInfo?.responsibleLawyerId;
+  // the case lawyer as the fallback for legacy rows with no attending lawyer.
+  //
+  // ⚠ THE ATTENDANCE RULE IS UNCHANGED — attendingLawyerId still wins outright.
+  // Only the FALLBACK half is widened: it read responsibleLawyerId ALONE, a field
+  // with no UI input that is no longer written at all, so a legacy hearing with no
+  // attending lawyer on a primary-only case resolved to nobody.
+  const hearingOwnerId = hearing.attendingLawyerId || caseNotificationRecipientId(caseInfo);
   if (hearingOwnerId) {
     recipientIds.push(hearingOwnerId);
 
@@ -264,8 +269,13 @@ async function checkUpcomingHearingReminders() {
         // Same correction as sendUnupdatedHearingAlert: these messages say
         // "لديك جلسة" — they must reach whoever actually attends. attendingLawyerId
         // already resolves المترافع → primary → responsible at hearing creation;
-        // the case's responsible lawyer stays the fallback for legacy rows.
-        const recipientId = hearing.attendingLawyerId || caseInfo?.responsibleLawyerId;
+        // the case's assigned lawyer stays the fallback for legacy rows.
+        //
+        // ⚠ ATTENDANCE RULE UNCHANGED — attendingLawyerId still wins. Only the
+        // FALLBACK is widened. It read responsibleLawyerId alone and then
+        // `continue`d, so a legacy hearing with no attending lawyer on a
+        // primary-only case emitted NO 48h and NO 24h reminder, silently.
+        const recipientId = hearing.attendingLawyerId || caseNotificationRecipientId(caseInfo);
         if (!recipientId) continue;
         const caseLabel = caseInfo ? caseInfo.caseNumber : "";
 

@@ -1371,7 +1371,12 @@ export class DatabaseStorage implements IStorage {
       departmentId: data.departmentId || "",
       assignedLawyers: [],
       primaryLawyerId: data.primaryLawyerId || null,
-      responsibleLawyerId: data.responsibleLawyerId || null,
+      // 🔴 HARD NULL, not a pass-through. primaryLawyerId is the single canonical
+      // field; no create path may seed the legacy column with a lawyer, even from
+      // a hand-written API body. Kept EXPLICIT rather than omitting the key: the
+      // column has no .default() today so omitting it would also yield NULL, but
+      // an explicit null stays correct if a default is ever added.
+      responsibleLawyerId: null,
       courtName: data.courtName || "",
       courtCaseNumber: data.courtCaseNumber || "",
       judgeName: data.judgeName || "",
@@ -5371,7 +5376,10 @@ export class DatabaseStorage implements IStorage {
         departmentId: caseFields.departmentId || existingCon.departmentId,
         assignedLawyers: [],
         primaryLawyerId: caseFields.primaryLawyerId || null,
-        responsibleLawyerId: caseFields.responsibleLawyerId || null,
+        // Same hard null as createCase — the consultation→case conversion must not
+        // seed the legacy column either. (The convert dialog sends only
+        // targetCaseStage + caseDepartmentId, so this was already null in practice.)
+        responsibleLawyerId: null,
         courtName: caseFields.courtName || "",
         courtCaseNumber: caseFields.courtCaseNumber || "",
         judgeName: caseFields.judgeName || "",

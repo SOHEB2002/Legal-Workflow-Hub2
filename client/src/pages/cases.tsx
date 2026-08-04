@@ -791,8 +791,10 @@ export default function CasesPage() {
         nextHearingTime: editFormData.nextHearingTime || null,
         internalReviewerId: editFormData.internalReviewerId || null,
         litigatorId: editFormData.litigatorId || null,
+        // responsibleLawyerId dropped — it was only ever a copy of THIS same
+        // input (the form has one lawyer control, "المحامي المسؤول"). The server
+        // clears the legacy column when primaryLawyerId changes.
         primaryLawyerId: editFormData.primaryLawyerId || null,
-        responsibleLawyerId: editFormData.primaryLawyerId || null,
         assignedLawyers: editFormData.primaryLawyerId ? [editFormData.primaryLawyerId] : [],
       });
       // Fire the same notification the assign dialog does, so changing the
