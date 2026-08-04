@@ -112,6 +112,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError, cn } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
 import { CaseDetailsDialog } from "@/components/case-details-dialog";
+import { OpponentResponseDialog } from "@/components/opponent-response-dialog";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
 import {
   isAwaitingJudgmentDeedFile,
@@ -641,9 +642,9 @@ export default function CasesPage() {
   const [closeNoResponseCase, setCloseNoResponseCase] = useState<LawCase | null>(null);
   const [closeNoResponseNotes, setCloseNoResponseNotes] = useState("");
   const [closeNoResponseSaving, setCloseNoResponseSaving] = useState(false);
+  // The dialog body (the answer + submitting state and the request) moved into
+  // the shared OpponentResponseDialog so the hearing-level toggle can reuse it.
   const [opponentResponseCase, setOpponentResponseCase] = useState<LawCase | null>(null);
-  const [opponentResponseAnswer, setOpponentResponseAnswer] = useState<"" | "نعم" | "لا">("");
-  const [opponentResponseSubmitting, setOpponentResponseSubmitting] = useState(false);
   const [appealOutcomeCase, setAppealOutcomeCase] = useState<LawCase | null>(null);
   const [appealOutcomeKind, setAppealOutcomeKind] = useState<"we_appealed" | "opponent_appealed" | "no_appeal">("opponent_appealed");
   const [appealSubmitting, setAppealSubmitting] = useState(false);
@@ -2510,7 +2511,6 @@ export default function CasesPage() {
             getHearingsByCase(selectedCase.id)
               .some(h => h.opponentResponseRequired && isHearingActor(user, h, selectedCase)),
           onOpponentResponseReceived: () => {
-            setOpponentResponseAnswer("");
             setOpponentResponseCase(selectedCase);
           },
           // صك SEAL — mirrors the server's gate on POST /appeal-outcome, which
@@ -2969,80 +2969,14 @@ export default function CasesPage() {
           audit found could never clear) and asks whether we must reply. نعم
           creates the SAME auto مذكرة جوابية the موعد_جديد "مطلوب مذكرة" flow
           creates, server-side, via one shared implementation. Required tri-state,
-          same discipline as the objectionability question. */}
-      <Dialog
-        open={!!opponentResponseCase}
-        onOpenChange={(open) => { if (!open) { setOpponentResponseCase(null); setOpponentResponseAnswer(""); } }}
-      >
-        <DialogContent className="max-w-md" dir="rtl">
-          <DialogHeader>
-            <DialogTitle>تسجيل استلام رد الخصم</DialogTitle>
-          </DialogHeader>
-          {opponentResponseCase && (
-            <>
-              <div className="space-y-4">
-                <p className="text-xs text-muted-foreground">
-                  سيتم إزالة مؤشر "مطلوب رد من الخصم" عن هذه القضية.
-                </p>
-                <div>
-                  <Label>هل نحتاج للرد على مذكرة الخصم؟ <span className="text-red-500">*</span></Label>
-                  <Select
-                    value={opponentResponseAnswer}
-                    onValueChange={(v) => setOpponentResponseAnswer(v as "نعم" | "لا")}
-                  >
-                    <SelectTrigger data-testid="select-needs-our-response"><SelectValue placeholder="اختر" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="نعم">نعم — نحتاج للرد</SelectItem>
-                      <SelectItem value="لا">لا — لا نحتاج للرد</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {opponentResponseAnswer === "نعم" && (
-                  <p className="text-xs text-muted-foreground">
-                    ستُنشأ مذكرة جوابية تلقائياً وتُسند للمحامي المسؤول، بنفس آلية "مطلوب مذكرة" عند تحديد موعد جديد.
-                  </p>
-                )}
-                {opponentResponseAnswer === "لا" && (
-                  <p className="text-xs text-muted-foreground">
-                    لن تُنشأ مذكرة — سيُزال المؤشر فقط.
-                  </p>
-                )}
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setOpponentResponseCase(null)}>إلغاء</Button>
-                <Button
-                  data-testid="button-confirm-opponent-response"
-                  disabled={!opponentResponseAnswer || opponentResponseSubmitting}
-                  onClick={async () => {
-                    setOpponentResponseSubmitting(true);
-                    try {
-                      await apiRequest("POST", `/api/cases/${opponentResponseCase.id}/opponent-response`, {
-                        needsOurResponse: opponentResponseAnswer === "نعم",
-                      });
-                      await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-                      await queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
-                      await refreshCases();
-                      toast({
-                        title: opponentResponseAnswer === "نعم"
-                          ? "تم تسجيل استلام رد الخصم وإنشاء مذكرة جوابية"
-                          : "تم تسجيل استلام رد الخصم",
-                      });
-                      setOpponentResponseCase(null);
-                      setOpponentResponseAnswer("");
-                    } catch (err) {
-                      toast({ title: "تعذّر تسجيل الاستلام", description: extractApiError(err), variant: "destructive" });
-                    } finally {
-                      setOpponentResponseSubmitting(false);
-                    }
-                  }}
-                >
-                  حفظ
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+          same discipline as the objectionability question.
+          The body now lives in OpponentResponseDialog, shared with the
+          hearing-level "مطلوب رد من الخصم" toggle so both ways of turning the
+          indicator off ask the same question and produce the same outcome. */}
+      <OpponentResponseDialog
+        caseId={opponentResponseCase?.id ?? null}
+        onOpenChange={(open) => { if (!open) setOpponentResponseCase(null); }}
+      />
 
       {/* Appeal outcome — the two manual routes out of محكوم_حكم_ابتدائي.
           "لم يستأنف" warns (never blocks) when the objection window computed from
