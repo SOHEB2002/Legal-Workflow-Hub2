@@ -398,7 +398,12 @@ async function checkLegalDeadlines() {
 
       const daysLeft = (deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
       const caseInfo = deadline.caseId ? caseMap.get(deadline.caseId) : null;
-      const recipientId = caseInfo?.responsibleLawyerId;
+      // 🔴 THE SILENT-DEADLINE BUG. This read responsibleLawyerId ALONE and
+      // `continue`d when it was empty — so a case assigned through the reassign
+      // dialog or مهامي (both write primaryLawyerId only) received NO 7-day,
+      // 3-day or overdue legal-deadline warning at all, silently. Primary first,
+      // responsible as fallback.
+      const recipientId = caseInfo?.primaryLawyerId || caseInfo?.responsibleLawyerId;
       if (!recipientId) continue;
 
       if (daysLeft > 6 && daysLeft <= 7) {

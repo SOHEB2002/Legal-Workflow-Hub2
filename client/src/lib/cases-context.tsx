@@ -48,7 +48,19 @@ const migrateCase = (c: LawCase): LawCase => {
   if (!c.stageHistory) {
     c.stageHistory = [{ stage: c.currentStage, timestamp: c.createdAt, userId: c.createdBy, userName: "النظام", notes: "تهجير البيانات" }];
   }
-  if (c.responsibleLawyerId === undefined) {
+  // Keep the in-memory responsibleLawyerId populated from primaryLawyerId, the
+  // field the UI actually sets. The guard was `=== undefined`, which the server
+  // never produces (mapDbCase always returns the column), so it was effectively
+  // dead; a falsy check also covers the NULL and "" rows that primary-only
+  // assignment produces today and that batch 3 will produce for every case.
+  //
+  // ⚠ DELIBERATELY ONE-DIRECTIONAL — primary → responsible, never the reverse.
+  // Filling primaryLawyerId from responsibleLawyerId here would change what the
+  // edit dialog pre-selects (cases.tsx reads caseItem.primaryLawyerId into the
+  // form), so the next save would persist a value the user never chose. That is
+  // a write consequence, and this batch is reads-only. The primary-only READS
+  // are fixed directly instead.
+  if (!c.responsibleLawyerId && c.primaryLawyerId) {
     c.responsibleLawyerId = c.primaryLawyerId;
   }
   if (!c.circuitNumber) {

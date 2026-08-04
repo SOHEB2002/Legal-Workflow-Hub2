@@ -14769,7 +14769,14 @@ export async function registerRoutes(
     );
 
     const results = lawyers.map(lawyer => {
-      const lawyerCases = allCases.filter(c => c.responsibleLawyerId === lawyer.id);
+      // BOTH assignment fields, primary first. This filter read responsibleLawyerId
+      // ALONE, and responsibleLawyerId has no input anywhere in the UI — the
+      // reassign dialog and the مهامي assignment both write primaryLawyerId only.
+      // So a lawyer assigned through either of them counted ZERO cases here: no
+      // active, no closed, no hearings, an empty performance row.
+      const lawyerCases = allCases.filter(
+        c => c.primaryLawyerId === lawyer.id || c.responsibleLawyerId === lawyer.id,
+      );
       const activeCases = lawyerCases.filter(c => (c.currentStage as string) !== "مقفلة" && (c.currentStage as string) !== "مغلق");
       const closedCases = lawyerCases.filter(c =>
         ((c.currentStage as string) === "مقفلة" || (c.currentStage as string) === "مغلق") &&
@@ -15400,7 +15407,13 @@ export async function registerRoutes(
     if (!type || type === "cases") {
       let cases = await storage.getAllCases();
       if (user.role === "employee") {
-        cases = cases.filter(c => c.responsibleLawyerId === user.id || c.departmentId === user.departmentId);
+        // primary first, responsible as fallback. The department clause masked
+        // this for most users, but an employee searching a case in ANOTHER
+        // department that is assigned to them by primaryLawyerId found nothing.
+        cases = cases.filter(c =>
+          c.primaryLawyerId === user.id
+          || c.responsibleLawyerId === user.id
+          || c.departmentId === user.departmentId);
       } else if (user.role === "department_head") {
         cases = cases.filter(c => c.departmentId === user.departmentId);
       }
@@ -15513,7 +15526,10 @@ export async function registerRoutes(
 
     let userCases = allCases;
     if (user.role === "employee") {
-      userCases = allCases.filter(c => c.responsibleLawyerId === user.id);
+      // primary first, responsible as fallback — see the performance-report note.
+      userCases = allCases.filter(
+        c => c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id,
+      );
     } else if (user.role === "department_head") {
       userCases = allCases.filter(c => c.departmentId === user.departmentId);
     }
