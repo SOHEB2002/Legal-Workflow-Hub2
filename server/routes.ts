@@ -2805,15 +2805,33 @@ export async function registerRoutes(
     }
   });
 
+  // 🔴 READ GATE = requireAuth ONLY (owner rule 2026-08-04: any employee may read
+  // any case). This was the LAST read on cases or hearings still narrower than the
+  // firm-wide list that leads to it, and the mismatch was doing real damage rather
+  // than protecting anything:
+  //   • GET /api/cases (:2764) is requireAuth + getAllCases() with NO scoping, so
+  //     every authenticated user ALREADY holds every case row, and the case-details
+  //     dialog renders from that list with no client gate. Nothing was withheld.
+  //   • This route is called by the dialog ONLY to graft the full stageHistory that
+  //     the list strips (case-details-dialog.tsx:284), and its failure is SWALLOWED.
+  //     So the canViewCase 403 never blocked anyone from opening a case — it just
+  //     made سجل المراحل render EMPTY, with no error, for an out-of-department
+  //     department_head or an unassigned employee. A silent partial failure on data
+  //     the same user could already see in full.
+  // Removed: the canViewCase check and its 403. Nothing else in the handler changed.
+  //
+  // ⚠ canViewCase ITSELF IS NOT DEAD and is deliberately left in place — it still
+  // gates four other call sites, TWO OF WHICH ARE WRITES:
+  //     GET  /api/field-tasks/case/:caseId          (:12718, read)
+  //     GET  /api/field-tasks/:id      parent fallback (:12745, read)
+  //     POST /api/cases/:id/comments                (:14666, WRITE)
+  //     POST /api/cases/:id/notes                   (:14711, WRITE)
+  // Those are untouched by this commit.
   app.get("/api/cases/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
       if (!caseItem) {
         return res.status(404).json({ error: "القضية غير موجودة" });
-      }
-      const user = req.user!;
-      if (!canViewCase(user, caseItem, req.actingContext)) {
-        return res.status(403).json({ error: "لا تملك صلاحية لعرض هذه القضية" });
       }
       res.json(caseItem);
     } catch (error) {
