@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import {
   Plus,
   Eye,
+  Paperclip,
   CheckCircle,
   Archive,
   UserPlus,
@@ -65,7 +66,10 @@ import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { formatTimeAmPm } from "@/lib/date-utils";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SingleAttachmentControl } from "@/components/single-attachment-control";
+import { canActOnHearingMinutes, caseReachedJudgment } from "@/lib/attachment-indicators";
 import { extractApiError } from "@/lib/utils";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
@@ -79,6 +83,7 @@ import {
   judgmentDirectionOf,
   weAreTheAppellant,
   ClosureReasonLabels,
+  hearingProducesNoMinutes,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue } from "@shared/schema";
 
@@ -672,6 +677,34 @@ export function CaseDetailsDialog({
                       <Label className="text-muted-foreground">رقم القضية</Label>
                       <p><LtrInline>{selectedCase.caseNumber || "-"}</LtrInline></p>
                     </div>
+                    {/* صك الحكم — THE READ SURFACE. Until now the deed was
+                        reachable ONLY through the "تسجيل استلام الصك" / late-attach
+                        dialogs, both gated on the WRITE roles, so a user who could
+                        read the case but not attach could not see it at all — even
+                        though the server's DOWNLOAD route is gated on canModifyCase,
+                        the view-level rule. This closes that gap on the read side,
+                        matching the download gate rather than the attach gate.
+                        canEdit={false}: SingleAttachmentControl renders preview and
+                        download whenever a file exists and hides upload/replace/
+                        delete without it, which is exactly the read-only split.
+                        Writing still happens only through the existing dialogs, so
+                        there is no second write path.
+                        Placed in the المعلومات grid beside المحكمة / رقم القضية —
+                        the case's existing court-information section — rather than
+                        in a new panel, and shown only for a case that actually
+                        reached a judgment stage so it never appears on files that
+                        can have no صك. */}
+                    {caseReachedJudgment(selectedCase) && (
+                      <div className="sm:col-span-2">
+                        <Label className="text-muted-foreground">صك الحكم</Label>
+                        <SingleAttachmentControl
+                          endpoint={`/api/cases/${selectedCase.id}/deed-attachment`}
+                          label="ملف صك الحكم"
+                          emptyHint="لم يُرفق الصك بعد"
+                          canEdit={false}
+                        />
+                      </div>
+                    )}
                     <div>
                       <Label className="text-muted-foreground">موعد الجلسة القادمة</Label>
                       <p className="font-medium">
@@ -1215,7 +1248,17 @@ export function CaseDetailsDialog({
                                 <TableHead className="text-right">الوقت</TableHead>
                                 <TableHead className="text-right">المحكمة</TableHead>
                                 <TableHead className="text-right">الحالة</TableHead>
-                                <TableHead className="text-center w-[60px]">إجراءات</TableHead>
+                                {/* LAST in DOM = far LEFT under dir="rtl", which is
+                                    the app-wide convention for the actions column
+                                    (cases, contracts, memos, consultations and the
+                                    hearings page all place it last and label it
+                                    "الإجراءات"). This table was the only one using
+                                    the bare "إجراءات". */}
+                                {/* 60px → 96px: the cell now holds TWO 32px icon
+                                    buttons (view + ضبط) and would have squeezed or
+                                    wrapped at the old width. Still the narrowest
+                                    column, so the four data columns keep their space. */}
+                                <TableHead className="text-center w-[96px]">الإجراءات</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -1228,19 +1271,88 @@ export function CaseDetailsDialog({
                                     <Badge variant="outline">{hearing.status}</Badge>
                                   </TableCell>
                                   <TableCell className="text-center">
-                                    <Button
-                                      size="icon"
-                                      variant="ghost"
-                                      title="عرض تفاصيل الجلسة"
-                                      data-testid={`button-view-hearing-${hearing.id}`}
-                                      // Opens the hearing IN PLACE, over this dialog.
-                                      // Was setLocation("/hearings?openHearing=…"),
-                                      // a wouter route push that navigated the whole
-                                      // app away from the case being read.
-                                      onClick={() => setHearingDetailId(hearing.id)}
-                                    >
-                                      <Eye className="w-4 h-4" />
-                                    </Button>
+                                    <div className="flex items-center justify-center gap-0.5">
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        title="عرض تفاصيل الجلسة"
+                                        data-testid={`button-view-hearing-${hearing.id}`}
+                                        // Opens the hearing IN PLACE, over this dialog.
+                                        // Was setLocation("/hearings?openHearing=…"),
+                                        // a wouter route push that navigated the whole
+                                        // app away from the case being read.
+                                        onClick={() => setHearingDetailId(hearing.id)}
+                                      >
+                                        <Eye className="w-4 h-4" />
+                                      </Button>
+                                      {/* ضبط الجلسة, without leaving the case.
+                                          FITTING IT IN A NARROW ROW: the control is
+                                          a bordered panel (file name, size, preview,
+                                          download, replace, delete) and would wreck
+                                          a table row, so it lives inside a POPOVER
+                                          behind ONE icon button — the row gains a
+                                          single 32px trigger beside the existing eye,
+                                          following the same icon-button-with-title
+                                          idiom already used here and in the hearings
+                                          page's actions cell.
+
+                                          🔴 HIDDEN ENTIRELY for جلسات الصلح والتسوية
+                                          via hearingProducesNoMinutes — the SEVENTH
+                                          consumer of that shared predicate, not a new
+                                          implementation. Those hearings issue no ضبط,
+                                          so offering an attach control would be
+                                          offering something that can never apply.
+
+                                          GATE: canActOnHearingMinutes, the shared
+                                          mirror of the server's canActOnHearing. It
+                                          governs the whole control rather than just
+                                          the write half, because the minutes DOWNLOAD
+                                          route is gated on canActOnHearing too — so
+                                          a preview button shown any wider would 403.
+                                          (The صك differs: its download is canModifyCase,
+                                          i.e. view-level — see commit 4.) */}
+                                      {!hearingProducesNoMinutes(hearing)
+                                        && canActOnHearingMinutes(user, hearing) && (
+                                        <Popover>
+                                          <PopoverTrigger asChild>
+                                            <Button
+                                              size="icon"
+                                              variant="ghost"
+                                              title="ضبط الجلسة"
+                                              data-testid={`button-hearing-minutes-${hearing.id}`}
+                                            >
+                                              <Paperclip className="w-4 h-4" />
+                                            </Button>
+                                          </PopoverTrigger>
+                                          <PopoverContent className="w-80 p-2" align="center" dir="rtl">
+                                            {/* THE SAME COMPONENT the hearing
+                                                workflow step renders — same endpoint,
+                                                same upload path, same permission prop.
+                                                No second upload implementation. */}
+                                            <SingleAttachmentControl
+                                              endpoint={`/api/hearings/${hearing.id}/minutes-attachment`}
+                                              label="ملف ضبط الجلسة"
+                                              emptyHint="لم يُرفق الضبط بعد"
+                                              canEdit={canActOnHearingMinutes(user, hearing)}
+                                              // THE SYNC GUARANTEE. Byte-identical to
+                                              // the hearing dialog's own onChanged
+                                              // (the ffadb50 fix): uploadAttachmentRaw
+                                              // is a raw fetch that touches no cache,
+                                              // so without this the badges would stay
+                                              // lit. Invalidating ["/api/hearings"]
+                                              // refetches the ONE app-wide list that
+                                              // feeds the cases-page badge, the
+                                              // hearings-page badge and row, and the
+                                              // filter — and the my-tasks feed polls
+                                              // itself every 30s. Attaching here is
+                                              // therefore indistinguishable from
+                                              // attaching in the hearing dialog.
+                                              onChanged={() => { queryClient.invalidateQueries({ queryKey: ["/api/hearings"] }); }}
+                                            />
+                                          </PopoverContent>
+                                        </Popover>
+                                      )}
+                                    </div>
                                   </TableCell>
                                 </TableRow>
                               ))}
