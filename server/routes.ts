@@ -2719,7 +2719,11 @@ export async function registerRoutes(
         const newAssignee = validReassignments[`case_${c.id}`];
         const updates: any = {};
         if (c.primaryLawyerId === userId) updates.primaryLawyerId = newAssignee || null;
-        if (c.responsibleLawyerId === userId) updates.responsibleLawyerId = newAssignee || null;
+        // CLEAR the legacy column rather than re-pointing it: primaryLawyerId is
+        // the single canonical field, and the line above already routes the work
+        // to the replacement. Leaving the departing user here would keep granting
+        // them case access through the responsibleLawyerId permission clause.
+        if (c.responsibleLawyerId === userId) updates.responsibleLawyerId = null;
         if (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(userId)) {
           const filtered = c.assignedLawyers.filter((l: string) => l !== userId);
           if (newAssignee && !filtered.includes(newAssignee)) {

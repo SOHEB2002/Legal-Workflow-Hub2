@@ -194,8 +194,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       stageHistory: [{ stage: initialStage, timestamp: now, userId: createdBy, userName: createdByName, notes: "استلام القضية" }],
       departmentId: data.departmentId || "",
       assignedLawyers: [],
+      // responsibleLawyerId is no longer sent — primaryLawyerId is the single
+      // canonical field (batch 3). The server hard-nulls the legacy column on
+      // insert anyway, so the row is identical either way.
       primaryLawyerId: null,
-      responsibleLawyerId: data.responsibleLawyerId || null,
       courtName: data.courtName || "",
       courtCaseNumber: data.courtCaseNumber || "",
       judgeName: data.judgeName || "",
@@ -277,8 +279,11 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const isReassign = !!(lawCase?.primaryLawyerId);
     const updateData: any = {
       assignedLawyers: [lawyerId],
+      // ONE canonical field. responsibleLawyerId used to be written here with the
+      // SAME lawyerId — the assign dialog has always had one control, labelled
+      // "المحامي المسؤول". The server clears the legacy column when the primary
+      // changes, so it cannot be left naming a superseded lawyer.
       primaryLawyerId: lawyerId,
-      responsibleLawyerId: lawyerId,
       departmentId,
     };
     // The internal reviewer slot is the persistent intake-time choice. Pass
