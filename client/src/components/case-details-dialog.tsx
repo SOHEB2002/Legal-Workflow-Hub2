@@ -1215,7 +1215,13 @@ export function CaseDetailsDialog({
                                 <TableHead className="text-right">الوقت</TableHead>
                                 <TableHead className="text-right">المحكمة</TableHead>
                                 <TableHead className="text-right">الحالة</TableHead>
-                                <TableHead className="text-center w-[60px]">إجراءات</TableHead>
+                                {/* LAST in DOM = far LEFT under dir="rtl", which is
+                                    the app-wide convention for the actions column
+                                    (cases, contracts, memos, consultations and the
+                                    hearings page all place it last and label it
+                                    "الإجراءات"). This table was the only one using
+                                    the bare "إجراءات". */}
+                                <TableHead className="text-center w-[60px]">الإجراءات</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
