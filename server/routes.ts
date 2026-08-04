@@ -2077,6 +2077,23 @@ async function isJudgmentDeedMissing(caseId: string): Promise<boolean> {
   return !(await storage.getCaseAttachment(caseId));
 }
 
+// ⚠ findHearingMissingMinutes STOOD HERE and was DELETED with the case-close ضبط
+// gate it served (owner decision 2026-08-05, reverting e52e4ad — 83 cases would
+// have been blocked on deploy, so the backlog gets attached first).
+//
+// It was deleted rather than kept-with-a-comment for one concrete reason: this
+// project holds `tsc --noUnusedLocals` at ZERO as a standing regression gate, and
+// an unreferenced module-level function fails it (TS6133, verified). The only ways
+// to keep it were to `export` it — dead code hidden behind an export, exactly what
+// an audit flags — or to weaken the gate. Both are worse than deleting something
+// that is one paste away from returning.
+//
+// 🔴 RE-ENABLING IS COPY-PASTE, NOT RE-DERIVATION. The full helper, the gate that
+// called it, the re-enable steps and the backlog-measuring SQL are all recorded in
+// CLAUDE.md under "📎 ATTACHMENTS"; the original code is also in git at e52e4ad.
+// Do not reconstruct the predicate from scratch — the three terms (has a result /
+// not تراضي-تسوية_ودية / not ملغية) each exist for a reason documented there.
+
 // Is this field task one of the two POST-JUDGMENT tasks whose completion ends
 // the case? Matched on the title prefix, the same discriminator getMyTasks uses
 // (there is no task-kind column) — see the constants' comment in schema.ts.
@@ -3589,6 +3606,17 @@ export async function registerRoutes(
           });
         }
 
+        // ⚠ A ضبط GATE STOOD HERE AND WAS REVERTED (owner decision 2026-08-05,
+        // reverting e52e4ad). It refused a case close while any resulted court
+        // hearing was missing its minutes. It worked, but a backlog measurement
+        // returned 83 cases that would have been blocked the moment it deployed,
+        // so the firm chose to attach the backlog FIRST and enable the gate after.
+        // The ضبط is therefore VISIBLE-BUT-OPTIONAL for now: the badges, the
+        // hearings filter, the my-tasks item and the workflow step all still fire.
+        // 🔴 THIS IS INTENDED TO COME BACK. The full predicate, the re-enable steps
+        // and the SQL that measures the remaining backlog are recorded in CLAUDE.md
+        // under "📎 ATTACHMENTS" — do not re-derive them, and do not treat the
+        // absence of a gate here as a decision that minutes are optional forever.
         // ============ صك SEAL — LEAVING ANY JUDGMENT STAGE ============
         // Placed BEFORE validateStageTransition so it covers every way this PATCH
         // can move the case off a judgment stage in one place: the table edges
@@ -6455,13 +6483,27 @@ export async function registerRoutes(
 
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
-      if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
-      }
 
       const hearings = await storage.getHearingsByCase(lawCase.id);
-      if (!hearings.some((h) => h.opponentResponseRequired)) {
+      const flagged = hearings.filter((h) => h.opponentResponseRequired);
+      if (flagged.length === 0) {
         return res.status(400).json({ error: "لا يوجد رد مطلوب من الخصم على هذه القضية" });
+      }
+      // 🔴 GATE ALIGNED TO canActOnHearing (owner decision 2026-08-04). It was
+      // canActOnMohrSettlement, which meant SETTING and CLEARING this flag answered
+      // to DIFFERENT role sets — a user could set a flag they were not allowed to
+      // clear. That asymmetry is exactly how the set-and-never-cleared bug class
+      // starts, so both ends now use the hearing-level gate, matching every other
+      // hearing action and matching the result route that sets the flag.
+      //
+      // Checked against the FLAGGED hearings, not the case: this route is
+      // case-scoped but the flag is a HEARING column. `.some` rather than `.every`
+      // because clearing is deliberately BLANKET (clearOpponentResponseFlag unsets
+      // every carrying row) — requiring authority over all of them would let one
+      // unrelated hearing block a legitimate clear, and the badge itself is
+      // `.some(...)` across the case.
+      if (!flagged.some((h) => canActOnHearing(reqUser, h, req.actingContext))) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
       }
 
       const cleared = await clearOpponentResponseFlag(lawCase.id);
@@ -11421,6 +11463,93 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/hearings/:id/opponent-response-required   Body: { required: boolean }
+  //
+  // Mark (or unmark) "مطلوب رد من الخصم" on a hearing AFTER the fact. The opponent
+  // sometimes responds late, and until now the flag could only be set while
+  // recording the result — PATCH /api/hearings/:id/result-details explicitly
+  // REFUSES it via CASCADE_FIELDS, so there was no sanctioned post-hoc path.
+  //
+  // 🔴 SETTING AND CLEARING ARE THE SAME ENDPOINT, ON PURPOSE. This flag is the
+  // codebase's documented set-and-never-cleared bug (55fc32b → 54cf108: a stored
+  // boolean written with no way to unset it, so the badge stuck on a case forever).
+  // The rule that came out of that is: every new way to SET it ships with a
+  // matching way to CLEAR it. Here they are literally one control — the UI toggle
+  // posts `required: false` to turn it off.
+  //
+  // EXPLICIT BOOLEAN, never an implicit flip: a stale client cannot invert state it
+  // did not see. Same tri-state discipline as the objectionability question.
+  //
+  // WRITES THE EXISTING COLUMN — no second flag. So the three established clearing
+  // paths still find and clear whatever this sets: the case-close sweep
+  // (cancelOpenCaseChildrenOnClose → clearOpponentResponseFlag), the newer-hearing
+  // sweep at the end of result recording, and the explicit
+  // POST /api/cases/:id/opponent-response action.
+  //
+  // GATE: canActOnHearing — the same gate that sets this flag today via the result
+  // route, and the gate on every other hearing-level action.
+  app.post("/api/hearings/:id/opponent-response-required", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+      }
+
+      // Tolerant gate (validation-patterns): type-check only; the handler keeps its
+      // own Arabic 400 below.
+      const bodyCheck = z.object({ required: z.boolean().optional() })
+        .passthrough().safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      if (typeof req.body?.required !== "boolean") {
+        return res.status(400).json({ error: "يجب تحديد ما إذا كان مطلوباً رد من الخصم" });
+      }
+      const required: boolean = req.body.required;
+
+      const updated = await storage.updateHearing(hearingId, {
+        opponentResponseRequired: required,
+      });
+      if (!updated) {
+        return res.status(500).json({ error: "فشل تحديث حالة رد الخصم" });
+      }
+
+      // Audit trail on the PARENT CASE's timeline — hearings have no activity log
+      // of their own, and case_activity_log.action_type is free text (no
+      // migration). Mirrors hearing_flagged / hearing_cancelled exactly. Logging
+      // BOTH directions matters here: the clear side is already audited by the
+      // case-level action, so an unlogged set would be the one opponent-response
+      // event with no trace.
+      if (hearing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: hearing.caseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            actionType: required ? "opponent_response_required_set" : "opponent_response_required_cleared",
+            title: required
+              ? `تم تعليم الجلسة: مطلوب رد من الخصم — جلسة ${hearing.hearingDate}`
+              : `تم إلغاء "مطلوب رد من الخصم" — جلسة ${hearing.hearingDate}`,
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        } catch (e) {
+          console.error("[hearings/opponent-response-required] logCaseActivity failed", e);
+        }
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[hearings/opponent-response-required] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // ==================== Hearing Workflow ====================
 
   app.post("/api/hearings/:id/result", requireAuth, async (req: AuthRequest, res) => {
@@ -12617,6 +12746,30 @@ export async function registerRoutes(
     }
   });
 
+  // ⚠ THIS ROUTE HAS NO UI, DELIBERATELY. Do not add a button back, and do not
+  // delete it as dead code.
+  //
+  // The "إغلاق الجلسة" workflow step was REMOVED (owner decision 2026-08-04). It
+  // wrote exactly one field — status → تمت — with no activity row, no notification
+  // and no case cascade, and it was already unreachable for most hearings:
+  // recording a result sets the status directly (موعد_جديد → مؤجلة, every other
+  // result → تمت), and the button only rendered while status !== تمت. So it
+  // governed POSTPONED hearings alone.
+  //
+  // ⚠ THE ضبط REQUIREMENT IT USED TO ENFORCE IS CURRENTLY ENFORCED BY NOTHING.
+  // It moved to a case-close gate, which was then REVERTED the next day (owner
+  // decision 2026-08-05: 83 cases would have been blocked on deploy, so the
+  // backlog gets attached first). The ضبط is visible-but-optional for now — every
+  // badge, filter, my-tasks item and workflow step still fires. The re-enable
+  // steps live in CLAUDE.md under "📎 ATTACHMENTS". Restoring a button HERE is
+  // not the way to bring enforcement back.
+  //
+  // WHY THE ROUTE STAYS: it is the ONLY writer of تمت for a postponed hearing, and
+  // two live readers key on that status —
+  //   routes.ts (lawyer performance stats)  filter(h => h.status === "تمت")
+  //   scheduler.ts (weekly report)          same, over the last 7 days
+  // Keeping it costs nothing, preserves the API path, and leaves those stats
+  // reachable if a close affordance is ever wanted again.
   app.post("/api/hearings/:id/close", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);

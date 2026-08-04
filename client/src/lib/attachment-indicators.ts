@@ -121,8 +121,10 @@ export function isPostJudgmentCaseMissingDeed(c: {
 //   READ  (preview / download)  → canViewHearingMinutes  → parent case's viewers
 //          GET .../minutes-attachment and .../download are canModifyCase on the
 //          PARENT CASE (routes.ts), matching the صك, which was already read-wide.
-//   WRITE (attach / replace / delete) → canWriteHearingMinutes → canActOnHearing
+//   WRITE (attach / replace / delete) → isHearingActor → canActOnHearing
 //          POST and DELETE .../minutes-attachment are UNCHANGED and stay narrow.
+//          isHearingActor also gates the "مطلوب رد من الخصم" toggle, which is why
+//          its name is no longer minutes-specific.
 //
 // Keeping one predicate would have meant either hiding the preview from users the
 // server now serves, or offering upload to users it still 403s. Both are the
@@ -141,8 +143,16 @@ export function canViewHearingMinutes(
   return !!user;
 }
 
-// WRITE half — the unchanged mirror of the server's canActOnHearing: attending
-// lawyer / branch_manager / admin_support.
+// THE CLIENT MIRROR of the server's canActOnHearing: attending lawyer /
+// branch_manager / admin_support.
+//
+// ⚠ RENAMED from canWriteHearingMinutes (2026-08-04) because it is no longer
+// minutes-specific: it now also gates the "مطلوب رد من الخصم" toggle, and the
+// server aligned that flag's CLEAR side onto canActOnHearing too. A name that
+// says "minutes" while gating opponent-response actions is the kind of lie this
+// codebase has been bitten by. It is deliberately NOT called canActOnHearing:
+// hearings.tsx already has a local const by that name (:1093), and shadowing it
+// with an import would be needlessly confusing.
 //
 // Deliberately NOT department-scoped: hearings carry no departmentId, so a
 // department_head would have to be resolved through the parent case — the known
@@ -153,7 +163,7 @@ export function canViewHearingMinutes(
 // EXPORTED so the hearing-details dialog and the case-details dialog share ONE
 // implementation. Two inline copies of the same four-line rule is exactly the
 // drift this codebase has been bitten by before.
-export function canWriteHearingMinutes(
+export function isHearingActor(
   user: { id: string; role: string } | null | undefined,
   hearing: { attendingLawyerId?: string | null } | null | undefined,
 ): boolean {

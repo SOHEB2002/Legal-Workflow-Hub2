@@ -119,6 +119,7 @@ import {
   caseHasDeedAttachment,
   caseReachedJudgment,
   isPostJudgmentCaseMissingDeed,
+  isHearingActor,
 } from "@/lib/attachment-indicators";
 import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
@@ -2497,9 +2498,17 @@ export default function CasesPage() {
           // answer to the same role set, so one helper covers both.
           // Gated on the same role rule the server enforces AND on the indicator
           // actually being on — the endpoint 400s if no hearing carries the flag.
+          // 🔴 GATE REALIGNED to canActOnHearing (owner decision 2026-08-04),
+          // mirroring the server. It was canActOnCaseWorkflow — the
+          // canActOnMohrSettlement mirror — which meant SETTING this flag and
+          // CLEARING it answered to different role sets, so a user could set a flag
+          // they could not clear. Both ends are now the hearing-level gate, checked
+          // against the FLAGGED hearings with `.some` exactly as the server does
+          // (the clear is blanket, so authority over one carrying hearing is
+          // enough).
           canRecordOpponentResponse:
-            canActOnCaseWorkflow(selectedCase)
-            && getHearingsByCase(selectedCase.id).some(h => h.opponentResponseRequired),
+            getHearingsByCase(selectedCase.id)
+              .some(h => h.opponentResponseRequired && isHearingActor(user, h)),
           onOpponentResponseReceived: () => {
             setOpponentResponseAnswer("");
             setOpponentResponseCase(selectedCase);

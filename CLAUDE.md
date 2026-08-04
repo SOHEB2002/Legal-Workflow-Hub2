@@ -321,8 +321,60 @@ These are owner decisions. Treat them as the module's contract; do not "restore"
 - **Minutes gate = `canActOnHearing` as-is** — attending lawyer / `branch_manager` / `admin_support`, NOT department-scoped, because hearings carry no `departmentId` (see the hearings-permissions item under Pending).
 - **DELETE is allowed and logged**, to the **PARENT CASE's** activity log for both entities. **Hearings have no activity log of their own, by design** — the minutes routes therefore write to `case_activity_log` guarded on `hearing.caseId`.
 
+### ⏸️ THE ضبط IS VISIBLE-BUT-NOT-ENFORCED — PENDING A BACKLOG CLEANUP (2026-08-05)
+**Owner decision. This is a DEFERRAL, not a reversal of policy — the gate is meant to come back.** A case-close gate requiring the ضبط on every resulted court hearing shipped as `e52e4ad` and was **reverted the same day**: a backlog measurement returned **83 cases** that would have been blocked the moment it deployed. The firm attaches the backlog first, then re-enables.
+
+**WHAT IS TRUE TODAY:** the ضبط is **required by policy, enforced by nothing.** Every VISIBILITY surface still works — the cases-page badge, the hearings-row badge, the hearings filter (`بانتظار إرفاق الضبط`), the my-tasks item (`hearing_minutes`) and the hearing workflow step. **No gate blocks anything**, and the hearing close action that used to enforce it is gone for good (see below).
+
+**MEASURE THE REMAINING BACKLOG** — read-only, run on the target DB before re-enabling. Each DISTINCT `case_number` is a case the gate would block:
+```sql
+SELECT c.id, c.case_number, c.current_stage,
+       h.id AS hearing_id, h.hearing_date, h.court_name, h.result
+FROM law_cases c
+JOIN hearings h ON h.case_id = c.id
+LEFT JOIN hearing_attachments ha ON ha.hearing_id = h.id
+WHERE c.current_stage <> 'مقفلة'
+  AND h.result IS NOT NULL AND h.result <> ''
+  AND COALESCE(h.hearing_type, 'محكمة') NOT IN ('تراضي', 'تسوية_ودية')
+  AND h.status <> 'ملغية'
+  AND ha.id IS NULL
+ORDER BY c.case_number, h.hearing_date;
+```
+
+**TO RE-ENABLE — two pastes, no re-derivation.** The original is in git at `e52e4ad`; the helper was DELETED rather than left dead because `tsc --noUnusedLocals` is held at 0 and an unreferenced module function fails it (TS6133, verified) — exporting it just to dodge the linter would have been hidden dead code.
+1. Restore the helper in `server/routes.ts` (it sat just above `isPostJudgmentTask`):
+```ts
+async function findHearingMissingMinutes(caseId: string): Promise<Hearing | null> {
+  const hearings = await storage.getHearingsByCase(caseId);
+  const candidates = hearings.filter((h) =>
+    !!String(h.result || "").trim()
+    && !hearingProducesNoMinutes(h)
+    && h.status !== HearingStatus.CANCELLED);
+  if (candidates.length === 0) return null;
+  const attached = await storage.getHearingIdsWithMinutesAttachment();
+  return candidates.find((h) => !attached.has(h.id)) ?? null;
+}
+```
+2. Restore the gate in `PATCH /api/cases/:id`, immediately **after** the صك close gate:
+```ts
+if (req.body.currentStage === "مقفلة" && existing.currentStage !== "مقفلة") {
+  const missingMinutes = await findHearingMissingMinutes(existing.id);
+  if (missingMinutes) {
+    const courtLabel = missingMinutes.courtName || "المحكمة";
+    return res.status(400).json({
+      error: `يجب إرفاق ضبط الجلسة قبل إغلاق القضية — الجلسة بتاريخ ${missingMinutes.hearingDate} (${courtLabel}) لم يُرفق ضبطها`,
+    });
+  }
+}
+```
+**THE THREE PREDICATE TERMS EACH EXIST FOR A REASON — do not simplify them:** *has a recorded result* (no result = the session did not happen, so there is nothing to have minutes of); *not `تراضي`/`تسوية_ودية`* via the shared `hearingProducesNoMinutes` (those issue no ضبط at all); *not `ملغية`* (you cannot obtain minutes for a cancelled session).
+
+**⚠️ WHAT THE GATE DELIBERATELY DID NOT COVER, and must not when restored:** it sits in the PATCH handler, so it governs **only user-initiated closes**. Every AUTOMATIC close writes via `storage.updateCase` directly and bypasses it — the post-judgment auto-close, the `ضدنا` final-judgment close, the three settlement-failure closes and both scheduler closes. **That is intentional:** those run with no actor inside swallowed try/catch blocks, so an unmet requirement there would wedge a case silently with no error surface. A user close can refuse out loud; an automatic one cannot.
+
+**⚠️ ALSO KNOWN, unchanged by the revert:** attaching is `canActOnHearing` (attending lawyer / branch_manager / admin_support) while CLOSING includes own-dept `department_head` — so once the gate is back, a department head can be blocked and unable to attach the file themselves. Not a wedge (branch_manager and admin_support always qualify), but real friction.
+
 **🔒 BLOCKING RULES (owner decision 2026-08-03) and their SCOPE:**
-- A case that **reached `محكوم_حكم_ابتدائي`** cannot **advance past it** or **close** without the صك. A hearing cannot **close** without its ضبط.
+- A case that **reached `محكوم_حكم_ابتدائي`** cannot **advance past it** or **close** without the صك. ~~A hearing cannot **close** without its ضبط.~~ → **the hearing close action was REMOVED entirely (2026-08-04, `6fa0ac1`)**; the route survives with no UI. The ضبط requirement it carried is currently **unenforced** — see the deferral note directly above.
 - **SCOPE IS TESTED VIA STAGE HISTORY, NOT THE CURRENT STAGE** — `caseReachedPrimaryJudgment` (shared/schema.ts). Current stage is too narrow: the close gates fire at `محكوم_حكم_نهائي`, one stage later, and later still after appeal-and-back. **"Has a judgment hearing" is too WIDE and would wedge cases** — a `منظورة` ruling marked NOT objectionable goes straight to `محكوم_حكم_نهائي`, never visits the judgment stage, and is never offered the صك step, so gating it would demand a document nobody can file. The test is precisely *"was the صك ever recordable here"*.
 - **Cases closed by SETTLEMENT, STRIKE-OFF or NO-CLIENT-RESPONSE are untouched** — they never enter that stage, so the test returns false. It is a POSITIVE test, never an exclusion list that could drift. (`close-no-response` additionally **cannot apply**: it 400s unless the case is at `استكمال_البيانات`.)
 - **THE CONTRACTS RULE IS NOT OVERTURNED.** ✅ The cross-reference already exists at the `ContractSlotsByType` decision site in `shared/schema.ts` (added in batch 3) — both sites agree this is a deliberate owner-approved EXCEPTION. `checkRequiredSlotsForTransition` and every `requiredBeforeLeavingStage` stay a permanent no-op by data.

@@ -137,7 +137,6 @@ export default function HearingsPage() {
     addHearing,
     updateHearing,
     submitReport,
-    closeHearing,
     cancelHearing,
     deleteHearing,
     setHearingFlag,
@@ -365,18 +364,6 @@ export default function HearingsPage() {
     }
   };
 
-  const handleCloseHearing = async (hearing: Hearing) => {
-    setSubmitting(true);
-    try {
-      await closeHearing(hearing.id);
-      toast({ title: "تم إغلاق الجلسة بنجاح" });
-      setDetailHearingId(null);
-    } catch (e: any) {
-      toast({ title: "خطأ", description: e.message, variant: "destructive" });
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const handleMarkContactCompleted = async (hearing: Hearing) => {
     setSubmitting(true);
@@ -1703,7 +1690,6 @@ export default function HearingsPage() {
           onRecordResult: (h) => setResultDialogHearing(h),
           onWriteReport: (h) => { prefillReportForm(h); setReportDialogHearing(h); },
           onMarkContactCompleted: handleMarkContactCompleted,
-          onCloseHearing: handleCloseHearing,
           busy: submitting,
         }}
       />
