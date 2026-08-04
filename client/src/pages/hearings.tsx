@@ -87,7 +87,7 @@ import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing } from "@shared/schema";
-import { HearingStatus, HearingResult, HearingType, HearingTypeLabels, type HearingTypeValue } from "@shared/schema";
+import { HearingStatus, HearingResult, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm, formatDualDate, formatHijriDateFull } from "@/lib/date-utils";
 
@@ -1236,24 +1236,9 @@ export default function HearingsPage() {
                                 <MapPin className="w-3 h-3 shrink-0" />
                                 <BidiText>{hearing.courtName}</BidiText>
                               </div>
-                              {/* نوع الجلسة, but ONLY when it is NOT محكمة.
-                                  محكمة is the default and very nearly every row,
-                                  so printing it everywhere would be noise that
-                                  trains the eye to skip the field — the opposite
-                                  of the point. Rendering only the EXCEPTION makes
-                                  a settlement hearing legible at a glance, which
-                                  is exactly the failure that let 14 mistyped
-                                  hearings sit unnoticed. Same teal as the details
-                                  badge so the two read as one signal. */}
-                              {hearing.hearingType && hearing.hearingType !== HearingType.COURT && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-xs border-teal-500 text-teal-600 dark:text-teal-400"
-                                  data-testid={`badge-hearing-type-row-${hearing.id}`}
-                                >
-                                  {HearingTypeLabels[hearing.hearingType as HearingTypeValue] || hearing.hearingType}
-                                </Badge>
-                              )}
+                              {/* نوع الجلسة is DELIBERATELY NOT shown here (owner
+                                  decision) — it lives in the hearing details
+                                  dialog only. The list row stays as it was. */}
                             </div>
                           </td>
                           {/* المحامي المكلف */}
