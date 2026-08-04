@@ -223,7 +223,12 @@ export default function NotificationsPage() {
 
       <Card>
         <CardContent className="p-0">
-          <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+          {/* dir="rtl" — Radix Tabs.Root stamps a literal dir="ltr" when given no
+              dir prop (see 4cfe7cb). Note the page wrapper at the top of this file
+              ALREADY sets dir="rtl"; that is precisely the direction this Tabs was
+              overriding, which is why the notifications table rendered LTR despite
+              a correct-looking container. */}
+          <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full" dir="rtl">
             <div className="border-b px-4 pt-4">
               <TabsList className="w-full justify-start">
                 <TabsTrigger value="all" data-testid="tab-all">الكل</TabsTrigger>

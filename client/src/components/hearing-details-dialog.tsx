@@ -294,7 +294,12 @@ export function HearingDetailsDialog({
                 )}
               </div>
             )}
-            <Tabs defaultValue="info" className="w-full">
+            {/* dir="rtl" — Radix Tabs.Root resolves `localDir || globalDir ||
+                "ltr"` and STAMPS the result as a real dir attribute, so without
+                this it writes dir="ltr" over the app's RTL for everything inside.
+                Same fix and same reason as case-details-dialog (4cfe7cb) and the
+                reports/support precedent. */}
+            <Tabs defaultValue="info" className="w-full" dir="rtl">
               <TabsList className="w-full flex">
                 <TabsTrigger value="info" className="flex-1" data-testid="tab-info">المعلومات</TabsTrigger>
                 <TabsTrigger value="result" className="flex-1" data-testid="tab-result">النتيجة</TabsTrigger>

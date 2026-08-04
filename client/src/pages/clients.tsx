@@ -611,7 +611,13 @@ export default function ClientsPage() {
             </DialogTitle>
           </DialogHeader>
           {viewingClient && (
-            <Tabs value={detailsTab} onValueChange={setDetailsTab} className="w-full">
+            /* dir="rtl" — Radix Tabs.Root stamps a literal dir="ltr" when given
+               no dir prop (see 4cfe7cb), flipping every panel inside it. The three
+               tabs below each hold a TABLE, so this one is a visible fix, not a
+               preventive one. Deliberately a plain JS block comment rather than a
+               JSX one: this sits in expression position inside
+               `viewingClient && (…)`, where a JSX comment is a syntax error. */
+            <Tabs value={detailsTab} onValueChange={setDetailsTab} className="w-full" dir="rtl">
               <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="info" data-testid="tab-client-info">المعلومات</TabsTrigger>
                 <TabsTrigger value="contacts" data-testid="tab-client-contacts">
