@@ -42,7 +42,6 @@ import {
   FileText,
   Gavel,
   Phone,
-  Lock,
   Flag,
   CheckCircle,
   XCircle,
@@ -78,7 +77,6 @@ export interface HearingDetailsActions {
   onRecordResult: (hearing: Hearing) => void;
   onWriteReport: (hearing: Hearing) => void;
   onMarkContactCompleted: (hearing: Hearing) => void;
-  onCloseHearing: (hearing: Hearing) => void;
   busy?: boolean;
 }
 
@@ -193,10 +191,9 @@ export function HearingDetailsDialog({
     minutesRequired && !!detailHearing?.result
     && (canAttachHearingMinutes || (canViewHearingMinutes(user) && minutesOnFile));
 
-  // "Minutes are not standing in the way of closing" — either they are on file, or
-  // this hearing never owed any. See the close step for why the distinction is
-  // load-bearing rather than cosmetic.
-  const minutesSatisfied = !minutesRequired || minutesOnFile;
+  // (minutesSatisfied lived here and went with the close step — it had no other
+  // consumer. minutesOnFile stays: it drives the minutes step's done-state and
+  // showMinutesControl.)
 
   // PHASE 2 — inline correction of the two no-cascade result fields. Self-contained
   // (own state + apiRequest) rather than an injected action, so it works in BOTH
@@ -777,30 +774,14 @@ export function HearingDetailsDialog({
                       onChanged={() => { queryClient.invalidateQueries({ queryKey: ["/api/hearings"] }); }}
                     />
                   )}
-                  <WorkflowStep
-                    done={detailHearing.status === HearingStatus.COMPLETED && detailHearing.reportCompleted}
-                    label="إغلاق الجلسة"
-                    icon={<Lock className="w-4 h-4" />}
-                    // THE THIRD CONDITION, mirroring the server's close gate
-                    // (POST /api/hearings/:id/close) in BOTH expressions so no
-                    // "إغلاق" button can render only to 400. minutesAttached is
-                    // the attach control's own fetch above, reported through
-                    // onAttachedChange — the dialog issues no second read for it,
-                    // and it flips the instant a file is uploaded or deleted.
-                    // 🔴 minutesSatisfied, NOT minutesAttached — this also FIXES A
-                    // BUG shipped with the settlement exemption. For a تراضي /
-                    // تسوية_ودية hearing the attach control never renders, so
-                    // onAttachedChange never fires and minutesAttached stays false
-                    // FOREVER. The bare term therefore withheld "إغلاق" from every
-                    // settlement hearing permanently — while the SERVER had already
-                    // been changed to allow that close. Visibility must equal
-                    // authorization in both directions, so the client uses the same
-                    // shared predicate the server does.
-                    disabled={!detailHearing.reportCompleted || !detailHearing.contactCompleted || !minutesSatisfied}
-                    actionLabel={detailHearing.reportCompleted && detailHearing.contactCompleted && minutesSatisfied && detailHearing.status !== HearingStatus.COMPLETED ? "إغلاق" : undefined}
-                    onAction={actions ? () => actions.onCloseHearing(detailHearing) : undefined}
-                    actionDisabled={submitting}
-                  />
+                  {/* "إغلاق الجلسة" WAS HERE and was REMOVED (owner decision
+                      2026-08-04). It wrote only status → تمت, with no activity row
+                      and no cascade, and it was already unreachable for any hearing
+                      whose result set تمت automatically — i.e. everything except a
+                      postponement. The ضبط requirement it carried now lives on the
+                      CASE close gate (findHearingMissingMinutes, server/routes.ts),
+                      where it covers every resulted court hearing instead of that
+                      minority. The route survives with no UI — see its comment. */}
                 </div>
               </TabsContent>
             </Tabs>

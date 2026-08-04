@@ -33,7 +33,6 @@ interface HearingsContextType {
   deleteHearing: (id: string) => Promise<void>;
   submitResult: (id: string, data: HearingResultData) => Promise<any>;
   submitReport: (id: string, data: HearingReportData) => Promise<void>;
-  closeHearing: (id: string) => Promise<void>;
   cancelHearing: (id: string, reason: string) => Promise<void>;
   setHearingFlag: (id: string, flagged: boolean, reason?: string) => Promise<void>;
   getHearingById: (id: string) => Hearing | undefined;
@@ -169,17 +168,9 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     scheduleBackgroundRefetch();
   };
 
-  const closeHearing = async (id: string): Promise<void> => {
-    const res = await apiRequest("POST", `/api/hearings/${id}/close`);
-    try {
-      const updated = await res.json();
-      if (updated && updated.id) upsertLocal(updated);
-      else patchLocal(id, { status: HearingStatus.COMPLETED } as any);
-    } catch {
-      patchLocal(id, { status: HearingStatus.COMPLETED } as any);
-    }
-    scheduleBackgroundRefetch();
-  };
+  // (closeHearing lived here and was removed with the "إغلاق الجلسة" step — owner
+  // decision 2026-08-04. The SERVER route POST /api/hearings/:id/close survives
+  // deliberately and carries the explanation; there is simply no caller now.)
 
   // Cancellation now goes through the dedicated endpoint so the mandatory
   // reason is captured (the old PATCH-status call recorded nothing). The server
@@ -235,7 +226,6 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
         deleteHearing,
         submitResult,
         submitReport,
-        closeHearing,
         cancelHearing,
         setHearingFlag,
         getHearingById,

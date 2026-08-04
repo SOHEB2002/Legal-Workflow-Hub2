@@ -12693,6 +12693,24 @@ export async function registerRoutes(
     }
   });
 
+  // ⚠ THIS ROUTE HAS NO UI, DELIBERATELY. Do not add a button back, and do not
+  // delete it as dead code.
+  //
+  // The "إغلاق الجلسة" workflow step was REMOVED (owner decision 2026-08-04). It
+  // wrote exactly one field — status → تمت — with no activity row, no notification
+  // and no case cascade, and it was already unreachable for most hearings:
+  // recording a result sets the status directly (موعد_جديد → مؤجلة, every other
+  // result → تمت), and the button only rendered while status !== تمت. So it
+  // governed POSTPONED hearings alone, and the ضبط requirement it used to enforce
+  // now lives on the CASE close gate (findHearingMissingMinutes), where it covers
+  // every resulted court hearing instead of just that minority.
+  //
+  // WHY THE ROUTE STAYS: it is the ONLY writer of تمت for a postponed hearing, and
+  // two live readers key on that status —
+  //   routes.ts (lawyer performance stats)  filter(h => h.status === "تمت")
+  //   scheduler.ts (weekly report)          same, over the last 7 days
+  // Keeping it costs nothing, preserves the API path, and leaves those stats
+  // reachable if a close affordance is ever wanted again.
   app.post("/api/hearings/:id/close", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);
