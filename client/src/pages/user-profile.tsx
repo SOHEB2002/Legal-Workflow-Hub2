@@ -194,7 +194,10 @@ export default function UserProfilePage() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="stats" className="w-full">
+      {/* dir="rtl" — Radix Tabs.Root stamps a literal dir="ltr" when given no dir
+          prop (see 4cfe7cb). The القضايا tab holds a table, so this is a visible
+          fix; the other four tabs are stat cards and lists that only re-align. */}
+      <Tabs defaultValue="stats" className="w-full" dir="rtl">
         <TabsList className={`grid w-full ${isOwnProfile ? "grid-cols-6" : "grid-cols-5"}`}>
           <TabsTrigger value="stats" data-testid="tab-stats">الإحصائيات</TabsTrigger>
           <TabsTrigger value="cases" data-testid="tab-cases">القضايا</TabsTrigger>
