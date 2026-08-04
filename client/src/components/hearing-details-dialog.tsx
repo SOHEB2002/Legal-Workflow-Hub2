@@ -52,7 +52,7 @@ import {
   Paperclip,
 } from "lucide-react";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { canActOnHearingMinutes } from "@/lib/attachment-indicators";
+import { canWriteHearingMinutes, canViewHearingMinutes, hearingHasMinutes } from "@/lib/attachment-indicators";
 
 // SHARED hearing-details dialog. The body was moved VERBATIM out of
 // hearings.tsx (its detail Dialog + the WorkflowStep helper it is the only
@@ -141,10 +141,16 @@ export function HearingDetailsDialog({
   // department_head would have to be resolved through the parent case — the
   // known-large open item that kept hearings out of the tiered permissions
   // widening. Out of scope; this matches every other hearing action.
-  // Now the SHARED canActOnHearingMinutes (lib/attachment-indicators) rather than
+  // Now the SHARED canWriteHearingMinutes (lib/attachment-indicators) rather than
   // an inline copy — the case-details dialog needs the identical rule for its own
   // ضبط control, and two copies of it would drift.
-  const canAttachHearingMinutes = canActOnHearingMinutes(user, detailHearing);
+  //
+  // 🔴 WRITE ONLY. Reading the ضبط widened to the parent case's viewers
+  // (owner decision 2026-08-04) while attach / replace / delete stayed at
+  // canActOnHearing, so this predicate no longer answers "may this user see the
+  // file" — canViewHearingMinutes does. Passing this one to canEdit is what keeps
+  // the two halves apart.
+  const canAttachHearingMinutes = canWriteHearingMinutes(user, detailHearing);
 
   // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
   // control's own fetch (onAttachedChange) so the dialog issues no second read.
@@ -165,10 +171,32 @@ export function HearingDetailsDialog({
   // consumer and deliberately NOT a sixth implementation — the rule has exactly
   // one definition.
   const minutesRequired = !!detailHearing && !hearingProducesNoMinutes(detailHearing);
-  // "Minutes are not standing in the way of closing" — either they were attached,
-  // or this hearing never owed any. See the close step for why the distinction is
+
+  // Is a ضبط ON FILE? Two sources, and which one is authoritative depends on
+  // whether the control is rendered:
+  //   • a WRITER always gets the control, so its own fetch (minutesAttached) is
+  //     live and correct — including immediately after an upload or a delete;
+  //   • a VIEW-ONLY user gets the control only when a file already exists, so
+  //     there may be no fetch at all; the list's derived hasMinutesAttachment
+  //     answers instead.
+  // Deliberately NOT `minutesAttached || hearingHasMinutes(...)`: that would keep
+  // reading TRUE for a moment after a writer deletes the file, and a stale-true on
+  // the close gate is the wrong direction to fail.
+  const minutesOnFile = !detailHearing ? false
+    : canAttachHearingMinutes ? minutesAttached
+    : hearingHasMinutes(detailHearing);
+
+  // Show the control at all? A viewer with no ضبط on file must see NOTHING — no
+  // empty upload box, no dead button — so the control is withheld entirely; a
+  // writer always gets it, because attaching is the point.
+  const showMinutesControl =
+    minutesRequired && !!detailHearing?.result
+    && (canAttachHearingMinutes || (canViewHearingMinutes(user) && minutesOnFile));
+
+  // "Minutes are not standing in the way of closing" — either they are on file, or
+  // this hearing never owed any. See the close step for why the distinction is
   // load-bearing rather than cosmetic.
-  const minutesSatisfied = !minutesRequired || minutesAttached;
+  const minutesSatisfied = !minutesRequired || minutesOnFile;
 
   // PHASE 2 — inline correction of the two no-cascade result fields. Self-contained
   // (own state + apiRequest) rather than an injected action, so it works in BOTH
@@ -714,13 +742,13 @@ export function HearingDetailsDialog({
                       earlier note saying they never block a close is superseded. */}
                   {minutesRequired && (
                   <WorkflowStep
-                    done={minutesAttached}
+                    done={minutesOnFile}
                     label="إرفاق ضبط الجلسة"
                     icon={<Paperclip className="w-4 h-4" />}
                     disabled={!detailHearing.result}
                   />
                   )}
-                  {minutesRequired && detailHearing.result && (
+                  {showMinutesControl && (
                     <SingleAttachmentControl
                       endpoint={`/api/hearings/${detailHearing.id}/minutes-attachment`}
                       label="ملف ضبط الجلسة"
