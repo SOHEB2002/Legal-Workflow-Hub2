@@ -1955,8 +1955,24 @@ export interface CaseStageTransition {
 
 // ==================== مستلم إشعارات/مهام القضية ====================
 //
-// THE canonical "which lawyer do we notify / assign this to" answer for a case
-// (owner decision 2026-08-04): responsibleLawyerId FIRST, then primaryLawyerId.
+// THE canonical "which lawyer do we notify / assign this to" answer for a case:
+// primaryLawyerId FIRST, then responsibleLawyerId.
+//
+// 🔴 THIS ORDER IS SETTLED — owner decision 2026-08-04, REVERSING the
+// responsible-first order this helper shipped with the same day. It is now the
+// ONE order for notifications, tasks, memos and reports alike. Two reasons, both
+// concrete:
+//   1. responsibleLawyerId has NO input anywhere in the UI. All three assignment
+//      controls are labelled "المحامي المسؤول" and every one writes
+//      primaryLawyerId; two of them (the reassign dialog and the مهامي
+//      CASE_UNASSIGNED action) write primaryLawyerId and nothing else. So after a
+//      reassignment responsibleLawyerId names the SUPERSEDED lawyer, and
+//      preferring it would notify the person who was just replaced.
+//   2. Memo assignment already resolves primary-then-responsible. A notification
+//      resolved the other way would name a different person as owner of the very
+//      memo it announces.
+// Do NOT flip it back. If a later change wants a different order, it needs its
+// own named helper and its own reason.
 //
 // law_cases carries FOUR assignment fields — primaryLawyerId, responsibleLawyerId,
 // assignedLawyers (jsonb) and litigatorId — and different call sites picked
@@ -1979,11 +1995,11 @@ export interface CaseStageTransition {
 // this helper deliberately invents NO fallback (no dept-head, no branch manager).
 export function caseNotificationRecipientId(
   lawCase:
-    | { responsibleLawyerId?: string | null; primaryLawyerId?: string | null }
+    | { primaryLawyerId?: string | null; responsibleLawyerId?: string | null }
     | null
     | undefined,
 ): string {
-  return lawCase?.responsibleLawyerId || lawCase?.primaryLawyerId || "";
+  return lawCase?.primaryLawyerId || lawCase?.responsibleLawyerId || "";
 }
 
 // ==================== أسباب الإغلاق ====================

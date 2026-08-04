@@ -1777,7 +1777,7 @@ export default function CasesPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-center text-sm break-words">
-                    {getLawyerName(c.responsibleLawyerId || c.primaryLawyerId)}
+                    {getLawyerName(caseNotificationRecipientId(c))}
                     {/* "المترافع" — rendered only when set, so the row is
                         unchanged for the overwhelming majority of cases. Makes
                         it visible from the LIST that someone else appears in

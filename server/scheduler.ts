@@ -403,7 +403,9 @@ async function checkLegalDeadlines() {
       // dialog or مهامي (both write primaryLawyerId only) received NO 7-day,
       // 3-day or overdue legal-deadline warning at all, silently. Primary first,
       // responsible as fallback.
-      const recipientId = caseInfo?.primaryLawyerId || caseInfo?.responsibleLawyerId;
+      // Now byte-equivalent to the shared helper, so use it rather than keeping a
+      // second copy of the chain.
+      const recipientId = caseNotificationRecipientId(caseInfo);
       if (!recipientId) continue;
 
       if (daysLeft > 6 && daysLeft <= 7) {

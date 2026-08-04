@@ -334,7 +334,10 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       reviewDecision: decision,
       reviewNotes: notes,
     });
-    notifyCaseReturnedForRevision(id, lawCase?.caseNumber || "", lawCase?.responsibleLawyerId || lawCase?.primaryLawyerId || null, notes).catch(() => {});
+    // SECOND caller of notifyCaseReturnedForRevision — it had its own inline copy
+    // of the chain, in the OLD responsible-first order, so the two callers could
+    // notify different people about the same event. Both now use the helper.
+    notifyCaseReturnedForRevision(id, lawCase?.caseNumber || "", caseNotificationRecipientId(lawCase) || null, notes).catch(() => {});
   };
 
   const markReadyToSubmit = (id: string) => {
