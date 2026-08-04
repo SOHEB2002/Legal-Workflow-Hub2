@@ -69,7 +69,7 @@ import { formatTimeAmPm } from "@/lib/date-utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { canActOnHearingMinutes, caseReachedJudgment } from "@/lib/attachment-indicators";
+import { canWriteHearingMinutes, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment } from "@/lib/attachment-indicators";
 import { extractApiError } from "@/lib/utils";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
@@ -1321,16 +1321,22 @@ export function CaseDetailsDialog({
                                           so offering an attach control would be
                                           offering something that can never apply.
 
-                                          GATE: canActOnHearingMinutes, the shared
-                                          mirror of the server's canActOnHearing. It
-                                          governs the whole control rather than just
-                                          the write half, because the minutes DOWNLOAD
-                                          route is gated on canActOnHearing too — so
-                                          a preview button shown any wider would 403.
-                                          (The صك differs: its download is canModifyCase,
-                                          i.e. view-level — see commit 4.) */}
+                                          🔴 THE GATE IS NOW SPLIT, because the server's
+                                          is. READ (preview/download) went wide — the
+                                          minutes GET + download routes now resolve the
+                                          PARENT CASE and use canModifyCase, matching
+                                          the صك. WRITE (attach/replace/delete) is
+                                          UNCHANGED at canActOnHearing.
+                                          So the trigger renders for a writer ALWAYS,
+                                          and for a view-only user ONLY when a file
+                                          actually exists (hearingHasMinutes, off the
+                                          list's derived flag) — a viewer with no ضبط
+                                          on file sees nothing at all rather than an
+                                          empty upload box or a dead button. canEdit
+                                          then hides upload/replace/delete inside. */}
                                       {!hearingProducesNoMinutes(hearing)
-                                        && canActOnHearingMinutes(user, hearing) && (
+                                        && (canWriteHearingMinutes(user, hearing)
+                                            || (canViewHearingMinutes(user) && hearingHasMinutes(hearing))) && (
                                         <Popover>
                                           <PopoverTrigger asChild>
                                             <Button
@@ -1351,7 +1357,7 @@ export function CaseDetailsDialog({
                                               endpoint={`/api/hearings/${hearing.id}/minutes-attachment`}
                                               label="ملف ضبط الجلسة"
                                               emptyHint="لم يُرفق الضبط بعد"
-                                              canEdit={canActOnHearingMinutes(user, hearing)}
+                                              canEdit={canWriteHearingMinutes(user, hearing)}
                                               // THE SYNC GUARANTEE. Byte-identical to
                                               // the hearing dialog's own onChanged
                                               // (the ffadb50 fix): uploadAttachmentRaw

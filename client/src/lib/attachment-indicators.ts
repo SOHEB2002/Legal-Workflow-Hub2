@@ -113,26 +113,44 @@ export function isPostJudgmentCaseMissingDeed(c: {
   return !c.hasDeedAttachment;
 }
 
-// CLIENT MIRROR of canActOnHearing (server/routes.ts) — attending lawyer /
-// branch_manager / admin_support. This one predicate governs BOTH halves of the
-// ضبط file on a hearing, because the server uses the SAME gate for both:
-//   POST/DELETE .../minutes-attachment           → canActOnHearing
-//   GET        .../minutes-attachment/download    → canActOnHearing  (:9829)
+// 🔴 THE ضبط GATE IS NOW TWO GATES, because the server's is (owner decision
+// 2026-08-04). The single canActOnHearingMinutes stopped meaning one thing the
+// moment reading widened, so it was RENAMED rather than left as a name that
+// silently covers two different audiences:
 //
-// ⚠ NOTE THE ASYMMETRY WITH THE صك: the deed's DOWNLOAD route is gated on
-// canModifyCase — the view-level rule, deliberately wider than its write gate —
-// so anyone who can open a case may read its صك. The minutes download is NOT
-// widened that way. So a preview button here must be shown to exactly this set
-// and no wider, or it would render for users the server will 403.
+//   READ  (preview / download)  → canViewHearingMinutes  → parent case's viewers
+//          GET .../minutes-attachment and .../download are canModifyCase on the
+//          PARENT CASE (routes.ts), matching the صك, which was already read-wide.
+//   WRITE (attach / replace / delete) → canWriteHearingMinutes → canActOnHearing
+//          POST and DELETE .../minutes-attachment are UNCHANGED and stay narrow.
+//
+// Keeping one predicate would have meant either hiding the preview from users the
+// server now serves, or offering upload to users it still 403s. Both are the
+// visibility != authorization failure this codebase keeps paying for.
+
+// READ half. The client equivalent of "can open this case" — the case-details
+// dialog only renders for a case the user can already see, and the hearing dialog
+// is reached from it, so anyone with the row in hand qualifies. The server is
+// still the authority; this only decides what renders.
+export function canViewHearingMinutes(
+  user: { id: string; role: string } | null | undefined,
+): boolean {
+  return !!user;
+}
+
+// WRITE half — the unchanged mirror of the server's canActOnHearing: attending
+// lawyer / branch_manager / admin_support.
 //
 // Deliberately NOT department-scoped: hearings carry no departmentId, so a
 // department_head would have to be resolved through the parent case — the known
-// open item that kept hearings out of the tiered permissions widening.
+// open item that kept hearings out of the tiered permissions widening. (The READ
+// half above does resolve the parent case, server-side, which is exactly why it
+// can be wider.)
 //
 // EXPORTED so the hearing-details dialog and the case-details dialog share ONE
 // implementation. Two inline copies of the same four-line rule is exactly the
 // drift this codebase has been bitten by before.
-export function canActOnHearingMinutes(
+export function canWriteHearingMinutes(
   user: { id: string; role: string } | null | undefined,
   hearing: { attendingLawyerId?: string | null } | null | undefined,
 ): boolean {
@@ -140,6 +158,16 @@ export function canActOnHearingMinutes(
   return user.role === "branch_manager"
     || user.role === "admin_support"
     || (!!hearing.attendingLawyerId && hearing.attendingLawyerId === user.id);
+}
+
+// Structural accessor for the ضبط presence flag — the hearing-side twin of
+// caseHasDeedAttachment, reading the derived hasMinutesAttachment stamped on
+// GET /api/hearings. Used to decide whether a VIEW-ONLY user is shown anything at
+// all: a viewer must see a preview when a file exists and NOTHING when it does
+// not, and this is the only way to know which without issuing a fetch first.
+// `id` is the same TS2559 anchor the accessors above use.
+export function hearingHasMinutes(c: { id: string; hasMinutesAttachment?: boolean }): boolean {
+  return !!c.hasMinutesAttachment;
 }
 
 // A single hearing whose result is recorded but whose ضبط is not attached.

@@ -9809,7 +9809,17 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const hearing = await storage.getHearingById(String(req.params.id));
       if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
-      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+      // Widened with the download route below, and it HAD to be: this is the
+      // metadata read the attachment control issues first, so leaving it narrow
+      // would 403 a read-only viewer before any preview button could render — the
+      // download gate alone would have been useless. Same parent-case resolution,
+      // same orphan fallback. Mirrors the صك's metadata route, which is likewise
+      // canModifyCase and states the same intent.
+      const parentCase = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
+      const mayReadMinutes = parentCase
+        ? canModifyCase(reqUser, parentCase, req.actingContext)
+        : canActOnHearing(reqUser, hearing, req.actingContext);
+      if (!mayReadMinutes) {
         return res.status(403).json({ error: "لا تملك صلاحية عرض هذه الجلسة" });
       }
       const att = await storage.getHearingAttachment(hearing.id);
@@ -9826,7 +9836,30 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const hearing = await storage.getHearingById(String(req.params.id));
       if (!hearing) return res.status(404).json({ error: "الجلسة غير موجودة" });
-      if (!canActOnHearing(reqUser, hearing, req.actingContext)) {
+      // 🔴 READ GATE WIDENED (owner decision 2026-08-04): the ضبط is viewable by
+      // anyone who can open the parent case, matching the صك — whose download
+      // route is already canModifyCase (:9622). It used to be canActOnHearing,
+      // the same narrow set as the WRITE routes, which is why the case-details
+      // dialog could not offer a preview to a read-only viewer.
+      //
+      // ⚠ THIS IS THE READ ROUTE ONLY. POST and DELETE on
+      // /api/hearings/:id/minutes-attachment still use canActOnHearing and are
+      // deliberately untouched — attaching, replacing and deleting stay with the
+      // attending lawyer / branch_manager / admin_support.
+      //
+      // Hearings carry no departmentId, so the audience is resolved through the
+      // PARENT CASE with the getCaseById(hearing.caseId) precedent already used
+      // throughout this file (canEditHearingRecord, the my-tasks scoping, the
+      // judgment promotion). No new plumbing.
+      //
+      // A hearing with no caseId cannot be scoped that way, so it FALLS BACK to
+      // canActOnHearing — refusing rather than opening up is the safe direction
+      // for an orphan row.
+      const parentCase = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
+      const mayReadMinutes = parentCase
+        ? canModifyCase(reqUser, parentCase, req.actingContext)
+        : canActOnHearing(reqUser, hearing, req.actingContext);
+      if (!mayReadMinutes) {
         return res.status(403).json({ error: "لا تملك صلاحية تحميل هذا الملف" });
       }
       const att = await storage.getHearingAttachment(hearing.id);
