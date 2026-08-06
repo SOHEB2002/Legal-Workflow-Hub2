@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
 import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId } from "@shared/schema";
+import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 
 export function startScheduler() {
   console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
@@ -815,6 +816,63 @@ async function checkExpiredPauses() {
   const UNPAUSE_NOTE = "إلغاء تعليق تلقائي — انتهاء مدة التعليق";
   let lifted = 0;
 
+  // Recipient roster for the auto-lift notices, fetched ONCE for the whole
+  // sweep. Isolated in its own try/catch and defaulted to []: TELLING someone is
+  // secondary to LIFTING, so a users-table failure must degrade to "lifted, but
+  // nobody was told" — never block the sweep that is this job's actual purpose.
+  // resolveNotificationRecipients returns [] for an empty roster, which makes
+  // every send below a silent no-op with no further guarding needed.
+  let roster: NotificationRecipientUser[] = [];
+  try {
+    roster = await storage.getAllUsers();
+  } catch (error) {
+    console.error("Error loading users for expired-pause notifications:", error);
+  }
+
+  // ONE notification per lifted record, to the assignee AND whoever paused it,
+  // de-duplicated when they are the same person (the common case).
+  //
+  // 🔴 THE WORDING IS PAST TENSE ON PURPOSE. By the time anyone reads this the
+  // record is ALREADY ACTIVE — the pause was lifted moments earlier, in the same
+  // loop iteration. Copy that urges the reader to act ("the pause is about to
+  // expire") would describe a state that no longer exists and invite them to
+  // hunt for a pause that is gone. This is a statement of fact, matching the
+  // tone of UNPAUSE_NOTE, which is what the activity log already records.
+  //
+  // 🔴 ISOLATED PER ROW, and that is not redundant with the four outer
+  // try/catch blocks: those isolate the four ENTITIES from each other, so an
+  // uncaught throw here would still abandon every REMAINING row of the entity
+  // being processed — lifting case #3 and then silently skipping cases #4..#n.
+  // Same shape as checkStruckOffExpiry's own notify-block try/catch.
+  const notifyLift = async (input: {
+    title: string;
+    message: string;
+    candidates: (string | null | undefined)[];
+    relatedType: "case" | "consultation" | "memo" | null;
+    relatedId: string | null;
+  }) => {
+    try {
+      for (const recipientId of resolveNotificationRecipients(input.candidates, roster)) {
+        await storage.createNotification({
+          type: "general_alert",
+          priority: "medium",
+          status: "pending",
+          title: input.title,
+          message: input.message,
+          senderId: "system",
+          senderName: "النظام التلقائي",
+          recipientId,
+          relatedType: input.relatedType,
+          relatedId: input.relatedId,
+          // Information, not a request — nothing is being asked of the reader.
+          requiresResponse: false,
+        });
+      }
+    } catch (error) {
+      console.error("Error sending expired-pause notification:", error);
+    }
+  };
+
   // Each entity is isolated in its own try/catch: one entity failing (a missing
   // column mid-deploy, a bad row) must not stop the other three from lifting.
   try {
@@ -824,12 +882,27 @@ async function checkExpiredPauses() {
       if ((c.currentStage as string) === "مقفلة") continue;
       if ((c as { status?: string }).status === "مغلق") continue;
       if (!isExpired(c)) continue;
-      await storage.unpauseCase(c.id, {
+      // Captured BEFORE the lift — unpauseCase clears pause_until, so reading it
+      // afterwards would always yield null.
+      const pauseUntilValue = String(c.pauseUntil ?? "").trim();
+      const unpaused = await storage.unpauseCase(c.id, {
         performedBy: "system",
         performerName: "النظام",
         notes: UNPAUSE_NOTE,
       });
       lifted++;
+      // Only on a CONFIRMED lift. unpauseCase returns undefined when the row
+      // vanished between the read and the write; announcing a lift that did not
+      // happen would be worse than staying quiet.
+      if (unpaused) {
+        await notifyLift({
+          title: "تم إلغاء تعليق القضية تلقائياً",
+          message: `تم إلغاء تعليق القضية رقم ${c.caseNumber} تلقائياً — انتهت مدة التعليق بتاريخ ${pauseUntilValue}، وعادت القضية إلى العمل.`,
+          candidates: [caseNotificationRecipientId(c), c.pausedBy],
+          relatedType: "case",
+          relatedId: c.id,
+        });
+      }
     }
   } catch (error) {
     console.error("Error lifting expired case pauses:", error);
@@ -844,11 +917,21 @@ async function checkExpiredPauses() {
       // isn't dragged back to active.
       if (c.status !== "paused") continue;
       if (!isExpired(c)) continue;
-      await storage.unpauseConsultation(c.id, {
+      const pauseUntilValue = String(c.pauseUntil ?? "").trim();
+      const unpaused = await storage.unpauseConsultation(c.id, {
         performedBy: "system",
         notes: UNPAUSE_NOTE,
       });
       lifted++;
+      if (unpaused) {
+        await notifyLift({
+          title: "تم إلغاء تعليق الاستشارة تلقائياً",
+          message: `تم إلغاء تعليق الاستشارة رقم ${c.consultationNumber} تلقائياً — انتهت مدة التعليق بتاريخ ${pauseUntilValue}، وعادت الاستشارة إلى العمل.`,
+          candidates: [c.assignedTo, c.pausedBy],
+          relatedType: "consultation",
+          relatedId: c.id,
+        });
+      }
     }
   } catch (error) {
     console.error("Error lifting expired consultation pauses:", error);
@@ -860,11 +943,30 @@ async function checkExpiredPauses() {
       // Same status-flip model as consultations.
       if (c.status !== "paused") continue;
       if (!isExpired(c)) continue;
-      await storage.unpauseContract(c.id, {
+      const pauseUntilValue = String(c.pauseUntil ?? "").trim();
+      const unpaused = await storage.unpauseContract(c.id, {
         performedBy: "system",
         notes: UNPAUSE_NOTE,
       });
       lifted++;
+      if (unpaused) {
+        // 🔴 relatedType/relatedId are NULL for contracts, deliberately.
+        // Notification.relatedType (shared/schema.ts) is a closed union that does
+        // NOT include "contract", so this notification cannot carry a typed link
+        // and the reader gets no click-through. Widening that union is a real
+        // change with server-gate consequences (canReferenceRelatedEntity has no
+        // contract arm either) and is scoped to the reminder batch — NOT smuggled
+        // in here. The contract NUMBER is therefore carried in the message text
+        // so the record is still identifiable by search. Sending link-less is
+        // the established fallback: checkDelegationExpiry does the same.
+        await notifyLift({
+          title: "تم إلغاء تعليق العقد تلقائياً",
+          message: `تم إلغاء تعليق العقد رقم ${c.contractNumber} تلقائياً — انتهت مدة التعليق بتاريخ ${pauseUntilValue}، وعاد العقد إلى العمل.`,
+          candidates: [c.assignedTo, c.pausedBy],
+          relatedType: null,
+          relatedId: null,
+        });
+      }
     }
   } catch (error) {
     console.error("Error lifting expired contract pauses:", error);
@@ -878,11 +980,21 @@ async function checkExpiredPauses() {
       // paused should not be revived.
       if (m.status === "ملغاة" || m.status === "مرفوعة" || m.status === "معتمدة") continue;
       if (!isExpired(m)) continue;
-      await storage.unpauseMemo(m.id, {
+      const pauseUntilValue = String(m.pauseUntil ?? "").trim();
+      const unpaused = await storage.unpauseMemo(m.id, {
         performedBy: "system",
         notes: UNPAUSE_NOTE,
       });
       lifted++;
+      if (unpaused) {
+        await notifyLift({
+          title: "تم إلغاء تعليق المذكرة تلقائياً",
+          message: `تم إلغاء تعليق المذكرة "${m.title}" تلقائياً — انتهت مدة التعليق بتاريخ ${pauseUntilValue}، وعادت المذكرة إلى العمل.`,
+          candidates: [m.assignedTo, m.pausedBy],
+          relatedType: "memo",
+          relatedId: m.id,
+        });
+      }
     }
   } catch (error) {
     console.error("Error lifting expired memo pauses:", error);
