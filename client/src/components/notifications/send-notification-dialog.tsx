@@ -464,12 +464,15 @@ export function SendNotificationDialog({
             linkId={relatedId}
             onChange={(t, id) => { setRelatedType(asNotificationLinkType(t)); setRelatedId(id); }}
             label="ربط بـ (اختياري)"
-            // Narrower than my-tasks: Notification.relatedType is typed
-            // case/consultation/task/field_task/hearing/memo, and the cascade
-            // cleanup in storage only deletes notifications for case /
-            // consultation / hearing / memo. A contract- or client-linked
-            // notification would be off-type AND never cleaned up, so those two
-            // are withheld here rather than widening the shared type.
+            // Narrower than my-tasks, but the REASON has changed for عقد.
+            // Both original objections — that Notification.relatedType had no
+            // "contract" member, and that deleteContract never cleaned up
+            // contract-linked notifications — were resolved in batch 4, so a
+            // contract link would now be typed and would be cascaded. It stays
+            // withheld only because offering a new link target in the manual
+            // send dialog is a product decision nobody has taken; it is no
+            // longer a technical limitation. عميل remains genuinely
+            // unsupported: there is no "client" member and no cascade.
             types={NOTIFICATION_LINK_TYPES}
           />
 

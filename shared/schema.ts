@@ -4758,7 +4758,13 @@ export interface Notification {
   senderName: string;
   recipientId: string;
   recipientIds?: string[];
-  relatedType: "case" | "consultation" | "task" | "field_task" | "hearing" | "memo" | null;
+  // "contract" added in batch 4 so contract reminders can carry a typed link
+  // like every sibling. Until then contracts were the ONLY notifiable entity
+  // with no member here, which is why the pause notice and the create notice
+  // both send relatedType:null with a bare relatedId. Those two producers still
+  // do — they are correct as written and were deliberately left alone; setting
+  // their relatedType is a follow-up, not part of this change.
+  relatedType: "case" | "consultation" | "contract" | "task" | "field_task" | "hearing" | "memo" | null;
   relatedId: string | null;
   /** Optional = additive. Stamped only on the PAGED list read; absent on every
    *  other path, so nothing that does not ask for it is affected. */

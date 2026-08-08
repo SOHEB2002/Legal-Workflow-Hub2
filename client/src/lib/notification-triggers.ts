@@ -53,7 +53,10 @@ async function sendNotificationDirect(
   priority: NotificationPriorityValue,
   title: string,
   message: string,
-  relatedType: "case" | "consultation" | "field_task",
+  // Widened to the four entity types the triggers actually reference. It was
+  // narrower than Notification.relatedType for no reason other than that no
+  // caller had needed the others yet.
+  relatedType: "case" | "consultation" | "contract" | "memo" | "field_task",
   relatedId: string,
   senderId?: string,
   senderName?: string,

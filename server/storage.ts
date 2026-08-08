@@ -22,7 +22,7 @@ import {
   ConsultationType, resolveConsultationType,
   ConsultationCategory, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
-  ContractStage, ContractStatus, ContractActivityType,
+  ContractStage, ContractStatus, ContractActivityType, ContractStageLabels, type ContractStageValue,
   CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, findPrimaryJudgmentHearing,
   type NotificationLinkedContext,
   CaseStageLabels, type CaseStageValue,
@@ -2534,12 +2534,14 @@ export class DatabaseStorage implements IStorage {
     const hearingIds = idsOf("hearing");
     const memoIds = idsOf("memo");
     const consultationIds = idsOf("consultation");
+    const contractIds = idsOf("contract");
     const fieldTaskIds = idsOf("field_task");
 
     const byCase = new Map<string, NotificationLinkedContext>();
     const byHearing = new Map<string, NotificationLinkedContext>();
     const byMemo = new Map<string, NotificationLinkedContext>();
     const byConsultation = new Map<string, NotificationLinkedContext>();
+    const byContract = new Map<string, NotificationLinkedContext>();
     const byFieldTask = new Map<string, NotificationLinkedContext>();
 
     // Empty/whitespace collapses to undefined so the client renders only what
@@ -2621,6 +2623,28 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // Contracts — added with the relatedType widening so a contract
+    // notification renders with the same context card as its siblings instead
+    // of a bare title. Shaped on the CONSULTATION branch: contracts lead with
+    // their own headline (the TITLE, which is NOT NULL here, unlike the
+    // consultation title) and carry a client but NO opponent column, so
+    // opponentName stays unset exactly as it does for consultations.
+    if (contractIds.length > 0) {
+      const r = await db.select({
+        id: contracts.id, title: contracts.title, currentStage: contracts.currentStage,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      }).from(contracts).leftJoin(clients, eq(contracts.clientId, clients.id))
+        .where(inArray(contracts.id, contractIds));
+      for (const row of r) {
+        byContract.set(row.id, {
+          primary: clean(row.title),
+          clientName: clean(clientDisplayName(row)),
+          stageLabel: ContractStageLabels[row.currentStage as ContractStageValue] || clean(row.currentStage),
+        });
+      }
+    }
+
     if (fieldTaskIds.length > 0) {
       // A field task links to AT MOST ONE of four entities, all optional. Four
       // left joins in ONE query beat four round trips; the first non-empty name
@@ -2656,6 +2680,7 @@ export class DatabaseStorage implements IStorage {
       : t === "hearing" ? byHearing
       : t === "memo" ? byMemo
       : t === "consultation" ? byConsultation
+      : t === "contract" ? byContract
       : t === "field_task" ? byFieldTask
       : null; // "task" carries a delegation id — nothing to resolve.
 
@@ -6984,6 +7009,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteContract(id: string): Promise<boolean> {
+    // Contract-linked notifications go WITH the contract, mirroring
+    // deleteCase / deleteConsultation. Added alongside the relatedType
+    // widening: "contract" notifications were previously impossible, so there
+    // was nothing to clean up; now that they exist, leaving them would orphan
+    // rows pointing at a deleted contract — which is precisely one of the two
+    // reasons the manual send dialog gives for withholding عقد as a link type.
+    await db.delete(notifications).where(and(eq(notifications.relatedType, "contract"), eq(notifications.relatedId, id)));
     const result = await db.delete(contracts).where(eq(contracts.id, id)).returning();
     return result.length > 0;
   }

@@ -634,12 +634,46 @@ async function canReferenceRelatedEntity(
     const c = await storage.getConsultationById(id);
     return !!c && canModifyConsultation(user, c, ctx);
   };
+  // 🔴 THE ONE PERMISSION LINE THE OWNER APPROVED FOR THIS BATCH.
+  //
+  // MODELLED ON onConsultation, deliberately, and not on onCase. Contracts are
+  // the exact structural analogue of consultations here: a single top-level
+  // entity that carries its OWN departmentId column and has its own
+  // canModifyContract helper — so the authority test is one call, identical in
+  // shape. onCase additionally accepts `c.createdBy === user.id`, which is a
+  // case-specific carve-out (a case's creator may reference it before a lawyer
+  // is assigned); canModifyContract ALREADY admits the creator internally, so
+  // copying that arm would have been redundant, not merely wider.
+  //
+  // WHAT THIS WIDENS, EXACTLY: relatedType "contract" previously hit the
+  // `default: return false` arm, so referencing a contract in a notification was
+  // available ONLY to the five canSendNotifications roles. It is now ALSO
+  // available to whoever canModifyContract already admits — admin_support, the
+  // own-department department_head, the contract's assignee, its creator, and
+  // its internal reviewer. admin_support is the one that matters: it is in
+  // canSendReminders but NOT in canSendNotifications, so without this arm an
+  // admin_support contract reminder 403s.
+  //
+  // IT GRANTS NOTHING ELSE. This helper is consulted at exactly one place — the
+  // send gate on POST /api/notifications (and the reminders endpoint, which
+  // reuses that same gate). Its return value only ever decides whether a
+  // notification row may NAME this contract. It confers no read of the
+  // contract, no write, no stage transition, no workflow action; every one of
+  // those keeps its own gate, untouched. And it can only widen for users
+  // canModifyContract ALREADY returns true for — it introduces no new predicate.
+  const onContract = async (id: string | null | undefined): Promise<boolean> => {
+    if (!id) return false;
+    const c = await storage.getContractById(id);
+    return !!c && canModifyContract(user, c, ctx);
+  };
 
   switch (relatedType) {
     case "case":
       return onCase(relatedId);
     case "consultation":
       return onConsultation(relatedId);
+    case "contract":
+      return onContract(relatedId);
     case "hearing": {
       const h = await storage.getHearingById(relatedId);
       return !!h && onCase(h.caseId);
