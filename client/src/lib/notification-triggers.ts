@@ -107,21 +107,15 @@ export async function notifyCaseAssigned(caseId: string, caseNumber: string, law
   );
 }
 
-export async function notifyCaseSentToReview(caseId: string, caseNumber: string) {
-  const users = await getUsers();
-  const reviewHeads = findUsersByRole(users, "cases_review_head");
-  for (const head of reviewHeads) {
-    await sendNotificationDirect(
-      head.id,
-      NotificationType.SENT_TO_REVIEW,
-      NotificationPriority.HIGH,
-      "قضية جديدة للمراجعة",
-      `تم إحالة القضية رقم ${caseNumber} للجنة المراجعة`,
-      "case",
-      caseId,
-    );
-  }
-}
+// 🔴 notifyCaseSentToReview WAS DELETED — do not re-add a client copy. It
+// notified every active cases_review_head FIRM-WIDE, which was wrong for LABOR
+// cases: those are chaired by labor_review_head, so the notice paged someone who
+// would be 403'd if they acted and never reached the only role that could
+// decide. The referral notice now fires from PATCH /api/cases/:id
+// (notifyCaseSentToCommittee), in the SAME handler as the committee authority
+// gate, so who-is-told and who-may-decide come from one rule and cannot drift.
+// The browser copy also carried the double-swallowed failure — its own catch
+// plus the caller's `.catch(() => {})`.
 
 export async function notifyCaseReturnedForRevision(caseId: string, caseNumber: string, responsibleLawyerId: string | null, notes: string) {
   if (!responsibleLawyerId) return;

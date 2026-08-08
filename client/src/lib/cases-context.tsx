@@ -3,7 +3,7 @@ import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, Case
 import { CaseStatus, Priority, CaseStage, CaseClassification, getStagesForClassification, caseNotificationRecipientId } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
-import { notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
+import { notifyCaseAssigned, notifyCaseReturnedForRevision } from "./notification-triggers";
 import { useAuth } from "./auth-context";
 import { useDepartments } from "./departments-context";
 
@@ -465,10 +465,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
     await updateCase(id, updateData);
 
-    if (nextStage === CaseStage.REVIEW_COMMITTEE) {
-      notifyCaseSentToReview(lawCase.id, lawCase.caseNumber).catch(() => {});
-    }
-
+    // The committee-referral notice now fires from PATCH /api/cases/:id itself,
+    // which is where the committee authority gate lives — so the chair who is
+    // told is the chair who may decide, labor included.
     return true;
   };
 
