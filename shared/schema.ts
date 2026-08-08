@@ -6516,6 +6516,12 @@ export type SidebarCounts = Record<SidebarSectionValue, number>;
 export const MyTaskKind = {
   CASE_WORK: "case_work",                 // assigned lawyer must act at a lawyer-work stage
   CASE_UNASSIGNED: "case_unassigned",     // unassigned case in dept (dept_head assigns)
+  // Siblings of the above for the other two assignable record types. Separate
+  // kinds rather than one shared "unassigned" kind because each routes to its
+  // OWN assign endpoint and needs its own Arabic verb — CASE_UNASSIGNED's
+  // "إسناد القضية لمحامٍ" and its lawyer/department toggle are case-specific.
+  CONSULTATION_UNASSIGNED: "consultation_unassigned",
+  CONTRACT_UNASSIGNED: "contract_unassigned",
   HEARING_ATTEND: "hearing_attend",       // upcoming hearing to attend
   HEARING_UNRECORDED: "hearing_unrecorded", // hearing date passed, result not recorded
   HEARING_REPORT: "hearing_report",       // result recorded, report not completed

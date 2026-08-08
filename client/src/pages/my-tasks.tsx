@@ -80,6 +80,8 @@ function isCaseStageKind(task: MyTaskItem): boolean {
 const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> = {
   case_work: { icon: Scale, label: "عمل على قضية" },
   case_unassigned: { icon: UserPlus, label: "قضية بحاجة لإسناد" },
+  consultation_unassigned: { icon: UserPlus, label: "استشارة بحاجة لإسناد" },
+  contract_unassigned: { icon: UserPlus, label: "عقد بحاجة لإسناد" },
   hearing_attend: { icon: Gavel, label: "حضور جلسة" },
   hearing_unrecorded: { icon: AlertTriangle, label: "جلسة دون تسجيل نتيجة" },
   hearing_report: { icon: FileText, label: "تقرير جلسة" },
@@ -156,6 +158,9 @@ const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
 const PINNED_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.HEARING_ATTEND, MyTaskKind.HEARING_UNRECORDED, MyTaskKind.HEARING_REPORT,
   MyTaskKind.AGENCY_VERIFICATION, MyTaskKind.CASE_UNASSIGNED,
+  // Pinned with their case sibling — an unassigned record is nobody's work
+  // until a head acts, so it must not sink below assigned items.
+  MyTaskKind.CONSULTATION_UNASSIGNED, MyTaskKind.CONTRACT_UNASSIGNED,
 ]);
 
 function byTime(a: MyTaskItem, b: MyTaskItem): number {
@@ -236,6 +241,11 @@ function actionModeFor(task: MyTaskItem): { mode: ActionMode; title: string } | 
     case MyTaskKind.CONSULTATION_CLOSING: return { mode: "reason", title: "إغلاق الاستشارة" };
     case MyTaskKind.HEARING_REPORT: return { mode: "report", title: "تقرير الجلسة" };
     case MyTaskKind.CASE_UNASSIGNED: return { mode: "assign", title: "إسناد القضية لمحامٍ" };
+    // Person-only assign (no department toggle — that is a case-specific route).
+    // The shared modal already renders the plain "المسند إليه" dropdown for any
+    // assign kind that is not CASE_UNASSIGNED, so no new modal branch is needed.
+    case MyTaskKind.CONSULTATION_UNASSIGNED: return { mode: "assign", title: "إسناد الاستشارة" };
+    case MyTaskKind.CONTRACT_UNASSIGNED: return { mode: "assign", title: "إسناد العقد" };
     case MyTaskKind.REVIEW_PENDING:
       // memo / contract / consultation have dedicated decision endpoints; case
       // review goes through stage transitions (deferred — see report).
@@ -356,6 +366,13 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
       return form.assignTarget === "department"
         ? { method: "PATCH", url: `/api/cases/${e}`, body: { departmentId: form.assignDeptId } }
         : { method: "PATCH", url: `/api/cases/${e}`, body: { primaryLawyerId: form.assigneeId } };
+    // The DEDICATED assign endpoints, not a bare PATCH: both already exist, are
+    // department-scoped for a head, and carry their own validation + activity
+    // log. Using PATCH here would bypass that.
+    case MyTaskKind.CONSULTATION_UNASSIGNED:
+      return { method: "POST", url: `/api/consultations/${e}/assign`, body: { assignedTo: form.assigneeId } };
+    case MyTaskKind.CONTRACT_UNASSIGNED:
+      return { method: "POST", url: `/api/contracts/${e}/assign`, body: { assignedTo: form.assigneeId } };
     case MyTaskKind.REVIEW_PENDING: {
       const isCommittee = task.id.includes(":committee_");
       const base = task.entityType === "memo" ? "memos" : task.entityType === "contract" ? "contracts" : "consultations";

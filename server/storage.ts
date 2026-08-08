@@ -4159,6 +4159,84 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // ---- 2b/2c. consultation_unassigned + contract_unassigned ----
+    // Only CASES had an unassigned block. A consultation or contract could sit
+    // with no assignee indefinitely and reach NO worklist at all — the head was
+    // told about it once, at creation, by a notification that (until this batch)
+    // was posted from the browser and could silently fail.
+    //
+    // Mirrors block 2 exactly: same head-per-department resolution, same
+    // "no active head → stay dormant" rule, same scopeOf ownership. The head
+    // lookup is shared with block 2 via deptHeadFor below rather than re-queried.
+    //
+    // 🔴 "UNASSIGNED" IS NOT THE SAME TEST AS FOR CASES. A case is unassigned
+    // when BOTH lawyer columns are empty (hasNoLawyer). Consultations and
+    // contracts have ONE nullable assigned_to, and it can be NULL *or* the ""
+    // sentinel, so both must be tested — `IS NULL` alone would miss every
+    // record unassigned through the transfer/unassign paths.
+    //
+    // 🔴 PAUSE SUPPRESSION IS INHERENT HERE, not bolted on: pauseConsultation /
+    // pauseContract flip status to "paused", so `status = 'active'` already
+    // excludes a paused record — the same mechanism batch 1 relied on for every
+    // other consultation/contract block. A paused record is therefore never
+    // asked to be assigned, and no separate pausedAt term is needed.
+    // status='active' also covers closed and converted.
+    //
+    // Terminal STAGES are excluded on top of that, because a record can reach a
+    // done stage while status is still "active" — block 13 surfaces منجزة
+    // consultations as active, so without this a finished consultation would be
+    // reported as needing an assignee.
+    if (teamScoped) {
+      const heads = await db.select({ id: users.id, departmentId: users.departmentId })
+        .from(users)
+        .where(and(eq(users.role, "department_head"), eq(users.isActive, true)));
+      const deptHeadFor = new Map<string, string>();
+      for (const h of heads) if (h.departmentId) deptHeadFor.set(h.departmentId, h.id);
+
+      // NULL *or* "" — see the note above.
+      const consultationUnassigned = sql`(${consultations.assignedTo} IS NULL OR ${consultations.assignedTo} = '')`;
+      const consultWhere = firmWideScoped
+        ? and(eq(consultations.status, ConsultationStatus.ACTIVE), consultationUnassigned,
+            sql`${consultations.currentStage} NOT IN ('منجزة', 'مغلقة')`)
+        : and(eq(consultations.departmentId, userDept!), eq(consultations.status, ConsultationStatus.ACTIVE),
+            consultationUnassigned, sql`${consultations.currentStage} NOT IN ('منجزة', 'مغلقة')`);
+      const consultRows = await db.select({
+        id: consultations.id, consultationNumber: consultations.consultationNumber,
+        departmentId: consultations.departmentId,
+      }).from(consultations).where(consultWhere);
+      for (const r of consultRows) {
+        const deptHeadId = r.departmentId ? deptHeadFor.get(r.departmentId) : undefined;
+        if (!deptHeadId) continue; // head-less department → dormant, exactly like block 2
+        tasks.push({
+          id: `consultation_unassigned:${r.id}`, kind: MyTaskKind.CONSULTATION_UNASSIGNED,
+          title: `استشارة غير مُسندة بحاجة لإسناد — ${r.consultationNumber}`,
+          entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId: deptHeadId, ownerScope: scopeOf(deptHeadId), dueDate: null, isOverdue: false, actionHint: "assign",
+        });
+      }
+
+      const contractUnassigned = sql`(${contracts.assignedTo} IS NULL OR ${contracts.assignedTo} = '')`;
+      const contractWhere = firmWideScoped
+        ? and(eq(contracts.status, ContractStatus.ACTIVE), contractUnassigned,
+            sql`${contracts.currentStage} <> 'مغلقة'`)
+        : and(eq(contracts.departmentId, userDept!), eq(contracts.status, ContractStatus.ACTIVE),
+            contractUnassigned, sql`${contracts.currentStage} <> 'مغلقة'`);
+      const contractRows = await db.select({
+        id: contracts.id, contractNumber: contracts.contractNumber,
+        departmentId: contracts.departmentId,
+      }).from(contracts).where(contractWhere);
+      for (const r of contractRows) {
+        const deptHeadId = r.departmentId ? deptHeadFor.get(r.departmentId) : undefined;
+        if (!deptHeadId) continue;
+        tasks.push({
+          id: `contract_unassigned:${r.id}`, kind: MyTaskKind.CONTRACT_UNASSIGNED,
+          title: `عقد غير مُسند بحاجة لإسناد — ${r.contractNumber}`,
+          entityType: "contract", entityId: r.id, caseId: null,
+          ownerId: deptHeadId, ownerScope: scopeOf(deptHeadId), dueDate: null, isOverdue: false, actionHint: "assign",
+        });
+      }
+    }
+
     // ---- 3-5 + agency. Hearings (attend / unrecorded-overdue / report) ----
     // GUARDED (mirrors the data_completion / execution / agency blocks): a failure
     // here degrades to "no hearing tasks this run" and never throws out of
