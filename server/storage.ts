@@ -3580,6 +3580,37 @@ export class DatabaseStorage implements IStorage {
     // idiom as assignedToMe above.
     const hasAnyLawyer = sql`((${lawCases.primaryLawyerId} IS NOT NULL AND ${lawCases.primaryLawyerId} <> '') OR (${lawCases.responsibleLawyerId} IS NOT NULL AND ${lawCases.responsibleLawyerId} <> ''))`;
     const hasNoLawyer = sql`((${lawCases.primaryLawyerId} IS NULL OR ${lawCases.primaryLawyerId} = '') AND (${lawCases.responsibleLawyerId} IS NULL OR ${lawCases.responsibleLawyerId} = ''))`;
+    // 🔴 PAUSE SUPPRESSION. A paused record must not ask anyone to work on it —
+    // that is exactly what a pause MEANS, and the feed used to ignore pauses
+    // entirely. Same reusable-`sql`-fragment idiom as hasAnyLawyer/hasNoLawyer
+    // above, defined ONCE here so no block can drift from another.
+    //
+    // ⚠ ONLY THREE FRAGMENTS EXIST BECAUSE THE FOUR ENTITIES DO NOT RECORD A
+    // PAUSE THE SAME WAY — verified against the pause* storage methods:
+    //   • cases + memos — pauseCase/pauseMemo leave `status` ALONE and mark the
+    //     pause ONLY with paused_at ("Cases status (workflow stage) is left
+    //     alone; pause is detected via paused_at IS NOT NULL"). NOTHING in this
+    //     method looked at paused_at, so every block over them leaked.
+    //   • consultations + contracts — pauseConsultation/pauseContract ALSO flip
+    //     `status` to "paused", so every sibling query already filtering
+    //     status='active' excluded a paused row before this change. Those are
+    //     deliberately NOT given a redundant second term; they are listed in the
+    //     batch report so the asymmetry is on the record rather than implicit.
+    //     The two contract COMMITTEE queries in block 7 are the exception — they
+    //     carry no status filter at all, so they take contractNotPaused.
+    //
+    // DERIVED, NEVER STORED: the guard reads paused_at on the row, and every
+    // unpause path (manual and the scheduler's auto-lift) sets paused_at = NULL
+    // in the same transaction. So suppression lifts on the very next feed read,
+    // with no clearing code, no flag and nothing to reconcile.
+    //
+    // NOT CASCADED TO CHILDREN, deliberately: pausing a CASE does not pause its
+    // hearings, memos or field tasks (no pause* method touches a child row), so
+    // this guard is applied to the record that is ITSELF paused and never
+    // inferred through a join. See the batch report for what that leaves live.
+    const caseNotPaused = sql`${lawCases.pausedAt} IS NULL`;
+    const memoNotPaused = sql`${memos.pausedAt} IS NULL`;
+    const contractNotPaused = sql`${contracts.pausedAt} IS NULL`;
 
     // Admin_support per-type routing: resolve the owner of the assignable
     // kinds ONCE (identity-independent). Each goes to its mapped
@@ -3632,7 +3663,10 @@ export class DatabaseStorage implements IStorage {
     // refinement point). Excludes review/committee/platform/admin-owned stages.
     const LAWYER_WORK_STAGES = ["دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
     {
-      const where = firmWideScoped
+      // Wrapped rather than repeated per arm: the pause guard applies to all
+      // three scopes identically, so applying it ONCE here makes it impossible
+      // to add a fourth arm that silently forgets it. Same shape in 1b/1d/1e.
+      const scopeWhere = firmWideScoped
         ? and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
             hasAnyLawyer)
         : deptHeadScoped
@@ -3640,6 +3674,7 @@ export class DatabaseStorage implements IStorage {
             hasAnyLawyer)
         : and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const where = and(scopeWhere, caseNotPaused);
       const rows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber, stage: lawCases.currentStage,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
@@ -3685,7 +3720,7 @@ export class DatabaseStorage implements IStorage {
     // carrying a caseId (see the tail of this method), so it comes for free.
     {
       const SETTLEMENT_DIRECTION_STAGE = "توجيه_العميل_بالتسوية";
-      const where = firmWideScoped
+      const scopeWhere = firmWideScoped
         ? and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
             hasAnyLawyer)
         : deptHeadScoped
@@ -3693,6 +3728,7 @@ export class DatabaseStorage implements IStorage {
             hasAnyLawyer)
         : and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const where = and(scopeWhere, caseNotPaused);
       const rows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
@@ -3744,8 +3780,8 @@ export class DatabaseStorage implements IStorage {
       // ATTENDING lawyer, who is on the hearing row, not the case. Candidates are
       // fetched by stage (+ dept for a head) and filtered by resolved owner below.
       const deedWhere = deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing)
-        : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing);
+        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing, caseNotPaused)
+        : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing, caseNotPaused);
       const deedRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
@@ -3811,12 +3847,19 @@ export class DatabaseStorage implements IStorage {
     {
       const PRIMARY_JUDGMENT_STAGE = "محكوم_حكم_ابتدائي";
       const deedPresent = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL AND ${lawCases.judgmentDeedReceivedDate} <> '')`;
-      const lapsedWhere = firmWideScoped
+      // SUPPRESSED WHILE PAUSED even though the objection WINDOW is a legal
+      // clock: this task fires only AFTER that window has already lapsed, and
+      // asks for a RECORDING ("سجّل النتيجة"), not for an act with a deadline.
+      // Nothing is lost by deferring it, and it reappears intact on lift. The
+      // genuinely time-bound items — hearings and legal_deadlines — are NOT
+      // suppressed; see the batch report.
+      const lapsedScopeWhere = firmWideScoped
         ? and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent)
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent)
         : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent,
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const lapsedWhere = and(lapsedScopeWhere, caseNotPaused);
       const lapsedRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         deedDate: lawCases.judgmentDeedReceivedDate, windowDays: lawCases.objectionWindowDays,
@@ -3867,13 +3910,14 @@ export class DatabaseStorage implements IStorage {
         new Set(flaggedHearings.map((h) => h.caseId).filter((id): id is string => !!id)),
       );
       if (flaggedCaseIds.length > 0) {
-        const oppWhere = firmWideScoped
+        const oppScopeWhere = firmWideScoped
           ? and(inArray(lawCases.id, flaggedCaseIds), ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
           : deptHeadScoped
           ? and(inArray(lawCases.id, flaggedCaseIds), eq(lawCases.departmentId, userDept!),
               ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
           : and(inArray(lawCases.id, flaggedCaseIds), ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`,
               or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+        const oppWhere = and(oppScopeWhere, caseNotPaused);
         const oppRows = await db.select({
           id: lawCases.id, caseNumber: lawCases.caseNumber,
           primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
@@ -3904,15 +3948,20 @@ export class DatabaseStorage implements IStorage {
         .where(and(eq(users.role, "department_head"), eq(users.isActive, true)));
       const deptHeadByDept = new Map<string, string>();
       for (const h of heads) if (h.departmentId) deptHeadByDept.set(h.departmentId, h.id);
+      // Paused cases excluded too: ASSIGNING a case is work on it, and a head
+      // told to staff a case that was deliberately parked would be acting
+      // against the pause decision. It returns to the head's list on lift.
       const unassignedWhere = firmWideScoped
         ? and(
             hasNoLawyer,
             sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+            caseNotPaused,
           )
         : and(
             eq(lawCases.departmentId, userDept!),
             hasNoLawyer,
             sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+            caseNotPaused,
           );
       const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber, departmentId: lawCases.departmentId })
         .from(lawCases).where(unassignedWhere);
@@ -4087,11 +4136,16 @@ export class DatabaseStorage implements IStorage {
       // turn and still surfaces. COALESCE keeps null-stage legacy memos surfacing
       // exactly as before (NULL NOT IN (…) would otherwise drop them).
       const mActionable = sql`COALESCE(${memos.currentStage}, '') NOT IN ('مرفوعة', 'مراجعة_داخلية', 'لجنة_مراجعة') AND ${memos.status} <> 'ملغاة'`;
-      const where = firmWideScoped
+      // memoNotPaused suppresses a paused memo's own work item. It does NOT
+      // silence that memo's DEADLINE: checkMemoDeadlines (scheduler) has no
+      // pause filter and keeps sending the 3-day / 1-day / overdue reminders,
+      // so a court-imposed date still surfaces through its own channel.
+      const scopeWhere = firmWideScoped
         ? and(mActionable, sql`${memos.assignedTo} <> ''`)
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), mActionable, sql`${memos.assignedTo} <> ''`)
         : and(eq(memos.assignedTo, uid), mActionable);
+      const where = and(scopeWhere, memoNotPaused);
       const rows = await db.select({
         id: memos.id, caseId: memos.caseId, title: memos.title, deadline: memos.deadline, assignedTo: memos.assignedTo,
       }).from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id)).where(where);
@@ -4146,9 +4200,9 @@ export class DatabaseStorage implements IStorage {
 
       const caseReviewWhere = firmWideScoped
         ? and(hasReviewer(lawCases.internalReviewerId), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
-            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
+            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`, caseNotPaused)
         : and(eq(lawCases.internalReviewerId, uid), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
-            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`);
+            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`, caseNotPaused);
       const caseRows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber,
           reviewerId: lawCases.internalReviewerId })
         .from(lawCases).where(caseReviewWhere);
@@ -4169,8 +4223,8 @@ export class DatabaseStorage implements IStorage {
       // Memos carry no departmentId — the dept-head scope joins the parent case,
       // the same way block 6 and the committee block below do.
       const memoReviewWhere = firmWideScoped
-        ? and(hasReviewer(memos.internalReviewerId), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"))
-        : and(eq(memos.internalReviewerId, uid), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"));
+        ? and(hasReviewer(memos.internalReviewerId), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused)
+        : and(eq(memos.internalReviewerId, uid), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused);
       const memoRows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId,
           reviewerId: memos.internalReviewerId })
         .from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id)).where(memoReviewWhere);
@@ -4205,14 +4259,14 @@ export class DatabaseStorage implements IStorage {
 
         if (isCasesReviewHead) {
           const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), caseNotLabor));
+            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), caseNotLabor, caseNotPaused));
           for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           // memos carry no departmentId — join the parent case for the exclusion.
           const mc = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
             .from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id))
-            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), caseNotLabor));
+            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), caseNotLabor, memoNotPaused));
           for (const r of mc) tasks.push({ id: `review_pending:committee_memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
@@ -4225,7 +4279,14 @@ export class DatabaseStorage implements IStorage {
             title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const ctc = await db.select({ id: contracts.id, title: contracts.title })
-            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), contractNotLabor));
+            // ⚠ contractNotPaused is the ONLY lifecycle term these two committee
+            // queries have — unlike their internal-review sibling they carry no
+            // status='active' filter at all, so a CLOSED/CANCELLED contract
+            // parked on لجنة_مراجعة still surfaces here. That is a pre-existing
+            // gap of the same family as the block-7 (A) fix; it is REPORTED, not
+            // fixed here, because widening it is a behaviour change beyond this
+            // batch's approved scope.
+            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), contractNotLabor, contractNotPaused));
           for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
@@ -4234,13 +4295,13 @@ export class DatabaseStorage implements IStorage {
         // (guarded on laborDeptId so a missing dept means the labor head sees nothing here).
         if (isLaborReviewHead && laborDeptId) {
           const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), eq(lawCases.departmentId, laborDeptId)));
+            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), eq(lawCases.departmentId, laborDeptId), caseNotPaused));
           for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const mc = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
             .from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id))
-            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), eq(lawCases.departmentId, laborDeptId)));
+            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), eq(lawCases.departmentId, laborDeptId), memoNotPaused));
           for (const r of mc) tasks.push({ id: `review_pending:committee_memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
@@ -4251,7 +4312,9 @@ export class DatabaseStorage implements IStorage {
             title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const ctc = await db.select({ id: contracts.id, title: contracts.title })
-            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), eq(contracts.departmentId, laborDeptId)));
+            // Same missing-status-filter caveat as the non-labor contract
+            // committee query above — reported, not widened here.
+            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), eq(contracts.departmentId, laborDeptId), contractNotPaused));
           for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
@@ -4491,6 +4554,7 @@ export class DatabaseStorage implements IStorage {
           .from(lawCases).where(and(
             eq(lawCases.currentStage, "استكمال_البيانات"),
             sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+            caseNotPaused,
           ));
         for (const r of rows) {
           const ownerId = dataCompletionCaseOwner;
@@ -4563,6 +4627,7 @@ export class DatabaseStorage implements IStorage {
           .from(memos).where(and(
             eq(memos.awaitingCompletion, true),
             sql`(${memos.dataCompletionLastAckAt} IS NULL OR ${memos.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
+            memoNotPaused,
           ));
         for (const r of rows) {
           const ownerId = dataCompletionMemoOwner;
