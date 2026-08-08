@@ -83,6 +83,8 @@ const PRODUCED_NOTIFICATION_TYPES: NotificationTypeValue[] = [
   NotificationType.DELEGATION_EXPIRED,
   NotificationType.WEEKLY_REPORT,
   NotificationType.MONTHLY_REPORT,
+  // scheduler — checkLongPauses (one notice per record per pause episode)
+  NotificationType.PAUSE_AGING,
   // client-side workflow triggers (lib/notification-triggers.ts)
   NotificationType.CONSULTATION_ASSIGNED,
   NotificationType.SENT_TO_REVIEW,

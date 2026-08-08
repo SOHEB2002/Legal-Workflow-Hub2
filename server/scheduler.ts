@@ -1,8 +1,10 @@
 import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
-import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId } from "@shared/schema";
+import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId,
+  NotificationType, pausedDaysLabel } from "@shared/schema";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
+import type { LongPausedRecord } from "./storage";
 
 export function startScheduler() {
   console.log("Scheduler started - automated hearing/memo/deadline/delegation checks active");
@@ -26,6 +28,10 @@ export function startScheduler() {
     // today must be gone before the 15-day settlement-link scan looks at the
     // same rows, so one tick can never both lift and close a case.
     await checkExpiredPauses();
+    // AFTER the lift, on purpose: a pause whose date arrived today is already
+    // gone by now, so a record on its way back to work can never be told it is
+    // "still paused" on the same morning it resumed.
+    await checkLongPauses();
     await checkSettlementLinkMissingTimeout();
     await checkNajizReviewReminders();
   });
@@ -1002,6 +1008,152 @@ async function checkExpiredPauses() {
 
   if (lifted > 0) {
     console.log(`Expired-pause auto-lift: ${lifted} entities resumed.`);
+  }
+}
+
+// ⏸️ ONE notice, the first time a record has been paused for
+// PausedTaskMinDays. Never repeated for that pause.
+//
+// WHY THIS IS ITS OWN JOB AND NOT PART OF checkExpiredPauses. That function has
+// one contract — LIFT pauses whose date has arrived — and its four try/catch
+// blocks are built around the lift. The two jobs also disagree about which rows
+// they care about: checkExpiredPauses looks only at rows carrying a pause_until
+// that has passed, while this one is about pauses that are still very much in
+// force, including every OPEN-ENDED pause (pause_until NULL), which that
+// function skips entirely. Folding this in would have quietly inherited that
+// skip and missed exactly the pauses most likely to drift.
+//
+// 🔴 REGISTERED AFTER checkExpiredPauses in the same daily tick, deliberately —
+// same reasoning as checkExpiredPauses running before
+// checkSettlementLinkMissingTimeout. A pause that expires today is lifted
+// first, so a record on its way out never gets a "still paused" notice on the
+// same morning it resumed.
+async function checkLongPauses() {
+  try {
+    const records = await storage.getLongPausedRecords();
+    if (records.length === 0) return;
+
+    // Roster isolated and defaulted to []: telling someone is secondary to the
+    // rest of the sweep, and resolveNotificationRecipients returns [] for an
+    // empty roster, so a users-table failure degrades to "no notices this run".
+    let roster: NotificationRecipientUser[] = [];
+    try {
+      roster = await storage.getAllUsers();
+    } catch (error) {
+      console.error("Error loading users for long-pause notifications:", error);
+    }
+
+    // 🔴 THE FIRE-ONCE GUARANTEE, and why it is not notificationExists.
+    // notificationExists dedups on relatedId + a TITLE SUBSTRING. That is not
+    // safe enough here for two independent reasons:
+    //   1. Rewording the title would make every already-notified record fire
+    //      AGAIN — permanently, because nothing ever deletes notifications, so
+    //      the duplicates would pile up in every recipient's list forever.
+    //   2. Contracts cannot carry a typed relatedType (the union has no
+    //      "contract" member), so a title-only match across null relatedIds
+    //      would let one contract's notice suppress another's.
+    // Instead the check is purely structural: a dedicated notification TYPE
+    // plus related_id, with created_at deciding the window. No text at all
+    // takes part, so the copy below can be rewritten freely.
+    //
+    // created_at >= the CURRENT pause's start is what scopes it to this pause
+    // EPISODE: a record that was paused, notified, resumed, and paused again
+    // months later has an older notification but a NEWER paused_at, so it
+    // correctly notifies again — while a second run on the same pause finds a
+    // notification created after that pause began and stays silent.
+    const seen = await storage.getNotificationKeysByTypeAndRelatedIds(
+      NotificationType.PAUSE_AGING,
+      records.map((r) => r.id),
+    );
+    const sentAtFor = new Map<string, string>();
+    for (const s of seen) {
+      if (!s.relatedId || !s.createdAt) continue;
+      const key = `${s.relatedId}|${s.recipientId}`;
+      // Keep the NEWEST — an older row must not mask a later re-notification.
+      const prev = sentAtFor.get(key);
+      if (!prev || s.createdAt > prev) sentAtFor.set(key, s.createdAt);
+    }
+
+    let sent = 0;
+    for (const rec of records) {
+      // Per-record isolation: one bad row must not abandon the rest of the
+      // sweep. Mirrors the notifyLift block in checkExpiredPauses.
+      try {
+        const copy = longPauseCopy(rec);
+        for (const recipientId of resolveNotificationRecipients([rec.assigneeId, rec.pausedBy], roster)) {
+          const alreadySent = sentAtFor.get(`${rec.id}|${recipientId}`);
+          // No pausedAt (impossible for a row this query returned, but the
+          // column is nullable) → treat any prior notice as covering it.
+          if (alreadySent && (!rec.pausedAt || alreadySent >= rec.pausedAt)) continue;
+          await storage.createNotification({
+            type: NotificationType.PAUSE_AGING,
+            priority: "medium",
+            status: "pending",
+            title: copy.title,
+            message: copy.message,
+            senderId: "system",
+            senderName: "النظام التلقائي",
+            recipientId,
+            // 🔴 CONTRACTS CARRY relatedId WITHOUT relatedType, on purpose.
+            // Notification.relatedType is a closed union with no "contract"
+            // member, so the typed link is impossible (the auto-lift notice hit
+            // the same wall). But related_id is a plain varchar and the click-
+            // through, the server-side context enrichment and the FE all key on
+            // relatedTYPE — enrichNotificationsWithContext filters
+            // `relatedType === t` before it ever reads relatedId — so setting it
+            // adds no link and breaks nothing, while giving the fire-once check
+            // above a real key for contracts instead of a null one. This is a
+            // deliberate, narrow divergence from the auto-lift notice, which
+            // nulled both because it needed no dedup.
+            relatedType: rec.entityType === "contract" ? null : rec.entityType,
+            relatedId: rec.id,
+            // Information, not a request.
+            requiresResponse: false,
+          });
+          sent++;
+        }
+      } catch (error) {
+        console.error("Error sending long-pause notification:", error);
+      }
+    }
+
+    if (sent > 0) {
+      console.log(`Long-pause notices: ${sent} sent.`);
+    }
+  } catch (error) {
+    console.error("Error in checkLongPauses:", error);
+  }
+}
+
+// 🔴 PRESENT TENSE, unlike the auto-lift notice in checkExpiredPauses. That one
+// reports something that FINISHED ("تم إلغاء تعليق… وعادت إلى العمل"); this one
+// reports a state that is STILL TRUE as the reader reads it — the record is
+// paused right now and stays paused until somebody acts. Hence "معلّقة منذ"
+// rather than "كانت معلّقة", and a closing line that points at a decision
+// rather than announcing one.
+function longPauseCopy(rec: LongPausedRecord): { title: string; message: string } {
+  const days = pausedDaysLabel(rec.pausedDays);
+  switch (rec.entityType) {
+    case "case":
+      return {
+        title: `قضية معلّقة منذ ${days}`,
+        message: `القضية رقم ${rec.label} معلّقة منذ ${days} ولا تزال معلّقة. يرجى مراجعة سبب التعليق وإلغاؤه أو تحديد موعد لانتهائه.`,
+      };
+    case "consultation":
+      return {
+        title: `استشارة معلّقة منذ ${days}`,
+        message: `الاستشارة رقم ${rec.label} معلّقة منذ ${days} ولا تزال معلّقة. يرجى مراجعة سبب التعليق وإلغاؤه أو تحديد موعد لانتهائه.`,
+      };
+    case "contract":
+      return {
+        title: `عقد معلّق منذ ${days}`,
+        message: `العقد رقم ${rec.label} معلّق منذ ${days} ولا يزال معلّقاً. يرجى مراجعة سبب التعليق وإلغاؤه أو تحديد موعد لانتهائه.`,
+      };
+    case "memo":
+      return {
+        title: `مذكرة معلّقة منذ ${days}`,
+        message: `المذكرة "${rec.label}" معلّقة منذ ${days} ولا تزال معلّقة. يرجى مراجعة سبب التعليق وإلغاؤه أو تحديد موعد لانتهائه.`,
+      };
   }
 }
 

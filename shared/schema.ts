@@ -4573,6 +4573,18 @@ export const NotificationType = {
   // تنبيه جلسة متأخرة
   HEARING_UPDATE_OVERDUE: "hearing_update_overdue",
   HEARING_REMINDER: "hearing_reminder",
+
+  // ⏸️ سجل معلّق منذ مدة — the ONE-TIME notice sent when a record crosses
+  // PausedTaskMinDays still paused.
+  //
+  // 🔴 A DEDICATED TYPE IS WHAT MAKES "ONCE" ENFORCEABLE, and that is the only
+  // reason it is not general_alert like its scheduler siblings. The fire-once
+  // check asks the notifications table whether this notice already exists; with
+  // a shared type it would have to match on the TITLE, and every other
+  // general_alert about the same record (the auto-lift notice, hearing alerts)
+  // would collide with it. Type + related_id + created_at makes the check
+  // purely structural. See checkLongPauses in server/scheduler.ts.
+  PAUSE_AGING: "pause_aging",
 } as const;
 
 export type NotificationTypeValue = typeof NotificationType[keyof typeof NotificationType];
@@ -4636,6 +4648,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   contact_followup_overdue: "متابعة تواصل متأخرة",
   hearing_update_overdue: "جلسة متأخرة التحديث",
   hearing_reminder: "تذكير بجلسة",
+  pause_aging: "سجل معلّق منذ مدة",
 };
 
 export const NotificationPriority = {

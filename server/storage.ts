@@ -154,6 +154,12 @@ export interface IStorage {
   // Notifications
   getAllNotifications(): Promise<Notification[]>;
   getRecentNotifications(limit: number): Promise<Notification[]>;
+  // ⏸️ The two reads behind the one-time paused-record notice (checkLongPauses).
+  getLongPausedRecords(): Promise<LongPausedRecord[]>;
+  getNotificationKeysByTypeAndRelatedIds(
+    type: string,
+    relatedIds: string[],
+  ): Promise<{ relatedId: string | null; recipientId: string; createdAt: string | null }[]>;
   getNotificationsByRecipient(recipientId: string, opts?: { limit?: number; offset?: number; unread?: boolean; requiresResponse?: boolean }): Promise<Notification[]>;
   enrichNotificationsWithContext(rows: Notification[]): Promise<Notification[]>;
   createNotification(data: Partial<Notification>): Promise<Notification>;
@@ -1234,6 +1240,29 @@ const pausedLongEnough = (col: AnyPgColumn) =>
 const pausedDaysExpr = (col: AnyPgColumn) =>
   sql<number>`FLOOR(EXTRACT(EPOCH FROM (NOW() - ${col})) / 86400)::int`;
 
+/**
+ * One long-paused record, flattened across the four entity types so the
+ * scheduler can treat them uniformly. Read-only; produced by
+ * getLongPausedRecords and consumed by checkLongPauses.
+ *
+ * `label` is the user-visible identifier — the NUMBER for cases /
+ * consultations / contracts, the TITLE for memos, which have no number.
+ * `assigneeId` is normalised to "" when unowned (memos store "" as the
+ * unassigned sentinel; consultations and contracts store NULL), so callers
+ * never have to know which convention an entity uses.
+ * `pausedAt` is the ISO instant the pause began — the scheduler uses it as the
+ * dedup WINDOW, so that a record paused again later legitimately re-notifies.
+ */
+export interface LongPausedRecord {
+  entityType: "case" | "consultation" | "contract" | "memo";
+  id: string;
+  label: string;
+  assigneeId: string;
+  pausedBy: string | null;
+  pausedAt: string | null;
+  pausedDays: number;
+}
+
 export class DatabaseStorage implements IStorage {
 
   // ==================== Users ====================
@@ -2267,6 +2296,130 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(notifications.createdAt))
       .limit(limit);
     return result.map(mapDbNotification);
+  }
+
+  // ⏸️ Every record that has now been paused for ≥ PausedTaskMinDays, across
+  // all four entity types, flattened into one shape for the scheduler.
+  //
+  // Uses the SAME pausedLongEnough / pausedDaysExpr fragments as the مهامي
+  // blocks, so the notice and the task agree on both "is it long?" and "how
+  // long?" by construction rather than by two matching literals.
+  //
+  // ALIVE GUARDS mirror the feed blocks exactly, and for the same reason: no
+  // close path clears paused_at, so a closed case, a consultation/contract
+  // whose status has left "paused", and a cancelled/filed/approved memo can all
+  // still carry one and must not be announced as paused work.
+  //
+  // Four independent queries rather than a UNION: the four tables share no
+  // column names for the label/assignee, the alive tests genuinely differ, and
+  // drizzle would need raw SQL to union them — for four small indexed reads on
+  // a once-a-day job that trade is not worth the loss of type safety.
+  async getLongPausedRecords(): Promise<LongPausedRecord[]> {
+    const out: LongPausedRecord[] = [];
+
+    const caseRows = await db.select({
+      id: lawCases.id, label: lawCases.caseNumber,
+      primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+      pausedBy: lawCases.pausedBy, pausedAt: lawCases.pausedAt,
+      pausedDays: pausedDaysExpr(lawCases.pausedAt),
+    }).from(lawCases).where(and(
+      pausedLongEnough(lawCases.pausedAt),
+      ne(lawCases.status, "مغلق"),
+      sql`${lawCases.isArchived} IS NOT TRUE`,
+      sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+    ));
+    for (const r of caseRows) {
+      out.push({
+        entityType: "case", id: r.id, label: r.label,
+        // The canonical lawyer order, via the shared helper.
+        assigneeId: caseNotificationRecipientId(r),
+        pausedBy: r.pausedBy, pausedAt: toISOStringOrNull(r.pausedAt), pausedDays: r.pausedDays,
+      });
+    }
+
+    const consultationRows = await db.select({
+      id: consultations.id, label: consultations.consultationNumber,
+      assignedTo: consultations.assignedTo, pausedBy: consultations.pausedBy,
+      pausedAt: consultations.pausedAt, pausedDays: pausedDaysExpr(consultations.pausedAt),
+    }).from(consultations).where(and(
+      eq(consultations.status, ConsultationStatus.PAUSED),
+      pausedLongEnough(consultations.pausedAt),
+    ));
+    for (const r of consultationRows) {
+      out.push({
+        entityType: "consultation", id: r.id, label: r.label,
+        assigneeId: r.assignedTo || "",
+        pausedBy: r.pausedBy, pausedAt: toISOStringOrNull(r.pausedAt), pausedDays: r.pausedDays,
+      });
+    }
+
+    const contractRows = await db.select({
+      id: contracts.id, label: contracts.contractNumber,
+      assignedTo: contracts.assignedTo, pausedBy: contracts.pausedBy,
+      pausedAt: contracts.pausedAt, pausedDays: pausedDaysExpr(contracts.pausedAt),
+    }).from(contracts).where(and(
+      eq(contracts.status, ContractStatus.PAUSED),
+      pausedLongEnough(contracts.pausedAt),
+    ));
+    for (const r of contractRows) {
+      out.push({
+        entityType: "contract", id: r.id, label: r.label,
+        assigneeId: r.assignedTo || "",
+        pausedBy: r.pausedBy, pausedAt: toISOStringOrNull(r.pausedAt), pausedDays: r.pausedDays,
+      });
+    }
+
+    // Memos have no number — the TITLE is their identity everywhere else in the
+    // feed and in the auto-lift notice, so it is the label here too.
+    const memoRows = await db.select({
+      id: memos.id, label: memos.title,
+      assignedTo: memos.assignedTo, pausedBy: memos.pausedBy,
+      pausedAt: memos.pausedAt, pausedDays: pausedDaysExpr(memos.pausedAt),
+    }).from(memos).where(and(
+      pausedLongEnough(memos.pausedAt),
+      sql`${memos.status} NOT IN ('ملغاة', 'مرفوعة', 'معتمدة')`,
+    ));
+    for (const r of memoRows) {
+      out.push({
+        entityType: "memo", id: r.id, label: r.label,
+        // NOT NULL on memos, but "" is the unassigned sentinel.
+        assigneeId: r.assignedTo || "",
+        pausedBy: r.pausedBy, pausedAt: toISOStringOrNull(r.pausedAt), pausedDays: r.pausedDays,
+      });
+    }
+
+    return out;
+  }
+
+  // ⏸️ The fire-once lookup. Returns only the three columns the caller compares
+  // on — never whole notification rows — so the check stays cheap on a table
+  // that only ever grows (nothing deletes notifications).
+  //
+  // 🔴 STRUCTURAL, NOT TEXTUAL. It matches on (type, related_id) and hands back
+  // created_at; the caller decides "already sent?" by comparing created_at
+  // against the CURRENT pause's start. No title or message text takes part, so
+  // rewording the notice cannot make it fire again for records already told.
+  //
+  // related_id is used even where relatedType is null (contracts), because it
+  // is a plain varchar and the typed-link behaviour is driven by relatedType.
+  async getNotificationKeysByTypeAndRelatedIds(
+    type: string,
+    relatedIds: string[],
+  ): Promise<{ relatedId: string | null; recipientId: string; createdAt: string | null }[]> {
+    if (relatedIds.length === 0) return [];
+    const rows = await db.select({
+      relatedId: notifications.relatedId,
+      recipientId: notifications.recipientId,
+      createdAt: notifications.createdAt,
+    }).from(notifications).where(and(
+      eq(notifications.type, type),
+      inArray(notifications.relatedId, relatedIds),
+    ));
+    return rows.map((r) => ({
+      relatedId: r.relatedId,
+      recipientId: r.recipientId,
+      createdAt: toISOStringOrNull(r.createdAt),
+    }));
   }
 
   // ORDER BY createdAt DESC — newest first, at the SQL level.
