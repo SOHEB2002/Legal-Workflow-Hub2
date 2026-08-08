@@ -71,6 +71,8 @@ import {
   NoteOutcome,
   ConsultationClosureReason,
   ClosureReason,
+  NotificationType,
+  caseNotificationRecipientId,
   ConsultationActivityType,
   getStagesForClassification,
   CollectionTaskTitlePrefix,
@@ -182,6 +184,7 @@ import {
   effectiveRolesFor,
 } from "./acting-context";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
+import { resolveNotificationRecipients } from "./notification-recipients";
 
 // Attachments live in Replit Object Storage — the previous
 // ./uploads/contracts/<id>/<file> layout was on the container's
@@ -632,12 +635,46 @@ async function canReferenceRelatedEntity(
     const c = await storage.getConsultationById(id);
     return !!c && canModifyConsultation(user, c, ctx);
   };
+  // 🔴 THE ONE PERMISSION LINE THE OWNER APPROVED FOR THIS BATCH.
+  //
+  // MODELLED ON onConsultation, deliberately, and not on onCase. Contracts are
+  // the exact structural analogue of consultations here: a single top-level
+  // entity that carries its OWN departmentId column and has its own
+  // canModifyContract helper — so the authority test is one call, identical in
+  // shape. onCase additionally accepts `c.createdBy === user.id`, which is a
+  // case-specific carve-out (a case's creator may reference it before a lawyer
+  // is assigned); canModifyContract ALREADY admits the creator internally, so
+  // copying that arm would have been redundant, not merely wider.
+  //
+  // WHAT THIS WIDENS, EXACTLY: relatedType "contract" previously hit the
+  // `default: return false` arm, so referencing a contract in a notification was
+  // available ONLY to the five canSendNotifications roles. It is now ALSO
+  // available to whoever canModifyContract already admits — admin_support, the
+  // own-department department_head, the contract's assignee, its creator, and
+  // its internal reviewer. admin_support is the one that matters: it is in
+  // canSendReminders but NOT in canSendNotifications, so without this arm an
+  // admin_support contract reminder 403s.
+  //
+  // IT GRANTS NOTHING ELSE. This helper is consulted at exactly one place — the
+  // send gate on POST /api/notifications (and the reminders endpoint, which
+  // reuses that same gate). Its return value only ever decides whether a
+  // notification row may NAME this contract. It confers no read of the
+  // contract, no write, no stage transition, no workflow action; every one of
+  // those keeps its own gate, untouched. And it can only widen for users
+  // canModifyContract ALREADY returns true for — it introduces no new predicate.
+  const onContract = async (id: string | null | undefined): Promise<boolean> => {
+    if (!id) return false;
+    const c = await storage.getContractById(id);
+    return !!c && canModifyContract(user, c, ctx);
+  };
 
   switch (relatedType) {
     case "case":
       return onCase(relatedId);
     case "consultation":
       return onConsultation(relatedId);
+    case "contract":
+      return onContract(relatedId);
     case "hearing": {
       const h = await storage.getHearingById(relatedId);
       return !!h && onCase(h.caseId);
@@ -1814,6 +1851,113 @@ async function cancelActiveCaseMemos(
 //
 // Best-effort by design: a cleanup failure must never fail the close itself,
 // which is why the caller's own try/catch shape is preserved inside.
+// 📣 "A new record landed in your department" — told to the department HEAD(S),
+// from the server, at create time.
+//
+// WHY THIS MOVED OFF THE CLIENT. It used to be a browser POST to
+// /api/notifications (notifyCaseAdded / notifyConsultationAdded), and its
+// failure was swallowed TWICE: once inside sendNotificationDirect's own catch
+// and again by a `.catch(() => {})` at the call site. So a head could silently
+// never be told, and nobody — user or log — would ever know. Worse, it could
+// not fire at all for a record created by any non-browser path. Contracts had
+// no notification whatsoever. Emitting from the create route makes it a
+// property of CREATING the record rather than of the tab that happened to do
+// it, and puts the failure in the server log where it can be seen.
+//
+// 🔴 THE OLD CLIENT LOOKUP WAS WRONG IN TWO WAYS, both fixed by delegating to
+// the SHARED resolveNotificationRecipients (built in batch 1, department-head
+// arm unused until now):
+//   1. findDepartmentHead used `.find`, so a department with TWO active heads
+//      notified exactly one of them — silently, with no way to notice. The
+//      shared helper iterates the whole roster and returns every match.
+//   2. It compared `u.departmentId === departmentId` with NO `!!u.departmentId`
+//      guard — the single most repeated permission bug in this codebase. A user
+//      with a NULL department matched every record with a NULL department. The
+//      shared helper carries the guard.
+// It also filters to ACTIVE users and drops ids that name no real user, which
+// matters because notifications.recipient_id carries an FK on PROD that dev
+// does not have.
+//
+// NO HEAD → NO NOTIFICATION, and no fallback is invented. This deliberately
+// matches the case_unassigned feed block, which treats a head-less department
+// as DORMANT ("no active head → dormant; surfaces when a head is assigned")
+// rather than escalating to the branch manager. One rule for head-less
+// departments, not two competing ones.
+//
+// 🔴 THE ACTOR IS EXCLUDED. When the department head creates the record
+// themselves they are not told about their own click — that is noise, and a
+// notification the reader already knows about trains people to ignore the bell.
+// A head creating their own record therefore produces NO notification at all,
+// which is correct: the only person who needed telling already knows.
+//
+// 🔴 TOTAL BY CONSTRUCTION — IT CAN NEVER FAIL A CREATE. The entire body,
+// including the roster read and every send, is inside one try/catch that only
+// logs. There is no throw path out of this function, so `await`ing it cannot
+// reject and a notification failure can never turn a successful create into a
+// 500. It is also called only AFTER the record exists, so the record is never
+// rolled back on account of a notice about it.
+async function notifyDepartmentHeadOfNewRecord(input: {
+  entityType: "case" | "consultation" | "contract";
+  entityId: string;
+  label: string;
+  departmentId: string | null | undefined;
+  actorId: string;
+  actorName: string;
+}): Promise<void> {
+  try {
+    if (!input.departmentId) return;
+    const users = await storage.getAllUsers();
+    const recipients = resolveNotificationRecipients([], users, { departmentId: input.departmentId })
+      .filter((id) => id !== input.actorId);
+    if (recipients.length === 0) return;
+
+    const copy = input.entityType === "case"
+      ? {
+        type: NotificationType.CASE_ASSIGNED,
+        title: "قضية جديدة في القسم",
+        message: `تم استلام قضية جديدة رقم ${input.label} وإسنادها لقسمكم`,
+      }
+      : input.entityType === "consultation"
+      ? {
+        type: NotificationType.CONSULTATION_ASSIGNED,
+        title: "استشارة جديدة في القسم",
+        message: `تم استلام استشارة جديدة رقم ${input.label} وإسنادها لقسمكم`,
+      }
+      : {
+        type: NotificationType.CONTRACT_ASSIGNED,
+        title: "عقد جديد في القسم",
+        message: `تم استلام عقد جديد رقم ${input.label} وإسناده لقسمكم`,
+      };
+
+    for (const recipientId of recipients) {
+      await storage.createNotification({
+        type: copy.type,
+        priority: "high",
+        status: "pending",
+        title: copy.title,
+        message: copy.message,
+        // Sender is the ACTOR, not "system" — a person created this record, and
+        // the old client notice named them too. Scheduler notices are the ones
+        // that use the "system" sender.
+        senderId: input.actorId,
+        senderName: input.actorName,
+        recipientId,
+        // Contracts carry relatedId WITHOUT relatedType — Notification.relatedType
+        // is a closed union with no "contract" member. Same precedent as the
+        // paused-record notice: consumers key on relatedTYPE (the server-side
+        // context enrichment filters `relatedType === t` before ever reading
+        // relatedId), so this adds no broken link while keeping the row
+        // attributable to its contract.
+        relatedType: input.entityType === "contract" ? null : input.entityType,
+        relatedId: input.entityId,
+        requiresResponse: false,
+      });
+    }
+  } catch (e) {
+    console.error(`[notifyDepartmentHeadOfNewRecord] ${input.entityType} ${input.entityId} — notification failed, record was still created:`, e);
+  }
+}
+
 async function cancelOpenCaseChildrenOnClose(caseId: string): Promise<void> {
   try {
     // Cancel upcoming hearings
@@ -3111,6 +3255,17 @@ export async function registerRoutes(
           title: `تم إنشاء القضية ${newCase.caseNumber}`,
         });
       } catch (e) {}
+
+      // Total by construction — see the helper. Awaiting it cannot reject, so
+      // the 201 below is never at risk from a notification failure.
+      await notifyDepartmentHeadOfNewRecord({
+        entityType: "case",
+        entityId: newCase.id,
+        label: newCase.caseNumber,
+        departmentId: newCase.departmentId,
+        actorId: createdBy,
+        actorName: user.name || createdBy,
+      });
 
       res.status(201).json({ ...newCase, autoCreated });
     } catch (error) {
@@ -4714,6 +4869,14 @@ export async function registerRoutes(
       // actor. Fall back for legacy clients that still pass it explicitly.
       const createdBy = reqUser?.id || req.body.createdBy || "unknown";
       const newConsultation = await storage.createConsultation(validatedData, createdBy);
+      await notifyDepartmentHeadOfNewRecord({
+        entityType: "consultation",
+        entityId: newConsultation.id,
+        label: newConsultation.consultationNumber,
+        departmentId: newConsultation.departmentId,
+        actorId: createdBy,
+        actorName: reqUser.name || createdBy,
+      });
       res.status(201).json(newConsultation);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -7622,6 +7785,15 @@ export async function registerRoutes(
       const validated = insertContractSchema.parse(req.body);
       const createdBy = reqUser?.id || "unknown";
       const created = await storage.createContract(validated, createdBy);
+      // NEW for contracts — this record type had no create notification at all.
+      await notifyDepartmentHeadOfNewRecord({
+        entityType: "contract",
+        entityId: created.id,
+        label: created.contractNumber,
+        departmentId: created.departmentId,
+        actorId: createdBy,
+        actorName: reqUser.name || createdBy,
+      });
       res.status(201).json(created);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -14299,6 +14471,143 @@ export async function registerRoutes(
       res.status(201).json(newNotification);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في إنشاء الإشعار" });
+    }
+  });
+
+  // 🔔 REMINDERS — ONE request in, one notification per RESOLVED recipient out.
+  //
+  // WHY THIS ENDPOINT EXISTS AT ALL. A reminder now goes to the assignee AND
+  // that record's department head. The browser cannot do that fan-out:
+  //   1. It has no correct department-head lookup any more. The client's
+  //      findDepartmentHead was DELETED in the previous batch precisely because
+  //      it used `.find` (one head when a department has two) and compared
+  //      departmentId with no !!guard. The only correct resolver —
+  //      resolveNotificationRecipients — is server-side.
+  //   2. Two recipients from the browser means TWO POSTs to /api/notifications,
+  //      which is two hits on notificationSendLimiter (150 per 5 min per USER)
+  //      for one user action, halving the effective ceiling. One request here
+  //      costs ONE hit no matter how many people are notified.
+  //   3. De-duplication has to happen where the recipient list is built. Doing
+  //      it on the client would be a FOURTH copy of a fan-out that already
+  //      exists once, correctly, on the server.
+  // This continues the direction of the previous batch, which moved the create
+  // notifications server-side for exactly these reasons.
+  //
+  // 🔴 THE AUTHORITY GATE IS COPIED FROM POST /api/notifications, VERBATIM AND
+  // DELIBERATELY: canSendNotifications(role) OR canReferenceRelatedEntity(...).
+  // Reminders reached the server through that endpoint until now, so reusing
+  // the identical test means NOBODY gains or loses the ability to send one.
+  // Adding canSendReminders as an extra AND would have NARROWED it (an assigned
+  // lawyer can send today), and narrowing is as much a permission change as
+  // widening. canSendReminders stays where it has always been — the FRONTEND
+  // gate on who is offered the button.
+  const sendReminderSchema = z.object({
+    entityType: z.enum(["case", "consultation", "contract", "memo"]),
+    entityId: z.string().min(1),
+    reminderType: z.string().min(1),
+    message: z.string().min(1),
+    // Cases offer a manual recipient picker; the other three do not. When set it
+    // REPLACES the assignee — it never replaces the department head.
+    recipientId: z.string().nullable().optional(),
+  }).passthrough();
+
+  app.post("/api/reminders", requireAuth, notificationSendLimiter, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const parsed = sendReminderSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
+      }
+      const { entityType, entityId, reminderType, message, recipientId } = parsed.data;
+
+      // Resolve the record ONCE into the three things a reminder needs: what to
+      // call it, who owns it, and which department's head to copy.
+      let label = "";
+      let assigneeId = "";
+      let departmentId: string | null = null;
+      let noun = "";
+      if (entityType === "case") {
+        const c = await storage.getCaseById(entityId);
+        if (!c) return res.status(404).json({ error: "القضية غير موجودة" });
+        label = c.caseNumber; noun = "قضية";
+        assigneeId = caseNotificationRecipientId(c);
+        departmentId = c.departmentId ?? null;
+      } else if (entityType === "consultation") {
+        const c = await storage.getConsultationById(entityId);
+        if (!c) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+        label = c.consultationNumber; noun = "استشارة";
+        assigneeId = c.assignedTo || "";
+        departmentId = c.departmentId ?? null;
+      } else if (entityType === "contract") {
+        const c = await storage.getContractById(entityId);
+        if (!c) return res.status(404).json({ error: "العقد غير موجود" });
+        label = c.contractNumber; noun = "عقد";
+        assigneeId = c.assignedTo || "";
+        departmentId = c.departmentId ?? null;
+      } else {
+        const m = await storage.getMemoById(entityId);
+        if (!m) return res.status(404).json({ error: "المذكرة غير موجودة" });
+        label = m.title; noun = "مذكرة";
+        // assigned_to is NOT NULL on memos but carries "" as the unassigned
+        // sentinel, so the same normalisation as its nullable siblings applies.
+        assigneeId = m.assignedTo || "";
+        // 🔴 MEMOS CARRY NO departmentId — the head resolves through the PARENT
+        // CASE, the same hop the memo feed blocks and the memo permission gates
+        // already make. A memo whose case is missing simply yields no head.
+        const parentCase = m.caseId ? await storage.getCaseById(m.caseId) : null;
+        departmentId = parentCase?.departmentId ?? null;
+      }
+
+      const maySend = canSendNotifications(user.role)
+        || await canReferenceRelatedEntity(user, entityType, entityId, req.actingContext);
+      if (!maySend) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإرسال الإشعارات" });
+      }
+
+      // 🔴 THE DE-DUPLICATION. resolveNotificationRecipients returns a Set-backed
+      // list, so when the department head IS the assignee (or the manually
+      // picked recipient) they appear ONCE, not twice — which is the whole
+      // reason the fan-out belongs here and not in two client POSTs. It also
+      // drops blank ids and anyone who is not a real ACTIVE user.
+      //
+      // NO ASSIGNEE → the candidate list contributes nothing and only the head
+      // is notified. NO HEAD → only the assignee. NEITHER → zero recipients, and
+      // the endpoint says so with a 400 rather than reporting a phantom success:
+      // this is a user action with a visible outcome, unlike the DORMANT rule
+      // used for background tasks, where silence is correct because nobody is
+      // waiting on a toast.
+      const users = await storage.getAllUsers();
+      const recipients = resolveNotificationRecipients(
+        [recipientId || assigneeId],
+        users,
+        { departmentId },
+      );
+      if (recipients.length === 0) {
+        return res.status(400).json({ error: "لا يوجد مستلم للتذكير — لم يُسنَد السجل ولا يوجد رئيس قسم نشط" });
+      }
+
+      for (const rid of recipients) {
+        const created = await storage.createNotification({
+          type: NotificationType.TASK_REMINDER,
+          priority: "high",
+          status: "pending",
+          title: `تذكير: ${reminderType} - ${noun} ${label}`,
+          message,
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: rid,
+          relatedType: entityType,
+          relatedId: entityId,
+          requiresResponse: false,
+        });
+        if (created.recipientId) {
+          sendToUser(created.recipientId, { type: "notification:new", payload: created });
+        }
+      }
+      res.status(201).json({ sent: recipients.length });
+    } catch (error) {
+      console.error("[POST /api/reminders] error:", error);
+      res.status(500).json({ error: "حدث خطأ في إرسال التذكير" });
     }
   });
 

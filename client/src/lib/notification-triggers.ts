@@ -38,9 +38,14 @@ function findUsersByRole(users: User[], role: string): User[] {
   return users.filter(u => u.role === role && u.isActive);
 }
 
-function findDepartmentHead(users: User[], departmentId: string): User | undefined {
-  return users.find(u => u.role === "department_head" && u.departmentId === departmentId && u.isActive);
-}
+// 🔴 findDepartmentHead WAS DELETED WITH ITS TWO CALLERS — do not reinstate it.
+// It resolved the head with `.find`, so a department with two active heads
+// notified exactly one of them, and it compared departmentId with no
+// `!!u.departmentId` guard, so a user with a NULL department matched every
+// record with a NULL department. Both bugs are fixed by the SERVER-side
+// resolveNotificationRecipients (server/notification-recipients.ts), which is
+// where "who is this department's head" is now answered — once, for every
+// producer. Anything needing that lookup belongs on the server.
 
 async function sendNotificationDirect(
   recipientId: string,
@@ -48,7 +53,10 @@ async function sendNotificationDirect(
   priority: NotificationPriorityValue,
   title: string,
   message: string,
-  relatedType: "case" | "consultation" | "field_task",
+  // Widened to the four entity types the triggers actually reference. It was
+  // narrower than Notification.relatedType for no reason other than that no
+  // caller had needed the others yet.
+  relatedType: "case" | "consultation" | "contract" | "memo" | "field_task",
   relatedId: string,
   senderId?: string,
   senderName?: string,
@@ -80,21 +88,12 @@ async function sendNotificationDirect(
   }
 }
 
-export async function notifyCaseAdded(caseId: string, caseNumber: string, departmentId: string) {
-  const users = await getUsers();
-  const deptHead = findDepartmentHead(users, departmentId);
-  if (deptHead) {
-    await sendNotificationDirect(
-      deptHead.id,
-      NotificationType.CASE_ASSIGNED,
-      NotificationPriority.HIGH,
-      "قضية جديدة في القسم",
-      `تم استلام قضية جديدة رقم ${caseNumber} وإسنادها لقسمكم`,
-      "case",
-      caseId,
-    );
-  }
-}
+// notifyCaseAdded / notifyConsultationAdded WERE DELETED. Both now fire from
+// their server create routes (POST /api/cases, POST /api/consultations, plus a
+// new one at POST /api/contracts) via notifyDepartmentHeadOfNewRecord in
+// server/routes.ts. From the browser the failure was swallowed twice — inside
+// sendNotificationDirect and again by the caller's `.catch(() => {})` — so a
+// department head could silently never be told. Do not re-add a client copy.
 
 export async function notifyCaseAssigned(caseId: string, caseNumber: string, lawyerId: string) {
   await sendNotificationDirect(
@@ -135,22 +134,6 @@ export async function notifyCaseReturnedForRevision(caseId: string, caseNumber: 
     "case",
     caseId,
   );
-}
-
-export async function notifyConsultationAdded(consultationId: string, consultationNumber: string, departmentId: string) {
-  const users = await getUsers();
-  const deptHead = findDepartmentHead(users, departmentId);
-  if (deptHead) {
-    await sendNotificationDirect(
-      deptHead.id,
-      NotificationType.CONSULTATION_ASSIGNED,
-      NotificationPriority.HIGH,
-      "استشارة جديدة في القسم",
-      `تم استلام استشارة جديدة رقم ${consultationNumber} وإسنادها لقسمكم`,
-      "consultation",
-      consultationId,
-    );
-  }
 }
 
 export async function notifyConsultationAssigned(consultationId: string, consultationNumber: string, assignedTo: string) {
@@ -206,40 +189,79 @@ export async function notifyFieldTaskAssigned(taskId: string, taskTitle: string,
   );
 }
 
+// 🔔 THE REMINDER TRIGGERS — ONE request each, fanned out SERVER-side.
+//
+// These used to build a title and POST a single notification to a single
+// recipient. A reminder now reaches the assignee AND the record's department
+// head, and the browser cannot resolve that head: the client's own lookup was
+// deleted for being wrong (`.find` returned one head when a department has two,
+// and it compared departmentId with no !!guard). POST /api/reminders resolves
+// the record, the assignee, the head, de-duplicates, and writes the rows.
+//
+// 🔴 DELIBERATELY NOT ROUTED THROUGH sendNotificationDirect. That helper
+// swallows its own errors, which is right for a fire-and-forget side effect but
+// wrong here: every caller shows a "تم إرسال التذكير" / "فشل إرسال التذكير"
+// toast, so the rejection has to reach them. apiRequest throws; the callers
+// already have try/catch around it.
+//
+// The TITLE is built server-side now, so the four entity types can never word it
+// differently — which is why these take no caller-supplied title.
+export type ReminderEntityType = "case" | "consultation" | "contract" | "memo";
+
+async function sendReminder(
+  entityType: ReminderEntityType,
+  entityId: string,
+  reminderType: string,
+  message: string,
+  recipientId?: string,
+) {
+  await apiRequest("POST", "/api/reminders", {
+    entityType,
+    entityId,
+    reminderType,
+    message,
+    // Cases offer a manual recipient picker; when set it replaces the ASSIGNEE
+    // as a candidate. It never replaces the department head.
+    recipientId: recipientId || null,
+  });
+}
+
 export async function sendCaseReminder(
   caseId: string,
-  caseNumber: string,
   recipientId: string,
   reminderType: string,
   message: string,
 ) {
-  await sendNotificationDirect(
-    recipientId,
-    NotificationType.TASK_REMINDER,
-    NotificationPriority.HIGH,
-    `تذكير: ${reminderType} - قضية ${caseNumber}`,
-    message,
-    "case",
-    caseId,
-  );
+  await sendReminder("case", caseId, reminderType, message, recipientId);
 }
 
 export async function sendConsultationReminder(
   consultationId: string,
-  consultationNumber: string,
-  recipientId: string,
   reminderType: string,
   message: string,
 ) {
-  await sendNotificationDirect(
-    recipientId,
-    NotificationType.TASK_REMINDER,
-    NotificationPriority.HIGH,
-    `تذكير: ${reminderType} - استشارة ${consultationNumber}`,
-    message,
-    "consultation",
-    consultationId,
-  );
+  await sendReminder("consultation", consultationId, reminderType, message);
+}
+
+// NEW — contracts and memos had no reminder at all. No manual recipient picker
+// on either: that control exists ONLY on cases, and the asymmetry is deliberate
+// (see the dialogs). Recipients are the assignee + the department head, resolved
+// server-side — for a MEMO that means hopping through memos.caseId to the parent
+// case, since memos carry no departmentId of their own.
+export async function sendContractReminder(
+  contractId: string,
+  reminderType: string,
+  message: string,
+) {
+  await sendReminder("contract", contractId, reminderType, message);
+}
+
+export async function sendMemoReminder(
+  memoId: string,
+  reminderType: string,
+  message: string,
+) {
+  await sendReminder("memo", memoId, reminderType, message);
 }
 
 export async function requestCaseTransfer(

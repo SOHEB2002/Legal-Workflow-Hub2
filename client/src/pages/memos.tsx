@@ -66,6 +66,7 @@ import {
   Play,
   MoreVertical,
   Archive,
+  Bell,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -80,6 +81,7 @@ import {
 import { useMemos } from "@/lib/memos-context";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
+import { sendMemoReminder } from "@/lib/notification-triggers";
 import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
 import { pauseBadgeTooltip } from "@/lib/case-stage-utils";
 import { useCases } from "@/lib/cases-context";
@@ -336,7 +338,7 @@ export default function MemosPage() {
   const { cases, updateCase } = useCases();
   const { getHearingsByCase, getHearingById } = useHearings();
   const { departments, getDepartmentName } = useDepartments();
-  const { user } = useAuth();
+  const { user, permissions } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
   const { clients } = useClients();
   const { toast } = useToast();
@@ -349,6 +351,15 @@ export default function MemosPage() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [caseComboOpen, setCaseComboOpen] = useState(false);
   const [detailMemoId, setDetailMemoId] = useState<string | null>(null);
+
+  // 🔔 Reminder — memos had none. Same two controls as the consultations and
+  // contracts dialogs; no manual recipient picker (that stays case-only).
+  const [showReminder, setShowReminder] = useState(false);
+  const [reminderMemo, setReminderMemo] = useState<Memo | null>(null);
+  const [reminderData, setReminderData] = useState({
+    reminderType: "تذكير بتحديث الحالة",
+    message: "",
+  });
   const detailMemo = detailMemoId ? memos.find(m => m.id === detailMemoId) || null : null;
 
   // Earliest upcoming hearing for the memo's parent case. Mirrors the
@@ -623,6 +634,36 @@ export default function MemosPage() {
   const openReassignMemoDialog = (memo: Memo) => {
     setReassignMemoAssignedTo(memo.assignedTo || "");
     setReassignMemoDialog(memo);
+  };
+
+  const openReminderDialog = (memo: Memo) => {
+    setReminderMemo(memo);
+    setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "" });
+    setShowReminder(true);
+  };
+
+  // 🔴 MEMOS CARRY NO departmentId, so the department head cannot be resolved
+  // from the memo itself. The SERVER hops memos.caseId → the parent case →
+  // departmentId — the same hop the memo feed blocks and the memo permission
+  // gates already make. Nothing about that is done here: the page sends only
+  // the memo id, exactly like its three siblings, so the hop lives in one place
+  // and a memo whose parent case is missing simply yields no head.
+  //
+  // No manual recipient picker, matching consultations and contracts — see the
+  // contracts handler for why that control stays case-only. assigned_to is NOT
+  // NULL on memos but holds "" when unassigned; the server normalises it, so an
+  // unassigned memo still reminds the head rather than being refused here.
+  const handleSendReminder = async () => {
+    if (!reminderMemo) return;
+    const msg = reminderData.message || `${reminderData.reminderType} للمذكرة "${reminderMemo.title}"`;
+    try {
+      await sendMemoReminder(reminderMemo.id, reminderData.reminderType, msg);
+      toast({ title: "تم إرسال التذكير بنجاح" });
+    } catch (err) {
+      toast({ title: "فشل إرسال التذكير", description: extractApiError(err), variant: "destructive" });
+    }
+    setShowReminder(false);
+    setReminderMemo(null);
   };
 
   const handleReassignMemo = async () => {
@@ -1534,6 +1575,19 @@ export default function MemosPage() {
                                 <Eye className="w-4 h-4 ml-2" />
                                 عرض التفاصيل
                               </DropdownMenuItem>
+                              {/* Reminder — canSendReminders, like the other
+                                  three pages. Not gated on an assignee: the
+                                  parent case's department head is a recipient
+                                  now, and "" is memos' unassigned sentinel. */}
+                              {permissions.canSendReminders && (
+                                <DropdownMenuItem
+                                  data-testid={`button-reminder-memo-${memo.id}`}
+                                  onClick={() => openReminderDialog(memo)}
+                                >
+                                  <Bell className="w-4 h-4 ml-2 text-accent" />
+                                  إرسال تذكير
+                                </DropdownMenuItem>
+                              )}
                               {canReassignMemo(memo) && !["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status) && (
                                 <DropdownMenuItem
                                   data-testid={`button-reassign-memo-${memo.id}`}
@@ -1639,6 +1693,56 @@ export default function MemosPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Reminder dialog — identical controls to the consultations/contracts
+          twins so the four pages cannot drift. */}
+      <Dialog open={showReminder} onOpenChange={setShowReminder}>
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bell className="w-5 h-5 text-accent" />
+              إرسال تذكير
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>نوع التذكير</Label>
+              <Select
+                value={reminderData.reminderType}
+                onValueChange={(value) => setReminderData({ ...reminderData, reminderType: value })}
+              >
+                <SelectTrigger data-testid="select-reminder-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="تذكير بتحديث الحالة">تذكير بتحديث الحالة</SelectItem>
+                  <SelectItem value="تذكير بالمتابعة">تذكير بالمتابعة</SelectItem>
+                  <SelectItem value="إطلاع مدة">إطلاع مدة (Deadline)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>رسالة نصية</Label>
+              <Textarea
+                data-testid="input-reminder-message"
+                placeholder="اكتب رسالة التذكير هنا..."
+                value={reminderData.message}
+                onChange={(e) => setReminderData({ ...reminderData, message: e.target.value })}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReminder(false)} data-testid="button-cancel-reminder">
+              إلغاء
+            </Button>
+            <Button onClick={handleSendReminder} data-testid="button-send-reminder">
+              <Bell className="w-4 h-4 ml-2" />
+              إرسال التذكير
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!reassignMemoDialog} onOpenChange={(open) => !open && setReassignMemoDialog(null)}>
         <DialogContent className="max-w-md">

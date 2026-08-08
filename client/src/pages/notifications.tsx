@@ -85,8 +85,12 @@ const PRODUCED_NOTIFICATION_TYPES: NotificationTypeValue[] = [
   NotificationType.MONTHLY_REPORT,
   // scheduler — checkLongPauses (one notice per record per pause episode)
   NotificationType.PAUSE_AGING,
-  // client-side workflow triggers (lib/notification-triggers.ts)
+  // create routes — notifyDepartmentHeadOfNewRecord. CASE_ASSIGNED is listed
+  // above with the other server producers; these two are its twins. All three
+  // moved server-side when the browser-posted create notices were deleted.
   NotificationType.CONSULTATION_ASSIGNED,
+  NotificationType.CONTRACT_ASSIGNED,
+  // client-side workflow triggers (lib/notification-triggers.ts)
   NotificationType.SENT_TO_REVIEW,
   NotificationType.RETURNED_FOR_REVISION,
 ];

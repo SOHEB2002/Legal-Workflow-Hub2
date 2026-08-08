@@ -10,7 +10,7 @@ import {
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   type AdminSupportTaskAssignment,
   type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, FieldTaskStatus, taskSpecialtyClass,
-  PausedTaskMinDays, pausedDaysLabel, caseNotificationRecipientId,
+  PausedTaskMinDays, DataCompletionEscalationDays, elapsedDaysLabel, caseNotificationRecipientId,
   AssignableAdminSupportTaskKind, resolveAdminSupportAssignee,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
@@ -22,7 +22,7 @@ import {
   ConsultationType, resolveConsultationType,
   ConsultationCategory, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
-  ContractStage, ContractStatus, ContractActivityType,
+  ContractStage, ContractStatus, ContractActivityType, ContractStageLabels, type ContractStageValue,
   CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, findPrimaryJudgmentHearing,
   type NotificationLinkedContext,
   CaseStageLabels, type CaseStageValue,
@@ -1239,6 +1239,37 @@ const pausedLongEnough = (col: AnyPgColumn) =>
   sql`${col} IS NOT NULL AND ${col} < NOW() - make_interval(days => ${PausedTaskMinDays})`;
 const pausedDaysExpr = (col: AnyPgColumn) =>
   sql<number>`FLOOR(EXTRACT(EPOCH FROM (NOW() - ${col})) / 86400)::int`;
+
+// ⏳ Whole 24-hour periods elapsed since an instant, or null when there is no
+// usable instant. The JS counterpart of pausedDaysExpr, and deliberately the
+// same KIND of arithmetic: a duration between two instants, never a calendar-day
+// difference, so it needs no Asia/Riyadh resolution and has no boundary to get
+// wrong. Used where the instant comes from a jsonb history entry or an activity
+// row rather than a column the query can subtract in SQL.
+function elapsedWholeDays(instant: string | Date | null | undefined, nowMs: number): number | null {
+  if (!instant) return null;
+  const ms = instant instanceof Date ? instant.getTime() : new Date(instant).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return Math.floor((nowMs - ms) / 86400000);
+}
+
+// Latest performed_at per entity id, in epoch ms. The activity logs are
+// append-only, so "when did it last enter this state" is the MAX — a record can
+// enter data-completion, resume, and enter again, and only the most recent entry
+// may start the escalation clock.
+function latestActivityMsByEntity(
+  rows: { entityId: string; performedAt: Date | null }[],
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.performedAt) continue;
+    const t = r.performedAt.getTime();
+    if (!Number.isFinite(t)) continue;
+    const prev = out.get(r.entityId);
+    if (prev === undefined || t > prev) out.set(r.entityId, t);
+  }
+  return out;
+}
 
 /**
  * One long-paused record, flattened across the four entity types so the
@@ -2503,12 +2534,14 @@ export class DatabaseStorage implements IStorage {
     const hearingIds = idsOf("hearing");
     const memoIds = idsOf("memo");
     const consultationIds = idsOf("consultation");
+    const contractIds = idsOf("contract");
     const fieldTaskIds = idsOf("field_task");
 
     const byCase = new Map<string, NotificationLinkedContext>();
     const byHearing = new Map<string, NotificationLinkedContext>();
     const byMemo = new Map<string, NotificationLinkedContext>();
     const byConsultation = new Map<string, NotificationLinkedContext>();
+    const byContract = new Map<string, NotificationLinkedContext>();
     const byFieldTask = new Map<string, NotificationLinkedContext>();
 
     // Empty/whitespace collapses to undefined so the client renders only what
@@ -2590,6 +2623,28 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // Contracts — added with the relatedType widening so a contract
+    // notification renders with the same context card as its siblings instead
+    // of a bare title. Shaped on the CONSULTATION branch: contracts lead with
+    // their own headline (the TITLE, which is NOT NULL here, unlike the
+    // consultation title) and carry a client but NO opponent column, so
+    // opponentName stays unset exactly as it does for consultations.
+    if (contractIds.length > 0) {
+      const r = await db.select({
+        id: contracts.id, title: contracts.title, currentStage: contracts.currentStage,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      }).from(contracts).leftJoin(clients, eq(contracts.clientId, clients.id))
+        .where(inArray(contracts.id, contractIds));
+      for (const row of r) {
+        byContract.set(row.id, {
+          primary: clean(row.title),
+          clientName: clean(clientDisplayName(row)),
+          stageLabel: ContractStageLabels[row.currentStage as ContractStageValue] || clean(row.currentStage),
+        });
+      }
+    }
+
     if (fieldTaskIds.length > 0) {
       // A field task links to AT MOST ONE of four entities, all optional. Four
       // left joins in ONE query beat four round trips; the first non-empty name
@@ -2625,6 +2680,7 @@ export class DatabaseStorage implements IStorage {
       : t === "hearing" ? byHearing
       : t === "memo" ? byMemo
       : t === "consultation" ? byConsultation
+      : t === "contract" ? byContract
       : t === "field_task" ? byFieldTask
       : null; // "task" carries a delegation id — nothing to resolve.
 
@@ -4159,6 +4215,84 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // ---- 2b/2c. consultation_unassigned + contract_unassigned ----
+    // Only CASES had an unassigned block. A consultation or contract could sit
+    // with no assignee indefinitely and reach NO worklist at all — the head was
+    // told about it once, at creation, by a notification that (until this batch)
+    // was posted from the browser and could silently fail.
+    //
+    // Mirrors block 2 exactly: same head-per-department resolution, same
+    // "no active head → stay dormant" rule, same scopeOf ownership. The head
+    // lookup is shared with block 2 via deptHeadFor below rather than re-queried.
+    //
+    // 🔴 "UNASSIGNED" IS NOT THE SAME TEST AS FOR CASES. A case is unassigned
+    // when BOTH lawyer columns are empty (hasNoLawyer). Consultations and
+    // contracts have ONE nullable assigned_to, and it can be NULL *or* the ""
+    // sentinel, so both must be tested — `IS NULL` alone would miss every
+    // record unassigned through the transfer/unassign paths.
+    //
+    // 🔴 PAUSE SUPPRESSION IS INHERENT HERE, not bolted on: pauseConsultation /
+    // pauseContract flip status to "paused", so `status = 'active'` already
+    // excludes a paused record — the same mechanism batch 1 relied on for every
+    // other consultation/contract block. A paused record is therefore never
+    // asked to be assigned, and no separate pausedAt term is needed.
+    // status='active' also covers closed and converted.
+    //
+    // Terminal STAGES are excluded on top of that, because a record can reach a
+    // done stage while status is still "active" — block 13 surfaces منجزة
+    // consultations as active, so without this a finished consultation would be
+    // reported as needing an assignee.
+    if (teamScoped) {
+      const heads = await db.select({ id: users.id, departmentId: users.departmentId })
+        .from(users)
+        .where(and(eq(users.role, "department_head"), eq(users.isActive, true)));
+      const deptHeadFor = new Map<string, string>();
+      for (const h of heads) if (h.departmentId) deptHeadFor.set(h.departmentId, h.id);
+
+      // NULL *or* "" — see the note above.
+      const consultationUnassigned = sql`(${consultations.assignedTo} IS NULL OR ${consultations.assignedTo} = '')`;
+      const consultWhere = firmWideScoped
+        ? and(eq(consultations.status, ConsultationStatus.ACTIVE), consultationUnassigned,
+            sql`${consultations.currentStage} NOT IN ('منجزة', 'مغلقة')`)
+        : and(eq(consultations.departmentId, userDept!), eq(consultations.status, ConsultationStatus.ACTIVE),
+            consultationUnassigned, sql`${consultations.currentStage} NOT IN ('منجزة', 'مغلقة')`);
+      const consultRows = await db.select({
+        id: consultations.id, consultationNumber: consultations.consultationNumber,
+        departmentId: consultations.departmentId,
+      }).from(consultations).where(consultWhere);
+      for (const r of consultRows) {
+        const deptHeadId = r.departmentId ? deptHeadFor.get(r.departmentId) : undefined;
+        if (!deptHeadId) continue; // head-less department → dormant, exactly like block 2
+        tasks.push({
+          id: `consultation_unassigned:${r.id}`, kind: MyTaskKind.CONSULTATION_UNASSIGNED,
+          title: `استشارة غير مُسندة بحاجة لإسناد — ${r.consultationNumber}`,
+          entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId: deptHeadId, ownerScope: scopeOf(deptHeadId), dueDate: null, isOverdue: false, actionHint: "assign",
+        });
+      }
+
+      const contractUnassigned = sql`(${contracts.assignedTo} IS NULL OR ${contracts.assignedTo} = '')`;
+      const contractWhere = firmWideScoped
+        ? and(eq(contracts.status, ContractStatus.ACTIVE), contractUnassigned,
+            sql`${contracts.currentStage} <> 'مغلقة'`)
+        : and(eq(contracts.departmentId, userDept!), eq(contracts.status, ContractStatus.ACTIVE),
+            contractUnassigned, sql`${contracts.currentStage} <> 'مغلقة'`);
+      const contractRows = await db.select({
+        id: contracts.id, contractNumber: contracts.contractNumber,
+        departmentId: contracts.departmentId,
+      }).from(contracts).where(contractWhere);
+      for (const r of contractRows) {
+        const deptHeadId = r.departmentId ? deptHeadFor.get(r.departmentId) : undefined;
+        if (!deptHeadId) continue;
+        tasks.push({
+          id: `contract_unassigned:${r.id}`, kind: MyTaskKind.CONTRACT_UNASSIGNED,
+          title: `عقد غير مُسند بحاجة لإسناد — ${r.contractNumber}`,
+          entityType: "contract", entityId: r.id, caseId: null,
+          ownerId: deptHeadId, ownerScope: scopeOf(deptHeadId), dueDate: null, isOverdue: false, actionHint: "assign",
+        });
+      }
+    }
+
     // ---- 3-5 + agency. Hearings (attend / unrecorded-overdue / report) ----
     // GUARDED (mirrors the data_completion / execution / agency blocks): a failure
     // here degrades to "no hearing tasks this run" and never throws out of
@@ -5031,7 +5165,7 @@ export class DatabaseStorage implements IStorage {
         const ownerId = caseNotificationRecipientId(r);
         tasks.push({
           id: `paused_aging:case:${r.id}`, kind: MyTaskKind.PAUSED_AGING,
-          title: `قضية معلّقة منذ ${pausedDaysLabel(r.pausedDays)} — ${r.caseNumber}`,
+          title: `قضية معلّقة منذ ${elapsedDaysLabel(r.pausedDays)} — ${r.caseNumber}`,
           entityType: "case", entityId: r.id, caseId: r.id,
           ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
         });
@@ -5061,7 +5195,7 @@ export class DatabaseStorage implements IStorage {
         const ownerId = r.assignedTo || "";
         tasks.push({
           id: `paused_aging:consultation:${r.id}`, kind: MyTaskKind.PAUSED_AGING,
-          title: `استشارة معلّقة منذ ${pausedDaysLabel(r.pausedDays)} — ${r.consultationNumber}`,
+          title: `استشارة معلّقة منذ ${elapsedDaysLabel(r.pausedDays)} — ${r.consultationNumber}`,
           entityType: "consultation", entityId: r.id, caseId: null,
           ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
         });
@@ -5088,7 +5222,7 @@ export class DatabaseStorage implements IStorage {
         const ownerId = r.assignedTo || "";
         tasks.push({
           id: `paused_aging:contract:${r.id}`, kind: MyTaskKind.PAUSED_AGING,
-          title: `عقد معلّق منذ ${pausedDaysLabel(r.pausedDays)} — ${r.contractNumber}`,
+          title: `عقد معلّق منذ ${elapsedDaysLabel(r.pausedDays)} — ${r.contractNumber}`,
           entityType: "contract", entityId: r.id, caseId: null,
           ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
         });
@@ -5120,13 +5254,218 @@ export class DatabaseStorage implements IStorage {
         const ownerId = r.assignedTo || "";
         tasks.push({
           id: `paused_aging:memo:${r.id}`, kind: MyTaskKind.PAUSED_AGING,
-          title: `مذكرة معلّقة منذ ${pausedDaysLabel(r.pausedDays)} — ${r.title}`,
+          title: `مذكرة معلّقة منذ ${elapsedDaysLabel(r.pausedDays)} — ${r.title}`,
           entityType: "memo", entityId: r.id, caseId: r.caseId,
           ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
         });
       }
     } catch (e) {
       console.error("[getMyTasks] paused_aging memo block failed — skipping:", e);
+    }
+
+    // ---- 21. Data-completion ESCALATION — the wait reaches the assignee ----
+    // The day-0 data-completion task (blocks 14/14b/14c/14d) is admin_support's,
+    // with its 2-day ack suppression, and NOTHING here changes it. These four
+    // blocks add a SECOND, separate row that appears once the record has sat at
+    // its data-completion step for DataCompletionEscalationDays, and it goes to
+    // the ASSIGNEE — the person who owns the matter and can chase the client
+    // directly or decide the record cannot proceed.
+    //
+    // 🔴 NO NOTIFICATION IS SENT BY THIS FEATURE. It is a task only, by owner
+    // decision. Nothing here writes to the notifications table.
+    //
+    // 🔴 ENTRY TIME COMES FROM A TIMESTAMPED ROW, NEVER FROM updatedAt:
+    //   cases          the LAST stage_history entry whose stage is the
+    //                  data-completion stage (a record can enter, resume and
+    //                  re-enter; only the most recent entry starts the clock)
+    //   memos          the latest await_completion activity row — memos have no
+    //                  data-completion STAGE, only the awaiting_completion latch
+    //   consultations  the latest await_completion row, OR a stage_advanced row
+    //   contracts      whose metadata.toStage is the data-completion stage —
+    //                  BOTH are needed because the step is reachable either by
+    //                  the explicit await-completion button or by an ordinary
+    //                  stage advance, and each writes a different activity type
+    //
+    // ⚠️ KNOWN AND ACCEPTED GAP — a record moved into the data-completion step
+    // by a RAW PATCH (a direct currentStage write that bypasses the advance and
+    // await-completion endpoints) leaves NO timestamped row, so it has no entry
+    // time and will NEVER escalate. It still shows the day-0 admin_support task,
+    // so it is not invisible — only the escalation is missed.
+    // 🔴 DO NOT "FIX" THIS WITH AN updatedAt FALLBACK. updatedAt moves on ANY
+    // write, so it would restart the clock every time anyone touched the record
+    // and would report a wait that never happened. That exact unreliability is
+    // why the بانتظار_رفع_العميل_للتسوية auto-close was CANCELLED rather than
+    // built on it. Silence is the correct failure here; a wrong number is not.
+    //
+    // PAUSE: cases and memos take the explicit paused guards; consultations and
+    // contracts are covered by status='active', which excludes "paused" — the
+    // same split documented at the fragment definitions above.
+    const escalationNowMs = Date.now();
+
+    try {
+      const DATA_COMPLETION_CASE_STAGE = "استكمال_البيانات";
+      const where = firmWideScoped
+        ? and(eq(lawCases.currentStage, DATA_COMPLETION_CASE_STAGE), caseNotPaused,
+            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, DATA_COMPLETION_CASE_STAGE),
+            caseNotPaused, ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
+        : and(eq(lawCases.currentStage, DATA_COMPLETION_CASE_STAGE), caseNotPaused,
+            ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`,
+            or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const rows = await db.select({
+        id: lawCases.id, caseNumber: lawCases.caseNumber,
+        primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+        // Typed jsonb read — no cast to any; only the two fields used are named.
+        stageHistory: sql<Array<{ stage?: string | null; timestamp?: string | null } | null> | null>`${lawCases.stageHistory}`,
+      }).from(lawCases).where(where);
+      for (const r of rows) {
+        const history = Array.isArray(r.stageHistory) ? r.stageHistory : [];
+        const entry = [...history].reverse().find((h) => h?.stage === DATA_COMPLETION_CASE_STAGE);
+        const days = elapsedWholeDays(entry?.timestamp ?? null, escalationNowMs);
+        if (days === null || days < DataCompletionEscalationDays) continue;
+        const ownerId = caseNotificationRecipientId(r);
+        tasks.push({
+          id: `data_completion_escalated:case:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_ESCALATED,
+          title: `لم تُستكمل بيانات القضية ${r.caseNumber} منذ ${elapsedDaysLabel(days)}`,
+          entityType: "case", entityId: r.id, caseId: r.id,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+        });
+      }
+    } catch (e) {
+      console.error("[getMyTasks] data_completion_escalated case block failed — skipping:", e);
+    }
+
+    try {
+      const where = firmWideScoped
+        ? and(eq(consultations.status, ConsultationStatus.ACTIVE),
+            eq(consultations.currentStage, "استكمال_المرفقات_والبيانات"))
+        : deptHeadScoped
+        ? and(eq(consultations.departmentId, userDept!), eq(consultations.status, ConsultationStatus.ACTIVE),
+            eq(consultations.currentStage, "استكمال_المرفقات_والبيانات"))
+        : and(eq(consultations.assignedTo, uid), eq(consultations.status, ConsultationStatus.ACTIVE),
+            eq(consultations.currentStage, "استكمال_المرفقات_والبيانات"));
+      const rows = await db.select({
+        id: consultations.id, consultationNumber: consultations.consultationNumber,
+        assignedTo: consultations.assignedTo,
+      }).from(consultations).where(where);
+      if (rows.length > 0) {
+        // await_completion OR a stage_advanced whose metadata.toStage is the
+        // data-completion stage — both routes into the step are timestamped,
+        // each by a different activity type.
+        const logRows = await db.select({
+          entityId: consultationActivityLog.consultationId,
+          performedAt: consultationActivityLog.performedAt,
+        }).from(consultationActivityLog).where(and(
+          inArray(consultationActivityLog.consultationId, rows.map((r) => r.id)),
+          or(
+            eq(consultationActivityLog.activityType, ConsultationActivityType.AWAIT_COMPLETION),
+            and(
+              eq(consultationActivityLog.activityType, ConsultationActivityType.STAGE_ADVANCED),
+              sql`${consultationActivityLog.metadata} ->> 'toStage' = 'استكمال_المرفقات_والبيانات'`,
+            ),
+          ),
+        ));
+        const enteredAt = latestActivityMsByEntity(logRows);
+        for (const r of rows) {
+          const ms = enteredAt.get(r.id);
+          const days = ms === undefined ? null : Math.floor((escalationNowMs - ms) / 86400000);
+          if (days === null || days < DataCompletionEscalationDays) continue;
+          const ownerId = r.assignedTo || "";
+          tasks.push({
+            id: `data_completion_escalated:consultation:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_ESCALATED,
+            title: `لم تُستكمل بيانات الاستشارة ${r.consultationNumber} منذ ${elapsedDaysLabel(days)}`,
+            entityType: "consultation", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[getMyTasks] data_completion_escalated consultation block failed — skipping:", e);
+    }
+
+    try {
+      const where = firmWideScoped
+        ? and(eq(contracts.status, ContractStatus.ACTIVE),
+            eq(contracts.currentStage, "استكمال_البيانات_والمرفقات"))
+        : deptHeadScoped
+        ? and(eq(contracts.departmentId, userDept!), eq(contracts.status, ContractStatus.ACTIVE),
+            eq(contracts.currentStage, "استكمال_البيانات_والمرفقات"))
+        : and(eq(contracts.assignedTo, uid), eq(contracts.status, ContractStatus.ACTIVE),
+            eq(contracts.currentStage, "استكمال_البيانات_والمرفقات"));
+      const rows = await db.select({
+        id: contracts.id, contractNumber: contracts.contractNumber,
+        assignedTo: contracts.assignedTo,
+      }).from(contracts).where(where);
+      if (rows.length > 0) {
+        const logRows = await db.select({
+          entityId: contractActivityLog.contractId,
+          performedAt: contractActivityLog.performedAt,
+        }).from(contractActivityLog).where(and(
+          inArray(contractActivityLog.contractId, rows.map((r) => r.id)),
+          or(
+            eq(contractActivityLog.activityType, ContractActivityType.AWAIT_COMPLETION),
+            and(
+              eq(contractActivityLog.activityType, ContractActivityType.STAGE_ADVANCED),
+              sql`${contractActivityLog.metadata} ->> 'toStage' = 'استكمال_البيانات_والمرفقات'`,
+            ),
+          ),
+        ));
+        const enteredAt = latestActivityMsByEntity(logRows);
+        for (const r of rows) {
+          const ms = enteredAt.get(r.id);
+          const days = ms === undefined ? null : Math.floor((escalationNowMs - ms) / 86400000);
+          if (days === null || days < DataCompletionEscalationDays) continue;
+          const ownerId = r.assignedTo || "";
+          tasks.push({
+            id: `data_completion_escalated:contract:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_ESCALATED,
+            title: `لم تُستكمل بيانات العقد ${r.contractNumber} منذ ${elapsedDaysLabel(days)}`,
+            entityType: "contract", entityId: r.id, caseId: null,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[getMyTasks] data_completion_escalated contract block failed — skipping:", e);
+    }
+
+    // Memos: the awaiting_completion LATCH, not a stage — so the only entry
+    // marker is the await_completion activity row (there is no stage_advanced
+    // arm to add, because no memo stage means "awaiting data").
+    try {
+      const aliveMemo = sql`${memos.status} NOT IN ('ملغاة', 'مرفوعة', 'معتمدة')`;
+      const where = firmWideScoped
+        ? and(eq(memos.awaitingCompletion, true), memoNotPaused, aliveMemo)
+        : deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), eq(memos.awaitingCompletion, true), memoNotPaused, aliveMemo)
+        : and(eq(memos.assignedTo, uid), eq(memos.awaitingCompletion, true), memoNotPaused, aliveMemo);
+      const rows = await db.select({
+        id: memos.id, title: memos.title, caseId: memos.caseId, assignedTo: memos.assignedTo,
+      }).from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id)).where(where);
+      if (rows.length > 0) {
+        const logRows = await db.select({
+          entityId: memoActivityLog.memoId,
+          performedAt: memoActivityLog.performedAt,
+        }).from(memoActivityLog).where(and(
+          inArray(memoActivityLog.memoId, rows.map((r) => r.id)),
+          eq(memoActivityLog.activityType, MemoActivityType.AWAIT_COMPLETION),
+        ));
+        const enteredAt = latestActivityMsByEntity(logRows);
+        for (const r of rows) {
+          const ms = enteredAt.get(r.id);
+          const days = ms === undefined ? null : Math.floor((escalationNowMs - ms) / 86400000);
+          if (days === null || days < DataCompletionEscalationDays) continue;
+          const ownerId = r.assignedTo || "";
+          tasks.push({
+            id: `data_completion_escalated:memo:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_ESCALATED,
+            title: `لم تُستكمل بيانات المذكرة "${r.title}" منذ ${elapsedDaysLabel(days)}`,
+            entityType: "memo", entityId: r.id, caseId: r.caseId,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[getMyTasks] data_completion_escalated memo block failed — skipping:", e);
     }
 
     return tasks;
@@ -6670,6 +7009,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteContract(id: string): Promise<boolean> {
+    // Contract-linked notifications go WITH the contract, mirroring
+    // deleteCase / deleteConsultation. Added alongside the relatedType
+    // widening: "contract" notifications were previously impossible, so there
+    // was nothing to clean up; now that they exist, leaving them would orphan
+    // rows pointing at a deleted contract — which is precisely one of the two
+    // reasons the manual send dialog gives for withholding عقد as a link type.
+    await db.delete(notifications).where(and(eq(notifications.relatedType, "contract"), eq(notifications.relatedId, id)));
     const result = await db.delete(contracts).where(eq(contracts.id, id)).returning();
     return result.length > 0;
   }

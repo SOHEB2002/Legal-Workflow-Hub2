@@ -4494,6 +4494,10 @@ export const NotificationType = {
   STAGE_CHANGED: "stage_changed",
   CASE_ASSIGNED: "case_assigned",
   CONSULTATION_ASSIGNED: "consultation_assigned",
+  // Sibling of the two above, added when the "new record in your department"
+  // notice moved server-side: contracts had no notification at all, and reusing
+  // GENERAL_ALERT would have made them unfilterable alongside their twins.
+  CONTRACT_ASSIGNED: "contract_assigned",
   SENT_TO_REVIEW: "sent_to_review",
   REVIEW_NOTES_ADDED: "review_notes_added",
   RETURNED_FOR_REVISION: "returned_for_revision",
@@ -4593,6 +4597,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   stage_changed: "تغيرت المرحلة",
   case_assigned: "تم تعيين قضية",
   consultation_assigned: "تم تعيين استشارة",
+  contract_assigned: "تم تعيين عقد",
   sent_to_review: "أُرسل للمراجعة",
   review_notes_added: "أُضيفت ملاحظات المراجعة",
   returned_for_revision: "أُرجع للتعديل",
@@ -4753,7 +4758,13 @@ export interface Notification {
   senderName: string;
   recipientId: string;
   recipientIds?: string[];
-  relatedType: "case" | "consultation" | "task" | "field_task" | "hearing" | "memo" | null;
+  // "contract" added in batch 4 so contract reminders can carry a typed link
+  // like every sibling. Until then contracts were the ONLY notifiable entity
+  // with no member here, which is why the pause notice and the create notice
+  // both send relatedType:null with a bare relatedId. Those two producers still
+  // do — they are correct as written and were deliberately left alone; setting
+  // their relatedType is a follow-up, not part of this change.
+  relatedType: "case" | "consultation" | "contract" | "task" | "field_task" | "hearing" | "memo" | null;
   relatedId: string | null;
   /** Optional = additive. Stamped only on the PAGED list read; absent on every
    *  other path, so nothing that does not ask for it is affected. */
@@ -6511,6 +6522,12 @@ export type SidebarCounts = Record<SidebarSectionValue, number>;
 export const MyTaskKind = {
   CASE_WORK: "case_work",                 // assigned lawyer must act at a lawyer-work stage
   CASE_UNASSIGNED: "case_unassigned",     // unassigned case in dept (dept_head assigns)
+  // Siblings of the above for the other two assignable record types. Separate
+  // kinds rather than one shared "unassigned" kind because each routes to its
+  // OWN assign endpoint and needs its own Arabic verb — CASE_UNASSIGNED's
+  // "إسناد القضية لمحامٍ" and its lawyer/department toggle are case-specific.
+  CONSULTATION_UNASSIGNED: "consultation_unassigned",
+  CONTRACT_UNASSIGNED: "contract_unassigned",
   HEARING_ATTEND: "hearing_attend",       // upcoming hearing to attend
   HEARING_UNRECORDED: "hearing_unrecorded", // hearing date passed, result not recorded
   HEARING_REPORT: "hearing_report",       // result recorded, report not completed
@@ -6547,6 +6564,15 @@ export const MyTaskKind = {
   // exhaustive Record<MyTaskKindValue, …>, so four kinds would be four FE
   // entries carrying identical copy.
   PAUSED_AGING: "paused_aging",
+  // A record that has sat at its data-completion step for
+  // ≥ DataCompletionEscalationDays. ESCALATION ONLY — the day-0 task
+  // (DATA_COMPLETION_*) stays with admin_support, ack-suppression and all; this
+  // is a SECOND, separate row that goes to the ASSIGNEE once the wait drags.
+  // A distinct kind is required, not cosmetic: reusing DATA_COMPLETION_* would
+  // hand the assignee that kind's "تأكيد التواصل" action, whose ack writes
+  // data_completion_last_ack_at and would silently suppress ADMIN SUPPORT's
+  // task for two days. One kind for all four types; entityType tells them apart.
+  DATA_COMPLETION_ESCALATED: "data_completion_escalated",
 } as const;
 
 export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
@@ -6556,8 +6582,17 @@ export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
 // one-time notice, so the two can never disagree about when a pause is "long".
 export const PausedTaskMinDays = 3;
 
-// عدد أيام التعليق — the Arabic rendering of "N days", used by BOTH the task
-// title and its notification so the same pause is never worded two ways.
+// ⏳ How long a record may sit at its data-completion step before the wait
+// ESCALATES from admin_support to the assignee. Deliberately its own constant
+// rather than reusing PausedTaskMinDays: the two thresholds happen to coincide
+// today but answer different questions, and tuning one must not move the other.
+export const DataCompletionEscalationDays = 3;
+
+// عدد الأيام بالعربية — the Arabic rendering of "N days". Shared by every
+// elapsed-time task title and notification so the same duration is never worded
+// two ways. (Named pausedDaysLabel when the pause task introduced it; renamed
+// when the data-completion escalation became its second caller — one formatter,
+// not two near-identical ones.)
 //
 // 🔴 THE DAY COUNT IS AN ELAPSED DURATION, NOT A CALENDAR-DAY DIFFERENCE, and
 // that is deliberate given this codebase's date-boundary bug class. A calendar
@@ -6572,7 +6607,7 @@ export const PausedTaskMinDays = 3;
 // function, so the singular (يوم) and dual (يومان) forms are unreachable.
 // Arabic takes the broken plural for 3–10 (أيام) and the accusative singular
 // from 11 up (يوماً).
-export function pausedDaysLabel(days: number): string {
+export function elapsedDaysLabel(days: number): string {
   return days >= 11 ? `${days} يوماً` : `${days} أيام`;
 }
 

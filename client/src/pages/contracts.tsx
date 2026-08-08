@@ -28,7 +28,7 @@ import {
 import {
   Plus, FileSignature, MoreHorizontal, UserPlus, ChevronLeft, ChevronRight,
   XCircle, Trash2, Pause, Play, ClipboardCheck, AlertTriangle, CheckCircle, 
-  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, RotateCcw, Pencil, Archive,
+  Upload, Download, FileIcon, Paperclip, Eye, RotateCw, RotateCcw, Pencil, Archive, Bell,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -59,6 +59,7 @@ import {
   canPreview,
 } from "@/lib/attachment-client";
 import { extractApiError, cn } from "@/lib/utils";
+import { sendContractReminder } from "@/lib/notification-triggers";
 import { PauseUntilField, pauseUntilError } from "@/components/ui/pause-until-field";
 import { pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 
@@ -349,7 +350,7 @@ export default function ContractsPage() {
   } = useContracts();
   const { getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, users, isViewer } = useAuth();
+  const { user, users, isViewer, permissions } = useAuth();
   const { toast } = useToast();
 
   const lawyers = users.filter((u) => u.canBeAssignedConsultations);
@@ -787,6 +788,16 @@ export default function ContractsPage() {
   // ---- Action dialogs ----
   const [showAssign, setShowAssign] = useState(false);
   const [assignTarget, setAssignTarget] = useState<Contract | null>(null);
+
+  // 🔔 Reminder — contracts had none. Shape copied from the CONSULTATIONS
+  // dialog, not the cases one: no manual recipient picker. That control exists
+  // only on cases and the asymmetry is deliberate (see handleSendReminder).
+  const [showReminder, setShowReminder] = useState(false);
+  const [reminderContract, setReminderContract] = useState<Contract | null>(null);
+  const [reminderData, setReminderData] = useState({
+    reminderType: "تذكير بتحديث الحالة",
+    message: "",
+  });
   const [assignLawyerId, setAssignLawyerId] = useState("");
 
   const [showReturn, setShowReturn] = useState(false);
@@ -930,6 +941,37 @@ export default function ContractsPage() {
     description: "",
   });
   const [editSaving, setEditSaving] = useState(false);
+
+  const openReminderDialog = (c: Contract) => {
+    setReminderContract(c);
+    setReminderData({ reminderType: "تذكير بتحديث الحالة", message: "" });
+    setShowReminder(true);
+  };
+
+  // 🔴 NO MANUAL RECIPIENT PICKER, matching consultations rather than cases.
+  // The picker on the cases page lets a manager aim a nudge at a specific
+  // lawyer in the department — it exists because a case can be worked by
+  // several people and reassignment is routine. A contract has ONE assignee,
+  // and since this batch the department head is copied automatically, so a
+  // picker would only offer a way to notify someone with no relationship to the
+  // record. The cases picker is left exactly as it is; this simply does not
+  // grow a third copy of it.
+  //
+  // No assignee is NOT a blocker: the server notifies the department head
+  // alone, which is the point of the change. It refuses only when neither
+  // exists, with its own Arabic reason, surfaced by extractApiError below.
+  const handleSendReminder = async () => {
+    if (!reminderContract) return;
+    const msg = reminderData.message || `${reminderData.reminderType} للعقد رقم ${reminderContract.contractNumber}`;
+    try {
+      await sendContractReminder(reminderContract.id, reminderData.reminderType, msg);
+      toast({ title: "تم إرسال التذكير بنجاح" });
+    } catch (err) {
+      toast({ title: "فشل إرسال التذكير", description: extractApiError(err), variant: "destructive" });
+    }
+    setShowReminder(false);
+    setReminderContract(null);
+  };
 
   const openEditContractDialog = (c: Contract) => {
     setEditForm({
@@ -1610,6 +1652,20 @@ export default function ContractsPage() {
                               flips between "إسناد" (no current assignee) and
                               "تعديل الإسناد" (existing assignee). Server
                               accepts reassignment regardless of stage. */}
+                          {/* Reminder — gated on canSendReminders exactly like
+                              the cases and consultations menus. NOT gated on an
+                              assignee: the department head is a recipient now,
+                              and an unassigned contract is the one most worth
+                              reminding about. */}
+                          {permissions.canSendReminders && (
+                            <DropdownMenuItem
+                              data-testid={`row-action-reminder-${c.id}`}
+                              onClick={() => openReminderDialog(c)}
+                            >
+                              <Bell className="w-4 h-4 ml-2 text-accent" />
+                              إرسال تذكير
+                            </DropdownMenuItem>
+                          )}
                           {c.status === "active" && canTransferContract(c) && (
                             <DropdownMenuItem
                               data-testid={`row-action-assign-${c.id}`}
@@ -2517,6 +2573,56 @@ export default function ContractsPage() {
               disabled={editSaving || !editForm.title.trim() || !editForm.clientId}
             >
               حفظ التعديل
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reminder dialog — same two controls as the consultations one (type
+          select + free message), same labels, same test ids. */}
+      <Dialog open={showReminder} onOpenChange={setShowReminder}>
+        <DialogContent className="max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bell className="w-5 h-5 text-accent" />
+              إرسال تذكير
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>نوع التذكير</Label>
+              <Select
+                value={reminderData.reminderType}
+                onValueChange={(value) => setReminderData({ ...reminderData, reminderType: value })}
+              >
+                <SelectTrigger data-testid="select-reminder-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="تذكير بتحديث الحالة">تذكير بتحديث الحالة</SelectItem>
+                  <SelectItem value="تذكير بالمتابعة">تذكير بالمتابعة</SelectItem>
+                  <SelectItem value="إطلاع مدة">إطلاع مدة (Deadline)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>رسالة نصية</Label>
+              <Textarea
+                data-testid="input-reminder-message"
+                placeholder="اكتب رسالة التذكير هنا..."
+                value={reminderData.message}
+                onChange={(e) => setReminderData({ ...reminderData, message: e.target.value })}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReminder(false)} data-testid="button-cancel-reminder">
+              إلغاء
+            </Button>
+            <Button onClick={handleSendReminder} data-testid="button-send-reminder">
+              <Bell className="w-4 h-4 ml-2" />
+              إرسال التذكير
             </Button>
           </DialogFooter>
         </DialogContent>
