@@ -3,7 +3,7 @@ import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, Case
 import { CaseStatus, Priority, CaseStage, CaseClassification, getStagesForClassification, caseNotificationRecipientId } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
-import { notifyCaseAdded, notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
+import { notifyCaseAssigned, notifyCaseSentToReview, notifyCaseReturnedForRevision } from "./notification-triggers";
 import { useAuth } from "./auth-context";
 import { useDepartments } from "./departments-context";
 
@@ -234,9 +234,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (newCase.autoCreated?.some((a: any) => a.type === "hearing")) {
       queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
     }
-    if (newCase.departmentId) {
-      notifyCaseAdded(newCase.id, newCase.caseNumber, newCase.departmentId).catch(() => {});
-    }
+    // The department-head notice now fires from POST /api/cases itself. It used
+    // to be posted from here with a `.catch(() => {})` that discarded the only
+    // evidence it had failed.
     return newCase;
   };
 

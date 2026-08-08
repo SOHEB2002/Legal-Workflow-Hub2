@@ -71,6 +71,7 @@ import {
   NoteOutcome,
   ConsultationClosureReason,
   ClosureReason,
+  NotificationType,
   ConsultationActivityType,
   getStagesForClassification,
   CollectionTaskTitlePrefix,
@@ -182,6 +183,7 @@ import {
   effectiveRolesFor,
 } from "./acting-context";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
+import { resolveNotificationRecipients } from "./notification-recipients";
 
 // Attachments live in Replit Object Storage — the previous
 // ./uploads/contracts/<id>/<file> layout was on the container's
@@ -1814,6 +1816,113 @@ async function cancelActiveCaseMemos(
 //
 // Best-effort by design: a cleanup failure must never fail the close itself,
 // which is why the caller's own try/catch shape is preserved inside.
+// 📣 "A new record landed in your department" — told to the department HEAD(S),
+// from the server, at create time.
+//
+// WHY THIS MOVED OFF THE CLIENT. It used to be a browser POST to
+// /api/notifications (notifyCaseAdded / notifyConsultationAdded), and its
+// failure was swallowed TWICE: once inside sendNotificationDirect's own catch
+// and again by a `.catch(() => {})` at the call site. So a head could silently
+// never be told, and nobody — user or log — would ever know. Worse, it could
+// not fire at all for a record created by any non-browser path. Contracts had
+// no notification whatsoever. Emitting from the create route makes it a
+// property of CREATING the record rather than of the tab that happened to do
+// it, and puts the failure in the server log where it can be seen.
+//
+// 🔴 THE OLD CLIENT LOOKUP WAS WRONG IN TWO WAYS, both fixed by delegating to
+// the SHARED resolveNotificationRecipients (built in batch 1, department-head
+// arm unused until now):
+//   1. findDepartmentHead used `.find`, so a department with TWO active heads
+//      notified exactly one of them — silently, with no way to notice. The
+//      shared helper iterates the whole roster and returns every match.
+//   2. It compared `u.departmentId === departmentId` with NO `!!u.departmentId`
+//      guard — the single most repeated permission bug in this codebase. A user
+//      with a NULL department matched every record with a NULL department. The
+//      shared helper carries the guard.
+// It also filters to ACTIVE users and drops ids that name no real user, which
+// matters because notifications.recipient_id carries an FK on PROD that dev
+// does not have.
+//
+// NO HEAD → NO NOTIFICATION, and no fallback is invented. This deliberately
+// matches the case_unassigned feed block, which treats a head-less department
+// as DORMANT ("no active head → dormant; surfaces when a head is assigned")
+// rather than escalating to the branch manager. One rule for head-less
+// departments, not two competing ones.
+//
+// 🔴 THE ACTOR IS EXCLUDED. When the department head creates the record
+// themselves they are not told about their own click — that is noise, and a
+// notification the reader already knows about trains people to ignore the bell.
+// A head creating their own record therefore produces NO notification at all,
+// which is correct: the only person who needed telling already knows.
+//
+// 🔴 TOTAL BY CONSTRUCTION — IT CAN NEVER FAIL A CREATE. The entire body,
+// including the roster read and every send, is inside one try/catch that only
+// logs. There is no throw path out of this function, so `await`ing it cannot
+// reject and a notification failure can never turn a successful create into a
+// 500. It is also called only AFTER the record exists, so the record is never
+// rolled back on account of a notice about it.
+async function notifyDepartmentHeadOfNewRecord(input: {
+  entityType: "case" | "consultation" | "contract";
+  entityId: string;
+  label: string;
+  departmentId: string | null | undefined;
+  actorId: string;
+  actorName: string;
+}): Promise<void> {
+  try {
+    if (!input.departmentId) return;
+    const users = await storage.getAllUsers();
+    const recipients = resolveNotificationRecipients([], users, { departmentId: input.departmentId })
+      .filter((id) => id !== input.actorId);
+    if (recipients.length === 0) return;
+
+    const copy = input.entityType === "case"
+      ? {
+        type: NotificationType.CASE_ASSIGNED,
+        title: "قضية جديدة في القسم",
+        message: `تم استلام قضية جديدة رقم ${input.label} وإسنادها لقسمكم`,
+      }
+      : input.entityType === "consultation"
+      ? {
+        type: NotificationType.CONSULTATION_ASSIGNED,
+        title: "استشارة جديدة في القسم",
+        message: `تم استلام استشارة جديدة رقم ${input.label} وإسنادها لقسمكم`,
+      }
+      : {
+        type: NotificationType.CONTRACT_ASSIGNED,
+        title: "عقد جديد في القسم",
+        message: `تم استلام عقد جديد رقم ${input.label} وإسناده لقسمكم`,
+      };
+
+    for (const recipientId of recipients) {
+      await storage.createNotification({
+        type: copy.type,
+        priority: "high",
+        status: "pending",
+        title: copy.title,
+        message: copy.message,
+        // Sender is the ACTOR, not "system" — a person created this record, and
+        // the old client notice named them too. Scheduler notices are the ones
+        // that use the "system" sender.
+        senderId: input.actorId,
+        senderName: input.actorName,
+        recipientId,
+        // Contracts carry relatedId WITHOUT relatedType — Notification.relatedType
+        // is a closed union with no "contract" member. Same precedent as the
+        // paused-record notice: consumers key on relatedTYPE (the server-side
+        // context enrichment filters `relatedType === t` before ever reading
+        // relatedId), so this adds no broken link while keeping the row
+        // attributable to its contract.
+        relatedType: input.entityType === "contract" ? null : input.entityType,
+        relatedId: input.entityId,
+        requiresResponse: false,
+      });
+    }
+  } catch (e) {
+    console.error(`[notifyDepartmentHeadOfNewRecord] ${input.entityType} ${input.entityId} — notification failed, record was still created:`, e);
+  }
+}
+
 async function cancelOpenCaseChildrenOnClose(caseId: string): Promise<void> {
   try {
     // Cancel upcoming hearings
@@ -3111,6 +3220,17 @@ export async function registerRoutes(
           title: `تم إنشاء القضية ${newCase.caseNumber}`,
         });
       } catch (e) {}
+
+      // Total by construction — see the helper. Awaiting it cannot reject, so
+      // the 201 below is never at risk from a notification failure.
+      await notifyDepartmentHeadOfNewRecord({
+        entityType: "case",
+        entityId: newCase.id,
+        label: newCase.caseNumber,
+        departmentId: newCase.departmentId,
+        actorId: createdBy,
+        actorName: user.name || createdBy,
+      });
 
       res.status(201).json({ ...newCase, autoCreated });
     } catch (error) {
@@ -4714,6 +4834,14 @@ export async function registerRoutes(
       // actor. Fall back for legacy clients that still pass it explicitly.
       const createdBy = reqUser?.id || req.body.createdBy || "unknown";
       const newConsultation = await storage.createConsultation(validatedData, createdBy);
+      await notifyDepartmentHeadOfNewRecord({
+        entityType: "consultation",
+        entityId: newConsultation.id,
+        label: newConsultation.consultationNumber,
+        departmentId: newConsultation.departmentId,
+        actorId: createdBy,
+        actorName: reqUser.name || createdBy,
+      });
       res.status(201).json(newConsultation);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -7622,6 +7750,15 @@ export async function registerRoutes(
       const validated = insertContractSchema.parse(req.body);
       const createdBy = reqUser?.id || "unknown";
       const created = await storage.createContract(validated, createdBy);
+      // NEW for contracts — this record type had no create notification at all.
+      await notifyDepartmentHeadOfNewRecord({
+        entityType: "contract",
+        entityId: created.id,
+        label: created.contractNumber,
+        departmentId: created.departmentId,
+        actorId: createdBy,
+        actorName: reqUser.name || createdBy,
+      });
       res.status(201).json(created);
     } catch (error) {
       if (error instanceof z.ZodError) {

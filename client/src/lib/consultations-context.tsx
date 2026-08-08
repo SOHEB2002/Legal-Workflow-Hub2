@@ -9,7 +9,7 @@ import type {
 } from "@shared/schema";
 import { ConsultationStage } from "@shared/schema";
 import { apiRequest } from "./queryClient";
-import { notifyConsultationAdded, notifyConsultationAssigned } from "./notification-triggers";
+import { notifyConsultationAssigned } from "./notification-triggers";
 import { useAuth } from "./auth-context";
 
 interface ConsultationsContextType {
@@ -112,9 +112,8 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     const response = await apiRequest("POST", "/api/consultations", consultationData);
     const newConsultation = await response.json();
     setConsultations((prev) => [newConsultation, ...prev]);
-    if (newConsultation.departmentId) {
-      notifyConsultationAdded(newConsultation.id, newConsultation.consultationNumber, newConsultation.departmentId).catch(() => {});
-    }
+    // The department-head notice now fires from POST /api/consultations itself
+    // — see the cases-context twin for why the client copy was removed.
     return newConsultation;
   };
 

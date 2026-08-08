@@ -4494,6 +4494,10 @@ export const NotificationType = {
   STAGE_CHANGED: "stage_changed",
   CASE_ASSIGNED: "case_assigned",
   CONSULTATION_ASSIGNED: "consultation_assigned",
+  // Sibling of the two above, added when the "new record in your department"
+  // notice moved server-side: contracts had no notification at all, and reusing
+  // GENERAL_ALERT would have made them unfilterable alongside their twins.
+  CONTRACT_ASSIGNED: "contract_assigned",
   SENT_TO_REVIEW: "sent_to_review",
   REVIEW_NOTES_ADDED: "review_notes_added",
   RETURNED_FOR_REVISION: "returned_for_revision",
@@ -4593,6 +4597,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   stage_changed: "تغيرت المرحلة",
   case_assigned: "تم تعيين قضية",
   consultation_assigned: "تم تعيين استشارة",
+  contract_assigned: "تم تعيين عقد",
   sent_to_review: "أُرسل للمراجعة",
   review_notes_added: "أُضيفت ملاحظات المراجعة",
   returned_for_revision: "أُرجع للتعديل",

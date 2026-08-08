@@ -38,9 +38,14 @@ function findUsersByRole(users: User[], role: string): User[] {
   return users.filter(u => u.role === role && u.isActive);
 }
 
-function findDepartmentHead(users: User[], departmentId: string): User | undefined {
-  return users.find(u => u.role === "department_head" && u.departmentId === departmentId && u.isActive);
-}
+// 🔴 findDepartmentHead WAS DELETED WITH ITS TWO CALLERS — do not reinstate it.
+// It resolved the head with `.find`, so a department with two active heads
+// notified exactly one of them, and it compared departmentId with no
+// `!!u.departmentId` guard, so a user with a NULL department matched every
+// record with a NULL department. Both bugs are fixed by the SERVER-side
+// resolveNotificationRecipients (server/notification-recipients.ts), which is
+// where "who is this department's head" is now answered — once, for every
+// producer. Anything needing that lookup belongs on the server.
 
 async function sendNotificationDirect(
   recipientId: string,
@@ -80,21 +85,12 @@ async function sendNotificationDirect(
   }
 }
 
-export async function notifyCaseAdded(caseId: string, caseNumber: string, departmentId: string) {
-  const users = await getUsers();
-  const deptHead = findDepartmentHead(users, departmentId);
-  if (deptHead) {
-    await sendNotificationDirect(
-      deptHead.id,
-      NotificationType.CASE_ASSIGNED,
-      NotificationPriority.HIGH,
-      "قضية جديدة في القسم",
-      `تم استلام قضية جديدة رقم ${caseNumber} وإسنادها لقسمكم`,
-      "case",
-      caseId,
-    );
-  }
-}
+// notifyCaseAdded / notifyConsultationAdded WERE DELETED. Both now fire from
+// their server create routes (POST /api/cases, POST /api/consultations, plus a
+// new one at POST /api/contracts) via notifyDepartmentHeadOfNewRecord in
+// server/routes.ts. From the browser the failure was swallowed twice — inside
+// sendNotificationDirect and again by the caller's `.catch(() => {})` — so a
+// department head could silently never be told. Do not re-add a client copy.
 
 export async function notifyCaseAssigned(caseId: string, caseNumber: string, lawyerId: string) {
   await sendNotificationDirect(
@@ -135,22 +131,6 @@ export async function notifyCaseReturnedForRevision(caseId: string, caseNumber: 
     "case",
     caseId,
   );
-}
-
-export async function notifyConsultationAdded(consultationId: string, consultationNumber: string, departmentId: string) {
-  const users = await getUsers();
-  const deptHead = findDepartmentHead(users, departmentId);
-  if (deptHead) {
-    await sendNotificationDirect(
-      deptHead.id,
-      NotificationType.CONSULTATION_ASSIGNED,
-      NotificationPriority.HIGH,
-      "استشارة جديدة في القسم",
-      `تم استلام استشارة جديدة رقم ${consultationNumber} وإسنادها لقسمكم`,
-      "consultation",
-      consultationId,
-    );
-  }
 }
 
 export async function notifyConsultationAssigned(consultationId: string, consultationNumber: string, assignedTo: string) {
