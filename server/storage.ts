@@ -4595,14 +4595,27 @@ export class DatabaseStorage implements IStorage {
             title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const ctc = await db.select({ id: contracts.id, title: contracts.title })
-            // ⚠ contractNotPaused is the ONLY lifecycle term these two committee
-            // queries have — unlike their internal-review sibling they carry no
-            // status='active' filter at all, so a CLOSED/CANCELLED contract
-            // parked on لجنة_مراجعة still surfaces here. That is a pre-existing
-            // gap of the same family as the block-7 (A) fix; it is REPORTED, not
-            // fixed here, because widening it is a behaviour change beyond this
-            // batch's approved scope.
-            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), contractNotLabor, contractNotPaused));
+            // ✅ status='active' ADDED — these two committee queries were the
+            // ONLY contract queries in this method with no lifecycle filter at
+            // all, so a CLOSED contract parked on لجنة_مراجعة kept asking the
+            // committee head for a decision forever. Closing a contract does
+            // NOT reset currentStage, so the row simply stayed at the committee
+            // stage and nothing ever cleared it — the same family as the
+            // block-7 "(A) lifecycle filters" fix directly above.
+            //
+            // ContractStatus.ACTIVE is the ESTABLISHED pattern, not a new rule:
+            // it is exactly what the contract internal-review query in this
+            // same block uses, what the consultation committee twin ten lines
+            // up uses (status='active'), and what data_completion_contract,
+            // contract_send and contract_unassigned all use. Nothing invented.
+            //
+            // contractNotPaused STAYS. status='active' happens to exclude
+            // paused rows too (pauseContract flips status), but the two terms
+            // are kept separate deliberately: the pause guard is the one that
+            // makes the pause-suppression rule uniform across all four entity
+            // types, and it must not silently depend on a lifecycle filter that
+            // a future edit might narrow.
+            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), contractNotLabor, contractNotPaused, eq(contracts.status, ContractStatus.ACTIVE)));
           for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
@@ -4628,9 +4641,9 @@ export class DatabaseStorage implements IStorage {
             title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const ctc = await db.select({ id: contracts.id, title: contracts.title })
-            // Same missing-status-filter caveat as the non-labor contract
-            // committee query above — reported, not widened here.
-            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), eq(contracts.departmentId, laborDeptId), contractNotPaused));
+            // Same status='active' fix as the non-labor contract committee
+            // query above — the labor head's arm had the identical gap.
+            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), eq(contracts.departmentId, laborDeptId), contractNotPaused, eq(contracts.status, ContractStatus.ACTIVE)));
           for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
