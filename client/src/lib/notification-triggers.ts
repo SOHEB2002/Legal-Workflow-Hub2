@@ -189,40 +189,58 @@ export async function notifyFieldTaskAssigned(taskId: string, taskTitle: string,
   );
 }
 
+// 🔔 THE REMINDER TRIGGERS — ONE request each, fanned out SERVER-side.
+//
+// These used to build a title and POST a single notification to a single
+// recipient. A reminder now reaches the assignee AND the record's department
+// head, and the browser cannot resolve that head: the client's own lookup was
+// deleted for being wrong (`.find` returned one head when a department has two,
+// and it compared departmentId with no !!guard). POST /api/reminders resolves
+// the record, the assignee, the head, de-duplicates, and writes the rows.
+//
+// 🔴 DELIBERATELY NOT ROUTED THROUGH sendNotificationDirect. That helper
+// swallows its own errors, which is right for a fire-and-forget side effect but
+// wrong here: every caller shows a "تم إرسال التذكير" / "فشل إرسال التذكير"
+// toast, so the rejection has to reach them. apiRequest throws; the callers
+// already have try/catch around it.
+//
+// The TITLE is built server-side now, so the four entity types can never word it
+// differently — which is why these take no caller-supplied title.
+export type ReminderEntityType = "case" | "consultation" | "contract" | "memo";
+
+async function sendReminder(
+  entityType: ReminderEntityType,
+  entityId: string,
+  reminderType: string,
+  message: string,
+  recipientId?: string,
+) {
+  await apiRequest("POST", "/api/reminders", {
+    entityType,
+    entityId,
+    reminderType,
+    message,
+    // Cases offer a manual recipient picker; when set it replaces the ASSIGNEE
+    // as a candidate. It never replaces the department head.
+    recipientId: recipientId || null,
+  });
+}
+
 export async function sendCaseReminder(
   caseId: string,
-  caseNumber: string,
   recipientId: string,
   reminderType: string,
   message: string,
 ) {
-  await sendNotificationDirect(
-    recipientId,
-    NotificationType.TASK_REMINDER,
-    NotificationPriority.HIGH,
-    `تذكير: ${reminderType} - قضية ${caseNumber}`,
-    message,
-    "case",
-    caseId,
-  );
+  await sendReminder("case", caseId, reminderType, message, recipientId);
 }
 
 export async function sendConsultationReminder(
   consultationId: string,
-  consultationNumber: string,
-  recipientId: string,
   reminderType: string,
   message: string,
 ) {
-  await sendNotificationDirect(
-    recipientId,
-    NotificationType.TASK_REMINDER,
-    NotificationPriority.HIGH,
-    `تذكير: ${reminderType} - استشارة ${consultationNumber}`,
-    message,
-    "consultation",
-    consultationId,
-  );
+  await sendReminder("consultation", consultationId, reminderType, message);
 }
 
 export async function requestCaseTransfer(

@@ -1313,7 +1313,7 @@ export default function CasesPage() {
     }
     const msg = reminderData.message || `${reminderData.reminderType} للقضية رقم ${reminderCase.caseNumber}`;
     try {
-      await sendCaseReminder(reminderCase.id, reminderCase.caseNumber, recipientId, reminderData.reminderType, msg);
+      await sendCaseReminder(reminderCase.id, recipientId, reminderData.reminderType, msg);
       toast({ title: "تم إرسال التذكير بنجاح" });
     } catch {
       toast({ title: "فشل إرسال التذكير", variant: "destructive" });

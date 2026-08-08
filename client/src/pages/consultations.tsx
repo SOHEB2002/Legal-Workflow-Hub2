@@ -1173,7 +1173,9 @@ export default function ConsultationsPage() {
     }
     const msg = reminderData.message || `${reminderData.reminderType} للاستشارة رقم ${reminderConsultation.consultationNumber}`;
     try {
-      await sendConsultationReminder(reminderConsultation.id, reminderConsultation.consultationNumber, reminderConsultation.assignedTo, reminderData.reminderType, msg);
+      // The assignee is resolved SERVER-side now (along with the department
+      // head), so the consultation's assignedTo is no longer passed from here.
+      await sendConsultationReminder(reminderConsultation.id, reminderData.reminderType, msg);
       toast({ title: "تم إرسال التذكير بنجاح" });
     } catch {
       toast({ title: "فشل إرسال التذكير", variant: "destructive" });

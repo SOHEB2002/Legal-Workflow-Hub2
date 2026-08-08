@@ -72,6 +72,7 @@ import {
   ConsultationClosureReason,
   ClosureReason,
   NotificationType,
+  caseNotificationRecipientId,
   ConsultationActivityType,
   getStagesForClassification,
   CollectionTaskTitlePrefix,
@@ -14470,6 +14471,143 @@ export async function registerRoutes(
       res.status(201).json(newNotification);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في إنشاء الإشعار" });
+    }
+  });
+
+  // 🔔 REMINDERS — ONE request in, one notification per RESOLVED recipient out.
+  //
+  // WHY THIS ENDPOINT EXISTS AT ALL. A reminder now goes to the assignee AND
+  // that record's department head. The browser cannot do that fan-out:
+  //   1. It has no correct department-head lookup any more. The client's
+  //      findDepartmentHead was DELETED in the previous batch precisely because
+  //      it used `.find` (one head when a department has two) and compared
+  //      departmentId with no !!guard. The only correct resolver —
+  //      resolveNotificationRecipients — is server-side.
+  //   2. Two recipients from the browser means TWO POSTs to /api/notifications,
+  //      which is two hits on notificationSendLimiter (150 per 5 min per USER)
+  //      for one user action, halving the effective ceiling. One request here
+  //      costs ONE hit no matter how many people are notified.
+  //   3. De-duplication has to happen where the recipient list is built. Doing
+  //      it on the client would be a FOURTH copy of a fan-out that already
+  //      exists once, correctly, on the server.
+  // This continues the direction of the previous batch, which moved the create
+  // notifications server-side for exactly these reasons.
+  //
+  // 🔴 THE AUTHORITY GATE IS COPIED FROM POST /api/notifications, VERBATIM AND
+  // DELIBERATELY: canSendNotifications(role) OR canReferenceRelatedEntity(...).
+  // Reminders reached the server through that endpoint until now, so reusing
+  // the identical test means NOBODY gains or loses the ability to send one.
+  // Adding canSendReminders as an extra AND would have NARROWED it (an assigned
+  // lawyer can send today), and narrowing is as much a permission change as
+  // widening. canSendReminders stays where it has always been — the FRONTEND
+  // gate on who is offered the button.
+  const sendReminderSchema = z.object({
+    entityType: z.enum(["case", "consultation", "contract", "memo"]),
+    entityId: z.string().min(1),
+    reminderType: z.string().min(1),
+    message: z.string().min(1),
+    // Cases offer a manual recipient picker; the other three do not. When set it
+    // REPLACES the assignee — it never replaces the department head.
+    recipientId: z.string().nullable().optional(),
+  }).passthrough();
+
+  app.post("/api/reminders", requireAuth, notificationSendLimiter, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const parsed = sendReminderSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
+      }
+      const { entityType, entityId, reminderType, message, recipientId } = parsed.data;
+
+      // Resolve the record ONCE into the three things a reminder needs: what to
+      // call it, who owns it, and which department's head to copy.
+      let label = "";
+      let assigneeId = "";
+      let departmentId: string | null = null;
+      let noun = "";
+      if (entityType === "case") {
+        const c = await storage.getCaseById(entityId);
+        if (!c) return res.status(404).json({ error: "القضية غير موجودة" });
+        label = c.caseNumber; noun = "قضية";
+        assigneeId = caseNotificationRecipientId(c);
+        departmentId = c.departmentId ?? null;
+      } else if (entityType === "consultation") {
+        const c = await storage.getConsultationById(entityId);
+        if (!c) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+        label = c.consultationNumber; noun = "استشارة";
+        assigneeId = c.assignedTo || "";
+        departmentId = c.departmentId ?? null;
+      } else if (entityType === "contract") {
+        const c = await storage.getContractById(entityId);
+        if (!c) return res.status(404).json({ error: "العقد غير موجود" });
+        label = c.contractNumber; noun = "عقد";
+        assigneeId = c.assignedTo || "";
+        departmentId = c.departmentId ?? null;
+      } else {
+        const m = await storage.getMemoById(entityId);
+        if (!m) return res.status(404).json({ error: "المذكرة غير موجودة" });
+        label = m.title; noun = "مذكرة";
+        // assigned_to is NOT NULL on memos but carries "" as the unassigned
+        // sentinel, so the same normalisation as its nullable siblings applies.
+        assigneeId = m.assignedTo || "";
+        // 🔴 MEMOS CARRY NO departmentId — the head resolves through the PARENT
+        // CASE, the same hop the memo feed blocks and the memo permission gates
+        // already make. A memo whose case is missing simply yields no head.
+        const parentCase = m.caseId ? await storage.getCaseById(m.caseId) : null;
+        departmentId = parentCase?.departmentId ?? null;
+      }
+
+      const maySend = canSendNotifications(user.role)
+        || await canReferenceRelatedEntity(user, entityType, entityId, req.actingContext);
+      if (!maySend) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لإرسال الإشعارات" });
+      }
+
+      // 🔴 THE DE-DUPLICATION. resolveNotificationRecipients returns a Set-backed
+      // list, so when the department head IS the assignee (or the manually
+      // picked recipient) they appear ONCE, not twice — which is the whole
+      // reason the fan-out belongs here and not in two client POSTs. It also
+      // drops blank ids and anyone who is not a real ACTIVE user.
+      //
+      // NO ASSIGNEE → the candidate list contributes nothing and only the head
+      // is notified. NO HEAD → only the assignee. NEITHER → zero recipients, and
+      // the endpoint says so with a 400 rather than reporting a phantom success:
+      // this is a user action with a visible outcome, unlike the DORMANT rule
+      // used for background tasks, where silence is correct because nobody is
+      // waiting on a toast.
+      const users = await storage.getAllUsers();
+      const recipients = resolveNotificationRecipients(
+        [recipientId || assigneeId],
+        users,
+        { departmentId },
+      );
+      if (recipients.length === 0) {
+        return res.status(400).json({ error: "لا يوجد مستلم للتذكير — لم يُسنَد السجل ولا يوجد رئيس قسم نشط" });
+      }
+
+      for (const rid of recipients) {
+        const created = await storage.createNotification({
+          type: NotificationType.TASK_REMINDER,
+          priority: "high",
+          status: "pending",
+          title: `تذكير: ${reminderType} - ${noun} ${label}`,
+          message,
+          senderId: user.id,
+          senderName: user.name,
+          recipientId: rid,
+          relatedType: entityType,
+          relatedId: entityId,
+          requiresResponse: false,
+        });
+        if (created.recipientId) {
+          sendToUser(created.recipientId, { type: "notification:new", payload: created });
+        }
+      }
+      res.status(201).json({ sent: recipients.length });
+    } catch (error) {
+      console.error("[POST /api/reminders] error:", error);
+      res.status(500).json({ error: "حدث خطأ في إرسال التذكير" });
     }
   });
 
