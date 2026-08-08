@@ -123,6 +123,11 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   // isInfoOnly handling in TaskRow for why its disabled button must not promise
   // a "coming soon" activation.
   paused_aging: { icon: PauseCircle, label: "تعليق مستمر" },
+  // The ESCALATION row, not admin_support's day-0 task. Info-only on purpose:
+  // its action is chasing the client or deciding the record can't proceed, both
+  // of which happen on the record — and it must NOT inherit the day-0 kind's
+  // "تأكيد التواصل" ack, which would suppress admin_support's own task.
+  data_completion_escalated: { icon: AlertTriangle, label: "تأخر استكمال البيانات" },
 };
 
 // actionHint → the Arabic verb shown on the action button.
@@ -461,9 +466,12 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   // in place). Without this it would fall to the generic disabled-button
   // tooltip and wrongly promise the action is "coming soon".
   const isInfoOnly = task.kind === MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION
-    || task.kind === MyTaskKind.PAUSED_AGING;
+    || task.kind === MyTaskKind.PAUSED_AGING
+    || task.kind === MyTaskKind.DATA_COMPLETION_ESCALATED;
   const infoOnlyHint = task.kind === MyTaskKind.PAUSED_AGING
     ? "السجل معلّق — افتح السجل لإلغاء التعليق أو تعديل مدته"
+    : task.kind === MyTaskKind.DATA_COMPLETION_ESCALATED
+    ? "تواصل مع العميل لاستكمال البيانات، أو افتح السجل لاتخاذ قرار بشأنه"
     : "بانتظار قيام رئيس القسم بإسناد المهمة";
   // A general (عام) task back in the worker's list WITH a reviewNote was returned
   // for edits (ملاحظة) — flag it so the worker sees it's a returned task, not a

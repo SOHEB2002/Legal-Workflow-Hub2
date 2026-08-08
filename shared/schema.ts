@@ -6558,6 +6558,15 @@ export const MyTaskKind = {
   // exhaustive Record<MyTaskKindValue, …>, so four kinds would be four FE
   // entries carrying identical copy.
   PAUSED_AGING: "paused_aging",
+  // A record that has sat at its data-completion step for
+  // ≥ DataCompletionEscalationDays. ESCALATION ONLY — the day-0 task
+  // (DATA_COMPLETION_*) stays with admin_support, ack-suppression and all; this
+  // is a SECOND, separate row that goes to the ASSIGNEE once the wait drags.
+  // A distinct kind is required, not cosmetic: reusing DATA_COMPLETION_* would
+  // hand the assignee that kind's "تأكيد التواصل" action, whose ack writes
+  // data_completion_last_ack_at and would silently suppress ADMIN SUPPORT's
+  // task for two days. One kind for all four types; entityType tells them apart.
+  DATA_COMPLETION_ESCALATED: "data_completion_escalated",
 } as const;
 
 export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
@@ -6567,8 +6576,17 @@ export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
 // one-time notice, so the two can never disagree about when a pause is "long".
 export const PausedTaskMinDays = 3;
 
-// عدد أيام التعليق — the Arabic rendering of "N days", used by BOTH the task
-// title and its notification so the same pause is never worded two ways.
+// ⏳ How long a record may sit at its data-completion step before the wait
+// ESCALATES from admin_support to the assignee. Deliberately its own constant
+// rather than reusing PausedTaskMinDays: the two thresholds happen to coincide
+// today but answer different questions, and tuning one must not move the other.
+export const DataCompletionEscalationDays = 3;
+
+// عدد الأيام بالعربية — the Arabic rendering of "N days". Shared by every
+// elapsed-time task title and notification so the same duration is never worded
+// two ways. (Named pausedDaysLabel when the pause task introduced it; renamed
+// when the data-completion escalation became its second caller — one formatter,
+// not two near-identical ones.)
 //
 // 🔴 THE DAY COUNT IS AN ELAPSED DURATION, NOT A CALENDAR-DAY DIFFERENCE, and
 // that is deliberate given this codebase's date-boundary bug class. A calendar
@@ -6583,7 +6601,7 @@ export const PausedTaskMinDays = 3;
 // function, so the singular (يوم) and dual (يومان) forms are unreachable.
 // Arabic takes the broken plural for 3–10 (أيام) and the accusative singular
 // from 11 up (يوماً).
-export function pausedDaysLabel(days: number): string {
+export function elapsedDaysLabel(days: number): string {
   return days >= 11 ? `${days} يوماً` : `${days} أيام`;
 }
 

@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
 import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId,
-  NotificationType, pausedDaysLabel } from "@shared/schema";
+  NotificationType, elapsedDaysLabel } from "@shared/schema";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
 
@@ -1132,7 +1132,7 @@ async function checkLongPauses() {
 // rather than "كانت معلّقة", and a closing line that points at a decision
 // rather than announcing one.
 function longPauseCopy(rec: LongPausedRecord): { title: string; message: string } {
-  const days = pausedDaysLabel(rec.pausedDays);
+  const days = elapsedDaysLabel(rec.pausedDays);
   switch (rec.entityType) {
     case "case":
       return {
