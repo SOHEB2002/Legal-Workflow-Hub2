@@ -148,34 +148,24 @@ export async function notifyConsultationAssigned(consultationId: string, consult
   );
 }
 
-export async function notifyConsultationSentToReview(consultationId: string, consultationNumber: string) {
-  const users = await getUsers();
-  const reviewHeads = findUsersByRole(users, "consultations_review_head");
-  for (const head of reviewHeads) {
-    await sendNotificationDirect(
-      head.id,
-      NotificationType.SENT_TO_REVIEW,
-      NotificationPriority.HIGH,
-      "استشارة جديدة للمراجعة",
-      `تم إحالة الاستشارة رقم ${consultationNumber} للجنة المراجعة`,
-      "consultation",
-      consultationId,
-    );
-  }
-}
-
-export async function notifyConsultationReturnedForRevision(consultationId: string, consultationNumber: string, assignedTo: string | null, notes: string) {
-  if (!assignedTo) return;
-  await sendNotificationDirect(
-    assignedTo,
-    NotificationType.RETURNED_FOR_REVISION,
-    NotificationPriority.URGENT,
-    "تم إرجاع الاستشارة للتعديلات",
-    `تم إرجاع الاستشارة رقم ${consultationNumber} للتعديلات. الملاحظات: ${notes}`,
-    "consultation",
-    consultationId,
-  );
-}
+// ⚠️ notifyConsultationSentToReview / notifyConsultationReturnedForRevision were
+// REMOVED here as dead code — zero callers anywhere in client/, server/,
+// shared/ or script/, and none since before this session.
+//
+// 🔴 BUT DELETING THEM DID NOT CLOSE A GAP, IT EXPOSED ONE. Their CASE
+// equivalents directly above (notifyCaseSentToReview /
+// notifyCaseReturnedForRevision) are LIVE and called from three places in
+// cases-context, and there is NO server-side substitute for either consultation
+// event — the consultation route block contains no createNotification call at
+// all. So today: referring a consultation to the review committee tells the
+// consultations_review_head NOTHING, and returning one for revision tells the
+// assigned lawyer NOTHING, while both case equivalents notify.
+//
+// That asymmetry is REPORTED, NOT BUILT — the owner decides whether
+// consultations should have it. If the answer is yes, it belongs SERVER-side in
+// the consultation review/return endpoints, not as a re-added client trigger:
+// the browser copy is exactly the shape whose silent double-swallowed failure
+// caused the create notices to be moved server-side.
 
 export async function notifyFieldTaskAssigned(taskId: string, taskTitle: string, assignedTo: string) {
   await sendNotificationDirect(
