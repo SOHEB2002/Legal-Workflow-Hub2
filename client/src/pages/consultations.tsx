@@ -1167,18 +1167,23 @@ export default function ConsultationsPage() {
   };
 
   const handleSendReminder = async () => {
-    if (!reminderConsultation || !reminderConsultation.assignedTo) {
-      toast({ title: "لا يوجد محامي مسؤول لهذه الاستشارة", variant: "destructive" });
-      return;
-    }
+    // The "no assignee → refuse" guard is GONE, and its removal is what makes
+    // "reminders reach the department head too" actually true: an UNASSIGNED
+    // consultation is the one most likely to be stalling, and the head is
+    // exactly who should hear about it. The server resolves assignee + head,
+    // notifies whoever exists, and 400s with its own Arabic message only when
+    // NEITHER does — which the catch below surfaces.
+    if (!reminderConsultation) return;
     const msg = reminderData.message || `${reminderData.reminderType} للاستشارة رقم ${reminderConsultation.consultationNumber}`;
     try {
       // The assignee is resolved SERVER-side now (along with the department
       // head), so the consultation's assignedTo is no longer passed from here.
       await sendConsultationReminder(reminderConsultation.id, reminderData.reminderType, msg);
       toast({ title: "تم إرسال التذكير بنجاح" });
-    } catch {
-      toast({ title: "فشل إرسال التذكير", variant: "destructive" });
+    } catch (err) {
+      // Surfaces the server's own Arabic reason — notably the "no assignee and
+      // no active department head" 400, which a bare toast would have hidden.
+      toast({ title: "فشل إرسال التذكير", description: extractApiError(err), variant: "destructive" });
     }
     setShowReminderDialog(false);
     setReminderConsultation(null);
@@ -2770,7 +2775,10 @@ export default function ConsultationsPage() {
                               </DropdownMenuItem>
                             </>
                           )}
-                          {permissions.canSendReminders && consultation.assignedTo && (
+                          {/* No longer gated on an assignee: the department head
+                              is a recipient now, and an unassigned consultation
+                              is exactly the one worth reminding about. */}
+                          {permissions.canSendReminders && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem data-testid={`button-reminder-${consultation.id}`} onClick={() => openReminderDialog(consultation)}>

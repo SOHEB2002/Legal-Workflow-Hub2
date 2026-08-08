@@ -243,6 +243,27 @@ export async function sendConsultationReminder(
   await sendReminder("consultation", consultationId, reminderType, message);
 }
 
+// NEW — contracts and memos had no reminder at all. No manual recipient picker
+// on either: that control exists ONLY on cases, and the asymmetry is deliberate
+// (see the dialogs). Recipients are the assignee + the department head, resolved
+// server-side — for a MEMO that means hopping through memos.caseId to the parent
+// case, since memos carry no departmentId of their own.
+export async function sendContractReminder(
+  contractId: string,
+  reminderType: string,
+  message: string,
+) {
+  await sendReminder("contract", contractId, reminderType, message);
+}
+
+export async function sendMemoReminder(
+  memoId: string,
+  reminderType: string,
+  message: string,
+) {
+  await sendReminder("memo", memoId, reminderType, message);
+}
+
 export async function requestCaseTransfer(
   caseId: string,
   caseNumber: string,
