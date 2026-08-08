@@ -4573,6 +4573,18 @@ export const NotificationType = {
   // تنبيه جلسة متأخرة
   HEARING_UPDATE_OVERDUE: "hearing_update_overdue",
   HEARING_REMINDER: "hearing_reminder",
+
+  // ⏸️ سجل معلّق منذ مدة — the ONE-TIME notice sent when a record crosses
+  // PausedTaskMinDays still paused.
+  //
+  // 🔴 A DEDICATED TYPE IS WHAT MAKES "ONCE" ENFORCEABLE, and that is the only
+  // reason it is not general_alert like its scheduler siblings. The fire-once
+  // check asks the notifications table whether this notice already exists; with
+  // a shared type it would have to match on the TITLE, and every other
+  // general_alert about the same record (the auto-lift notice, hearing alerts)
+  // would collide with it. Type + related_id + created_at makes the check
+  // purely structural. See checkLongPauses in server/scheduler.ts.
+  PAUSE_AGING: "pause_aging",
 } as const;
 
 export type NotificationTypeValue = typeof NotificationType[keyof typeof NotificationType];
@@ -4636,6 +4648,7 @@ export const NotificationTypeLabels: Record<NotificationTypeValue, string> = {
   contact_followup_overdue: "متابعة تواصل متأخرة",
   hearing_update_overdue: "جلسة متأخرة التحديث",
   hearing_reminder: "تذكير بجلسة",
+  pause_aging: "سجل معلّق منذ مدة",
 };
 
 export const NotificationPriority = {
@@ -6528,9 +6541,40 @@ export const MyTaskKind = {
   AGENCY_ISSUANCE: "agency_issuance", // admin_support issues the agency (إصدار وكالة) after a "لا يوجد" answer; incl. unassigned ""
   SESSION_REPORT_EXPORT: "session_report_export", // export session-report PDF (admin_support)
   CONTRACT_SEND: "contract_send", // admin_support sends an approved contract (إرسال العقد) at جاهزة_للإرسال → مغلقة; incl. unassigned ""
+  // A record that has now sat PAUSED for ≥ PausedTaskMinDays. Deliberately ONE
+  // kind for all four entity types (entityType distinguishes them) rather than
+  // four: the row says the same thing about each, and KIND_META is an
+  // exhaustive Record<MyTaskKindValue, …>, so four kinds would be four FE
+  // entries carrying identical copy.
+  PAUSED_AGING: "paused_aging",
 } as const;
 
 export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
+
+// ⏸️ How long a pause must run before it becomes a thing to look at. Shared by
+// the مهامي block that RAISES the task and the scheduler job that sends the
+// one-time notice, so the two can never disagree about when a pause is "long".
+export const PausedTaskMinDays = 3;
+
+// عدد أيام التعليق — the Arabic rendering of "N days", used by BOTH the task
+// title and its notification so the same pause is never worded two ways.
+//
+// 🔴 THE DAY COUNT IS AN ELAPSED DURATION, NOT A CALENDAR-DAY DIFFERENCE, and
+// that is deliberate given this codebase's date-boundary bug class. A calendar
+// difference would have to ask "what day is it in Asia/Riyadh?" and would be
+// off by one for every pause read near midnight. Whole 24-hour periods since
+// the pause INSTANT need no timezone at all — the caller computes them in the
+// same SQL query that decides visibility, so the number shown and the rule that
+// showed it are evaluated at one NOW() and cannot disagree.
+//
+// Only TWO grammatical cases exist here, and that is a consequence of the
+// 3-day threshold rather than an oversight: nothing below 3 ever reaches this
+// function, so the singular (يوم) and dual (يومان) forms are unreachable.
+// Arabic takes the broken plural for 3–10 (أيام) and the accusative singular
+// from 11 up (يوماً).
+export function pausedDaysLabel(days: number): string {
+  return days >= 11 ? `${days} يوماً` : `${days} أيام`;
+}
 
 export type MyTaskEntityType =
   | "case" | "consultation" | "contract" | "memo"

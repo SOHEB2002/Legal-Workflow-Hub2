@@ -14,7 +14,7 @@ import {
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
-  ChevronDown, ChevronLeft, ListChecks, Clock, Archive, Send, Eye, Briefcase, Paperclip,
+  ChevronDown, ChevronLeft, ListChecks, Clock, Archive, Send, Eye, Briefcase, Paperclip, PauseCircle,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -116,6 +116,11 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   agency_issuance: { icon: Stamp, label: "إصدار وكالة" },
   contract_send: { icon: Send, label: "إرسال العقد" },
   session_report_export: { icon: FileDown, label: "تصدير تقرير الجلسة" },
+  // The record is PAUSED and has been for a while. Not an instruction to work
+  // on it — the pause still stands — so it carries no inline action; see the
+  // isInfoOnly handling in TaskRow for why its disabled button must not promise
+  // a "coming soon" activation.
+  paused_aging: { icon: PauseCircle, label: "تعليق مستمر" },
 };
 
 // actionHint → the Arabic verb shown on the action button.
@@ -433,7 +438,16 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   // The awaiting-distribution row is INFORMATIONAL for the requester (no action
   // — it waits on the dept_head), so its disabled button must not promise a
   // "coming soon" activation like the genuinely-unwired kinds do.
-  const isInfoOnly = task.kind === MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION;
+  // paused_aging joins it for the same reason: the pause is still in force, so
+  // there is nothing to do FROM THIS ROW — resuming or re-dating the pause
+  // happens on the record itself (the Briefcase button opens a case-linked one
+  // in place). Without this it would fall to the generic disabled-button
+  // tooltip and wrongly promise the action is "coming soon".
+  const isInfoOnly = task.kind === MyTaskKind.GENERAL_TASK_AWAITING_DISTRIBUTION
+    || task.kind === MyTaskKind.PAUSED_AGING;
+  const infoOnlyHint = task.kind === MyTaskKind.PAUSED_AGING
+    ? "السجل معلّق — افتح السجل لإلغاء التعليق أو تعديل مدته"
+    : "بانتظار قيام رئيس القسم بإسناد المهمة";
   // A general (عام) task back in the worker's list WITH a reviewNote was returned
   // for edits (ملاحظة) — flag it so the worker sees it's a returned task, not a
   // fresh one. Short-circuited for every non-general kind (no lookup cost).
@@ -523,7 +537,7 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
         size="sm"
         variant="outline"
         disabled={!actionable}
-        title={actionable ? undefined : isInfoOnly ? "بانتظار قيام رئيس القسم بإسناد المهمة" : "سيتم تفعيل هذا الإجراء قريباً"}
+        title={actionable ? undefined : isInfoOnly ? infoOnlyHint : "سيتم تفعيل هذا الإجراء قريباً"}
         onClick={() => actionable && onAction(task)}
         data-testid={`task-action-${task.id}`}
       >
