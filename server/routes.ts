@@ -2008,16 +2008,17 @@ async function notifyConsultationWorkflow(input: {
     };
 
     if (input.event === "sent_to_review") {
-      // 🔴 A DELIBERATE DIVERGENCE FROM THE CASE TWIN, and the reason matters.
-      // notifyCaseSentToReview does a FLAT role lookup — every active
-      // cases_review_head, firm-wide. Copying that shape for consultations
-      // would notify the WRONG person: labor consultations are chaired by
-      // labor_review_head EXCLUSIVELY (the committee-decision endpoint's own
-      // authoritative gate), so a flat consultations_review_head lookup would
-      // page someone who would be 403'd if they acted, while leaving the real
-      // chair uninformed. The chair is resolved by the SAME rule the decision
-      // endpoint uses, so visibility matches authorization. (The case helper
-      // predates the labor committee; it is not re-shaped here.)
+      // 🔴 DEPARTMENT-ROUTED CHAIR, matching the committee-decision endpoint's
+      // own authoritative gate: labor consultations are chaired by
+      // labor_review_head EXCLUSIVELY, everything else by
+      // consultations_review_head. A flat role lookup would page someone who
+      // would be 403'd if they acted while leaving the real chair uninformed,
+      // so visibility is resolved by the SAME rule as authorization.
+      //
+      // This was written here as a deliberate divergence from the case twin,
+      // which still did the flat lookup at the time. THE CASE SIDE HAS SINCE
+      // BEEN FIXED THE SAME WAY (notifyCaseSentToCommittee below), so the two
+      // now agree — do not "restore" either to a flat role lookup.
       const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
       const chairRole = (!!laborDeptId && consultation.departmentId === laborDeptId)
         ? "labor_review_head" : "consultations_review_head";
@@ -2067,6 +2068,72 @@ async function notifyConsultationWorkflow(input: {
     }
   } catch (e) {
     console.error(`[notifyConsultationWorkflow] ${input.event} ${input.consultation.id} — notification failed, the transition still stands:`, e);
+  }
+}
+
+// 📣 "A case has been referred to the review committee" — told to the chair who
+// can ACTUALLY decide it.
+//
+// 🔴 THE BUG THIS REPLACES. notifyCaseSentToReview (client trigger, now deleted)
+// notified every active cases_review_head, FIRM-WIDE, with no department test.
+// It predates the labor committee. But the authoritative gate in
+// PATCH /api/cases/:id — a few hundred lines below, on the committee stage —
+// routes the decision by DEPARTMENT:
+//     committeeHead = (departmentId === عمالي) ? labor_review_head : cases_review_head
+//     if (user.role !== committeeHead) → 403
+// So for a LABOR case the old notice paged a cases_review_head who would be
+// 403'd the moment they acted, and never told labor_review_head, the only role
+// that could decide it. Visibility contradicted authorization.
+//
+// THE LABOR TEST IS THE DEPARTMENT, NOT caseType — the same resolution the gate
+// itself performs (department NAME "عمالي" → id → compare case.departmentId).
+// Trusting the free-text caseType is a documented bug in this codebase (L5): a
+// labor case mistyped "تجاري" would have been routed to the wrong committee.
+//
+// WITH NO LABOR DEPARTMENT CONFIGURED laborDeptId is undefined, every case
+// resolves to cases_review_head, and the behaviour is identical to before.
+//
+// 🔴 TOTAL BY CONSTRUCTION — IT CAN NEVER FAIL THE TRANSITION. The whole body,
+// roster and department reads included, is inside one try/catch that only logs.
+// There is no throw path out, so awaiting it cannot reject, and it is called
+// only AFTER storage.updateCase returned — the stage has already moved before
+// anyone is told about it.
+async function notifyCaseSentToCommittee(input: {
+  caseId: string;
+  caseNumber: string;
+  departmentId: string | null | undefined;
+  actorId: string;
+  actorName: string;
+}): Promise<void> {
+  try {
+    const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+    const chairRole = (!!laborDeptId && input.departmentId === laborDeptId)
+      ? "labor_review_head" : "cases_review_head";
+    const users = await storage.getAllUsers();
+    // Role SELECTION only. The fan-out itself — de-duplication, blank-id drop,
+    // active-user check — stays in resolveNotificationRecipients. No new
+    // fan-out is written here. The actor is excluded so nobody is told about
+    // their own referral (the create-notice precedent).
+    const candidates = users.filter((u) => u.role === chairRole).map((u) => u.id);
+    const recipients = resolveNotificationRecipients(candidates, users)
+      .filter((id) => id !== input.actorId);
+    for (const recipientId of recipients) {
+      await storage.createNotification({
+        type: NotificationType.SENT_TO_REVIEW,
+        priority: "high",
+        status: "pending",
+        title: "قضية جديدة للمراجعة",
+        message: `تم إحالة القضية رقم ${input.caseNumber} للجنة المراجعة`,
+        senderId: input.actorId,
+        senderName: input.actorName,
+        recipientId,
+        relatedType: "case",
+        relatedId: input.caseId,
+        requiresResponse: false,
+      });
+    }
+  } catch (e) {
+    console.error(`[notifyCaseSentToCommittee] ${input.caseId} — notification failed, the referral still stands:`, e);
   }
 }
 
@@ -4534,6 +4601,23 @@ export async function registerRoutes(
       const updated = await storage.updateCase(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "القضية غير موجودة" });
+      }
+
+      // Referral to the review committee. Tested as a genuine TRANSITION INTO
+      // the stage (was not there, is now), so re-saving a case already parked at
+      // إحالة_للجنة_المراجعة does not re-page the chair. Placed here, after
+      // updateCase returned, alongside the handler's other post-update side
+      // effects — and in the SAME handler as the committee authority gate above,
+      // so who-is-told and who-may-decide are computed from one rule.
+      if (existing.currentStage !== "إحالة_للجنة_المراجعة"
+        && updated.currentStage === "إحالة_للجنة_المراجعة") {
+        await notifyCaseSentToCommittee({
+          caseId: updated.id,
+          caseNumber: updated.caseNumber,
+          departmentId: updated.departmentId,
+          actorId: user.id,
+          actorName: user.name,
+        });
       }
 
       // Side effect for مداولة_الصلح → تحصيل: create the admin collection task.
