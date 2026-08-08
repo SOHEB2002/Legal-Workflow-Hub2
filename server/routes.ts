@@ -72,6 +72,8 @@ import {
   ConsultationClosureReason,
   ClosureReason,
   NotificationType,
+  type NotificationTypeValue,
+  type NotificationPriorityValue,
   caseNotificationRecipientId,
   ConsultationActivityType,
   getStagesForClassification,
@@ -1955,6 +1957,116 @@ async function notifyDepartmentHeadOfNewRecord(input: {
     }
   } catch (e) {
     console.error(`[notifyDepartmentHeadOfNewRecord] ${input.entityType} ${input.entityId} — notification failed, record was still created:`, e);
+  }
+}
+
+// 📣 The two CONSULTATION workflow notices that cases have had all along.
+//
+// THE GAP THIS CLOSES. notifyCaseSentToReview and notifyCaseReturnedForRevision
+// are live on the cases side and fire from three places in cases-context. Their
+// consultation twins existed as client functions with ZERO callers (deleted as
+// dead code), and no server route emitted anything — the whole consultation
+// route block contained not one createNotification call. So referring a
+// consultation to the committee told the chair nothing, and returning one for
+// revision told the answering lawyer nothing.
+//
+// 🔴 BUILT SERVER-SIDE, NOT AS RE-ADDED CLIENT TRIGGERS. The browser shape is
+// the one whose failure was swallowed twice — inside sendNotificationDirect and
+// again by the caller's `.catch(() => {})` — which is exactly why the create
+// notices were moved server-side. Emitting from the endpoint that performs the
+// transition also means the notice cannot be skipped by a non-browser caller.
+//
+// 🔴 TOTAL BY CONSTRUCTION — IT CAN NEVER FAIL A TRANSITION. The entire body,
+// roster read and every send included, sits in one try/catch that only logs.
+// There is no throw path out, so `await`ing it cannot reject and a notification
+// failure can never turn a completed review decision into a 500. Every caller
+// invokes it only AFTER the storage call returned, so the stage has already
+// moved before anyone is told about it.
+//
+// THE ACTOR IS EXCLUDED, per the create-notice precedent: nobody is told about
+// their own click. A reviewer who is also the committee chair is not notified
+// of their own referral.
+async function notifyConsultationWorkflow(input: {
+  event: "sent_to_review" | "returned_for_revision";
+  consultation: { id: string; consultationNumber: string; assignedTo?: string | null; departmentId?: string | null };
+  notes?: string;
+  actorId: string;
+  actorName: string;
+}): Promise<void> {
+  try {
+    const { consultation } = input;
+    const users = await storage.getAllUsers();
+
+    let candidates: (string | null | undefined)[];
+    // Typed to the shared unions rather than `string`, so a typo in either
+    // constant is a compile error instead of a row nothing can filter.
+    let copy: {
+      type: NotificationTypeValue;
+      priority: NotificationPriorityValue;
+      title: string;
+      message: string;
+    };
+
+    if (input.event === "sent_to_review") {
+      // 🔴 A DELIBERATE DIVERGENCE FROM THE CASE TWIN, and the reason matters.
+      // notifyCaseSentToReview does a FLAT role lookup — every active
+      // cases_review_head, firm-wide. Copying that shape for consultations
+      // would notify the WRONG person: labor consultations are chaired by
+      // labor_review_head EXCLUSIVELY (the committee-decision endpoint's own
+      // authoritative gate), so a flat consultations_review_head lookup would
+      // page someone who would be 403'd if they acted, while leaving the real
+      // chair uninformed. The chair is resolved by the SAME rule the decision
+      // endpoint uses, so visibility matches authorization. (The case helper
+      // predates the labor committee; it is not re-shaped here.)
+      const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+      const chairRole = (!!laborDeptId && consultation.departmentId === laborDeptId)
+        ? "labor_review_head" : "consultations_review_head";
+      // Role SELECTION only — the fan-out itself (de-duplication, blank-id
+      // drop, active-user check) still belongs to resolveNotificationRecipients
+      // below. No second fan-out is written here.
+      candidates = users.filter((u) => u.role === chairRole).map((u) => u.id);
+      copy = {
+        type: NotificationType.SENT_TO_REVIEW,
+        priority: "high",
+        title: "استشارة جديدة للمراجعة",
+        message: `تم إحالة الاستشارة رقم ${consultation.consultationNumber} للجنة المراجعة`,
+      };
+    } else {
+      // Mirrors the case twin exactly: the one person who must act on the
+      // notes — the assigned (answering) lawyer. "" is not a real id and the
+      // helper drops it, so an unassigned consultation notifies nobody rather
+      // than falling back to someone with no relationship to the work.
+      candidates = [consultation.assignedTo];
+      const notes = (input.notes || "").trim();
+      copy = {
+        type: NotificationType.RETURNED_FOR_REVISION,
+        priority: "urgent",
+        title: "تم إرجاع الاستشارة للتعديلات",
+        message: notes
+          ? `تم إرجاع الاستشارة رقم ${consultation.consultationNumber} للتعديلات. الملاحظات: ${notes}`
+          : `تم إرجاع الاستشارة رقم ${consultation.consultationNumber} للتعديلات`,
+      };
+    }
+
+    const recipients = resolveNotificationRecipients(candidates, users)
+      .filter((id) => id !== input.actorId);
+    for (const recipientId of recipients) {
+      await storage.createNotification({
+        type: copy.type,
+        priority: copy.priority,
+        status: "pending",
+        title: copy.title,
+        message: copy.message,
+        senderId: input.actorId,
+        senderName: input.actorName,
+        recipientId,
+        relatedType: "consultation",
+        relatedId: consultation.id,
+        requiresResponse: false,
+      });
+    }
+  } catch (e) {
+    console.error(`[notifyConsultationWorkflow] ${input.event} ${input.consultation.id} — notification failed, the transition still stands:`, e);
   }
 }
 
@@ -5382,6 +5494,18 @@ export async function registerRoutes(
           performedBy: reqUser.id,
         },
       });
+      // AFTER the transition — recordConsultationInternalReview has returned, so
+      // the stage has already moved. PASSED sent it to the committee (tell the
+      // chair); NEEDS_NOTES sent it back to drafting (tell the answering
+      // lawyer). Mirrors the two case events, which fire from the equivalent
+      // internal-review decision.
+      await notifyConsultationWorkflow({
+        event: decision === InternalReviewDecision.PASSED ? "sent_to_review" : "returned_for_revision",
+        consultation,
+        notes,
+        actorId: reqUser.id,
+        actorName: reqUser.name,
+      });
       res.json({ review: result.review, consultation: result.consultation });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -5473,6 +5597,21 @@ export async function registerRoutes(
           performedBy: reqUser.id,
         },
       });
+      // AFTER the transition. Only the NEEDS_NOTES branch notifies: it returns
+      // the consultation to الأخذ_بالملاحظات for the answering lawyer to act on,
+      // which is the second of the two case-side "returned for revision"
+      // triggers (cases fire it from the committee's taking-notes return too).
+      // APPROVED is deliberately silent — the case side has no notice for it
+      // either, and the consultation_closing task already surfaces the result.
+      if (decision === CommitteeDecision.NEEDS_NOTES) {
+        await notifyConsultationWorkflow({
+          event: "returned_for_revision",
+          consultation,
+          notes,
+          actorId: reqUser.id,
+          actorName: reqUser.name,
+        });
+      }
       res.json({ decision: result.decision, consultation: result.consultation });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

@@ -4575,7 +4575,30 @@ export class DatabaseStorage implements IStorage {
 
         if (isCasesReviewHead) {
           const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), caseNotLabor, caseNotPaused));
+            // ✅ Lifecycle terms ADDED, completing the block-7 "(A) lifecycle
+            // filters" fix that reached the internal-review queries and never
+            // these. THE CASE PATTERN IS NOT THE CONTRACT ONE: cases have no
+            // single "active" status — CaseStatus is a workflow vocabulary
+            // (استلام / دراسة / … / مرفوع / مغلق), so "alive" is expressed as a
+            // NEGATIVE test on the one terminal value plus the archive flag,
+            // exactly as the case internal-review query beside this one does,
+            // and as blocks 1e / 20 / 21 do.
+            //
+            // NO currentStage NOT IN (…) term: this query already pins
+            // currentStage to إحالة_للجنة_المراجعة, so a terminal stage is
+            // impossible by construction and that term would be dead weight.
+            //
+            // ⚠ SCOPE, HONESTLY: every ordinary close writes currentStage
+            // 'مقفلة' TOGETHER with status 'مغلق', and auto-archive refuses any
+            // case not already at 'مقفلة' — so this state is NOT reachable
+            // through the normal flow and this may match zero rows today. It is
+            // reachable by a direct PATCH writing `status` alone
+            // (updateCaseSchema accepts it), which is the same raw-PATCH class
+            // documented on the data-completion escalation. That is precisely
+            // why the internal-review sibling carries the guard, and why these
+            // two now match it rather than staying the odd ones out.
+            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), caseNotLabor, caseNotPaused,
+              ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`));
           for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
@@ -4624,7 +4647,10 @@ export class DatabaseStorage implements IStorage {
         // (guarded on laborDeptId so a missing dept means the labor head sees nothing here).
         if (isLaborReviewHead && laborDeptId) {
           const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
-            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), eq(lawCases.departmentId, laborDeptId), caseNotPaused));
+            // Same lifecycle terms as the non-labor case committee query above —
+            // the labor head's arm had the identical gap.
+            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), eq(lawCases.departmentId, laborDeptId), caseNotPaused,
+              ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`));
           for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
