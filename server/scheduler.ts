@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
 import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId,
-  NotificationType, elapsedDaysLabel } from "@shared/schema";
+  NotificationType, elapsedDaysLabel, firmToday } from "@shared/schema";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
 
@@ -16,6 +16,22 @@ export function startScheduler() {
 
   cron.schedule("0 */6 * * *", async () => {
     await checkMemoDeadlines();
+  });
+
+  // 🚩 Every 5 minutes — the finest cadence in this scheduler, and deliberately
+  // NOT per-minute. A flag is an after-the-fact accountability mark, not a
+  // real-time alert: worst case it appears 5 minutes after the session's moment,
+  // which nobody is watching a clock for. (The 10/8/6/5-minute RINGING chain in
+  // the later batches is what genuinely needs per-minute evaluation; this does
+  // not, and buying that precision here would multiply the tick count fivefold
+  // for no gain.)
+  //
+  // AFFORDABLE AT THIS CADENCE ONLY BECAUSE THE QUERY IS NARROW: one indexed
+  // read of a single calendar day, five columns, four conditions in SQL. It does
+  // NOT call getAllHearings / getAllCases / getAllNotifications. On a quiet day
+  // it returns zero rows and the job exits immediately.
+  cron.schedule("*/5 * * * *", async () => {
+    await checkUnpreparedHearings();
   });
 
   cron.schedule("0 8 * * *", async () => {
@@ -57,6 +73,12 @@ export function startScheduler() {
 // produced, since a later assumed time makes an escalation fire later, never
 // early.
 const FALLBACK_HEARING_TIME = "09:00";
+
+// The reason written on an auto-flagged session. A CONSTANT, not an inline
+// literal: it is the only way to recognise this job's flags apart from a human's
+// afterwards, and it must stay byte-identical across the write and any future
+// reader (a "clear the auto-flags" tool, a report, batch 3's ring copy).
+const UNPREPARED_FLAG_REASON = "لم يقم أحد بالتحضير للجلسة";
 
 // Resolve a hearing's date + time to a real instant IN THE FIRM'S TIMEZONE.
 //
@@ -1154,6 +1176,105 @@ function longPauseCopy(rec: LongPausedRecord): { title: string; message: string 
         title: `مذكرة معلّقة منذ ${days}`,
         message: `المذكرة "${rec.label}" معلّقة منذ ${days} ولا تزال معلّقة. يرجى مراجعة سبب التعليق وإلغاؤه أو تحديد موعد لانتهائه.`,
       };
+  }
+}
+
+// 🚩 "لم يقم أحد بالتحضير للجلسة" — flag a session whose moment arrived with
+// nobody having prepared it.
+//
+// WHY THE ROUTE IS NOT USED. POST /api/hearings/:id/flag is
+// requireAuth + requireRole("branch_manager","admin_support"); a scheduler tick
+// has no request, no session and no role, so it cannot pass either middleware.
+// The write goes through storage.updateHearing directly — the same thing this
+// scheduler already does for other hearing writes (reminderSent24h) — and the
+// activity row through storage.logCaseActivity, which takes plain data and
+// needs no `req` (unlike the route's logCaseActivityActing wrapper).
+//
+// flaggedBy is the literal "system": flagged_by carries NO foreign key
+// (script/apply-fk-constraints.sql declares exactly one FK on `hearings`,
+// hearings_case_id_fkey on case_id), and "system" is the established actor
+// sentinel across this codebase (createdBy / userId / performedBy / senderId).
+//
+// 🔴 THE FOUR-CONDITION QUERY IS THE WHOLE DESIGN — see
+// getUnpreparedHearingsForDate. `is_flagged IS NOT TRUE` is doing double duty:
+// it is BOTH the never-overwrite-a-human guard (a manually flagged hearing is
+// never re-flagged, so a person's reason can never be destroyed) AND the
+// fire-once guard (once this job flags a hearing it stops matching, so a later
+// tick cannot flag it twice). No watermark, no sent-flag column, no dedup table.
+//
+// ⚠ RESTART CATCH-UP IS FREE, BY CONSTRUCTION. The query asks "which of TODAY's
+// hearings are past their moment, unprepared and unflagged" — it does not ask
+// "which crossed their moment since the last tick". So a hearing whose time
+// passed during an outage is still matched by the next tick that runs, for the
+// REST OF THAT CALENDAR DAY. Only an outage spanning midnight loses one, and a
+// flag is not time-critical enough to justify a watermark for that.
+async function checkUnpreparedHearings() {
+  try {
+    const today = firmToday();
+    const candidates = await storage.getUnpreparedHearingsForDate(today);
+    if (candidates.length === 0) return;
+
+    const nowMs = Date.now();
+    let flagged = 0;
+
+    for (const h of candidates) {
+      // Per-hearing isolation — one bad row must never abandon the rest of the
+      // sweep. Same shape as the notify blocks in checkExpiredPauses.
+      try {
+        // 🔴 firmDateTimeToInstant DIRECTLY, not parseHearingDateTime. The
+        // wrapper substitutes 09:00 for a malformed hearing_time, which is right
+        // for a coarse daily reminder and WRONG here: it would declare "nobody
+        // prepared" at a moment the session never had. hearing_time is a bare
+        // varchar with no format validation, so malformed values are reachable.
+        //
+        // UNPARSEABLE → SKIP, never flag. A flag is an accusation that lands on
+        // a named session in front of the whole team; a broken time value must
+        // not manufacture one. The hearing simply keeps its normal appearance.
+        const instant = firmDateTimeToInstant(h.hearingDate, h.hearingTime);
+        if (!instant) continue;
+        // Not yet due — the session is still ahead, so nothing to report.
+        if (nowMs < instant.getTime()) continue;
+
+        const updated = await storage.updateHearing(h.id, {
+          isFlagged: true,
+          flagReason: UNPREPARED_FLAG_REASON,
+          flaggedBy: "system",
+          flaggedAt: new Date().toISOString(),
+        });
+        if (!updated) continue;
+        flagged++;
+
+        // Mirrors the manual route's audit row. Isolated in its own try/catch:
+        // the flag is already durable by this point, and losing a timeline entry
+        // is a strictly smaller failure than aborting the sweep over it.
+        // Hearings have no activity log of their own, so this writes to the
+        // PARENT CASE's timeline. action_type is free text — no migration.
+        if (h.caseId) {
+          try {
+            await storage.logCaseActivity({
+              caseId: h.caseId,
+              userId: "system",
+              userName: "النظام",
+              actionType: "hearing_flagged",
+              title: `تم تعليم الجلسة للانتباه — ${UNPREPARED_FLAG_REASON}`,
+              details: `الجلسة بتاريخ ${h.hearingDate}${h.courtName ? ` (${h.courtName})` : ""}`,
+              relatedEntityType: "hearing",
+              relatedEntityId: h.id,
+            });
+          } catch (e) {
+            console.error("[checkUnpreparedHearings] logCaseActivity failed", e);
+          }
+        }
+      } catch (error) {
+        console.error(`Error auto-flagging unprepared hearing ${h.id}:`, error);
+      }
+    }
+
+    if (flagged > 0) {
+      console.log(`Unprepared-hearing auto-flag: ${flagged} hearing(s) flagged.`);
+    }
+  } catch (error) {
+    console.error("Error in checkUnpreparedHearings:", error);
   }
 }
 

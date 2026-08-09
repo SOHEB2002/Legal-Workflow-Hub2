@@ -23,6 +23,7 @@ import {
   ConsultationCategory, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType, ContractStageLabels, type ContractStageValue,
+  HearingStatus,
   CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, findPrimaryJudgmentHearing,
   type NotificationLinkedContext,
   CaseStageLabels, type CaseStageValue,
@@ -126,6 +127,11 @@ export interface IStorage {
 
   // Hearings
   getAllHearings(): Promise<Hearing[]>;
+  // ⏱️ Narrow read for the auto-flag sweep — see the implementation for why it
+  // must never become getAllHearings().
+  getUnpreparedHearingsForDate(day: string): Promise<
+    { id: string; caseId: string; hearingDate: string; hearingTime: string | null; courtName: string | null }[]
+  >;
   getHearingsByCase(caseId: string): Promise<Hearing[]>;
   getHearingById(id: string): Promise<Hearing | undefined>;
   createHearing(data: Partial<Hearing>): Promise<Hearing>;
@@ -2034,6 +2040,42 @@ export class DatabaseStorage implements IStorage {
     const result = await db.select().from(hearings)
       .orderBy(asc(hearings.hearingDate), asc(hearings.hearingTime));
     return result.map(mapDbHearing);
+  }
+
+  // ⏱️ Candidates for the "nobody prepared this session" auto-flag: one calendar
+  // day's still-upcoming, not-yet-prepared, not-yet-flagged hearings.
+  //
+  // 🔴 EVERY CONDITION IS PUSHED INTO SQL, and that is the whole point. This runs
+  // every few minutes forever, so it must never grow into the shape of
+  // checkUpcomingHearingReminders, which opens with getAllHearings() +
+  // getAllCases() + getAllNotifications() — the last of those an UNBOUNDED scan
+  // of a table nothing ever deletes from. Filtering in JS would mean loading
+  // every hearing in the firm on every tick.
+  //   hearing_date = day   hits hearings_hearing_date_idx's leading column, so
+  //                        the scan is one day, not the table
+  //   status = قادمة       a مؤجلة or ملغية session was not going to be held
+  //   checked_in_at NULL   somebody already prepared it → nothing to report
+  //   is_flagged NOT TRUE  🔴 doubles as the once-only guard AND the
+  //                        never-overwrite-a-human guard — see the sweep
+  //
+  // Returns only the five columns the sweep needs (never mapDbHearing / whole
+  // rows): the id to update, the caseId for the activity row, date+time to
+  // resolve the instant, and the court name for the log text.
+  async getUnpreparedHearingsForDate(day: string): Promise<
+    { id: string; caseId: string; hearingDate: string; hearingTime: string | null; courtName: string | null }[]
+  > {
+    return await db.select({
+      id: hearings.id,
+      caseId: hearings.caseId,
+      hearingDate: hearings.hearingDate,
+      hearingTime: hearings.hearingTime,
+      courtName: hearings.courtName,
+    }).from(hearings).where(and(
+      eq(hearings.hearingDate, day),
+      eq(hearings.status, HearingStatus.UPCOMING),
+      sql`${hearings.checkedInAt} IS NULL`,
+      sql`${hearings.isFlagged} IS NOT TRUE`,
+    ));
   }
 
   async getHearingsByCase(caseId: string): Promise<Hearing[]> {
