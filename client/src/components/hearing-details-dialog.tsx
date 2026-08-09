@@ -377,8 +377,19 @@ export function HearingDetailsDialog({
                     <>بواسطة <BidiText>{users.find((u: any) => u.id === detailHearing.checkedInBy)?.name || detailHearing.checkedInBy}</BidiText></>
                   )}
                   {detailHearing.checkedInBy && detailHearing.checkedInAt ? " — " : ""}
+                  {/* 🔴 toLocaleString("ar"), NOT toISOString(). The stored value
+                      is a correct UTC instant; .toISOString() RENDERS it in UTC,
+                      so a 20:20 Riyadh check-in displayed as 17:20 — three hours
+                      early, every time. toLocaleString renders in the VIEWER's
+                      zone, which is the firm's. Idiom taken from
+                      case-details-dialog.tsx (the reviewer "name — timestamp"
+                      line in its review banner), the closest analogue in the
+                      codebase: same shape, same place, same purpose.
+                      No LtrInline here, deliberately — that forces dir="ltr",
+                      which suits an ISO string but not Arabic locale output with
+                      Arabic-Indic digits. The idiom site wraps nothing either. */}
                   {detailHearing.checkedInAt && (
-                    <>في <LtrInline>{new Date(detailHearing.checkedInAt).toISOString().slice(0, 16).replace("T", " ")}</LtrInline></>
+                    <>في {new Date(detailHearing.checkedInAt).toLocaleString("ar")}</>
                   )}
                 </div>
               </div>
