@@ -35,6 +35,7 @@ interface HearingsContextType {
   submitReport: (id: string, data: HearingReportData) => Promise<void>;
   cancelHearing: (id: string, reason: string) => Promise<void>;
   setHearingFlag: (id: string, flagged: boolean, reason?: string) => Promise<void>;
+  checkInHearing: (id: string) => Promise<{ alreadyCheckedIn: boolean }>;
   getHearingById: (id: string) => Hearing | undefined;
   getHearingsByCase: (caseId: string) => Hearing[];
   getUpcomingHearings: () => Hearing[];
@@ -195,6 +196,19 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     scheduleBackgroundRefetch();
   };
 
+  // "تحضير الجلسة" — record that the session is prepared. The server derives the
+  // actor and the instant, so there is no body. It answers { hearing,
+  // alreadyCheckedIn }: a SECOND check-in is a deliberate no-op returning the
+  // existing row, so the same upsert is correct either way and the caller can
+  // decide whether to say anything.
+  const checkInHearing = async (id: string): Promise<{ alreadyCheckedIn: boolean }> => {
+    const res = await apiRequest("POST", `/api/hearings/${id}/check-in`);
+    const payload = await res.json();
+    if (payload?.hearing?.id) upsertLocal(payload.hearing);
+    scheduleBackgroundRefetch();
+    return { alreadyCheckedIn: !!payload?.alreadyCheckedIn };
+  };
+
   const getHearingById = (id: string) => hearings.find((h) => h.id === id);
 
   const getHearingsByCase = (caseId: string) =>
@@ -228,6 +242,7 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
         submitReport,
         cancelHearing,
         setHearingFlag,
+        checkInHearing,
         getHearingById,
         getHearingsByCase,
         getUpcomingHearings,
