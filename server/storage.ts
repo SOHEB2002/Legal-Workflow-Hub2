@@ -2100,7 +2100,7 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getHearingById(id);
     if (!existing) return undefined;
     
-    const { createdAt, updatedAt, agencyVerificationAckAt, flaggedAt, ...updateFields } = data;
+    const { createdAt, updatedAt, agencyVerificationAckAt, flaggedAt, checkedInAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     // agency_verification_ack_at is a date-mode column — convert the ISO
     // string callers pass into a Date (mirrors updateCase's idiom).
@@ -2113,6 +2113,22 @@ export class DatabaseStorage implements IStorage {
     // breaking auto-archive. One chokepoint, every caller covered.
     if (flaggedAt !== undefined) {
       updateData.flaggedAt = flaggedAt ? new Date(flaggedAt) : null;
+    }
+    // 🔴 checked_in_at is date-mode too — THE SAME TRAP, HIT AGAIN. The check-in
+    // endpoint passes an ISO string (Hearing.checkedInAt is typed `string | null`
+    // like every other timestamp in the domain interfaces), and without this line
+    // it fell through `...updateFields` straight into `.set()`, where drizzle's
+    // date-mode mapper does `value.toISOString()` — which a string does not have.
+    // Result: TypeError, and a 500 on every check-in. Verified against the real
+    // mapper, not inferred (drizzle-orm/pg-core/columns/timestamp.js:33-35).
+    //
+    // This is now FOUR date-mode fields converted here and there are exactly
+    // four to convert — createdAt/updatedAt are handled above. If a fifth
+    // timestamp column is ever added to `hearings`, IT MUST BE ADDED HERE TOO:
+    // the failure is silent to tsc (the interface says string, the column says
+    // Date, and nothing reconciles them) and only shows up as a runtime 500.
+    if (checkedInAt !== undefined) {
+      updateData.checkedInAt = checkedInAt ? new Date(checkedInAt) : null;
     }
     await db.update(hearings).set(updateData).where(eq(hearings.id, id));
 
