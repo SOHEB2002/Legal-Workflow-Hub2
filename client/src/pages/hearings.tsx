@@ -75,13 +75,13 @@ import {
   Flag,
   Paperclip,
 } from "lucide-react";
-import { isHearingMissingMinutes, isHearingActor } from "@/lib/attachment-indicators";
+import { isHearingMissingMinutes, isHearingActor, canCheckInHearing } from "@/lib/attachment-indicators";
 import { useHearings } from "@/lib/hearings-context";
 import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
-import { CaseStageLabels, HearingResultLabels, isFirmFuture } from "@shared/schema";
+import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLate } from "@shared/schema";
 import type { CaseStageValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
@@ -140,6 +140,7 @@ export default function HearingsPage() {
     cancelHearing,
     deleteHearing,
     setHearingFlag,
+    checkInHearing,
     getUpcomingHearings,
   } = useHearings();
   const { cases, getCaseById } = useCases();
@@ -208,6 +209,9 @@ export default function HearingsPage() {
   const [flagDialogHearing, setFlagDialogHearing] = useState<Hearing | null>(null);
   const [flagReasonInput, setFlagReasonInput] = useState("");
   const [flagSubmitting, setFlagSubmitting] = useState(false);
+  // Per-row id rather than a page-wide boolean: several rows carry the button at
+  // once and only the pressed one should disable.
+  const [checkInSubmittingId, setCheckInSubmittingId] = useState<string | null>(null);
   // Unflagging is destructive-ish (it wipes the team's alert + its reason), so
   // it now asks first. No reason needed — just confirm.
   const [unflagConfirmHearing, setUnflagConfirmHearing] = useState<Hearing | null>(null);
@@ -418,6 +422,27 @@ export default function HearingsPage() {
     }
     setFlagReasonInput("");
     setFlagDialogHearing(hearing);
+  };
+
+  // Resolve a stored user id to a display name — same `users.find` idiom the
+  // attending-lawyer column uses, kept in one place because the check-in record
+  // shows it in both the row tooltip and the details banner.
+  const getUserName = (id: string | null | undefined): string =>
+    (id ? users.find((u: any) => u.id === id)?.name : "") || "—";
+
+  // "تحضير الجلسة". A SECOND check-in is a deliberate server-side no-op, so the
+  // already-prepared case is reported plainly rather than as an error — the
+  // session is prepared either way, which is what the user wanted.
+  const handleCheckIn = async (hearing: Hearing) => {
+    setCheckInSubmittingId(hearing.id);
+    try {
+      const { alreadyCheckedIn } = await checkInHearing(hearing.id);
+      toast({ title: alreadyCheckedIn ? "الجلسة محضّرة مسبقاً" : "تم تحضير الجلسة" });
+    } catch (e: any) {
+      toast({ title: "خطأ", description: extractApiError(e), variant: "destructive" });
+    } finally {
+      setCheckInSubmittingId(null);
+    }
   };
 
   const handleConfirmUnflag = async () => {
@@ -1100,6 +1125,16 @@ export default function HearingsPage() {
                         hearing,
                         hearing.caseId ? getCaseById(hearing.caseId) : null,
                       );
+                      // "تحضير الجلسة" — a NARROWER set than the line above:
+                      // admin_support is excluded (they are a ringing audience in
+                      // the later batches, not an actor who may declare a session
+                      // prepared). Separate shared helper so page, dialog and
+                      // server cannot drift.
+                      const canPrepare = canCheckInHearing(
+                        user,
+                        hearing,
+                        hearing.caseId ? getCaseById(hearing.caseId) : null,
+                      );
                       // FREE WIN — PATCH /api/hearings/:id is gated by canModifyCase
                       // on the PARENT CASE, which has always admitted the own-dept
                       // department_head and the case's assigned lawyers; the UI hid
@@ -1343,6 +1378,50 @@ export default function HearingsPage() {
                                   invisible — which cannot satisfy
                                   visibility === authorization. Same
                                   size/variant/Tooltip shape as its 8 siblings. */}
+                              {/* "تحضير الجلسة". Same icon-button + Tooltip shape
+                                  as its siblings in this cell. Shown only while
+                                  the session is still ahead (قادمة with no
+                                  result) — once it has a result the server
+                                  refuses, so rendering it would be a button that
+                                  400s. Once checked in it becomes a static
+                                  CheckCircle showing WHO and WHEN, so the record
+                                  is visible in the row itself and not only in the
+                                  dialog. */}
+                              {hearing.checkedInAt ? (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span
+                                      className="inline-flex h-7 w-7 items-center justify-center"
+                                      data-testid={`badge-checked-in-${hearing.id}`}
+                                    >
+                                      <CheckCircle
+                                        className={`w-4 h-4 ${isHearingCheckInLate(hearing) ? "text-amber-600" : "text-green-600"}`}
+                                      />
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {isHearingCheckInLate(hearing) ? "حضر متأخراً بعد التصعيد" : "تم تحضير الجلسة"}
+                                    {" — "}
+                                    {getUserName(hearing.checkedInBy)}
+                                  </TooltipContent>
+                                </Tooltip>
+                              ) : canPrepare && hearing.status === HearingStatus.UPCOMING && !hearing.result ? (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      data-testid={`button-check-in-${hearing.id}`}
+                                      disabled={checkInSubmittingId === hearing.id}
+                                      onClick={() => handleCheckIn(hearing)}
+                                    >
+                                      <CheckCircle className="w-4 h-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>تحضير الجلسة</TooltipContent>
+                                </Tooltip>
+                              ) : null}
                               {canFlagHearing && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>

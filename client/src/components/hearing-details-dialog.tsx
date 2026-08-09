@@ -36,6 +36,7 @@ import {
   HearingResultLabels,
   ObjectionStatusLabels,
   isFirmToday,
+  isHearingCheckInLate,
 } from "@shared/schema";
 import type { Hearing, ObjectionStatusValue, HearingStatusValue, HearingTypeValue } from "@shared/schema";
 import {
@@ -347,6 +348,39 @@ export function HearingDetailsDialog({
                     )}
                   </div>
                 )}
+              </div>
+            )}
+            {/* "تحضير الجلسة" — the RECORD, shown to everyone who can see the
+                hearing. Same banner shape as the flag block above (icon + line,
+                actor and date beneath) so the two read as siblings, but tone-coded
+                rather than destructive: green for an on-time preparation, amber
+                when it came after the escalation cutoff.
+                🔴 LATE IS DERIVED — isHearingCheckInLate compares checked_in_at
+                against the hearing's own instant via firmDateTimeToInstant. It
+                returns false when either is unresolvable, so an unparseable
+                hearing_time shows the check-in WITHOUT a late accusation. */}
+            {detailHearing.checkedInAt && (
+              <div
+                className={`mb-4 rounded-md border px-3 py-2 text-sm ${
+                  isHearingCheckInLate(detailHearing)
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                    : "border-green-600/40 bg-green-600/10 text-green-700 dark:text-green-400"
+                }`}
+                data-testid="banner-hearing-checked-in"
+              >
+                <div className="flex items-center gap-2 font-medium">
+                  <CheckCircle className="w-4 h-4" />
+                  {isHearingCheckInLate(detailHearing) ? "حضر متأخراً بعد التصعيد" : "تم تحضير الجلسة"}
+                </div>
+                <div className="mt-1 text-xs opacity-80">
+                  {detailHearing.checkedInBy && (
+                    <>بواسطة <BidiText>{users.find((u: any) => u.id === detailHearing.checkedInBy)?.name || detailHearing.checkedInBy}</BidiText></>
+                  )}
+                  {detailHearing.checkedInBy && detailHearing.checkedInAt ? " — " : ""}
+                  {detailHearing.checkedInAt && (
+                    <>في <LtrInline>{new Date(detailHearing.checkedInAt).toISOString().slice(0, 16).replace("T", " ")}</LtrInline></>
+                  )}
+                </div>
               </div>
             )}
             {/* dir="rtl" — Radix Tabs.Root resolves `localDir || globalDir ||
