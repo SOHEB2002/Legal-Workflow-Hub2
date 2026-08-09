@@ -1,0 +1,48 @@
+-- =====================================================================
+-- "تحضير الجلسة" — hearing check-in (who prepared the session, and when)
+-- =====================================================================
+-- TWO optional columns. NULL is the normal state and changes nothing: a hearing
+-- nobody has prepared reads exactly as it does today, so there is NO backfill
+-- and no existing row is touched.
+--
+-- Purpose: before a session the responsible lawyer confirms they are ready.
+-- The confirmation is recorded with an actor and a timestamp so the firm can
+-- see who prepared a hearing, and so a session nobody prepared is visible.
+--
+-- Design notes:
+--   - checked_in_at is a timestamp (date-mode), converted to an ISO string in
+--     the storage layer exactly like flagged_at on this same table.
+--   - checked_in_by is varchar(255), nullable, NO FK — matching every other
+--     user-id column on `hearings` (attending_lawyer_id, flagged_by). This
+--     table carries exactly ONE foreign key, hearings_case_id_fkey; adding a
+--     second here would live only on prod under the Batch-M rule (commented FK
+--     declarations are invisible to db:push) and create dev/prod drift that
+--     Republish would try to resolve with a DROP.
+--   - "LATE" IS NOT STORED. Whether a check-in was late is DERIVED from
+--     checked_in_at against the hearing's own instant
+--     (isHearingCheckInLate in shared/schema.ts). A stored boolean would
+--     freeze today's cutoff into historical rows and misreport them if the
+--     threshold ever moves.
+--
+-- ⚠ ORDER IS NOT OPTIONAL. Drizzle builds an explicit column list from the
+--   table declaration in shared/schema.ts, so from the moment checked_in_at and
+--   checked_in_by are declared EVERY read of `hearings` selects them — the
+--   hearings list, the case details dialog, the my-tasks feed and every
+--   scheduler job, not just the check-in feature. Run this on dev → confirm the
+--   app loads → run it on prod → deploy. db:push was NOT run.
+--
+-- Apply to BOTH dev (heliumdb) and prod (neondb), per replit.md / CLAUDE.md.
+-- Idempotent — safe to re-run.
+-- =====================================================================
+
+ALTER TABLE hearings ADD COLUMN IF NOT EXISTS checked_in_at timestamp;
+ALTER TABLE hearings ADD COLUMN IF NOT EXISTS checked_in_by varchar(255);
+
+-- Verification — expect TWO rows:
+--   checked_in_at | timestamp without time zone |      | YES
+--   checked_in_by | character varying           |  255 | YES
+--   SELECT column_name, data_type, character_maximum_length, is_nullable
+--     FROM information_schema.columns
+--    WHERE table_name = 'hearings'
+--      AND column_name IN ('checked_in_at', 'checked_in_by')
+--    ORDER BY column_name;

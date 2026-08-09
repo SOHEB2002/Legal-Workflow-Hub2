@@ -655,6 +655,26 @@ export const hearings = pgTable("hearings", {
   // before this feature captured none.
   // ⚠ APPLIED MANUALLY (db:push NOT run) — see the ALTER in the commit message.
   cancellationReason: varchar("cancellation_reason", { length: 500 }),
+  // تحضير الجلسة — who confirmed they are ready for this session, and when.
+  // NULL on every existing row and on every new hearing: a hearing nobody has
+  // prepared is the normal starting state, so there is no backfill.
+  //
+  // 🔴 "LATE" IS DERIVED, NEVER STORED. A check-in later than
+  // HearingCheckInLateCutoffMinutes before the session is late; the answer is
+  // computed from checked_in_at against the hearing's own instant (see
+  // isHearingCheckInLate). Storing a boolean would freeze today's threshold
+  // into historical rows and silently misreport them if the cutoff ever moves.
+  //
+  // checked_in_by is varchar(255) with NO FK, matching every other user-id
+  // column on this table (attending_lawyer_id, flagged_by) — hearings carries
+  // exactly one FK, hearings_case_id_fkey, and adding another here would create
+  // dev/prod drift under the Batch-M rule.
+  // ⚠ APPLIED MANUALLY (db:push NOT run) — script/add-hearing-checkin.sql. Both
+  // DBs must have these columns BEFORE this code serves traffic: drizzle selects
+  // declared columns explicitly, so a missing column breaks EVERY read of
+  // `hearings`, not just the check-in feature.
+  checkedInAt: timestamp("checked_in_at"),
+  checkedInBy: varchar("checked_in_by", { length: 255 }),
   attendingLawyerId: varchar("attending_lawyer_id", { length: 255 }),
   reminderSent24h: boolean("reminder_sent_24h").default(false),
   reminderSent1h: boolean("reminder_sent_1h").default(false),
@@ -3848,6 +3868,11 @@ export interface Hearing {
   flaggedAt: string | null;
   // سبب الإلغاء — required whenever a hearing is cancelled (enforced server-side).
   cancellationReason: string | null;
+  // تحضير الجلسة — ISO instant of the check-in and the user who made it. Both
+  // null until someone prepares the session. "Late" is DERIVED from checkedInAt
+  // (see isHearingCheckInLate), never stored.
+  checkedInAt: string | null;
+  checkedInBy: string | null;
   attendingLawyerId: string | null;
   reminderSent24h: boolean;
   reminderSent1h: boolean;
@@ -5347,6 +5372,40 @@ export function firmDateTimeToInstant(
   const secondPassOffset = firmZoneOffsetMs(firstPass);
   const instant = wallClockAsUtc - secondPassOffset;
   return isNaN(instant) ? null : new Date(instant);
+}
+
+// ⏱️ تحضير الجلسة — how close to the session a check-in stops counting as
+// on-time. Mirrors the escalation tier at which support staff start being rung
+// in the later batches: from this point the session is being chased, so a
+// check-in made afterwards is "حضر متأخراً بعد التصعيد".
+export const HearingCheckInLateCutoffMinutes = 6;
+
+/**
+ * Was this check-in LATE? Derived, never stored — see the checkedInAt column.
+ *
+ * 🔴 USES firmDateTimeToInstant DIRECTLY, and that is deliberate. The scheduler's
+ * parseHearingDateTime wrapper substitutes 09:00 for a malformed hearing_time,
+ * which is right for a coarse daily reminder and WRONG here: it would silently
+ * classify against a session time that does not exist. hearing_time is a bare
+ * varchar with no format validation, so malformed values are reachable.
+ *
+ * Returns FALSE — not late — when the check-in or the hearing time cannot be
+ * resolved. The fail direction is chosen: "late" is a mild accusation attached
+ * to a named person, so an unparseable time must never manufacture one. The
+ * check-in itself is still recorded and displayed; only the late badge is
+ * withheld.
+ */
+export function isHearingCheckInLate(
+  hearing: { hearingDate?: string | null; hearingTime?: string | null; checkedInAt?: string | null } | null | undefined,
+): boolean {
+  const checkedInAt = String(hearing?.checkedInAt || "").trim();
+  if (!checkedInAt) return false;
+  const checkedInMs = new Date(checkedInAt).getTime();
+  if (!Number.isFinite(checkedInMs)) return false;
+  const hearingInstant = firmDateTimeToInstant(hearing?.hearingDate, hearing?.hearingTime);
+  if (!hearingInstant) return false;
+  const cutoffMs = hearingInstant.getTime() - HearingCheckInLateCutoffMinutes * 60 * 1000;
+  return checkedInMs > cutoffMs;
 }
 
 export function findPrimaryJudgmentHearing<
