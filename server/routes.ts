@@ -735,6 +735,65 @@ function canActOnHearingIdentity(
   ) return true;
   return false;
 }
+// ✅ تحضير الجلسة — WHO MAY CONFIRM A SESSION IS PREPARED.
+//
+// 🔴 A SEPARATE, NARROWER HELPER — canActOnHearing IS DELIBERATELY NOT REUSED
+// AND NOT MODIFIED. That helper admits `admin_support` and `viewer` on top of
+// this set, and it gates result recording, the hearing report, the ضبط file and
+// the opponent-response flag. CLAUDE.md carries an explicit owner instruction
+// not to re-narrow it ("DO NOT RE-REMOVE department_head … that mirror is
+// exactly what changed"), so touching it to fit this feature is forbidden in
+// both directions.
+//
+// THE SET (owner decision): the hearing's ATTENDING LAWYER, the parent case's
+// OWN-DEPARTMENT department_head, and branch_manager. `admin_support` is
+// EXCLUDED on purpose — in the later ringing batches they are an escalation
+// AUDIENCE who may acknowledge ("تم الاطلاع") but may not end the chain by
+// declaring the session prepared. `viewer` is excluded too; it would be inert
+// anyway (viewerWriteGuard 403s every viewer write before any handler runs),
+// but leaving it out keeps this list readable as the real actor set.
+//
+// Same async/lazy shape as canActOnHearing: the two in-memory actor classes
+// settle without a read, so the parent case is fetched ONLY when a
+// department_head is asking. Callers holding the case pass it and skip the read.
+//
+// 🔴 THE !!u.departmentId GUARD IS MANDATORY — without it a head whose own
+// department is null matches every case whose department is also null.
+function canCheckInHearingIdentity(
+  u: CaseActorIdentity,
+  hearing: any,
+  parentCase: { departmentId?: string | null } | null,
+): boolean {
+  if (u.role === "branch_manager") return true;
+  if (hearing.attendingLawyerId && hearing.attendingLawyerId === u.id) return true;
+  if (
+    u.role === "department_head"
+    && !!u.departmentId
+    && !!parentCase?.departmentId
+    && u.departmentId === parentCase.departmentId
+  ) return true;
+  return false;
+}
+
+async function canCheckInHearing(
+  user: CaseActorIdentity,
+  hearing: any,
+  ctx?: ActingContext,
+  parentCase?: { departmentId?: string | null } | null,
+): Promise<boolean> {
+  const identities: CaseActorIdentity[] = ctx
+    ? actingIdentitiesFor(ctx, hearing.caseId ?? null)
+        .map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+    : [user];
+  if (identities.some((u) => canCheckInHearingIdentity(u, hearing, null))) return true;
+  if (!identities.some((u) => u.role === "department_head")) return false;
+  const resolved = parentCase !== undefined
+    ? parentCase
+    : (hearing.caseId ? await storage.getCaseById(hearing.caseId) : null);
+  if (!resolved) return false;
+  return identities.some((u) => canCheckInHearingIdentity(u, hearing, resolved));
+}
+
 // Delegation-aware wrapper — mirrors the canModifyCase idiom (identity fn +
 // actingIdentitiesFor expansion) so a delegate standing in for the attending
 // lawyer can act on the hearing, exactly like every other case action. Keyed on
@@ -13273,6 +13332,98 @@ export async function registerRoutes(
   //   scheduler.ts (weekly report)          same, over the last 7 days
   // Keeping it costs nothing, preserves the API path, and leaves those stats
   // reachable if a close affordance is ever wanted again.
+  // POST /api/hearings/:id/check-in — "تحضير الجلسة".
+  //
+  // Records that a responsible actor has confirmed the session is prepared, with
+  // WHO and WHEN. Body is empty — there is nothing to supply; the actor and the
+  // instant are both derived server-side, so nothing here is client-forgeable.
+  //
+  // Gate is canCheckInHearing, NOT canActOnHearing — see that helper for why
+  // admin_support is excluded and why the wider helper must not be reshaped.
+  //
+  // 🔴 SECOND CHECK-IN IS A NO-OP, NOT AN OVERWRITE AND NOT AN ERROR. The record
+  // answers "who prepared this session first", and the first answer is the true
+  // one — overwriting would let a later actor erase the original preparer (and,
+  // once the later batches derive lateness, silently turn an on-time check-in
+  // into a late one). A 400 was rejected because two people pressing تحضير
+  // moments apart is NORMAL, not a mistake, and the second person should see
+  // success: the session IS prepared. Returns the existing row unchanged with
+  // alreadyCheckedIn: true so the client can stay quiet about it.
+  app.post("/api/hearings/:id/check-in", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      if (!await canCheckInHearing(req.user!, hearing, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية تحضير هذه الجلسة" });
+      }
+
+      // WRONG-STATE GUARDS. Deliberately only two, and both are about the
+      // session no longer being ahead of us:
+      //  • ملغية — a cancelled session will not be held, so preparing it is
+      //    meaningless and the record would be misleading on the hearing.
+      //  • a recorded RESULT — the session already happened. Recording
+      //    preparation afterwards would be back-dating; the result itself is
+      //    the evidence it was attended.
+      // NOT guarded: مؤجلة (a postponed hearing keeps its own future date and is
+      // legitimately prepared again), and hearing TYPE — تراضي / تسوية_ودية get
+      // check-in like any other session (owner decision), unlike the ضبط rules
+      // which exempt them because those sessions issue no minutes.
+      if (hearing.status === HearingStatus.CANCELLED) {
+        return res.status(400).json({ error: "لا يمكن تحضير جلسة ملغية" });
+      }
+      if (String(hearing.result || "").trim()) {
+        return res.status(400).json({ error: "لا يمكن تحضير جلسة سُجّلت نتيجتها" });
+      }
+
+      if (hearing.checkedInAt) {
+        return res.json({ hearing, alreadyCheckedIn: true });
+      }
+
+      const reqUser = req.user!;
+      const updated = await storage.updateHearing(hearingId, {
+        checkedInAt: new Date().toISOString(),
+        checkedInBy: reqUser.id,
+      });
+      if (!updated) {
+        return res.status(500).json({ error: "فشل تسجيل تحضير الجلسة" });
+      }
+
+      // 🔴 THE AUDIT ROW MUST NOT BE ABLE TO FAIL THE CHECK-IN. Isolated in its
+      // own try/catch that only logs — same guarantee as the create notices and
+      // the flag endpoint's own logging block. The check-in is already durable
+      // by this point; losing its timeline entry is a strictly smaller failure
+      // than refusing a preparation the user has made.
+      //
+      // Hearings have NO activity log of their own, so this writes to the PARENT
+      // CASE's timeline guarded on hearing.caseId — the same precedent the ضبط
+      // routes and the flag endpoint use. case_activity_log.action_type is free
+      // text, so "hearing_checked_in" needs no migration.
+      if (hearing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: hearing.caseId,
+            userId: reqUser.id,
+            userName: reqUser.name || reqUser.id,
+            actionType: "hearing_checked_in",
+            title: `تم تحضير الجلسة بتاريخ ${hearing.hearingDate}`,
+            relatedEntityType: "hearing",
+            relatedEntityId: hearingId,
+          });
+        } catch (e) {
+          console.error("[hearings/check-in] logCaseActivity failed", e);
+        }
+      }
+
+      res.json({ hearing: updated, alreadyCheckedIn: false });
+    } catch (error) {
+      console.error("[POST /api/hearings/:id/check-in] error:", error);
+      res.status(500).json({ error: "حدث خطأ في تحضير الجلسة" });
+    }
+  });
+
   app.post("/api/hearings/:id/close", requireAuth, async (req: AuthRequest, res) => {
     try {
       const hearingId = String(req.params.id);

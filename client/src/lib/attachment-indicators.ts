@@ -183,6 +183,33 @@ export function isHearingActor(
     && user.departmentId === parentCase.departmentId;
 }
 
+// ✅ THE CLIENT MIRROR of the server's canCheckInHearing — "تحضير الجلسة".
+//
+// 🔴 NARROWER THAN isHearingActor ABOVE, and the one difference is the whole
+// point: admin_support is EXCLUDED. In the later ringing batches they are an
+// escalation AUDIENCE who may acknowledge but may not declare a session
+// prepared. Mirroring isHearingActor here would render a تحضير button that the
+// server 403s — the visibility != authorization failure this codebase keeps
+// paying for. `viewer` is excluded for the same reason (and would be inert
+// anyway: viewerWriteGuard blocks every viewer write server-side).
+//
+// Kept as its OWN function rather than a flag on isHearingActor so that neither
+// predicate can be widened by accident while "fixing" the other — the server
+// keeps them as two helpers for exactly that reason.
+export function canCheckInHearing(
+  user: { id: string; role: string; departmentId?: string | null } | null | undefined,
+  hearing: { attendingLawyerId?: string | null } | null | undefined,
+  parentCase?: { departmentId?: string | null } | null,
+): boolean {
+  if (!user || !hearing) return false;
+  if (user.role === "branch_manager") return true;
+  if (!!hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
+  return user.role === "department_head"
+    && !!user.departmentId
+    && !!parentCase?.departmentId
+    && user.departmentId === parentCase.departmentId;
+}
+
 // Structural accessor for the ضبط presence flag — the hearing-side twin of
 // caseHasDeedAttachment, reading the derived hasMinutesAttachment stamped on
 // GET /api/hearings. Used to decide whether a VIEW-ONLY user is shown anything at

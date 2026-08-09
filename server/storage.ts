@@ -1046,6 +1046,10 @@ function mapDbHearing(dbHearing: any): Hearing {
     flaggedBy: dbHearing.flaggedBy ?? null,
     flaggedAt: toISOStringOrNull(dbHearing.flaggedAt),
     cancellationReason: dbHearing.cancellationReason ?? null,
+    // Date-mode column → ISO string, the same conversion flaggedAt uses two
+    // lines up. checkedInBy is a plain id and needs none.
+    checkedInAt: toISOStringOrNull(dbHearing.checkedInAt),
+    checkedInBy: dbHearing.checkedInBy ?? null,
     attendingLawyerId: dbHearing.attendingLawyerId || null,
     reminderSent24h: dbHearing.reminderSent24h ?? false,
     reminderSent1h: dbHearing.reminderSent1h ?? false,
