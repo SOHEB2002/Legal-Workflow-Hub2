@@ -3275,6 +3275,9 @@ export async function registerRoutes(
       // case ids that have a صك file so the map below can stamp a derived
       // boolean; nothing about the attachment itself travels to the list.
       const deedAttached = await storage.getCaseIdsWithDeedAttachment();
+      // Batch 3 — one more set, one more query, same idiom. Feeds the
+      // hasJudgmentRecord stamp below.
+      const casesWithJudgment = await storage.getCaseIdsWithJudgment();
       // Strip stageHistory from list responses — it can be 20-50 entries
       // per case and is only needed in the case detail view (GET
       // /api/cases/:id). Replace it with a derived boolean the cases-table
@@ -3295,6 +3298,15 @@ export async function registerRoutes(
         // ONLY on this list response — it is not on the LawCase interface, so
         // it can never reach an insert or update path.
         hasDeedAttachment: deedAttached.has(c.id),
+        // DERIVED, never stored — "does this case have a ruling on record?".
+        // Batch 3's replacement for the `currentStage === محكوم_حكم_ابتدائي` term
+        // the two صك badges used to key on, which was wrong in both directions: a
+        // منظورة ruling marked NOT objectionable goes straight to محكوم_حكم_نهائي
+        // and never visits that stage (8 of 8 in production), while a case merely
+        // parked on it might have no ruling at all. Same rule the server's own deed
+        // gate has asked since batch 2, so badge and endpoint agree by construction.
+        // Not on the LawCase interface, so it can never reach an insert or update.
+        hasJudgmentRecord: casesWithJudgment.has(c.id),
         // DERIVED, never stored, and computed HERE because this is the last point
         // at which stageHistory still exists — the destructure above strips it.
         // Uses the SHARED caseReachedJudgmentStage so the client's صك gates
