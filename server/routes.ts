@@ -11486,6 +11486,63 @@ export async function registerRoutes(
     }
   });
 
+  // 🔔 GET /api/hearings/ring-state — THE DERIVATION SOURCE for the pre-hearing
+  // ring. Polled every 30s by every logged-in user.
+  //
+  // 🔴 REGISTERED IMMEDIATELY BEFORE /api/hearings/:id, AND THAT POSITION IS
+  // LOAD-BEARING — DO NOT MOVE IT BELOW. Express matches in registration order,
+  // so `/api/hearings/:id` is a catch-all for any single segment under
+  // /api/hearings: registered first, it captures "ring-state" as an :id, looks
+  // up a hearing by that literal string, finds none and returns 404 "الجلسة غير
+  // موجودة". That is exactly how this shipped in 62acf7c, and the failure is
+  // SILENT — the client's polled query just 404s every 30s, `data` stays [],
+  // and the ring never fires with nothing in the UI to indicate why.
+  // Any future /api/hearings/<literal> route must go above :id too.
+  //
+  // WHY ITS OWN ENDPOINT rather than riding on /api/my-tasks: my-tasks is
+  // already the app's busiest query (computeTasksForIdentity runs ~20 blocks and
+  // dozens of reads), and its response is an array of MyTaskItem — a ring is not
+  // a task, so it would have needed either a bogus MyTaskKind or a change to the
+  // response envelope that ripples through the whole feed UI. Tying a safety
+  // alert's latency to that computation is also backwards. This endpoint is one
+  // narrow indexed read returning at most a handful of rows.
+  //
+  // 🔴 IT RETURNS RESOLVED INSTANTS, NOT A BOOLEAN. The client decides whether
+  // to ring by comparing them to its own clock, which is what lets it start and
+  // stop between polls, and what makes the ring derivable from data alone with
+  // no memory of any pushed event.
+  //
+  // Tier 1 ONLY in this batch: the hearing's ATTENDING LAWYER. The later tiers
+  // widen the recipient set, not this shape.
+  app.get("/api/hearings/ring-state", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const rows = await storage.getRingCandidateHearingsForDate(firmToday(), user.id);
+      const items: HearingRingItem[] = [];
+      for (const r of rows) {
+        // 🔴 firmDateTimeToInstant DIRECTLY, never parseHearingDateTime — that
+        // wrapper substitutes 09:00 for a malformed hearing_time and would open
+        // a ring window at a moment the session never had. Unparseable → skip;
+        // a ring is an interruption and must never fire on a guess.
+        const hearingAt = firmDateTimeToInstant(r.hearingDate, r.hearingTime);
+        if (!hearingAt) continue;
+        items.push({
+          hearingId: r.id,
+          caseId: r.caseId ?? null,
+          caseNumber: r.caseNumber || "",
+          hearingTime: r.hearingTime || "",
+          courtName: r.courtName || "",
+          ringFromIso: new Date(hearingAt.getTime() - HearingRingLeadMinutes * 60 * 1000).toISOString(),
+          hearingAtIso: hearingAt.toISOString(),
+        });
+      }
+      res.json(items);
+    } catch (error) {
+      console.error("[GET /api/hearings/ring-state] error:", error);
+      res.status(500).json({ error: "حدث خطأ في جلب حالة التنبيه" });
+    }
+  });
+
   app.get("/api/hearings/:id", requireAuth, async (req, res) => {
     try {
       const hearing = await storage.getHearingById(String(req.params.id));
@@ -13336,53 +13393,6 @@ export async function registerRoutes(
   //   scheduler.ts (weekly report)          same, over the last 7 days
   // Keeping it costs nothing, preserves the API path, and leaves those stats
   // reachable if a close affordance is ever wanted again.
-  // 🔔 GET /api/hearings/ring-state — THE DERIVATION SOURCE for the pre-hearing
-  // ring. Polled every 30s by every logged-in user.
-  //
-  // WHY ITS OWN ENDPOINT rather than riding on /api/my-tasks: my-tasks is
-  // already the app's busiest query (computeTasksForIdentity runs ~20 blocks and
-  // dozens of reads), and its response is an array of MyTaskItem — a ring is not
-  // a task, so it would have needed either a bogus MyTaskKind or a change to the
-  // response envelope that ripples through the whole feed UI. Tying a safety
-  // alert's latency to that computation is also backwards. This endpoint is one
-  // narrow indexed read returning at most a handful of rows.
-  //
-  // 🔴 IT RETURNS RESOLVED INSTANTS, NOT A BOOLEAN. The client decides whether
-  // to ring by comparing them to its own clock, which is what lets it start and
-  // stop between polls, and what makes the ring derivable from data alone with
-  // no memory of any pushed event.
-  //
-  // Tier 1 ONLY in this batch: the hearing's ATTENDING LAWYER. The later tiers
-  // widen the recipient set, not this shape.
-  app.get("/api/hearings/ring-state", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const user = req.user!;
-      const rows = await storage.getRingCandidateHearingsForDate(firmToday(), user.id);
-      const items: HearingRingItem[] = [];
-      for (const r of rows) {
-        // 🔴 firmDateTimeToInstant DIRECTLY, never parseHearingDateTime — that
-        // wrapper substitutes 09:00 for a malformed hearing_time and would open
-        // a ring window at a moment the session never had. Unparseable → skip;
-        // a ring is an interruption and must never fire on a guess.
-        const hearingAt = firmDateTimeToInstant(r.hearingDate, r.hearingTime);
-        if (!hearingAt) continue;
-        items.push({
-          hearingId: r.id,
-          caseId: r.caseId ?? null,
-          caseNumber: r.caseNumber || "",
-          hearingTime: r.hearingTime || "",
-          courtName: r.courtName || "",
-          ringFromIso: new Date(hearingAt.getTime() - HearingRingLeadMinutes * 60 * 1000).toISOString(),
-          hearingAtIso: hearingAt.toISOString(),
-        });
-      }
-      res.json(items);
-    } catch (error) {
-      console.error("[GET /api/hearings/ring-state] error:", error);
-      res.status(500).json({ error: "حدث خطأ في جلب حالة التنبيه" });
-    }
-  });
-
   // POST /api/hearings/:id/check-in — "تحضير الجلسة".
   //
   // Records that a responsible actor has confirmed the session is prepared, with
