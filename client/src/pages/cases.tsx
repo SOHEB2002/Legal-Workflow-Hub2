@@ -1547,6 +1547,29 @@ export default function CasesPage() {
                   <TableCell className="text-center font-medium">
                     <div className="flex flex-col items-center gap-1">
                       <LtrInline>{c.caseNumber}</LtrInline>
+                      {/* تاريخ الإنشاء as a SUBLABEL under the number — same
+                          two-line shape the plaintiff/client cell beside it
+                          already uses (font-medium primary + text-xs muted
+                          secondary), so the table gains no new idiom.
+
+                          compact = HIJRI ONLY, with the Gregorian on hover via
+                          the component's own title. Chosen over the default
+                          two-line rendering deliberately: this cell already
+                          stacks (the "غير مسندة" badge), and a full dual-date
+                          block would add TWO lines to a dense table instead of
+                          one. Same call the case-details dialog makes for this
+                          very field.
+
+                          🔴 No .toISOString() anywhere — DualDateDisplay goes
+                          through formatDualDate (gregorianToHijri + date-fns
+                          `format`), both of which read the LOCAL calendar.
+                          Rendering an instant as ISO shows UTC and has already
+                          produced two bugs here. */}
+                      <DualDateDisplay
+                        date={c.createdAt}
+                        compact
+                        className="text-[10px] font-normal text-muted-foreground"
+                      />
                       {priorityGroup === 1 && (
                         <Badge
                           variant="outline"
