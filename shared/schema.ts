@@ -5380,6 +5380,50 @@ export function firmDateTimeToInstant(
 // check-in made afterwards is "حضر متأخراً بعد التصعيد".
 export const HearingCheckInLateCutoffMinutes = 6;
 
+// 🔔 How long before a session the pre-hearing RING opens (batch 3, tier 1 —
+// the attending lawyer). Batches 4's later tiers fire inside this same window.
+export const HearingRingLeadMinutes = 10;
+
+/**
+ * One ring candidate as the client receives it — the DERIVATION SOURCE.
+ *
+ * 🔴 THE CLIENT MUST BE ABLE TO ANSWER "should I be ringing, and for which
+ * hearing" FROM THIS ALONE, with no memory of any pushed event. That is why the
+ * two window edges are sent as resolved ISO INSTANTS rather than left implicit:
+ * the client compares them to its own clock, so it needs no server round-trip to
+ * start at the right second or to stop at the hearing time.
+ */
+export interface HearingRingItem {
+  hearingId: string;
+  caseId: string | null;
+  caseNumber: string;
+  /** "HH:mm" as stored — for display only, never re-parsed by the client. */
+  hearingTime: string;
+  courtName: string;
+  /** Window opens — hearing instant minus HearingRingLeadMinutes. */
+  ringFromIso: string;
+  /** Window closes — the hearing's own instant. */
+  hearingAtIso: string;
+}
+
+/**
+ * Is this ring window open at `nowMs`? The ONE rule, shared by the endpoint that
+ * selects candidates, the scheduler that pushes, and the client that rings — so
+ * the three can never disagree about when a hearing is "ringing".
+ *
+ * Half-open [ringFrom, hearingAt): the ring stops of its own accord at the
+ * hearing's moment, which is exactly when the batch-2 auto-flag takes over.
+ */
+export function isRingWindowOpen(
+  item: { ringFromIso: string; hearingAtIso: string },
+  nowMs: number,
+): boolean {
+  const from = new Date(item.ringFromIso).getTime();
+  const until = new Date(item.hearingAtIso).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(until)) return false;
+  return nowMs >= from && nowMs < until;
+}
+
 /**
  * Was this check-in LATE? Derived, never stored — see the checkedInAt column.
  *
