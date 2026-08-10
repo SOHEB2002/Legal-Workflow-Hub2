@@ -442,7 +442,10 @@ export function CaseDetailsDialog({
                     {awaitInfo?.createdAt && (
                       <>
                         {awaitInfo.userName ? " — " : ""}
-                        في <LtrInline>{new Date(awaitInfo.createdAt).toISOString().slice(0, 10)}</LtrInline>
+                        {/* DATE ONLY in LOCAL time — .toISOString() rendered
+                            UTC and showed YESTERDAY between 00:00 and 03:00
+                            Riyadh. No time added: this line never had one. */}
+                        في {new Date(awaitInfo.createdAt).toLocaleDateString("ar")}
                       </>
                     )}
                   </div>
@@ -520,7 +523,9 @@ export function CaseDetailsDialog({
                     {selectedCase.pausedAt && (
                       <>
                         {selectedCase.pausedBy ? " — " : ""}
-                        في <LtrInline>{new Date(selectedCase.pausedAt).toISOString().slice(0, 10)}</LtrInline>
+                        {/* Same defect, same fix — found by the sweep, not
+                            reported. Date only, local. */}
+                        في {new Date(selectedCase.pausedAt).toLocaleDateString("ar")}
                       </>
                     )}
                   </div>

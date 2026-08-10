@@ -343,8 +343,15 @@ export function HearingDetailsDialog({
                       <>بواسطة <BidiText>{users.find((u: any) => u.id === detailHearing.flaggedBy)?.name || detailHearing.flaggedBy}</BidiText></>
                     )}
                     {detailHearing.flaggedBy && detailHearing.flaggedAt ? " — " : ""}
+                    {/* toLocaleDateString("ar") — DATE ONLY, deliberately. This
+                        banner has always shown a date without a time, so
+                        toLocaleString("ar") (the check-in banner's fix, which
+                        needed a time) would ADD one and change an existing
+                        feature's shape. Only the timezone is corrected here:
+                        .toISOString() rendered UTC, so between 00:00 and 03:00
+                        Riyadh it showed YESTERDAY. */}
                     {detailHearing.flaggedAt && (
-                      <>في <LtrInline>{new Date(detailHearing.flaggedAt).toISOString().slice(0, 10)}</LtrInline></>
+                      <>في {new Date(detailHearing.flaggedAt).toLocaleDateString("ar")}</>
                     )}
                   </div>
                 )}
