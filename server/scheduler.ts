@@ -2,7 +2,9 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
 import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId,
-  NotificationType, elapsedDaysLabel, firmToday } from "@shared/schema";
+  NotificationType, elapsedDaysLabel, firmToday,
+  HearingRingLeadMinutes, isRingWindowOpen } from "@shared/schema";
+import { sendToUsers } from "./websocket";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
 
@@ -32,6 +34,16 @@ export function startScheduler() {
   // it returns zero rows and the job exits immediately.
   cron.schedule("*/5 * * * *", async () => {
     await checkUnpreparedHearings();
+  });
+
+  // 🔔 Per-minute — the only job in this scheduler at that cadence, and it earns
+  // it: a 10-minute ring window needs sub-poll responsiveness at its edges.
+  // Affordable ONLY because the query is one indexed read of a single calendar
+  // day returning a handful of rows, and because the push carries no payload.
+  // Losing ticks is not a correctness problem — the client's 30s derivation is
+  // the mechanism; see checkHearingRingWindow.
+  cron.schedule("* * * * *", async () => {
+    await checkHearingRingWindow();
   });
 
   cron.schedule("0 8 * * *", async () => {
@@ -1176,6 +1188,59 @@ function longPauseCopy(rec: LongPausedRecord): { title: string; message: string 
         title: `مذكرة معلّقة منذ ${days}`,
         message: `المذكرة "${rec.label}" معلّقة منذ ${days} ولا تزال معلّقة. يرجى مراجعة سبب التعليق وإلغاؤه أو تحديد موعد لانتهائه.`,
       };
+  }
+}
+
+// 🔔 THE PRE-HEARING RING PUSH — tier 1 (the attending lawyer), T-10 → T.
+//
+// 🔴 THIS IS AN ACCELERATOR, NOT THE MECHANISM. The ring is DERIVED on the
+// client from the 30s /api/hearings/ring-state poll. This job only pushes a
+// content-free nudge so the client re-derives sooner than its next poll. If this
+// job never runs — a restart, a crashed tick, a deploy spanning the whole
+// window — every affected client STILL RINGS within 30 seconds, because the poll
+// is what decides. That is the whole reason the derivation was built first.
+//
+// It therefore keeps NO state: no watermark, no sent-flag, no dedup. It re-pushes
+// every minute for as long as the window is open, which is self-healing — a tab
+// that connected late, or reconnected after a socket drop, is nudged on the next
+// tick instead of waiting for its poll.
+//
+// FIRST TIME THIS SCHEDULER HAS PUSHED OVER THE SOCKET. The import is a clean
+// new edge: server/websocket.ts imports only `ws`, `http` and ./auth, so it
+// depends on nothing that depends on the scheduler — no cycle.
+async function checkHearingRingWindow() {
+  try {
+    const rows = await storage.getRingCandidateHearingsForDate(firmToday());
+    if (rows.length === 0) return;
+
+    const nowMs = Date.now();
+    const recipients = new Set<string>();
+
+    for (const r of rows) {
+      // Tier 1 only in this batch. No attending lawyer → nobody to ring; the
+      // later tiers are what cover that case.
+      if (!r.attendingLawyerId) continue;
+      // 🔴 firmDateTimeToInstant DIRECTLY, never parseHearingDateTime — the
+      // wrapper substitutes 09:00 for a malformed hearing_time and would ring at
+      // a moment the session never had. Unparseable → skip; a ring is an
+      // interruption and must never fire on a guess.
+      const hearingAt = firmDateTimeToInstant(r.hearingDate, r.hearingTime);
+      if (!hearingAt) continue;
+      // ONE shared window rule with the endpoint and the client.
+      const open = isRingWindowOpen({
+        ringFromIso: new Date(hearingAt.getTime() - HearingRingLeadMinutes * 60 * 1000).toISOString(),
+        hearingAtIso: hearingAt.toISOString(),
+      }, nowMs);
+      if (!open) continue;
+      recipients.add(r.attendingLawyerId);
+    }
+
+    if (recipients.size === 0) return;
+    // Content-free: the client re-reads ring-state rather than trusting a
+    // payload, so a push can never disagree with the derivation.
+    sendToUsers(Array.from(recipients), { type: "hearing:ring" });
+  } catch (error) {
+    console.error("Error in checkHearingRingWindow:", error);
   }
 }
 

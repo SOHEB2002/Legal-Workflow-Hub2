@@ -13468,6 +13468,20 @@ export async function registerRoutes(
         }
       }
 
+      // 🔔 Stop the ring — the ACCELERATOR half. The authoritative half is the
+      // data: checked_in_at is now set, so this hearing stops matching
+      // /api/hearings/ring-state and every client's next poll ends the ring on
+      // its own within 30s. This push just makes it immediate.
+      //
+      // sendToUser reaches ALL of that user's tabs (the registry is a Set per
+      // user), so three tabs stop together. Best-effort by design: it is a
+      // fire-and-forget in-memory fan-out with no failure mode worth failing a
+      // durable check-in over, which is why it sits after the response is
+      // already assured and is not awaited into the error path.
+      if (hearing.attendingLawyerId) {
+        sendToUser(hearing.attendingLawyerId, { type: "hearing:ring-stop", payload: { hearingId } });
+      }
+
       res.json({ hearing: updated, alreadyCheckedIn: false });
     } catch (error) {
       console.error("[POST /api/hearings/:id/check-in] error:", error);
