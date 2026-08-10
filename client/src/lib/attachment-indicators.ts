@@ -13,15 +13,64 @@ import { hearingProducesNoMinutes } from "@shared/schema";
 // here is what lets a caller pass a LawCase or a Hearing without the field ever
 // being declared on those types — the same trick caseHasReturnedFromReview uses.
 
+// ==================== THE TWO صك BADGES — RE-KEYED TO THE JUDGMENT (batch 3) ====================
+// 🔴 THEY USED TO BE GATED ON `currentStage === "محكوم_حكم_ابتدائي"`, WHICH WAS
+// WRONG IN BOTH DIRECTIONS:
+//   • TOO NARROW — a صك is issued for EVERY ruling. A منظورة ruling the lawyer
+//     marks NOT objectionable goes straight to محكوم_حكم_نهائي in ONE stage write
+//     and never visits the first-instance stage at all (production: 8 of 8 final
+//     -judgment cases), and an APPEAL ruling has a صك too, by which time the case
+//     is at محكوم_حكم_نهائي. Neither could ever show a صك badge.
+//   • TOO WIDE — a case parked on that stage with no ruling on record was badged
+//     for a document that nothing had made recordable.
+// Both now key on THE CURRENT JUDGMENT: hasJudgmentRecord (stamped on the list
+// response from case_judgments) says a ruling exists, and the deed date says
+// whether its صك has arrived. Exactly the question the server's own deed gate
+// asks since batch 2, so badge and endpoint agree by construction.
+//
+// THE DATE TERM STILL READS law_cases.judgmentDeedReceivedDate, and that is not a
+// second source of truth: since batch 2 those two scalars are a MIRROR of the
+// CURRENT judgment's deed fields, refreshed inside the same transaction that
+// writes the judgment row and RECOMPUTED from the record rather than tracked. A
+// case with no judgment row mirrors NULL, so both terms fall to "no badge"
+// together. See server/judgment-record.ts.
+
+// Closed and archived files are silent. A finished case must not be nagged about
+// paperwork, and both badges need the rule, so it lives in one place.
+// (Before batch 3 the stage term excluded these implicitly — مقفلة is not
+// محكوم_حكم_ابتدائي — so dropping that term without this would have started
+// badging every closed case that predates the deed gate.)
+function isFinishedFile(currentStage: string): boolean {
+  return currentStage === "مقفلة" || currentStage === "مؤرشفة";
+}
+
+// "بانتظار استلام الصك" — a ruling exists but its صك has not been logged as
+// received, so the objection clock has not started.
+//
+// MOVED HERE FROM cases.tsx in batch 3. It had no external importer and only one
+// call site, and its sibling below now shares the same two terms and the same
+// finished-file rule — keeping them in two files was how they would drift.
+export function isAwaitingJudgmentDeed(c: {
+  currentStage: string;
+  hasJudgmentRecord?: boolean;
+  judgmentDeedReceivedDate?: string | null;
+}): boolean {
+  if (!c.hasJudgmentRecord) return false;
+  if (isFinishedFile(c.currentStage)) return false;
+  return !String(c.judgmentDeedReceivedDate || "").trim();
+}
+
 // "بانتظار إرفاق الصك" — the receipt DATE is recorded but the صك FILE is not on
 // file yet.
 //
-// The three deed states on a case at محكوم_حكم_ابتدائي:
+// The three deed states on a case that HAS a ruling:
 //   no receipt date              -> isAwaitingJudgmentDeed  (بانتظار استلام الصك)
 //   date recorded, no file       -> THIS                    (بانتظار إرفاق الصك)
 //   file attached                -> no badge
 // The two are mutually exclusive by construction — one requires the date empty,
-// the other requires it non-empty — so a case never shows both.
+// the other requires it non-empty — so a case never shows both. Together they now
+// PARTITION every case that has a ruling, at any stage, which is what made the
+// third badge (isPostJudgmentCaseMissingDeed) redundant; see below.
 //
 // ⚠ NO COMPARISON BETWEEN THE RECEIPT DATE AND TODAY, deliberately. A future
 // date is legitimate and the date entry is unchanged, so there is no
@@ -30,12 +79,14 @@ import { hearingProducesNoMinutes } from "@shared/schema";
 // timezone to get wrong.
 export function isAwaitingJudgmentDeedFile(c: {
   currentStage: string;
+  hasJudgmentRecord?: boolean;
   judgmentDeedReceivedDate?: string | null;
   hasDeedAttachment?: boolean;
 }): boolean {
-  if (c.currentStage !== "محكوم_حكم_ابتدائي") return false;
-  // Date must be RECORDED — otherwise the existing "بانتظار استلام الصك" badge
-  // owns this case and this one stays silent.
+  if (!c.hasJudgmentRecord) return false;
+  if (isFinishedFile(c.currentStage)) return false;
+  // Date must be RECORDED — otherwise the "بانتظار استلام الصك" badge owns this
+  // case and this one stays silent.
   if (!String(c.judgmentDeedReceivedDate || "").trim()) return false;
   return !c.hasDeedAttachment;
 }
@@ -72,44 +123,59 @@ export function caseHasDeedAttachment(c: { id: string; hasDeedAttachment?: boole
   return !!c.hasDeedAttachment;
 }
 
-// The case is at a judgment stage OTHER than محكوم_حكم_ابتدائي — i.e.
-// منظورة_استئناف or محكوم_حكم_نهائي — and still owes its صك.
+// "Does this case have a ruling on record?" — the batch-3 replacement for the
+// `currentStage === محكوم_حكم_ابتدائي` term the صك surfaces used to key on.
+// hasJudgmentRecord is stamped on GET /api/cases from case_judgments, exactly like
+// hasDeedAttachment and reachedJudgmentStage: DERIVED on every list read, never
+// stored, and never declared on LawCase so it cannot reach an insert or update.
 //
-// WHY THIS EXISTS: a case can reach those stages with no deed on file by several
-// routes — three automatic cascades are deliberately not blocked (objection
-// filing, a court hearing listed at the judgment stage, a hearing result), and
-// 🔴 THE COMMONEST ROUTE OF ALL is a first-instance ruling marked NOT objectionable,
-// which goes STRAIGHT to محكوم_حكم_نهائي without ever visiting محكوم_حكم_ابتدائي.
-// Production confirmed that is 8 of 8 final-judgment cases, not an edge case.
-// Without this badge those cases are INVISIBLE: isAwaitingJudgmentDeedFile only
-// fires at محكوم_حكم_ابتدائي, so a case that skipped or left that stage shows
-// nothing while the close gate silently holds it — the "wedged with no actor"
-// failure the whole design exists to avoid.
+// A list response that predates the field reads as "no ruling", which is the SAFE
+// direction on both sides: badges stay silent and the deed affordance stays
+// hidden, rather than a button appearing whose endpoint would 400.
+// `id` is the same TS2559 anchor as caseReachedJudgment above.
+export function caseHasJudgmentRecord(c: { id: string; hasJudgmentRecord?: boolean }): boolean {
+  return !!c.hasJudgmentRecord;
+}
+
+// 🔴 THIS WAS isPostJudgmentCaseMissingDeed, AND ITS BADGE JOB IS GONE — but its
+// GATE job is not, which is why it is re-keyed and renamed rather than deleted.
 //
-// This is ALSO the case's only route to the late-attach affordance
-// (canAttachDeedLate), which is what makes the gate satisfiable at all. Widening
-// the gate without widening THIS would have re-created the batch-3 bug: a
-// requirement with no way to meet it.
+// WHAT IT USED TO BE: "the case is at a judgment stage OTHER than
+// محكوم_حكم_ابتدائي and still owes its صك". It existed because the two badges
+// above only fired AT that one stage, so every case that skipped it (a ruling
+// marked not objectionable goes straight to محكوم_حكم_نهائي — 8 of 8 in
+// production) or left it was INVISIBLE while the close gate silently held it.
 //
-// Same wording as isAwaitingJudgmentDeedFile ("بانتظار إرفاق الصك") — it is the
-// same state, so it gets the same words rather than a new vocabulary.
+// WHY THE BADGE HALF IS NOW REDUNDANT: with both badges re-keyed to the current
+// judgment they no longer care about the stage at all, so they already cover
+// every case this used to catch — and they say the more useful of the two things,
+// because a case with no receipt date needs the DATE first ("بانتظار استلام
+// الصك"), which this one could not distinguish. Its badge render was removed from
+// the cases table; keeping it would have double-badged the same case.
 //
-// MUTUALLY EXCLUSIVE with both deed badges by construction: those two require
-// currentStage === محكوم_حكم_ابتدائي, this one excludes it.
-export function isPostJudgmentCaseMissingDeed(c: {
+// WHAT SURVIVES: the LATE-ATTACH gate (canAttachDeedLate). That affordance opens
+// the صك dialog in FILE-ONLY mode for the CLERICAL role — admin_support receives
+// the court's paperwork and files it, but may not record the receipt date, which
+// starts the objection clock and is a legal act. It deliberately does NOT require
+// a receipt date, so admin_support can file the PDF the day it arrives and the
+// lawyer records the date afterwards; that ordering is why this cannot simply be
+// isAwaitingJudgmentDeedFile.
+//
+// RENAMED because "postJudgment" described the stage test it no longer performs,
+// and a name that lies about its own predicate is how the next reader gets it
+// wrong.
+export function isJudgmentMissingDeedFile(c: {
   currentStage: string;
-  reachedJudgmentStage?: boolean;
+  hasJudgmentRecord?: boolean;
   hasDeedAttachment?: boolean;
 }): boolean {
-  // Never reached judgment → the deed was never recordable → silent. This is the
-  // same positive test the server gates on, so badge and gate agree exactly.
-  if (!c.reachedJudgmentStage) return false;
-  // Still AT the judgment stage → owned by the two existing badges.
-  if (c.currentStage === "محكوم_حكم_ابتدائي") return false;
+  // No ruling → the deed was never recordable → silent. Same positive test the
+  // server's deed gate uses since batch 2, so gate and affordance agree exactly.
+  if (!c.hasJudgmentRecord) return false;
   // Already closed or archived → the gate no longer applies, and nagging about a
   // document on a finished file is noise. (A case can only BE closed with the
   // deed attached, so in practice this arm only catches pre-gate history.)
-  if (c.currentStage === "مقفلة" || c.currentStage === "مؤرشفة") return false;
+  if (isFinishedFile(c.currentStage)) return false;
   return !c.hasDeedAttachment;
 }
 

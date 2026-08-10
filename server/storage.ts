@@ -591,6 +591,9 @@ export interface IStorage {
   // id column is read (never the file metadata, which no list needs).
   getCaseIdsWithDeedAttachment(): Promise<Set<string>>;
   getHearingIdsWithMinutesAttachment(): Promise<Set<string>>;
+  // Batch 3 — the set of cases that have a ruling on record, for the
+  // hasJudgmentRecord list stamp the re-keyed صك badges read.
+  getCaseIdsWithJudgment(): Promise<Set<string>>;
 
   createHearingAttachment(input: {
     hearingId: string;
@@ -4271,12 +4274,13 @@ export class DatabaseStorage implements IStorage {
     // "بانتظار استلام الصك" badge showed it, and only to someone already reading
     // the cases list.
     //
-    // STAGE-PRESENCE, exactly like case_work and the D1 settlement task: computed
-    // from the case's own state, never stored. It shows while
-    //   currentStage === محكوم_حكم_ابتدائي AND judgment_deed_received_date is empty
+    // PRESENCE-DERIVED, exactly like case_work and the D1 settlement task: computed
+    // from the case's own state, never stored. Since batch 3 it shows while
+    //   the case HAS a ruling on record AND judgment_deed_received_date is empty
+    //   AND the case is neither closed nor archived
     // and DISAPPEARS on the next feed read the moment the صك receipt is recorded.
-    // No scheduler, no completion flag, no clearing code — the same two terms the
-    // badge derives from, so badge and task can never disagree.
+    // No scheduler, no completion flag, no clearing code — the same terms the
+    // re-keyed badge derives from, so badge and task can never disagree.
     //
     // OWNER = المترافع, the lawyer who ATTENDED the judgment hearing
     // (hearings.attending_lawyer_id), NOT necessarily the assigned lawyer — he is
@@ -4285,23 +4289,56 @@ export class DatabaseStorage implements IStorage {
     // session nobody was recorded for). The judgment hearing is located with the
     // SHARED findPrimaryJudgmentHearing, the same rule the صك endpoint and the
     // appeal-direction UI use.
+    // ⚠ THE OWNER RESOLUTION IS UNTOUCHED BY BATCH 3, deliberately.
+    // findPrimaryJudgmentHearing is one of the four batch-4 restructures; only this
+    // block's TRIGGER was re-keyed, not how it picks a person.
     //
-    // CANNOT DUPLICATE the two blocks above: محكوم_حكم_ابتدائي is in neither
-    // LAWYER_WORK_STAGES nor توجيه_العميل_بالتسوية, and a case has exactly one
-    // currentStage — the three blocks are mutually exclusive. The id prefix is
-    // DISTINCT (`judgment_deed:`) so the FE can route its click-through to the
-    // case-details dialog (where "تسجيل استلام الصك" lives) instead of the
-    // stage-advance panel, which has nothing to offer at a terminal stage.
+    // ⚠ NO LONGER MUTUALLY EXCLUSIVE WITH 1a/1b BY STAGE, and the old claim here
+    // said it was. Dropping the stage term means a case that HAS a ruling and sits
+    // on a drafting stage would emit both — reachable only by REOPENING a judged
+    // case onto one of the five LAWYER_WORK_STAGES (منظورة, where a quash-remand
+    // lands, is not among them). If it happens both statements are true — the case
+    // is being worked AND its صك is outstanding — and the id prefixes are distinct,
+    // so nothing collides. Still mutually exclusive with 1d, which requires the
+    // deed date PRESENT where this requires it EMPTY.
+    // The id prefix is DISTINCT (`judgment_deed:`) so the FE can route its
+    // click-through to the case-details dialog (where "تسجيل استلام الصك" lives)
+    // instead of the stage-advance panel.
     // Kind REUSES CASE_WORK — no new MyTaskKind, no KIND_META wiring needed.
     {
-      const PRIMARY_JUDGMENT_STAGE = "محكوم_حكم_ابتدائي";
+      // 🔴 RE-KEYED IN BATCH 3 — the stage term is GONE, replaced by "the case has
+      // a ruling on record". `currentStage === محكوم_حكم_ابتدائي` was wrong in both
+      // directions, exactly as it was for the badges: a منظورة ruling marked NOT
+      // objectionable goes straight to محكوم_حكم_نهائي and never visits that stage
+      // (production: 8 of 8 final-judgment cases), so its صك was chased by nobody;
+      // and a case merely parked on the stage with no ruling emitted a task for a
+      // document nothing had made recordable.
+      //
+      // CLOSED AND ARCHIVED ARE NOW EXCLUDED EXPLICITLY. The old stage term did it
+      // implicitly — مقفلة is not محكوم_حكم_ابتدائي — so dropping it without this
+      // would have started nagging every closed case that predates the deed gate.
+      // Same two terms the sibling blocks use (status <> مغلق, isArchived not true).
+      //
+      // THE DEED DATE STILL COMES FROM THE law_cases MIRROR, not from the judgment
+      // row, and that is not a second source of truth: since batch 2 the two
+      // scalars ARE the current judgment's deed fields, refreshed inside the same
+      // transaction that writes the judgment and recomputed from the record. Only
+      // the terms the mirror CANNOT express (existence here, opens_window in 1d)
+      // are read from case_judgments — so no reader in this batch reads the same
+      // fact from two places.
+      const hasJudgmentRecord = sql`EXISTS (SELECT 1 FROM case_judgments j WHERE j.case_id = ${lawCases.id})`;
       const deedMissing = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL OR ${lawCases.judgmentDeedReceivedDate} = '')`;
+      const deedCaseLive = and(
+        ne(lawCases.status, "مغلق"),
+        sql`${lawCases.isArchived} IS NOT TRUE`,
+      );
       // The personal scope cannot be expressed in SQL here: the owner may be the
       // ATTENDING lawyer, who is on the hearing row, not the case. Candidates are
-      // fetched by stage (+ dept for a head) and filtered by resolved owner below.
+      // fetched by ruling-presence (+ dept for a head) and filtered by resolved
+      // owner below.
       const deedWhere = deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing, caseNotPaused)
-        : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedMissing, caseNotPaused);
+        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedMissing, deedCaseLive, caseNotPaused)
+        : and(hasJudgmentRecord, deedMissing, deedCaseLive, caseNotPaused);
       const deedRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
@@ -4344,10 +4381,19 @@ export class DatabaseStorage implements IStorage {
     // لائحة اعتراضية of ours whose deadline the memo reminders would chase. The
     // window simply lapses in silence and the case leaves the radar.
     //
+    // 🔴 BATCH 3 ADDED THE opens_window GUARD — see the fragment below. The task
+    // asserts "انتهت مهلة الاعتراض", so it must never fire for a ruling that opened
+    // no window: an appeal ruling never does, and neither does a QUASH, so a
+    // remanded case must not be told a window it never had has lapsed.
+    //
     // TRIGGER IS A DATE COMPARISON, NOT A STAGE — and it still needs no
     // scheduler, because BOTH terms live on the case row:
     //   receipt = judgment_deed_received_date, window = objection_window_days ?? 30
     // so "today > receipt + window" is computable at feed time, on every read.
+    // Those two scalars ARE the current judgment's deed fields since batch 2 (one
+    // writer, refreshed transactionally), so reading them here is reading the
+    // ruling — only opens_window, which the mirror cannot express, comes from
+    // case_judgments.
     // A scheduler job would add a second source of truth for a value that is
     // already derivable — the D3 najiz reminder exists only because it needs a
     // CADENCE (every 3 days) and a stage-entry timestamp; this needs neither.
@@ -4367,6 +4413,37 @@ export class DatabaseStorage implements IStorage {
     {
       const PRIMARY_JUDGMENT_STAGE = "محكوم_حكم_ابتدائي";
       const deedPresent = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL AND ${lawCases.judgmentDeedReceivedDate} <> '')`;
+      // 🔴 BATCH 3 — THE OPENS_WINDOW GUARD. The task claims "انتهت مهلة الاعتراض",
+      // so it must only ever fire for a ruling that actually OPENED an objection
+      // window. opens_window is STORED INTENT, decided when the ruling was recorded:
+      // true only for a first-instance ruling the lawyer marked objectionable, and
+      // FALSE for every appeal ruling — including a QUASH, whose own صك is not
+      // objectionable. Without this a remanded case could be told its objection
+      // window had lapsed when it never had one.
+      //
+      // Keyed on the CURRENT ruling (the highest sequence), because that is the one
+      // the case is living under; a superseded ruling's window is not the case's
+      // business any more.
+      //
+      // ⚠ THE STAGE TERM STAYS, AND IS NOT AN OVERSIGHT. It is not a deed scalar —
+      // it is this task's SELF-CLEARING mechanism: the task means "the window
+      // lapsed and no outcome was recorded", and both ways of recording that
+      // outcome (/appeal-outcome → منظورة_استئناف or محكوم_حكم_نهائي) move the case
+      // OFF محكوم_حكم_ابتدائي. The judgment row keeps opens_window=true and its deed
+      // date forever, so dropping the stage term would make this task permanent.
+      // Stage and opens_window agree by construction anyway — an opens_window ruling
+      // is exactly the one the hearing handler routes to محكوم_حكم_ابتدائي — so the
+      // guard is protection against drift (a manual stage edit, a reopen landing a
+      // case there) rather than a redundant term.
+      const currentJudgmentOpensWindow = sql`EXISTS (
+        SELECT 1 FROM case_judgments j
+         WHERE j.case_id = ${lawCases.id}
+           AND j.opens_window = true
+           AND NOT EXISTS (
+             SELECT 1 FROM case_judgments j2
+              WHERE j2.case_id = j.case_id AND j2.sequence > j.sequence
+           )
+      )`;
       // SUPPRESSED WHILE PAUSED even though the objection WINDOW is a legal
       // clock: this task fires only AFTER that window has already lapsed, and
       // asks for a RECORDING ("سجّل النتيجة"), not for an act with a deadline.
@@ -4374,10 +4451,10 @@ export class DatabaseStorage implements IStorage {
       // genuinely time-bound items — hearings and legal_deadlines — are NOT
       // suppressed; see the batch report.
       const lapsedScopeWhere = firmWideScoped
-        ? and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent)
+        ? and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent, currentJudgmentOpensWindow)
         : deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent)
-        : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent,
+        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent, currentJudgmentOpensWindow)
+        : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent, currentJudgmentOpensWindow,
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
       const lapsedWhere = and(lapsedScopeWhere, caseNotPaused);
       const lapsedRows = await db.select({
@@ -7887,6 +7964,21 @@ export class DatabaseStorage implements IStorage {
   async getHearingIdsWithMinutesAttachment(): Promise<Set<string>> {
     const rows = await db.select({ hearingId: hearingAttachments.hearingId }).from(hearingAttachments);
     return new Set(rows.map((r) => r.hearingId));
+  }
+
+  // Same shape and the same reasoning as the two above: ONE query, only the
+  // parent-id column, returned as a Set for O(1) membership during the in-memory
+  // stamp — never a per-row query. Deliberately unfiltered rather than
+  // `WHERE case_id IN (…the page's ids)` because /api/cases is not paginated
+  // server-side, so an IN(…) would carry thousands of bind parameters while this
+  // column is at most three rows per judged case.
+  //
+  // Existence only. WHICH ruling is current, and what its deed fields are, is not
+  // asked here: the badges get the date from the law_cases mirror, which IS the
+  // current judgment's deed fields by the batch-2 transactional invariant.
+  async getCaseIdsWithJudgment(): Promise<Set<string>> {
+    const rows = await db.select({ caseId: caseJudgments.caseId }).from(caseJudgments);
+    return new Set(rows.map((r) => r.caseId));
   }
 
   async createHearingAttachment(input: {

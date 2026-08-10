@@ -116,11 +116,13 @@ import { CaseDetailsDialog } from "@/components/case-details-dialog";
 import { OpponentResponseDialog } from "@/components/opponent-response-dialog";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
 import {
+  isAwaitingJudgmentDeed,
   isAwaitingJudgmentDeedFile,
   caseHasHearingMissingMinutes,
   caseHasDeedAttachment,
+  caseHasJudgmentRecord,
   caseReachedJudgment,
-  isPostJudgmentCaseMissingDeed,
+  isJudgmentMissingDeedFile,
   isHearingActor,
 } from "@/lib/attachment-indicators";
 import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
@@ -285,18 +287,12 @@ function getCasePriorityGroup(
   return 4;
 }
 
-// Judgment-lifecycle step 2 — "بانتظار استلام الصك". DERIVED, never stored: a
-// primary judgment has been issued but the written judgment (الصك) hasn't been
-// logged as received, so the objection clock hasn't started. Two terms, both on
-// the case row, so no cross-entity scan is needed (cheaper than the memo-based
-// "مذكرة جارية"). Self-clearing: recording the receipt date makes it false.
-export function isAwaitingJudgmentDeed(c: {
-  currentStage: string;
-  judgmentDeedReceivedDate?: string | null;
-}): boolean {
-  if (c.currentStage !== "محكوم_حكم_ابتدائي") return false;
-  return !String(c.judgmentDeedReceivedDate || "").trim();
-}
+// isAwaitingJudgmentDeed MOVED to lib/attachment-indicators.ts in batch 3, where
+// it now sits beside its sibling isAwaitingJudgmentDeedFile. Both were re-keyed
+// from `currentStage === محكوم_حكم_ابتدائي` to THE CURRENT JUDGMENT, so they share
+// the same two terms and the same finished-file rule — keeping them in two files
+// is how they would have drifted. It was exported but had no external importer
+// and exactly one call site, so the move rippled nowhere.
 
 // What the per-case active-memo scan yields. ONE map, not two: the badge needs
 // the TYPE as well as the existence, and a second Map would mean a second pass
@@ -490,7 +486,22 @@ export default function CasesPage() {
     return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
   };
 
+  // Mirror of the server's deed gate, RE-KEYED IN BATCH 3 to follow it. The
+  // endpoint stopped asking `currentStage === محكوم_حكم_ابتدائي` in batch 2 and now
+  // asks whether the case HAS a current ruling — so leaving this on the stage
+  // would have left the button hidden on exactly the cases the new badges light
+  // up, i.e. a "بانتظار استلام الصك" badge with no way to satisfy it. Visibility
+  // must equal authorization in both directions.
   const canRecordJudgmentDeed = (c: LawCase): boolean =>
+    caseHasJudgmentRecord(c) && canActOnCaseWorkflow(c);
+
+  // ⚠ THE APPEAL-OUTCOME GATE KEEPS THE STAGE TERM, and must. Its endpoint
+  // (POST /api/cases/:id/appeal-outcome) is still `currentStage ===
+  // محكوم_حكم_ابتدائي` — batch 2 changed only the deed route — and that is
+  // correct: it records what happened during OUR objection window, which exists
+  // only at the first-instance judgment stage. Reusing the widened predicate above
+  // would render "الخصم استأنف / لم يستأنف" on cases the server then rejects.
+  const canRecordAppealOutcomeStage = (c: LawCase): boolean =>
     c.currentStage === "محكوم_حكم_ابتدائي" && canActOnCaseWorkflow(c);
 
   // Mirror of the server's canAttachCaseJudgmentDeed (routes.ts) — the gate on
@@ -1268,7 +1279,11 @@ export default function CasesPage() {
       // already cleared just opens the case on its default tab.
       //   appeal-outcome    → نتيجة مهلة الاعتراض (الخصم استأنف / لم يستأنف)
       //   opponent-response → تم استلام رد الخصم
-      if (pendingOpenAction === "appeal-outcome" && canRecordJudgmentDeed(c)) {
+      // Uses the STAGE predicate, not the widened deed one: the appeal-outcome
+      // endpoint is still محكوم_حكم_ابتدائي-only, so the deep-link must degrade to
+      // "just open the case" everywhere else rather than select a tab whose
+      // buttons are correctly absent.
+      if (pendingOpenAction === "appeal-outcome" && canRecordAppealOutcomeStage(c)) {
         setDetailsInitialTab("actions");
       }
       if (
@@ -1765,24 +1780,19 @@ export default function CasesPage() {
                           بانتظار إرفاق الصك
                         </Badge>
                       )}
-                      {/* The SAME state one stage later. A case can legitimately
-                          reach منظورة_استئناف / محكوم_حكم_نهائي still owing its صك
-                          — three automatic cascades are deliberately not blocked —
-                          and the close gate then holds it there. Without this the
-                          hold would be invisible: the badge above stops at
-                          محكوم_حكم_ابتدائي. Same words, same amber, because it is
-                          the same task on the same desk. */}
-                      {isPostJudgmentCaseMissingDeed(c) && (
-                        <Badge
-                          variant="outline"
-                          className="border-amber-500 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] px-1 py-0"
-                          data-testid={`badge-post-judgment-missing-deed-${c.id}`}
-                          title="صدر حكم في القضية ولم تُرفق نسخة الصك — لا يمكن إغلاق القضية قبل إرفاقه"
-                        >
-                          <Paperclip className="w-2.5 h-2.5 ml-1" />
-                          بانتظار إرفاق الصك
-                        </Badge>
-                      )}
+                      {/* 🔴 THE THIRD صك BADGE WAS REMOVED IN BATCH 3.
+                          isPostJudgmentCaseMissingDeed existed only because the two
+                          badges above fired at محكوم_حكم_ابتدائي and nowhere else, so
+                          a case that skipped or left that stage owed its صك
+                          invisibly. Both are now keyed on the CURRENT JUDGMENT
+                          rather than the stage, so between them they already cover
+                          every case it used to catch — and they distinguish "needs
+                          the DATE" from "needs the FILE", which it could not.
+                          Keeping it would have double-badged the same case in the
+                          same amber with the same words.
+                          The function survives, re-keyed and renamed
+                          (isJudgmentMissingDeedFile), because its OTHER job — the
+                          clerical late-attach affordance — is not redundant. */}
                       {/* A hearing on this case has its result recorded but no
                           ضبط attached. Reads the SAME in-memory hearings list the
                           "رد خصم" badge above uses (getHearingsByCase), so no
@@ -2549,17 +2559,31 @@ export default function CasesPage() {
           // الصك" action right below deliberately stays visible — it is where the
           // user goes to satisfy this, and hiding it would leave a dead end.
           canRecordAppealOutcome:
-            canRecordJudgmentDeed(selectedCase) && caseHasDeedAttachment(selectedCase),
+            canRecordAppealOutcomeStage(selectedCase) && caseHasDeedAttachment(selectedCase),
           onWeAppealed: () => { setAppealOutcomeKind("we_appealed"); setAppealOutcomeCase(selectedCase); },
           onOpponentAppealed: () => { setAppealOutcomeKind("opponent_appealed"); setAppealOutcomeCase(selectedCase); },
           onNoAppeal: () => { setAppealOutcomeKind("no_appeal"); setAppealOutcomeCase(selectedCase); },
-          // Late صك filing on a case already past محكوم_حكم_ابتدائي. Opens the SAME
-          // dialog in FILE-ONLY mode (deedFileOnly) rather than a second dialog:
-          // one attachment control, one endpoint, one set of permissions. The role
-          // half is canAttachDeed — the clerical gate that includes admin_support,
-          // since receiving and filing the court's paperwork is exactly their job.
+          // FILE-ONLY صك filing. Opens the SAME dialog in FILE-ONLY mode
+          // (deedFileOnly) rather than a second dialog: one attachment control, one
+          // endpoint, one set of permissions. The role half is canAttachDeed — the
+          // clerical gate that includes admin_support, since receiving and filing
+          // the court's paperwork is exactly their job.
+          //
+          // 🔴 RE-KEYED IN BATCH 3, AND NARROWED TO WHO ACTUALLY NEEDS IT. It used
+          // to mean "the case is PAST محكوم_حكم_ابتدائي and owes its صك", which was
+          // the only route to the affordance while the full dialog was stage-locked.
+          // The full dialog now opens wherever a ruling exists, so a lawyer reaches
+          // the file control through it and needs no second door — this one is left
+          // for the role that may file the PDF but NOT record the date, which is
+          // exactly admin_support. `!canRecordJudgmentDeed` is what expresses that.
+          //
+          // Deliberately does NOT require a receipt date: the صك arrives as paper,
+          // admin_support files it the day it lands, and the lawyer records the date
+          // afterwards. Requiring the date first would block that ordering.
           canAttachDeedLate:
-            isPostJudgmentCaseMissingDeed(selectedCase) && canAttachDeed(selectedCase),
+            isJudgmentMissingDeedFile(selectedCase)
+            && canAttachDeed(selectedCase)
+            && !canRecordJudgmentDeed(selectedCase),
           onAttachDeedLate: () => {
             setDeedFileOnly(true);
             setDeedCase(selectedCase);
