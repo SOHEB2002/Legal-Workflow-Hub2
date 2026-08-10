@@ -31,7 +31,7 @@ import {
   ConsultationStageLabels, type ConsultationStageValue,
   users, clients, lawCases, consultations, hearings, fieldTasks, contactLogs, notifications, departments, attachments, memos, supportTickets,
   caseActivityLog, caseNotes, caseComments, legalDeadlines, delegationsTable, savedFilters, userSectionViews,
-  adminSupportTaskAssignments,
+  adminSupportTaskAssignments, hearingRingAcknowledgements,
   consultationStudies, consultationDrafts, consultationReviews,
   consultationCommitteeDecisions, consultationNoteOutcomes,
   consultationActivityLog,
@@ -138,8 +138,17 @@ export interface IStorage {
     {
       id: string; caseId: string; hearingDate: string; hearingTime: string | null;
       courtName: string | null; attendingLawyerId: string | null; caseNumber: string | null;
+      caseDepartmentId: string | null;
     }[]
   >;
+  // 🔔 Ring recipients for the scheduler push — active users who occupy any tier
+  // for the given case departments. Narrow by construction; see the impl.
+  getRingRecipientCandidates(departmentIds: string[]): Promise<
+    { id: string; role: string; departmentId: string | null }[]
+  >;
+  // 🔔 "تم الاطلاع" — the ONLY two consumers of hearing_ring_acknowledgements.
+  acknowledgeHearingRing(hearingId: string, userId: string): Promise<void>;
+  getAcknowledgedHearingIds(userId: string, hearingIds: string[]): Promise<Set<string>>;
   getHearingsByCase(caseId: string): Promise<Hearing[]>;
   getHearingById(id: string): Promise<Hearing | undefined>;
   createHearing(data: Partial<Hearing>): Promise<Hearing>;
@@ -2114,6 +2123,7 @@ export class DatabaseStorage implements IStorage {
     {
       id: string; caseId: string; hearingDate: string; hearingTime: string | null;
       courtName: string | null; attendingLawyerId: string | null; caseNumber: string | null;
+      caseDepartmentId: string | null;
     }[]
   > {
     const conditions = [
@@ -2132,9 +2142,62 @@ export class DatabaseStorage implements IStorage {
       courtName: hearings.courtName,
       attendingLawyerId: hearings.attendingLawyerId,
       caseNumber: lawCases.caseNumber,
+      // Hearings carry NO departmentId — the department TIER resolves through
+      // the parent case, the same hop canActOnHearing makes. Taken from the
+      // innerJoin that is already here for the case number, so it costs nothing.
+      caseDepartmentId: lawCases.departmentId,
     }).from(hearings)
       .innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
       .where(and(...conditions));
+  }
+
+  // 🔔 Everyone who could occupy a ring tier for a given set of case departments:
+  // the departments' own members, plus every admin_support and branch_manager.
+  //
+  // 🔴 NOT getAllUsers(). The role/department test is pushed into SQL, so a firm
+  // with one ringing hearing loads only the handful of people that hearing can
+  // reach — not the whole staff table, every minute, forever. Only three columns
+  // are selected, and the caller applies resolveHearingRingTier to each.
+  //
+  // viewer / hr are NOT filtered here — resolveHearingRingTier excludes them
+  // from the DEPARTMENT tier, and doing it in one place keeps the rule single.
+  async getRingRecipientCandidates(departmentIds: string[]): Promise<
+    { id: string; role: string; departmentId: string | null }[]
+  > {
+    const roleOrDept = departmentIds.length > 0
+      ? or(
+          inArray(users.role, ["admin_support", "branch_manager"]),
+          inArray(users.departmentId, departmentIds),
+        )
+      : inArray(users.role, ["admin_support", "branch_manager"]);
+    return await db.select({
+      id: users.id,
+      role: users.role,
+      departmentId: users.departmentId,
+    }).from(users).where(and(eq(users.isActive, true), roleOrDept));
+  }
+
+  // 🔔 "تم الاطلاع". IDEMPOTENT BY THE UNIQUE INDEX rather than by a read-then-
+  // write: onConflictDoNothing lets a double press, or two tabs racing, resolve
+  // in the database instead of in a race window between SELECT and INSERT.
+  // Acknowledging twice is a no-op, never an error and never a second row.
+  async acknowledgeHearingRing(hearingId: string, userId: string): Promise<void> {
+    await db.insert(hearingRingAcknowledgements)
+      .values({ id: nanoid(), hearingId, userId, acknowledgedAt: new Date() })
+      .onConflictDoNothing();
+  }
+
+  // Which of these hearings has THIS user already acknowledged? Keyed read over
+  // the unique index; returns ids only. The sole reader of the table.
+  async getAcknowledgedHearingIds(userId: string, hearingIds: string[]): Promise<Set<string>> {
+    if (hearingIds.length === 0) return new Set();
+    const rows = await db.select({ hearingId: hearingRingAcknowledgements.hearingId })
+      .from(hearingRingAcknowledgements)
+      .where(and(
+        eq(hearingRingAcknowledgements.userId, userId),
+        inArray(hearingRingAcknowledgements.hearingId, hearingIds),
+      ));
+    return new Set(rows.map((r) => r.hearingId));
   }
 
   async getHearingsByCase(caseId: string): Promise<Hearing[]> {

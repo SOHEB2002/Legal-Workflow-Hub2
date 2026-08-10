@@ -557,6 +557,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       // opening a second socket per tab to own these would double connections.
       case "hearing:ring":
       case "hearing:ring-stop":
+      case "hearing:ring-ack":
         void queryClient.invalidateQueries({ queryKey: ["/api/hearings/ring-state"] });
         break;
       // 🔴 A DEFAULT ARM, added with the ring events. This switch previously had

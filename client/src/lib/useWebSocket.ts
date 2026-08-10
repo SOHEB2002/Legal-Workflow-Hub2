@@ -12,7 +12,9 @@ export type WSEventType =
   // poll interval. Neither carries the ring state itself; both simply invalidate
   // the query so the client re-derives from data.
   | "hearing:ring"
-  | "hearing:ring-stop";
+  | "hearing:ring-stop"
+  // Sent to the ACKNOWLEDGING user only, so their other tabs stop too.
+  | "hearing:ring-ack";
 
 export interface WSEvent {
   type: WSEventType;

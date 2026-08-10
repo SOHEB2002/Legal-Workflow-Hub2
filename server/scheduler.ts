@@ -3,7 +3,8 @@ import { storage } from "./storage";
 import { calculateSmartPriority } from "./routes";
 import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId,
   NotificationType, elapsedDaysLabel, firmToday,
-  HearingRingLeadMinutes, isRingWindowOpen } from "@shared/schema";
+  HearingRingLeadMinutes, isRingWindowOpen, resolveHearingRingTier,
+  HearingRingTier, HearingRingTierLeadMinutes } from "@shared/schema";
 import { sendToUsers } from "./websocket";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
@@ -1214,25 +1215,66 @@ async function checkHearingRingWindow() {
     if (rows.length === 0) return;
 
     const nowMs = Date.now();
-    const recipients = new Set<string>();
 
-    for (const r of rows) {
-      // Tier 1 only in this batch. No attending lawyer → nobody to ring; the
-      // later tiers are what cover that case.
-      if (!r.attendingLawyerId) continue;
+    // Resolve each candidate's instant ONCE, dropping the ones that cannot ring
+    // at all, before touching the users table.
+    const live = rows.flatMap((r) => {
       // 🔴 firmDateTimeToInstant DIRECTLY, never parseHearingDateTime — the
       // wrapper substitutes 09:00 for a malformed hearing_time and would ring at
       // a moment the session never had. Unparseable → skip; a ring is an
       // interruption and must never fire on a guess.
       const hearingAt = firmDateTimeToInstant(r.hearingDate, r.hearingTime);
-      if (!hearingAt) continue;
-      // ONE shared window rule with the endpoint and the client.
-      const open = isRingWindowOpen({
+      if (!hearingAt) return [];
+      // The WIDEST tier window — if even the earliest tier has not opened, no
+      // tier has, and this hearing needs no user lookup at all.
+      const anyTierOpen = isRingWindowOpen({
         ringFromIso: new Date(hearingAt.getTime() - HearingRingLeadMinutes * 60 * 1000).toISOString(),
         hearingAtIso: hearingAt.toISOString(),
       }, nowMs);
-      if (!open) continue;
-      recipients.add(r.attendingLawyerId);
+      return anyTierOpen ? [{ row: r, hearingAt }] : [];
+    });
+    if (live.length === 0) return;
+
+    // ONE narrow users read for the whole tick, scoped to the departments that
+    // actually have a live hearing — never getAllUsers().
+    const departmentIds = Array.from(new Set(
+      live.map((l) => l.row.caseDepartmentId).filter((d): d is string => !!d),
+    ));
+    const candidates = await storage.getRingRecipientCandidates(departmentIds);
+
+    const recipients = new Set<string>();
+    for (const { row, hearingAt } of live) {
+      for (const u of candidates) {
+        // ONE shared tier rule with the endpoint, so the push and the derivation
+        // can never disagree about who rings.
+        const tier = resolveHearingRingTier(u, {
+          attendingLawyerId: row.attendingLawyerId,
+          caseDepartmentId: row.caseDepartmentId,
+        });
+        if (!tier) continue;
+        const leadMs = HearingRingTierLeadMinutes[tier] * 60 * 1000;
+        // 🔴 EACH TIER IS THE SAME INSTANT WITH ITS OWN LEAD. At T-5 all four
+        // windows are open simultaneously, so all four tiers resolve true on
+        // this same pass — accumulation with NO state tracking which tier has
+        // "already fired".
+        const open = isRingWindowOpen({
+          ringFromIso: new Date(hearingAt.getTime() - leadMs).toISOString(),
+          hearingAtIso: hearingAt.toISOString(),
+        }, nowMs);
+        if (open) recipients.add(u.id);
+      }
+      // The attending lawyer is resolved from the hearing itself: they may not
+      // be in the candidate set (a lawyer in another department, or one whose
+      // role is neither admin_support nor branch_manager and whose department
+      // differs from the case's).
+      if (row.attendingLawyerId) {
+        const leadMs = HearingRingTierLeadMinutes[HearingRingTier.ATTENDING] * 60 * 1000;
+        const open = isRingWindowOpen({
+          ringFromIso: new Date(hearingAt.getTime() - leadMs).toISOString(),
+          hearingAtIso: hearingAt.toISOString(),
+        }, nowMs);
+        if (open) recipients.add(row.attendingLawyerId);
+      }
     }
 
     if (recipients.size === 0) return;
