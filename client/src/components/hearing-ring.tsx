@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Bell, BellOff, CheckCircle, Gavel } from "lucide-react";
@@ -8,7 +9,18 @@ import { useHearings } from "@/lib/hearings-context";
 import { useToast } from "@/hooks/use-toast";
 import { BidiText } from "@/components/ui/bidi-text";
 import { extractApiError } from "@/lib/utils";
-import { isRingWindowOpen, type HearingRingItem } from "@shared/schema";
+import { isRingWindowOpen, HearingRingTier, type HearingRingItem } from "@shared/schema";
+import { canCheckInHearing } from "@/lib/attachment-indicators";
+
+// WHY this user is being rung, per tier. The modal must say so: an admin_support
+// user woken by a hearing in a department they have never touched needs to know
+// it is a firm-wide escalation, not their own session.
+const TIER_HEADLINE: Record<string, string> = {
+  [HearingRingTier.ATTENDING]: "جلستك",
+  [HearingRingTier.DEPARTMENT]: "جلسة في قسمك — لم يتم تحضيرها بعد",
+  [HearingRingTier.ADMIN_SUPPORT]: "جلسة لم تُحضَّر — تصعيد",
+  [HearingRingTier.BRANCH_MANAGER]: "جلسة لم تُحضَّر — تصعيد نهائي",
+};
 
 // 🔔 THE PRE-HEARING RING — batch 3, tier 1 (the attending lawyer only).
 //
@@ -173,6 +185,24 @@ export function HearingRing() {
     }
   };
 
+  // "تم الاطلاع" — silences THIS PERSON's ring only. The chain continues: the
+  // hearing is still unprepared, later tiers still fire for everyone else, and
+  // this is never treated as a check-in anywhere.
+  const handleAcknowledge = async (item: HearingRingItem) => {
+    setSubmittingId(item.hearingId);
+    try {
+      await apiRequest("POST", `/api/hearings/${item.hearingId}/acknowledge`);
+      // Re-derive from the server rather than hiding it locally: the ack is
+      // server state, so the row disappearing is the same event every other tab
+      // of this user sees.
+      await queryClient.invalidateQueries({ queryKey: ["/api/hearings/ring-state"] });
+    } catch (e: any) {
+      toast({ title: "تعذّر تسجيل الاطلاع", description: extractApiError(e), variant: "destructive" });
+    } finally {
+      setSubmittingId(null);
+    }
+  };
+
   if (!user || !isRinging) return null;
 
   // 🔴 THE VISUAL FALLBACK, and it is not a fallback so much as the primary
@@ -209,30 +239,60 @@ export function HearingRing() {
         )}
 
         <div className="space-y-3">
-          {ringing.map((item) => (
-            <div
-              key={item.hearingId}
-              className="rounded-md border bg-card p-3 text-sm"
-              data-testid={`ring-item-${item.hearingId}`}
-            >
-              <div className="font-medium">
-                جلستك تبدأ الساعة {item.hearingTime}
-              </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                القضية رقم <BidiText>{item.caseNumber}</BidiText>
-                {item.courtName ? <> — <BidiText>{item.courtName}</BidiText></> : null}
-              </div>
-              <Button
-                className="mt-3 w-full"
-                onClick={() => handleCheckIn(item)}
-                disabled={submittingId === item.hearingId}
-                data-testid={`button-ring-check-in-${item.hearingId}`}
+          {ringing.map((item) => {
+            // 🔴 VISIBILITY == AUTHORIZATION. تحضير renders ONLY when the SHARED
+            // client predicate passes — the same rule the server's
+            // canCheckInHearing enforces — so a department member or an
+            // admin_support user never sees a button that would 403. They get
+            // "تم الاطلاع" instead, which is exactly why that action exists:
+            // without it they would face a non-dismissable modal with no action
+            // they are permitted to take.
+            const mayPrepare = canCheckInHearing(
+              user,
+              { attendingLawyerId: item.attendingLawyerId },
+              { departmentId: item.caseDepartmentId },
+            );
+            return (
+              <div
+                key={item.hearingId}
+                className="rounded-md border bg-card p-3 text-sm"
+                data-testid={`ring-item-${item.hearingId}`}
               >
-                <CheckCircle className="ml-2 h-4 w-4" />
-                تحضير
-              </Button>
-            </div>
-          ))}
+                <div className="font-medium" data-testid={`ring-tier-${item.hearingId}`}>
+                  {TIER_HEADLINE[item.tier] ?? "جلسة لم تُحضَّر"} — الساعة {item.hearingTime}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  القضية رقم <BidiText>{item.caseNumber}</BidiText>
+                  {item.courtName ? <> — <BidiText>{item.courtName}</BidiText></> : null}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  {mayPrepare && (
+                    <Button
+                      className="flex-1"
+                      onClick={() => handleCheckIn(item)}
+                      disabled={submittingId === item.hearingId}
+                      data-testid={`button-ring-check-in-${item.hearingId}`}
+                    >
+                      <CheckCircle className="ml-2 h-4 w-4" />
+                      تحضير
+                    </Button>
+                  )}
+                  {/* Offered to EVERYONE the ring reaches, including those who
+                      may prepare — a lawyer who cannot act right now may still
+                      want the noise to stop. */}
+                  <Button
+                    variant="outline"
+                    className={mayPrepare ? "" : "flex-1"}
+                    onClick={() => handleAcknowledge(item)}
+                    disabled={submittingId === item.hearingId}
+                    data-testid={`button-ring-ack-${item.hearingId}`}
+                  >
+                    تم الاطلاع
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         <DialogFooter className="text-xs text-muted-foreground sm:justify-start">
