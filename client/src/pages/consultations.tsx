@@ -545,11 +545,15 @@ function canPauseConsultation(
 // used for pausedAt and createdAt elsewhere on this page, so it must NOT be
 // deleted along with the delivery feature. (isConsultationOverdue, its former
 // companion, WAS deleted: it read expectedDeliveryDate and had no other use.)
+// 🔴 LOCAL, not UTC. This returned d.toISOString().slice(0, 10), which renders
+// the UTC calendar day — so between 00:00 and 03:00 Riyadh it showed YESTERDAY
+// for both of its callers (the pause banner and تاريخ الاستشارة). Date only, as
+// before; only the calendar was wrong.
 function formatExpectedDate(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toISOString().slice(0, 10);
+  return d.toLocaleDateString("ar");
 }
 
 // Per-category badge palette. Quick = amber (urgent), standard = neutral,
@@ -698,7 +702,12 @@ function formatActivityTime(iso: string): string {
   const mm = String(d.getMinutes()).padStart(2, "0");
   if (sameDay) return `اليوم ${hh}:${mm}`;
   if (isYesterday) return `أمس ${hh}:${mm}`;
-  return `${d.toISOString().slice(0, 10)} ${hh}:${mm}`;
+  // 🔴 THIS LINE WAS SELF-CONTRADICTORY: the time (hh:mm above) comes from
+  // getHours/getMinutes — LOCAL — while the date came from toISOString — UTC.
+  // One string, two calendars, so between 00:00 and 03:00 Riyadh it read e.g.
+  // "2026-08-09 01:30" for an event that happened on the 10th at 01:30 local.
+  // Both halves are now local.
+  return `${d.toLocaleDateString("ar")} ${hh}:${mm}`;
 }
 
 interface ConsultationActivityTimelineProps {

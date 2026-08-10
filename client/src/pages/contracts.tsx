@@ -336,7 +336,11 @@ function formatActivityTime(iso: string): string {
   const mm = String(d.getMinutes()).padStart(2, "0");
   if (sameDay) return `اليوم ${hh}:${mm}`;
   if (isYesterday) return `أمس ${hh}:${mm}`;
-  return `${d.toISOString().slice(0, 10)} ${hh}:${mm}`;
+  // Same self-contradiction as the consultations twin of this function: a LOCAL
+  // time (getHours/getMinutes) beside a UTC date (toISOString). Both local now.
+  // ⚠ These two helpers are byte-identical duplicates on two pages — fix both
+  // or neither.
+  return `${d.toLocaleDateString("ar")} ${hh}:${mm}`;
 }
 
 export default function ContractsPage() {

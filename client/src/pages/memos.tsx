@@ -2050,7 +2050,10 @@ export default function MemosPage() {
                       {detailMemo.pausedAt && (
                         <>
                           {detailMemo.pausedBy ? " — " : ""}
-                          في <LtrInline>{new Date(detailMemo.pausedAt).toISOString().slice(0, 10)}</LtrInline>
+                          {/* Date only, LOCAL — .toISOString() rendered UTC and
+                              showed YESTERDAY between 00:00 and 03:00 Riyadh.
+                              Found by the sweep, not reported. */}
+                          في {new Date(detailMemo.pausedAt).toLocaleDateString("ar")}
                         </>
                       )}
                     </div>
@@ -2089,7 +2092,8 @@ export default function MemosPage() {
                         {cancelInfo.performedAt && (
                           <>
                             {cancelInfo.performedBy ? " — " : ""}
-                            في <LtrInline>{new Date(cancelInfo.performedAt).toISOString().slice(0, 10)}</LtrInline>
+                            {/* Same defect, same fix — found by the sweep. */}
+                            في {new Date(cancelInfo.performedAt).toLocaleDateString("ar")}
                           </>
                         )}
                       </div>
