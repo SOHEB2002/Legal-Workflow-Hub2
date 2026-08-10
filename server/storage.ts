@@ -132,6 +132,14 @@ export interface IStorage {
   getUnpreparedHearingsForDate(day: string): Promise<
     { id: string; caseId: string; hearingDate: string; hearingTime: string | null; courtName: string | null }[]
   >;
+  // 🔔 Ring candidates — one day's unprepared sessions, optionally narrowed to
+  // one attending lawyer. See the implementation for the index it rides.
+  getRingCandidateHearingsForDate(day: string, attendingLawyerId?: string): Promise<
+    {
+      id: string; caseId: string; hearingDate: string; hearingTime: string | null;
+      courtName: string | null; attendingLawyerId: string | null; caseNumber: string | null;
+    }[]
+  >;
   getHearingsByCase(caseId: string): Promise<Hearing[]>;
   getHearingById(id: string): Promise<Hearing | undefined>;
   createHearing(data: Partial<Hearing>): Promise<Hearing>;
@@ -2076,6 +2084,57 @@ export class DatabaseStorage implements IStorage {
       sql`${hearings.checkedInAt} IS NULL`,
       sql`${hearings.isFlagged} IS NOT TRUE`,
     ));
+  }
+
+  // 🔔 Candidates for the pre-hearing RING: one calendar day's sessions that are
+  // still upcoming and still unprepared, with the case number for the alert text.
+  //
+  // 🔴 THIS RUNS EVERY 30 SECONDS FOR EVERY LOGGED-IN USER (the derivation poll)
+  // and every minute in the scheduler, so it must never widen. It is the same
+  // narrow shape as getUnpreparedHearingsForDate — every condition in SQL, a
+  // fixed short column list, ONE innerJoin for the case number — and it must
+  // NEVER become getAllHearings / getAllCases / getAllNotifications.
+  //
+  //   hearing_date = day        hearings_hearing_date_idx leading column
+  //   attending_lawyer_id = X   hearings_attending_lawyer_idx (when narrowed)
+  //   status = قادمة            a مؤجلة / ملغية session is not going to be held
+  //   checked_in_at IS NULL     🔴 somebody prepared it → the ring must stop.
+  //                             This is HALF the "stop for everyone" guarantee:
+  //                             the row simply stops matching, so the ring ends
+  //                             on the next poll even if no push is delivered.
+  //
+  // is_flagged is deliberately NOT a condition here (unlike the auto-flag
+  // sweep): a hearing flagged for some unrelated reason must still ring.
+  //
+  // NOTE it does NOT filter by time — the caller resolves the instant with
+  // firmDateTimeToInstant and decides the window. Keeping the time comparison
+  // out of SQL is required, not stylistic: hearing_time is a bare varchar and
+  // "9:30" sorts after "10:00" lexicographically.
+  async getRingCandidateHearingsForDate(day: string, attendingLawyerId?: string): Promise<
+    {
+      id: string; caseId: string; hearingDate: string; hearingTime: string | null;
+      courtName: string | null; attendingLawyerId: string | null; caseNumber: string | null;
+    }[]
+  > {
+    const conditions = [
+      eq(hearings.hearingDate, day),
+      eq(hearings.status, HearingStatus.UPCOMING),
+      sql`${hearings.checkedInAt} IS NULL`,
+    ];
+    if (attendingLawyerId) {
+      conditions.push(eq(hearings.attendingLawyerId, attendingLawyerId));
+    }
+    return await db.select({
+      id: hearings.id,
+      caseId: hearings.caseId,
+      hearingDate: hearings.hearingDate,
+      hearingTime: hearings.hearingTime,
+      courtName: hearings.courtName,
+      attendingLawyerId: hearings.attendingLawyerId,
+      caseNumber: lawCases.caseNumber,
+    }).from(hearings)
+      .innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
+      .where(and(...conditions));
   }
 
   async getHearingsByCase(caseId: string): Promise<Hearing[]> {

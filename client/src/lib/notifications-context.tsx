@@ -10,7 +10,7 @@ import type {
   NotificationRule,
 } from "@shared/schema";
 import { NotificationType, NotificationPriority, NotificationStatus, DigestMode } from "@shared/schema";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "./auth-context";
 import { useWebSocket, type WSEvent } from "./useWebSocket";
 
@@ -548,6 +548,25 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         setNotifications((prev) =>
           prev.map((n) => ({ ...n, isRead: true, readAt: n.readAt || new Date().toISOString(), status: "read" as any }))
         );
+        break;
+      // 🔔 Pre-hearing ring — ACCELERATORS ONLY. Neither event carries ring
+      // state; both just invalidate the query so HearingRing re-derives from
+      // /api/hearings/ring-state immediately instead of waiting up to 30s.
+      // Dropping either one changes ONLY the latency, never the outcome.
+      // Handled here because this is the app's single useWebSocket consumer —
+      // opening a second socket per tab to own these would double connections.
+      case "hearing:ring":
+      case "hearing:ring-stop":
+        void queryClient.invalidateQueries({ queryKey: ["/api/hearings/ring-state"] });
+        break;
+      // 🔴 A DEFAULT ARM, added with the ring events. This switch previously had
+      // none, so a server pushing a type the client did not know did NOTHING —
+      // silently, with no way to notice during development. An unknown type is
+      // now surfaced in the console rather than swallowed.
+      case "connected":
+        break;
+      default:
+        console.warn("[ws] unhandled event type:", (event as WSEvent).type);
         break;
     }
   }, []);

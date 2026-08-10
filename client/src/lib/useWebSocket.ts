@@ -5,7 +5,14 @@ export type WSEventType =
   | "notification:new"
   | "notification:updated"
   | "notification:deleted"
-  | "notification:all-read";
+  | "notification:all-read"
+  // 🔔 Pre-hearing ring. Both are ACCELERATORS ONLY — the ring is derived from
+  // the 30s /api/hearings/ring-state poll, and these just make it react sooner.
+  // A client that never receives either still rings, and still stops, within one
+  // poll interval. Neither carries the ring state itself; both simply invalidate
+  // the query so the client re-derives from data.
+  | "hearing:ring"
+  | "hearing:ring-stop";
 
 export interface WSEvent {
   type: WSEventType;
