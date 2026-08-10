@@ -20,6 +20,7 @@ import { DashboardProvider } from "@/lib/dashboard-context";
 import { ContactsProvider } from "@/lib/contacts-context";
 import { StandardsProvider } from "@/lib/standards-context";
 import { NotificationsProvider } from "@/lib/notifications-context";
+import { HearingRing } from "@/components/hearing-ring";
 import { GlobalSearch } from "@/components/global-search";
 import { ActingForBanner } from "@/components/acting-for-banner";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -205,6 +206,12 @@ function App() {
                                   <AppContent />
                                 </OnboardingProvider>
                               </KeyboardShortcutsProvider>
+                              {/* 🔔 Mounted ONCE at the app root, beside Toaster
+                                  — deliberately NOT inside notifications-bell,
+                                  whose sound effect is keyed on unread counts
+                                  and gated on a per-browser localStorage mute.
+                                  Renders nothing until a ring window is open. */}
+                              <HearingRing />
                               <Toaster />
                             </TooltipProvider>
                             </FavoritesProvider>
