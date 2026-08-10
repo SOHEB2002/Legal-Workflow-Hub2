@@ -81,14 +81,17 @@ export function isAwaitingJudgmentDeedFile(c: {
   currentStage: string;
   hasJudgmentRecord?: boolean;
   judgmentDeedReceivedDate?: string | null;
-  hasDeedAttachment?: boolean;
+  currentJudgmentHasDeed?: boolean;
 }): boolean {
   if (!c.hasJudgmentRecord) return false;
   if (isFinishedFile(c.currentStage)) return false;
   // Date must be RECORDED — otherwise the "بانتظار استلام الصك" badge owns this
   // case and this one stays silent.
   if (!String(c.judgmentDeedReceivedDate || "").trim()) return false;
-  return !c.hasDeedAttachment;
+  // 🔴 BATCH 4 — the CURRENT ruling's OWN صك, not the case's. hasDeedAttachment
+  // would report cycle 1's file as satisfying a cycle-2 ruling, so this badge
+  // went quiet while the server's close gate still refused — an invisible hold.
+  return !c.currentJudgmentHasDeed;
 }
 
 // "This case reached A JUDGMENT STAGE" — any of محكوم_حكم_ابتدائي /
@@ -119,6 +122,13 @@ export function caseReachedJudgment(c: { id: string; reachedJudgmentStage?: bool
 // list response predates the field reads as "no deed", which is the SAFE
 // direction for a gate: it refuses rather than lets something through.
 // `id` is the same TS2559 anchor as caseReachedJudgment above.
+// ⚠ AS OF BATCH 4 THIS HAS NO CALLERS. Every gate and badge that used it now
+// reads caseCurrentJudgmentHasDeed instead — the CASE-level answer is wrong once a
+// case can hold more than one ruling. It is deliberately KEPT, not deleted,
+// because retiring the case_attachments surface is its own change with its own
+// rollback: the deed GET / download / DELETE routes still read that table, and the
+// upload still dual-writes it. When those move, this and the hasDeedAttachment
+// list stamp go with them. Do NOT read this as "the case has its deed".
 export function caseHasDeedAttachment(c: { id: string; hasDeedAttachment?: boolean }): boolean {
   return !!c.hasDeedAttachment;
 }
@@ -135,6 +145,39 @@ export function caseHasDeedAttachment(c: { id: string; hasDeedAttachment?: boole
 // `id` is the same TS2559 anchor as caseReachedJudgment above.
 export function caseHasJudgmentRecord(c: { id: string; hasJudgmentRecord?: boolean }): boolean {
   return !!c.hasJudgmentRecord;
+}
+
+// 🔴 BATCH 4 — "does the case's CURRENT ruling have ITS OWN صك on file?", the
+// client half of the re-keyed server gate (isJudgmentDeedMissing).
+//
+// THIS REPLACES caseHasDeedAttachment EVERYWHERE THE DEED IS A REQUIREMENT.
+// hasDeedAttachment answers a CASE-level question — "is there a deed row for this
+// case" — which was the same question until a case could hold more than one
+// ruling. On a second cycle it reports true from cycle 1's file, so a badge would
+// go quiet and the close button would look available while the server refuses:
+// exactly the invisible hold the badges exist to prevent.
+// Safe direction on an older list response: absent → false → the badge shows and
+// the gate mirror refuses, rather than promising a close the server will reject.
+export function caseCurrentJudgmentHasDeed(c: { id: string; currentJudgmentHasDeed?: boolean }): boolean {
+  return !!c.currentJudgmentHasDeed;
+}
+
+// The hearing that produced the case's current ruling, for re-keying
+// findPrimaryJudgmentHearing. NULL is normal and means "recorded without a session
+// in our system" (POST /appeal-ruling) — that helper falls back to its date scan.
+export function caseCurrentJudgmentHearingId(
+  c: { id: string; currentJudgmentHearingId?: string | null },
+): string | null {
+  return c.currentJudgmentHearingId ?? null;
+}
+
+// The direction of the case's current ruling (لصالحنا | ضدنا | جزئي), for the
+// closed-case outcome badge. NULL for a quash — it decides procedure, not merits —
+// and null on a case with no ruling.
+export function caseCurrentJudgmentOutcome(
+  c: { id: string; currentJudgmentOutcome?: string | null },
+): string | null {
+  return c.currentJudgmentOutcome ?? null;
 }
 
 // 🔴 THIS WAS isPostJudgmentCaseMissingDeed, AND ITS BADGE JOB IS GONE — but its
@@ -167,7 +210,7 @@ export function caseHasJudgmentRecord(c: { id: string; hasJudgmentRecord?: boole
 export function isJudgmentMissingDeedFile(c: {
   currentStage: string;
   hasJudgmentRecord?: boolean;
-  hasDeedAttachment?: boolean;
+  currentJudgmentHasDeed?: boolean;
 }): boolean {
   // No ruling → the deed was never recordable → silent. Same positive test the
   // server's deed gate uses since batch 2, so gate and affordance agree exactly.
@@ -176,7 +219,8 @@ export function isJudgmentMissingDeedFile(c: {
   // document on a finished file is noise. (A case can only BE closed with the
   // deed attached, so in practice this arm only catches pre-gate history.)
   if (isFinishedFile(c.currentStage)) return false;
-  return !c.hasDeedAttachment;
+  // Batch 4 — the CURRENT ruling's own صك; see isAwaitingJudgmentDeedFile.
+  return !c.currentJudgmentHasDeed;
 }
 
 // 🔴 THE ضبط GATE IS NOW TWO GATES, because the server's is (owner decision

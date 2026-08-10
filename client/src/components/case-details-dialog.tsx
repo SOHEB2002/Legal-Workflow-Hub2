@@ -69,7 +69,7 @@ import { formatTimeAmPm } from "@/lib/date-utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment } from "@/lib/attachment-indicators";
+import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment, caseCurrentJudgmentHearingId } from "@/lib/attachment-indicators";
 import { extractApiError } from "@/lib/utils";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
@@ -1959,8 +1959,16 @@ export function CaseDetailsDialog({
                       //                prove either wrong, so BOTH are offered and
                       //                the row says the direction is undetermined
                       //                (the server likewise doesn't reject).
+                      // Batch 4 — re-keyed to the CURRENT ruling's hearing. The
+                      // date scan alone returns the latest non-final حكم hearing,
+                      // which after a remand is the QUASHED ruling's session, so
+                      // the button set was chosen from a judgment that no longer
+                      // stands. Null hearing id → the scan, exactly as before.
                       const direction = judgmentDirectionOf(
-                        findPrimaryJudgmentHearing(getHearingsByCase(selectedCase.id)),
+                        findPrimaryJudgmentHearing(
+                          getHearingsByCase(selectedCase.id),
+                          caseCurrentJudgmentHearingId(selectedCase),
+                        ),
                       );
                       const weAppeal = weAreTheAppellant(direction);
                       // BUTTON SET PER DIRECTION (2026-07-28):

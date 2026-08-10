@@ -10,6 +10,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { caseHasReturnedFromReview } from "@/lib/case-stage-utils";
 import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf, caseClosureBadgeSuffix } from "@shared/schema";
+import { caseCurrentJudgmentOutcome } from "@/lib/attachment-indicators";
 import type { LawCase, CaseClassificationValue } from "@shared/schema";
 
 // SHARED case stage panel. Wraps the existing <CaseProgressBar> (the proven
@@ -65,14 +66,27 @@ export function CaseStagePanel({
       // findLatestJudgmentHearing — the display counterpart of
       // findPrimaryJudgmentHearing, which filters !judgmentFinal and so would
       // never match a case sitting on محكوم_حكم_نهائي.
-      judgmentDirection={judgmentDirectionOf(
-        findLatestJudgmentHearing(getHearingsByCase(caseItem.id)),
-      )}
+      // 🔴 BATCH 4 — the JUDGMENT RECORD wins when the case has one. The hearing
+      // scan cannot see a ruling recorded without a session (POST /appeal-ruling
+      // writes no hearing) and cannot tell a standing ruling from a quashed one,
+      // so on a case that went to appeal it named the wrong ruling. Falls back to
+      // the scan when there is no record or the outcome is null (a quash decides
+      // procedure, not merits), which is the pre-batch-4 behaviour unchanged.
+      judgmentDirection={
+        judgmentDirectionOf({ judgmentSide: caseCurrentJudgmentOutcome(caseItem) })
+        ?? judgmentDirectionOf(findLatestJudgmentHearing(getHearingsByCase(caseItem.id)))
+      }
       // WHAT the case ended in, for the مقفلة terminal badge — resolved HERE because
       // the composer needs the hearings (for the ruling) as well as the case row,
       // and the bar takes no contexts. One call decides between the substantive
       // outcome and the closure reason; the bar just renders the result.
-      closureBadge={caseClosureBadgeSuffix(caseItem, getHearingsByCase(caseItem.id))}
+      // Batch 4 — the third argument makes the closed-case badge name the LATEST
+      // ruling rather than whichever judgment hearing is newest by date.
+      closureBadge={caseClosureBadgeSuffix(
+        caseItem,
+        getHearingsByCase(caseItem.id),
+        caseCurrentJudgmentOutcome(caseItem),
+      )}
       departmentName={getDepartmentName(caseItem.departmentId || "")}
       disabled={
         stageTransitioning
