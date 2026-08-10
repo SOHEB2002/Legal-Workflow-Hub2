@@ -612,10 +612,59 @@ export interface IStorage {
   getJudgmentsByCase(caseId: string): Promise<CaseJudgment[]>;
   getLatestJudgmentForCase(caseId: string): Promise<CaseJudgment | undefined>;
   getJudgmentAttachment(judgmentId: string): Promise<JudgmentAttachment | undefined>;
+  // Idempotency key for the hearing-result hook: one judgment per judgment
+  // hearing, so a re-save finds the existing row and creates nothing.
+  getJudgmentByHearingId(hearingId: string): Promise<CaseJudgment | undefined>;
+
+  // ---- سجل الأحكام — THE WRITE PRIMITIVES (batch 2) ----
+  // 🔴 CALL THESE ONLY THROUGH server/judgment-record.ts. Both write the judgment
+  // row AND refresh the law_cases mirror (judgment_deed_received_date /
+  // objection_window_days) inside ONE transaction, which is what makes the
+  // scalars a mirror rather than a second source of truth. Reaching past the
+  // service — or writing those two columns through updateCase — reintroduces the
+  // two-writer bug the whole design exists to prevent.
+  createCaseJudgment(input: {
+    caseId: string;
+    hearingId?: string | null;
+    degree: string;
+    outcome?: string | null;
+    isFinal: boolean;
+    opensWindow: boolean;
+    deedReceivedDate?: string | null;
+    objectionWindowDays?: number | null;
+    objectionDeadline?: string | null;
+    recordedBy: string;
+  }, opts?: { supersedesJudgmentId?: string | null }): Promise<CaseJudgment>;
+  updateJudgmentDeedFields(judgmentId: string, fields: {
+    deedReceivedDate: string | null;
+    objectionWindowDays: number | null;
+    objectionDeadline: string | null;
+  }): Promise<CaseJudgment | undefined>;
+
+  createJudgmentAttachment(input: {
+    judgmentId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    uploadedBy: string;
+  }): Promise<{ attachment: JudgmentAttachment; replaced: JudgmentAttachment | null }>;
+  deleteJudgmentAttachment(id: string): Promise<JudgmentAttachment | undefined>;
+  // 🔴 BLOB SAFETY. After batch 1's copy ONE Object-Storage key is referenced by
+  // rows in BOTH attachment tables, so a caller that deletes one row must ask
+  // this before deleting the blob — otherwise it pulls the file out from under
+  // the surface that still points at it.
+  countAttachmentRowsWithPath(filePath: string): Promise<number>;
 
   // Initialization
   initializeDefaultData(): Promise<void>;
 }
+
+// The handle drizzle hands a db.transaction callback. Derived from db itself
+// rather than imported, so it tracks the schema/driver generics automatically —
+// and so a helper that must run INSIDE a transaction can say so in its signature
+// instead of taking `any`.
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // Helper to convert DB timestamps to ISO strings
 function toISOString(date: Date | null | undefined): string {
@@ -7932,6 +7981,197 @@ export class DatabaseStorage implements IStorage {
     const rows = await db.select().from(judgmentAttachments)
       .where(eq(judgmentAttachments.judgmentId, judgmentId));
     return rows[0] ? mapDbJudgmentAttachment(rows[0]) : undefined;
+  }
+
+  async getJudgmentByHearingId(hearingId: string): Promise<CaseJudgment | undefined> {
+    const rows = await db.select().from(caseJudgments)
+      .where(eq(caseJudgments.hearingId, hearingId))
+      .orderBy(asc(caseJudgments.sequence))
+      .limit(1);
+    return rows[0] ? mapDbCaseJudgment(rows[0]) : undefined;
+  }
+
+  // ==================== سجل الأحكام — THE WRITE PRIMITIVES ====================
+  // 🔴 THE MIRROR INVARIANT, and it is enforced here rather than promised:
+  //   law_cases.judgment_deed_received_date / objection_window_days ALWAYS hold
+  //   the CURRENT (highest-sequence) judgment's deed fields.
+  // Both methods below re-read the latest judgment INSIDE the transaction and
+  // write its values to law_cases, so the mirror is recomputed from the record
+  // rather than tracked incrementally — it cannot drift, and it self-heals if it
+  // somehow did. Nothing else in the codebase writes those two columns; the
+  // generic PATCH strips them (see stripJudgmentMirrorFields).
+
+  // Shared tail of both writers: recompute the mirror from the case's current
+  // judgment. Takes the transaction handle so it can never run outside one.
+  private async refreshJudgmentMirror(tx: DbTransaction, caseId: string): Promise<void> {
+    const latest = await tx.select().from(caseJudgments)
+      .where(eq(caseJudgments.caseId, caseId))
+      .orderBy(desc(caseJudgments.sequence))
+      .limit(1);
+    const current = latest[0];
+    await tx.update(lawCases).set({
+      // A case with no judgment row mirrors NULL — the correct empty state, and
+      // the reason this is safe to call unconditionally.
+      judgmentDeedReceivedDate: current?.deedReceivedDate ?? null,
+      objectionWindowDays: current?.objectionWindowDays ?? null,
+      updatedAt: new Date(),
+    }).where(eq(lawCases.id, caseId));
+  }
+
+  async createCaseJudgment(input: {
+    caseId: string;
+    hearingId?: string | null;
+    degree: string;
+    outcome?: string | null;
+    isFinal: boolean;
+    opensWindow: boolean;
+    deedReceivedDate?: string | null;
+    objectionWindowDays?: number | null;
+    objectionDeadline?: string | null;
+    recordedBy: string;
+  }, opts?: { supersedesJudgmentId?: string | null }): Promise<CaseJudgment> {
+    return await db.transaction(async (tx) => {
+      // sequence = max+1 within the case. The UNIQUE (case_id, sequence) index is
+      // the real guard: two concurrent recordings resolve to a 23505 on the
+      // loser rather than to two rows claiming the same position.
+      const existing = await tx.select({ sequence: caseJudgments.sequence })
+        .from(caseJudgments)
+        .where(eq(caseJudgments.caseId, input.caseId))
+        .orderBy(desc(caseJudgments.sequence))
+        .limit(1);
+      const sequence = (existing[0]?.sequence ?? 0) + 1;
+
+      const id = randomUUID();
+      const now = new Date();
+      await tx.insert(caseJudgments).values({
+        id,
+        caseId: input.caseId,
+        hearingId: input.hearingId ?? null,
+        sequence,
+        degree: input.degree,
+        outcome: input.outcome ?? null,
+        isFinal: input.isFinal,
+        opensWindow: input.opensWindow,
+        deedReceivedDate: input.deedReceivedDate ?? null,
+        objectionWindowDays: input.objectionWindowDays ?? null,
+        objectionDeadline: input.objectionDeadline ?? null,
+        supersededAt: null,
+        supersededByJudgmentId: null,
+        recordedBy: input.recordedBy,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // THE QUASH MARKER — stamped on the ruling that WAS quashed, pointing at
+      // the one just inserted. Same transaction as the new row, so a quash can
+      // never half-land (a superseded ruling with no successor, or a successor
+      // with the prior ruling still reading as live).
+      if (opts?.supersedesJudgmentId) {
+        await tx.update(caseJudgments).set({
+          supersededAt: now,
+          supersededByJudgmentId: id,
+          updatedAt: now,
+        }).where(eq(caseJudgments.id, opts.supersedesJudgmentId));
+      }
+
+      await this.refreshJudgmentMirror(tx, input.caseId);
+
+      const rows = await tx.select().from(caseJudgments).where(eq(caseJudgments.id, id));
+      return mapDbCaseJudgment(rows[0]);
+    });
+  }
+
+  async updateJudgmentDeedFields(judgmentId: string, fields: {
+    deedReceivedDate: string | null;
+    objectionWindowDays: number | null;
+    objectionDeadline: string | null;
+  }): Promise<CaseJudgment | undefined> {
+    return await db.transaction(async (tx) => {
+      const found = await tx.select().from(caseJudgments).where(eq(caseJudgments.id, judgmentId));
+      if (found.length === 0) return undefined;
+      await tx.update(caseJudgments).set({
+        deedReceivedDate: fields.deedReceivedDate,
+        objectionWindowDays: fields.objectionWindowDays,
+        objectionDeadline: fields.objectionDeadline,
+        updatedAt: new Date(),
+      }).where(eq(caseJudgments.id, judgmentId));
+
+      // Refreshed unconditionally, NOT only when this is the latest judgment: the
+      // helper recomputes from whichever judgment is current, so correcting an
+      // OLDER ruling's deed correctly leaves the mirror showing the current one.
+      await this.refreshJudgmentMirror(tx, found[0].caseId);
+
+      const rows = await tx.select().from(caseJudgments).where(eq(caseJudgments.id, judgmentId));
+      return mapDbCaseJudgment(rows[0]);
+    });
+  }
+
+  // Create-or-replace, identical in shape to createCaseAttachment /
+  // createHearingAttachment: the unique index on judgment_id would reject the
+  // insert if the prior row were still there, so the delete comes first and both
+  // happen in one transaction.
+  async createJudgmentAttachment(input: {
+    judgmentId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    uploadedBy: string;
+  }): Promise<{ attachment: JudgmentAttachment; replaced: JudgmentAttachment | null }> {
+    return await db.transaction(async (tx) => {
+      let replaced: JudgmentAttachment | null = null;
+      const existing = await tx.select().from(judgmentAttachments)
+        .where(eq(judgmentAttachments.judgmentId, input.judgmentId));
+      if (existing.length > 0) {
+        replaced = mapDbJudgmentAttachment(existing[0]);
+        await tx.delete(judgmentAttachments).where(eq(judgmentAttachments.id, existing[0].id));
+      }
+      const id = randomUUID();
+      const now = new Date();
+      await tx.insert(judgmentAttachments).values({
+        id,
+        judgmentId: input.judgmentId,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now,
+      });
+      const attachment: JudgmentAttachment = {
+        id,
+        judgmentId: input.judgmentId,
+        fileName: input.fileName,
+        filePath: input.filePath,
+        fileSize: input.fileSize,
+        mimeType: input.mimeType,
+        uploadedBy: input.uploadedBy,
+        uploadedAt: now.toISOString(),
+      };
+      return { attachment, replaced };
+    });
+  }
+
+  async deleteJudgmentAttachment(id: string): Promise<JudgmentAttachment | undefined> {
+    const rows = await db.select().from(judgmentAttachments).where(eq(judgmentAttachments.id, id));
+    if (rows.length === 0) return undefined;
+    await db.delete(judgmentAttachments).where(eq(judgmentAttachments.id, id));
+    return mapDbJudgmentAttachment(rows[0]);
+  }
+
+  // 🔴 How many attachment rows — across BOTH deed tables — still point at this
+  // Object-Storage key. Batch 1 COPIED case_attachments into judgment_attachments
+  // without duplicating the blob, and batch 2's upload writes both rows from one
+  // upload, so a key is normally referenced TWICE. Deleting the blob while a row
+  // survives is what turns the other surface into a permanent "missing file".
+  async countAttachmentRowsWithPath(filePath: string): Promise<number> {
+    const [caseRows, judgmentRows] = await Promise.all([
+      db.select({ id: caseAttachments.id }).from(caseAttachments)
+        .where(eq(caseAttachments.filePath, filePath)),
+      db.select({ id: judgmentAttachments.id }).from(judgmentAttachments)
+        .where(eq(judgmentAttachments.filePath, filePath)),
+    ]);
+    return caseRows.length + judgmentRows.length;
   }
 
   // ==================== Initialize Default Data ====================

@@ -90,7 +90,7 @@ import {
   recordJudgmentDeedSchema,
   appealOutcomeSchema,
   opponentResponseSchema,
-  DefaultObjectionWindowDays,
+  appealRulingSchema,
   findPrimaryJudgmentHearing,
   caseReachedJudgmentStage,
   hearingProducesNoMinutes,
@@ -174,6 +174,21 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { randomUUID } from "crypto";
+// سجل الأحكام — THE SINGLE WRITER of the judgment rows and of the two law_cases
+// mirror scalars. Nothing in this file may write judgmentDeedReceivedDate /
+// objectionWindowDays directly; see the module header for why.
+import {
+  stripJudgmentMirrorFields,
+  judgmentDegreeForStage,
+  currentJudgmentFor,
+  recordJudgment,
+  recordDeedReceipt,
+  appealRulingPayload,
+  appealRulingTargetStage,
+  appendStageHistory,
+  AppealRulingOutcome,
+  type AppealRulingOutcomeValue,
+} from "./judgment-record";
 import { requireAuth, requireRole, requireRealRole, generateToken, verifyTokenForRefresh, validatePassword, hashPassword, comparePassword, generateCsrfToken } from "./auth";
 import rateLimit from "express-rate-limit";
 import multer from "multer";
@@ -289,6 +304,16 @@ function makeCaseDeedObjectKey(caseId: string, originalName: string): string {
 
 function makeHearingMinutesObjectKey(hearingId: string, originalName: string): string {
   return makeObjectKey(OBJECT_KEY_PREFIXES.hearing, hearingId, originalName);
+}
+
+// The صك keyed on the RULING (سجل الأحكام). A FOURTH THIN WRAPPER, deliberately
+// here beside its siblings rather than in server/judgment-record.ts: the note
+// above is explicit that there is ONE key builder and that a per-entity copy is
+// how the extension sanitiser silently drifts. The prefix it uses was registered
+// in batch 1, before any writer existed, so this first write cannot be the moment
+// an unrecognised prefix is discovered.
+function makeJudgmentDeedObjectKey(judgmentId: string, originalName: string): string {
+  return makeObjectKey(OBJECT_KEY_PREFIXES.judgment, judgmentId, originalName);
 }
 
 // Streams an attachment blob from Object Storage to the response. Extracted
@@ -1041,6 +1066,17 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
 
   { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer", "department_head"] },
+  // THE REMAND EDGE (نقض وإحالة). The appeal court quashed the ruling below and
+  // sent the case back to first instance, so it returns to منظورة DIRECTLY
+  // (owner-settled) to await a NEW first-instance ruling. Before this, منظورة_استئناف
+  // had no path back and a quashed case had nowhere to go.
+  //
+  // 🔴 ROLES ARE assigned_lawyer + department_head ONLY — deliberately NOT the
+  // مشطوبة → منظورة set, which also admits admin_support. Reinstating a struck-off
+  // case is a CLERICAL act (the registrar restored it); recording that a court
+  // quashed a judgment is a LEGAL one. Same reasoning that keeps admin_support out
+  // of the MOHR, reopen, appeal-outcome and صك-receipt gates.
+  { from: "منظورة_استئناف", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head"] },
 
   // محكوم_حكم_نهائي → تحصيل is DELIBERATELY ABSENT (removed). A final judgment
   // RESTS at محكوم_حكم_نهائي (b41553a): the collection / execution field tasks are
@@ -3891,6 +3927,28 @@ export async function registerRoutes(
       const bodyCheck = updateCaseSchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      // 🔴 THE SECOND WRITER OF THE JUDGMENT MIRROR, CLOSED. Exactly the same
+      // shape as the C3 MOHR back door directly below: updateCaseSchema ADMITS
+      // judgmentDeedReceivedDate and objectionWindowDays, and this handler spreads
+      // the whole body into storage.updateCase (:4696) — so any caller could set a
+      // صك receipt date, and with it the objection clock, with no stage check, no
+      // judgment record and no activity row.
+      //
+      // Those two columns are a MIRROR of the current judgment's deed fields and
+      // must have exactly ONE writer (server/judgment-record.ts). Stripped rather
+      // than 400'd because this is the app's busiest write path and several
+      // dialogs re-send whole case objects; see stripJudgmentMirrorFields for why.
+      //
+      // ZERO BEHAVIOUR CHANGE: the only client that sends these fields posts them
+      // to /api/cases/:id/judgment-deed (cases.tsx, the صك dialog), never here.
+      const droppedMirrorFields = stripJudgmentMirrorFields(req.body);
+      if (droppedMirrorFields.length > 0) {
+        console.warn("[cases PATCH] ignored judgment-mirror fields — use POST /judgment-deed", {
+          caseId: req.params?.id,
+          fields: droppedMirrorFields,
+        });
       }
 
       // C3 — close the MOHR back door. mohrStatus is NOT in caseDataFields below,
@@ -7244,6 +7302,182 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/cases/:id/appeal-ruling
+  // Body: { outcome: "affirmed" | "quashed_remanded", judgmentDeedReceivedDate?,
+  //         objectionWindowDays?, notes? }.
+  //
+  // THE APPEAL COURT'S RULING on a case sitting at منظورة_استئناف.
+  //
+  // 🔴 A SIBLING OF /appeal-outcome, NOT AN OVERLOAD OF IT — the two answer
+  // different questions at different stages and must not merge:
+  //   • /appeal-outcome runs at محكوم_حكم_ابتدائي and records what happened during
+  //     OUR OBJECTION WINDOW (we appealed / the opponent appealed / nobody did).
+  //     Its outcomes are about who filed, not about who won.
+  //   • THIS runs at منظورة_استئناف and records what the appeal court DECIDED.
+  // Folding them together would have put two unrelated vocabularies behind one
+  // `outcome` field whose legal values depend on the case's current stage — and
+  // the stage guard on each is what keeps them from double-firing.
+  //
+  // TWO OUTCOMES:
+  //   affirmed          — the ruling below stands. New judgment row (degree
+  //                       استئنافي, outcome inherited from the ruling it upheld),
+  //                       case → محكوم_حكم_نهائي on the EXISTING transition edge.
+  //   quashed_remanded  — نقض وإحالة. The ruling below is quashed and the case
+  //                       goes back to first instance: the prior judgment is
+  //                       stamped superseded, a new appeal-degree row is written
+  //                       with outcome NULL, and the case → منظورة on the edge
+  //                       added in this batch.
+  //
+  // NEITHER OUTCOME OPENS AN OBJECTION WINDOW (owner-settled): an appeal ruling
+  // is final by nature and the quash's own صك is not objectionable. Cassation
+  // (نقض) is out of scope.
+  //
+  // ⚠ THE QUASH DOES NOT RECUR. At most one quash per case, so at most three
+  // rulings. Nothing here enforces that cap — the model does not refuse a fourth,
+  // it simply is not built for one.
+  //
+  // AUTHORIZED ROLES: canActOnMohrSettlement — branch_manager | department_head of
+  // the case's own department | assigned lawyer, delegation-aware. admin_support
+  // EXCLUDED, matching the appeal-outcome / صك-receipt / reopen / MOHR gates: a
+  // court's ruling is a legal act, not a clerical one. This is also exactly why
+  // the new منظورة_استئناف → منظورة transition does NOT copy the مشطوبة → منظورة
+  // role set, which admits admin_support.
+  app.post("/api/cases/:id/appeal-ruling", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = appealRulingSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const outcome = String(req.body?.outcome ?? "").trim();
+      if (
+        outcome !== AppealRulingOutcome.AFFIRMED &&
+        outcome !== AppealRulingOutcome.QUASHED_REMANDED
+      ) {
+        return res.status(400).json({ error: "يجب تحديد نتيجة حكم الاستئناف (تأييد / نقض وإحالة)" });
+      }
+      const rulingOutcome = outcome as AppealRulingOutcomeValue;
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+      if (lawCase.currentStage !== "منظورة_استئناف") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضية منظورة استئنافاً" });
+      }
+      if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل حكم الاستئناف" });
+      }
+
+      // The ruling being reviewed. Its presence is REQUIRED: an appeal ruling that
+      // supersedes nothing is not something this endpoint can represent, and on a
+      // quash there would be no row to stamp superseded.
+      const priorJudgment = await currentJudgmentFor(lawCase.id);
+      if (!priorJudgment) {
+        return res.status(400).json({ error: "لا يوجد حكم سابق مسجَّل على هذه القضية" });
+      }
+
+      // Optional deed fields — validated with the SAME rules as /judgment-deed so
+      // the two entry points cannot disagree about what a valid window is.
+      const rawReceived = String(req.body?.judgmentDeedReceivedDate ?? "").trim();
+      if (rawReceived && isNaN(new Date(rawReceived).getTime())) {
+        return res.status(400).json({ error: "تاريخ استلام الصك غير صالح" });
+      }
+      const rawWindow = req.body?.objectionWindowDays;
+      let windowDays: number | null = null;
+      if (rawWindow !== undefined && rawWindow !== null && String(rawWindow).trim() !== "") {
+        const parsed = Number(rawWindow);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 365) {
+          return res.status(400).json({ error: "مهلة الاعتراض يجب أن تكون عدد أيام صحيح بين 1 و 365" });
+        }
+        windowDays = parsed;
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+      const isQuash = rulingOutcome === AppealRulingOutcome.QUASHED_REMANDED;
+      const payload = appealRulingPayload(rulingOutcome, priorJudgment);
+
+      // WRITE 1 — the new judgment row, and (on a quash) the superseded stamp on
+      // the prior one, both inside the service's single transaction along with the
+      // mirror refresh. Ordered BEFORE the stage move on purpose: if this throws,
+      // the case stays at منظورة_استئناف and the action can simply be retried,
+      // whereas a moved case with no judgment row would be a silent gap.
+      const { judgment } = await recordJudgment({
+        caseId: lawCase.id,
+        // No hearing: this endpoint exists precisely for an appeal ruling reached
+        // without a session recorded in the system. When a session IS recorded,
+        // the hearing-result handler creates the row instead.
+        hearingId: null,
+        degree: payload.degree,
+        outcome: payload.outcome,
+        isFinal: payload.isFinal,
+        opensWindow: payload.opensWindow,
+        recordedBy: reqUser.id,
+        supersedesJudgmentId: isQuash ? priorJudgment.id : null,
+      });
+
+      // WRITE 2 — the ruling's own صك, when it was supplied. Routed through the
+      // same single writer as /judgment-deed, so the mirror lands correctly
+      // whichever door the date came through.
+      let deedDeadline: string | null = null;
+      if (rawReceived) {
+        const receipt = await recordDeedReceipt({
+          judgmentId: judgment.id,
+          receivedDate: rawReceived,
+          objectionWindowDays: windowDays,
+        });
+        deedDeadline = receipt.deadline;
+      }
+
+      // WRITE 3 — the stage. affirmed → محكوم_حكم_نهائي (existing edge);
+      // quashed_remanded → منظورة (the edge added in this batch). The transition
+      // table is not consulted here, matching every sibling judgment-lifecycle
+      // action (moveCaseFromPrimaryJudgment, skip-committee, reopen): those edges
+      // exist so the GENERIC advance route can offer them, and this endpoint is
+      // the authorised path with its own gate.
+      const targetStage = appealRulingTargetStage(rulingOutcome);
+      const note = String(req.body?.notes ?? "").trim() || (isQuash
+        ? "نقض حكم الاستئناف للحكم الابتدائي وإعادة القضية للنظر"
+        : "تأييد الحكم — أصبح الحكم نهائياً");
+      const updated = await storage.updateCase(lawCase.id, {
+        currentStage: targetStage,
+        stageHistory: appendStageHistory(
+          lawCase, targetStage, { id: reqUser.id, name: performerName }, note,
+        ),
+      } as Partial<LawCase>);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث حالة القضية" });
+
+      // WRITE 4 — the activity row. Records WHICH ruling superseded which, so the
+      // timeline explains a case that went back to منظورة after an appeal rather
+      // than appearing to have jumped backwards on its own.
+      await logCaseActivityActing(req, {
+        caseId: lawCase.id,
+        userId: reqUser.id,
+        userName: performerName,
+        actionType: isQuash ? "appeal_ruling_quashed" : "appeal_ruling_affirmed",
+        title: isQuash
+          ? "حكم الاستئناف — نقض وإحالة، عادت القضية للنظر"
+          : "حكم الاستئناف — تأييد الحكم، أصبح نهائياً",
+        previousValue: "منظورة_استئناف",
+        newValue: targetStage,
+        details: JSON.stringify({
+          outcome: rulingOutcome,
+          judgmentId: judgment.id,
+          judgmentSequence: judgment.sequence,
+          supersededJudgmentId: isQuash ? priorJudgment.id : null,
+          deedReceivedDate: rawReceived || null,
+          objectionDeadline: deedDeadline,
+        }),
+      });
+
+      res.json({ case: updated, judgment, supersededJudgmentId: isQuash ? priorJudgment.id : null });
+    } catch (error: any) {
+      console.error("[cases/appeal-ruling] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // POST /api/cases/:id/judgment-deed
   // Body: { judgmentDeedReceivedDate, objectionWindowDays? }.
   // Judgment-lifecycle step 2 — records (or corrects) the date the صك was
@@ -7277,8 +7511,27 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      if (lawCase.currentStage !== "محكوم_حكم_ابتدائي") {
-        return res.status(400).json({ error: "تسجيل استلام الصك متاح فقط لقضية عليها حكم ابتدائي" });
+      // 🔴 THE GATE IS NOW THE JUDGMENT RECORD, NOT THE STAGE (batch 2).
+      // It was `currentStage === "محكوم_حكم_ابتدائي"`, which asked the wrong
+      // question in both directions:
+      //   • TOO NARROW — a صك is issued for EVERY ruling. A منظورة ruling marked
+      //     NOT objectionable goes straight to محكوم_حكم_نهائي and never visits
+      //     the first-instance stage, so its deed could not be recorded at all;
+      //     that is the 8-of-8 production population. An APPEAL ruling has a صك
+      //     too, and the case is at محكوم_حكم_نهائي by then.
+      //   • TOO WIDE in a different sense — it accepted any case parked on that
+      //     stage even with no ruling on record to attach the receipt to.
+      // The new question is exactly the right one: does this case HAVE a current
+      // ruling awaiting (or holding) its صك?
+      //
+      // ⚠ EXISTENCE, NOT EMPTINESS. Deliberately not "…and its deed date is
+      // empty": this endpoint also CORRECTS a receipt date (the dialog's "تعديل"
+      // button), and re-dating recomputes the objection deadline and re-dates the
+      // لائحة اعتراضية memo. Gating on emptiness would make the correction path
+      // 400 — the exact behaviour the memo re-dating exists to support.
+      const judgment = await currentJudgmentFor(lawCase.id);
+      if (!judgment) {
+        return res.status(400).json({ error: "لا يوجد حكم مسجَّل على هذه القضية لتسجيل استلام صكه" });
       }
       if (!canActOnMohrSettlement(reqUser, lawCase, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتسجيل استلام الصك" });
@@ -7304,16 +7557,21 @@ export async function registerRoutes(
         }
         windowDays = parsed;
       }
-      const effectiveWindow = windowDays ?? DefaultObjectionWindowDays;
-
-      const deadlineDate = new Date(receivedAt.getTime());
-      deadlineDate.setDate(deadlineDate.getDate() + effectiveWindow);
-      const deadlineStr = deadlineDate.toISOString().split("T")[0];
-
-      const updated = await storage.updateCase(lawCase.id, {
-        judgmentDeedReceivedDate: receivedDate,
+      // 🔴 ROUTED THROUGH THE SINGLE WRITER (batch 2). This used to compute the
+      // deadline inline and call storage.updateCase with the two mirror columns.
+      // recordDeedReceipt writes the JUDGMENT row's deed fields and refreshes the
+      // law_cases mirror in ONE transaction, so the scalars can never describe a
+      // ruling the judgment record disagrees with. The deadline arithmetic moved
+      // to the service unchanged — same computation, one implementation.
+      const { deadline: deadlineStr, effectiveWindow } = await recordDeedReceipt({
+        judgmentId: judgment.id,
+        receivedDate,
         objectionWindowDays: windowDays,
       });
+
+      // Re-read so the response carries the refreshed mirror. The service wrote
+      // law_cases inside its transaction; this row is that write's result.
+      const updated = await storage.getCaseById(lawCase.id);
       if (!updated) return res.status(500).json({ error: "فشل تسجيل استلام الصك" });
 
       // Was the primary judgment objectionable? Read the lawyer's assessment
@@ -10173,9 +10431,27 @@ export async function registerRoutes(
           // Defensive only — Buffer.from never throws on a string input.
         }
 
+        // 🔴 THE DEED NOW BELONGS TO A RULING (batch 2). A case can carry up to
+        // three rulings, each with its OWN صك, so "the case's deed" is no longer a
+        // well-formed idea — this file is the deed of whichever ruling is current.
+        //
+        // The key follows the owner: judgments/<judgmentId>/… when a judgment
+        // record exists. That is the whole point of the prefix scheme (the prefix
+        // IS the bucket folder, so keys are self-describing), and a صك belonging
+        // to ruling #2 must not live under a key claiming to be THE case's deed.
+        //
+        // FALLBACK, not an error: a case with NO judgment row keeps the old
+        // cases/<caseId>/… key and the old single-row behaviour. Batch 1 backfilled
+        // every case that reached a judgment stage, so this is an edge (a case
+        // whose stage_history was never populated and so fell outside the
+        // population) — and refusing the upload there would strand a real deed
+        // rather than file it.
+        const currentJudgment = await currentJudgmentFor(lawCase.id);
         // Object Storage FIRST, DB row second, so a failed upload cannot leave
         // a row pointing at nothing.
-        const objectKey = makeCaseDeedObjectKey(lawCase.id, file.originalname);
+        const objectKey = currentJudgment
+          ? makeJudgmentDeedObjectKey(currentJudgment.id, file.originalname)
+          : makeCaseDeedObjectKey(lawCase.id, file.originalname);
         const uploadResult = await attachmentObjectStore.uploadFromFilename(objectKey, file.path);
         if (!uploadResult.ok) {
           console.error("[cases/deed-attachment POST] object storage upload failed:", {
@@ -10187,6 +10463,20 @@ export async function registerRoutes(
           });
         }
 
+        // 🔴 DUAL-WRITE, ONE BLOB — and the case_attachments row is deliberately
+        // KEPT, not replaced. Batch 2 writes the judgment-keyed row that batch 3
+        // will read from, while every reader that exists TODAY —
+        // isJudgmentDeedMissing (the close gate, both advance gates, the
+        // appeal-outcome gate and the ضدنا auto-close), getCaseIdsWithDeedAttachment
+        // (the hasDeedAttachment list flag behind two badges) and the deed
+        // GET/download routes — still reads case_attachments and still works
+        // unchanged. Dropping the old row here would have re-keyed all of them in a
+        // batch whose whole premise is that it re-keys none.
+        //
+        // Both rows carry the SAME filePath: one upload, one blob, two references.
+        // That is exactly the shape batch 1's copy produced, so backfilled and
+        // newly-uploaded deeds are indistinguishable downstream — which is what
+        // makes batch 3's cutover a reader change and nothing more.
         const { attachment, replaced } = await storage.createCaseAttachment({
           caseId: lawCase.id,
           fileName: file.originalname,
@@ -10196,17 +10486,41 @@ export async function registerRoutes(
           uploadedBy: reqUser.id,
         });
 
+        let judgmentReplaced: { filePath: string } | null = null;
+        if (currentJudgment) {
+          const judgmentWrite = await storage.createJudgmentAttachment({
+            judgmentId: currentJudgment.id,
+            fileName: file.originalname,
+            filePath: objectKey,
+            fileSize: file.size,
+            mimeType: file.mimetype,
+            uploadedBy: reqUser.id,
+          });
+          judgmentReplaced = judgmentWrite.replaced;
+        }
+
         // Drop the displaced blob AFTER the transaction commits. Best-effort:
         // a failed delete leaves a billable orphan, not a correctness problem.
-        if (replaced && replaced.filePath && replaced.filePath !== attachment.filePath) {
-          if (isAttachmentObjectKey(replaced.filePath)) {
-            attachmentObjectStore.delete(replaced.filePath, { ignoreNotFound: true }).catch((e) => {
-              console.error("[cases/deed-attachment POST] failed to delete replaced object:", {
-                key: replaced.filePath,
-                error: e,
-              });
+        //
+        // 🔴 REFERENCE-COUNTED NOW. A displaced key may still be referenced by the
+        // OTHER table — most obviously for a backfilled case, where both rows point
+        // at the same copied key, so replacing one row leaves the other pointing at
+        // a blob this used to delete outright. countAttachmentRowsWithPath asks
+        // BOTH tables; only a key nobody references any more is removed.
+        const displacedPaths = Array.from(new Set(
+          [replaced?.filePath, judgmentReplaced?.filePath]
+            .filter((p): p is string => !!p && p !== attachment.filePath),
+        ));
+        for (const displaced of displacedPaths) {
+          if (!isAttachmentObjectKey(displaced)) continue;
+          const stillReferenced = await storage.countAttachmentRowsWithPath(displaced);
+          if (stillReferenced > 0) continue;
+          attachmentObjectStore.delete(displaced, { ignoreNotFound: true }).catch((e) => {
+            console.error("[cases/deed-attachment POST] failed to delete replaced object:", {
+              key: displaced,
+              error: e,
             });
-          }
+          });
         }
 
         await logCaseActivityActing(req, {
@@ -10322,10 +10636,44 @@ export async function registerRoutes(
       if (!att) return res.status(404).json({ error: "المرفق غير موجود" });
       const deleted = await storage.deleteCaseAttachment(att.id);
       if (!deleted) return res.status(404).json({ error: "المرفق غير موجود" });
-      if (deleted.filePath && isAttachmentObjectKey(deleted.filePath)) {
-        attachmentObjectStore.delete(deleted.filePath, { ignoreNotFound: true }).catch((e) => {
+
+      // The dual-write's other half. Removing "the صك" must remove BOTH rows or
+      // the judgment record keeps claiming a deed the user just deleted. Only the
+      // CURRENT ruling's row is touched — an older ruling's صك is a different
+      // document and is not what this button removed.
+      const currentJudgment = await currentJudgmentFor(lawCase.id);
+      let judgmentDeletedPath: string | null = null;
+      if (currentJudgment) {
+        const judgmentAtt = await storage.getJudgmentAttachment(currentJudgment.id);
+        if (judgmentAtt) {
+          const removed = await storage.deleteJudgmentAttachment(judgmentAtt.id);
+          judgmentDeletedPath = removed?.filePath ?? null;
+        }
+      }
+
+      // 🔴 THE BLOB IS REFERENCE-COUNTED, NOT DELETED WITH ITS ROW. After batch 1's
+      // copy — and after every batch-2 upload — ONE Object-Storage key is
+      // referenced by a row in EACH table. Deleting the blob alongside the first
+      // row would leave the surviving row pointing at nothing: the file would
+      // render as missing and download would 410, with no way to tell it apart
+      // from a genuine upload failure. So each distinct key is removed only once
+      // NO row in EITHER table still names it.
+      const deletedPaths = Array.from(new Set(
+        [deleted.filePath, judgmentDeletedPath].filter((p): p is string => !!p),
+      ));
+      for (const filePath of deletedPaths) {
+        if (!isAttachmentObjectKey(filePath)) continue;
+        const stillReferenced = await storage.countAttachmentRowsWithPath(filePath);
+        if (stillReferenced > 0) {
+          console.warn("[cases/deed-attachment DELETE] blob kept — still referenced", {
+            key: filePath,
+            remainingRows: stillReferenced,
+          });
+          continue;
+        }
+        attachmentObjectStore.delete(filePath, { ignoreNotFound: true }).catch((e) => {
           console.error("[cases/deed-attachment DELETE] failed to delete object:", {
-            key: deleted.filePath,
+            key: filePath,
             error: e,
           });
         });
@@ -12679,6 +13027,58 @@ export async function registerRoutes(
           //                   محكوم_حكم_ابتدائي, which opens the صك / objection /
           //                   appeal path.
           const isFinal = judgmentDerivedFinal;
+
+          // ==================== سجل الأحكام — THE JUDGMENT ROW (batch 2) ====================
+          // 🔴 THE HOOK POINT. This is the one place in the codebase where a
+          // genuine ruling comes into existence from a session, and it sits at the
+          // TOP of PATH B — before either stage branch — so both a first-instance
+          // and an appeal ruling are recorded by one call rather than by two
+          // copies that could drift.
+          //
+          // It fires ONLY on a genuine judgment, on three independent counts:
+          //   1. PATH B is `data.result === HearingResult.JUDGMENT`, so no other
+          //      hearing result reaches here.
+          //   2. Everything the row needs was VALIDATED BEFORE ANY MUTATION at the
+          //      top of the handler — outcome present, the case on a court stage
+          //      (promoted if not), objectionability answered for a first-instance
+          //      ruling. A request that would have produced a half-formed judgment
+          //      has already 400'd.
+          //   3. RE-SAVE IS A NO-OP. recordJudgment is idempotent on hearingId: a
+          //      judgment already referencing this hearing is returned untouched
+          //      and nothing is written. This matters because the hearing REPORT
+          //      and result DETAILS are editable after recording — re-saving a
+          //      hearing whose result is already حكم must not mint a second ruling
+          //      or reset the deed mirror. (Changing the result TYPE was
+          //      deliberately never built; the sanctioned path for a wrong type is
+          //      to cancel the hearing and record a new one, which produces a new
+          //      hearing id and therefore correctly a new ruling.)
+          //
+          // The three properties come from the values already derived up front, so
+          // the row and the stage decision cannot disagree:
+          //   degree      — from the case's stage at judgment time (منظورة_استئناف
+          //                 → استئنافي, else ابتدائي), via the shared helper.
+          //   isFinal     — judgmentDerivedFinal, the same value written to
+          //                 hearings.judgment_final.
+          //   opensWindow — a first-instance ruling the lawyer marked objectionable.
+          //                 An appeal ruling never opens a window.
+          //
+          // 🔴 NOTHING READS THIS ROW YET. The stage branches below are unchanged
+          // and still decide everything; this is a parallel record being built up
+          // for batch 3. Its one visible effect is the mirror refresh inside the
+          // service's transaction, which clears the case's صك scalars because the
+          // NEW ruling has no deed yet — see the report.
+          const judgmentDegree = judgmentDegreeForStage(
+            judgmentIsAppealRuling ? "منظورة_استئناف" : existingCase.currentStage,
+          );
+          await recordJudgment({
+            caseId: effectiveCaseId,
+            hearingId,
+            degree: judgmentDegree,
+            outcome: judgmentType,
+            isFinal: judgmentDerivedFinal,
+            opensWindow: !judgmentIsAppealRuling && data.objectionFeasible === true,
+            recordedBy: reqUser.id,
+          });
 
           // PLEADINGS ARE OVER once a ruling issues — the case's still-open memos
           // were already cancelled by the UNIVERSAL block above (hoisted out of

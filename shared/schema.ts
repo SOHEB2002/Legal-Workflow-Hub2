@@ -6046,6 +6046,29 @@ export const recordJudgmentDeedSchema = z.object({
   objectionWindowDays: z.union([z.number(), z.string()]).nullable().optional(),
 }).passthrough();
 
+// POST /api/cases/:id/appeal-ruling — the APPEAL COURT'S ruling on a case at
+// منظورة_استئناف.
+//
+// ⚠ A SIBLING OF appealOutcomeSchema, NOT a widening of it. /appeal-outcome
+// answers "what happened during OUR objection window on the first-instance
+// ruling" (we appealed / the opponent appealed / nobody did) and runs at
+// محكوم_حكم_ابتدائي. This one answers "what did the appeal court DECIDE" and runs
+// one stage later. Overloading the first would have put two unrelated questions
+// behind one `outcome` string whose legal values depend on the case's stage.
+//
+// Tolerant per the validation-patterns rule: all-optional, .passthrough(), with
+// the handler keeping its own Arabic 400s so behaviour is unchanged for every
+// shape the gate admits.
+export const appealRulingSchema = z.object({
+  outcome: z.string().optional(),
+  // The appeal ruling's own صك, optional at recording time — the deed usually
+  // arrives days later and is then filed through POST /judgment-deed exactly as
+  // for a first-instance ruling.
+  judgmentDeedReceivedDate: z.string().optional(),
+  objectionWindowDays: z.union([z.number(), z.string()]).nullable().optional(),
+  notes: z.string().optional(),
+}).passthrough();
+
 export const reopenCaseSchema = z.object({
   targetStage: z.string().optional(),
   notes: z.string().optional(),
