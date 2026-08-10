@@ -766,6 +766,149 @@ export const hearingAttachments = pgTable("hearing_attachments", {
   hearingUniqueIdx: uniqueIndex("hearing_attachments_hearing_unique_idx").on(t.hearingId),
 }));
 
+// ==================== سجل الأحكام — THE JUDGMENT RECORD ====================
+// One ROW PER RULING on a case, replacing the model where a case could hold only
+// the ONE judgment its scalar columns had room for.
+//
+// 🔴 BATCH 1 IS INERT. Nothing reads or writes these two tables yet: no route, no
+// gate, no badge, no scheduler job. The declarations exist so the DDL (applied by
+// hand — script/add-judgment-tables.sql) has a drizzle counterpart, and so the
+// read-only accessors in server/storage.ts have something to select from. Every
+// existing judgment surface still reads law_cases + hearings exactly as before.
+//
+// WHY A TABLE AND NOT MORE COLUMNS. A case can carry up to THREE rulings:
+//   1. the first-instance ruling                        (degree ابتدائي)
+//   2. the appeal ruling — which may QUASH #1 and remand (degree استئنافي)
+//   3. the new first-instance ruling after the remand    (degree ابتدائي again)
+// law_cases.judgment_deed_received_date / objection_window_days are ONE slot, so
+// ruling #3 would overwrite ruling #1's deed date and silently rewrite history.
+//
+// 🔴 THE QUASH CYCLE DOES NOT RECUR (owner, settled). At most one quash, so at
+// most three rulings. The model is NOT built for unbounded N — but it does not
+// REFUSE it either: nothing here caps `sequence`, so a fourth row would insert
+// cleanly if the firm ever meets one. Do not add a CHECK that forbids it.
+//
+// THE COURT CASE NUMBER IS NOT PER-CYCLE (owner, settled). A remand keeps the
+// same court_case_number on law_cases; there is deliberately no number column
+// here. Cassation (نقض) is out of scope entirely.
+//
+// DEGREE IS DERIVED FROM THE CASE PATH, NEVER ASKED — the model correction of
+// 2026-07-27. It is STORED here (not recomputed on read) because the case moves
+// on: a case that later goes to appeal would otherwise retroactively relabel its
+// first-instance ruling as an appeal ruling. The stored value is the answer as of
+// the moment the ruling was recorded, which is what a record means.
+export const caseJudgments = pgTable("case_judgments", {
+  id:     varchar("id", { length: 255 }).primaryKey(),
+  caseId: varchar("case_id", { length: 255 }).notNull(),
+  // The session that ANNOUNCED the ruling. Nullable, and ON DELETE SET NULL: the
+  // judgment is the record of the RULING, not of the session — deleting the
+  // hearing row must not delete the firm's record that a judgment exists. Also
+  // null for backfilled rows on cases whose judgment hearing cannot be located.
+  hearingId: varchar("hearing_id", { length: 255 }),
+  // 1, 2, 3 — the ruling's position in the case's own chain, and the ONLY
+  // ordering key. Deliberately not created_at: the backfill stamps every row with
+  // the same now(), and a later batch may record a ruling out of chronological
+  // order (a صك arriving late). UNIQUE per case, so "judgment #1" is a fact and
+  // not a guess.
+  sequence: integer("sequence").notNull(),
+  // ابتدائي | استئنافي — see JudgmentDegree.
+  degree: varchar("degree", { length: 50 }).notNull(),
+  // لصالحنا | ضدنا | جزئي, mirroring hearings.judgment_side. NULLABLE because a
+  // backfilled row whose judgment hearing is missing has no recorded side, and a
+  // quash ruling decides procedure rather than the merits.
+  outcome: varchar("outcome", { length: 50 }),
+  // Mirrors hearings.judgment_final: isFinal = appeal ruling || NOT objectionable.
+  isFinal: boolean("is_final").notNull().default(false),
+  // 🔴 STORED INTENT, NOT A DERIVED READ. "Did THIS ruling open an objection
+  // window?" is decided once, when the ruling is recorded, from the answer the
+  // lawyer gave then. Recomputing it later would let a policy change (or the
+  // case's own movement) rewrite whether a window that has already expired ever
+  // existed. false for every appeal ruling, and false for a quash — the quash's
+  // own صك is not objectionable (owner, settled).
+  opensWindow: boolean("opens_window").notNull().default(false),
+  // The صك (written judgment) for THIS ruling, and its objection clock. Same
+  // meaning as the law_cases scalars they mirror — null receipt date = not yet
+  // received; null window = the 30-day default (10 for القضاء المستعجل).
+  deedReceivedDate:    varchar("deed_received_date", { length: 50 }),
+  objectionWindowDays: integer("objection_window_days"),
+  objectionDeadline:   varchar("objection_deadline", { length: 50 }),
+  // 🔴 THE QUASH MARKER. Set on the ruling that was QUASHED (never on the ruling
+  // that did the quashing), pointing at the appeal judgment that superseded it.
+  // A NULL superseded_at is the normal state and means "this ruling still stands".
+  // Expressing the quash as a relationship rather than as a new outcome value is
+  // deliberate: it needs no new Arabic vocabulary in the outcome column, and it
+  // keeps "which ruling is live" answerable by one IS NULL test.
+  supersededAt:           timestamp("superseded_at"),
+  supersededByJudgmentId: varchar("superseded_by_judgment_id", { length: 255 }),
+  // The actor. varchar with NO FK, matching every other user-id column on the
+  // judgment/hearing surfaces (attending_lawyer_id, flagged_by, checked_in_by);
+  // the backfill writes the established "system" sentinel, which names no user.
+  recordedBy: varchar("recorded_by", { length: 255 }),
+  createdAt:  timestamp("created_at").defaultNow(),
+  updatedAt:  timestamp("updated_at").defaultNow(),
+}, (t) => ({
+  // FKs are ACTIVE (uncommented), like case_attachments / hearing_attachments and
+  // unlike the Batch-M commented set. The Batch-M exemption exists because
+  // retrofitting a validating constraint onto a POPULATED table scanned every row
+  // and timed out the deploy; this table is created EMPTY by the DDL that also
+  // creates the constraints inline, so there is nothing to validate, and because
+  // the DDL is applied by hand to BOTH DBs there is no dev/prod drift for
+  // Republish to turn into a DROP.
+  caseFk: foreignKey({
+    name: "case_judgments_case_id_fkey",
+    columns: [t.caseId],
+    foreignColumns: [lawCases.id],
+  }).onDelete("cascade"),
+  hearingFk: foreignKey({
+    name: "case_judgments_hearing_id_fkey",
+    columns: [t.hearingId],
+    foreignColumns: [hearings.id],
+  }).onDelete("set null"),
+  supersededByFk: foreignKey({
+    name: "case_judgments_superseded_by_fkey",
+    columns: [t.supersededByJudgmentId],
+    foreignColumns: [t.id],
+  }).onDelete("set null"),
+  // Doubles as the lookup index for "this case's judgments, in order" — the
+  // access pattern of both read-only accessors.
+  caseSequenceUniqueIdx: uniqueIndex("case_judgments_case_sequence_unique_idx")
+    .on(t.caseId, t.sequence),
+}));
+
+// The صك (judgment deed) as a FILE, keyed on the RULING rather than on the case.
+// Mirrors hearing_attachments column-for-column, including the plain unique index
+// on the parent id (exactly one deed per ruling — no slots, no free attachments,
+// so contract_attachments' PARTIAL unique index has nothing to exclude here).
+//
+// 🔴 case_attachments IS NOT TOUCHED, AND ITS UNIQUE INDEX IS NOT DROPPED. Two
+// deed tables coexisting permanently is the ACCEPTED cost (owner, settled): the
+// DROP is forbidden, so the one-deed-per-CASE table stays exactly as it is and
+// keeps serving every existing surface unchanged. Batch 1 COPIES its rows here
+// (never moves them), which is what makes this batch reversible by a code revert
+// alone.
+//
+// ⚠ CONSEQUENCE FOR LATER BATCHES: after the copy, a case_attachments row and a
+// judgment_attachments row point at the SAME Object-Storage key — one blob, two
+// rows. Deleting one row must NOT delete the blob, or the other surface renders
+// as missing. Whichever batch first wires up a DELETE here has to settle that.
+export const judgmentAttachments = pgTable("judgment_attachments", {
+  id:         varchar("id", { length: 255 }).primaryKey(),
+  judgmentId: varchar("judgment_id", { length: 255 }).notNull(),
+  fileName:   varchar("file_name", { length: 500 }).notNull(),
+  filePath:   varchar("file_path", { length: 1000 }).notNull(),
+  fileSize:   bigint("file_size", { mode: "number" }).notNull(),
+  mimeType:   varchar("mime_type", { length: 100 }).notNull(),
+  uploadedBy: varchar("uploaded_by", { length: 255 }).notNull(),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+}, (t) => ({
+  judgmentFk: foreignKey({
+    name: "judgment_attachments_judgment_id_fkey",
+    columns: [t.judgmentId],
+    foreignColumns: [caseJudgments.id],
+  }).onDelete("cascade"),
+  judgmentUniqueIdx: uniqueIndex("judgment_attachments_judgment_unique_idx").on(t.judgmentId),
+}));
+
 // 🔔 "تم الاطلاع" — a per-PERSON acknowledgement of a pre-hearing ring.
 //
 // One row per (hearing, user). It silences the ring FOR THAT PERSON ONLY and
@@ -3745,6 +3888,56 @@ export interface CaseAttachment {
 export interface HearingAttachment {
   id: string;
   hearingId: string;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  missing?: boolean;
+}
+
+// ==================== درجة الحكم ====================
+// The DEGREE of a ruling — which court issued it. 🔴 NOT its finality: the
+// opposite of ابتدائي is استئنافي, while نهائي ("can this still be objected to")
+// is a SEPARATE property, carried by isFinal. Conflating the two is the exact
+// false opposition the 2026-07-27 model correction removed from the judgment
+// dialog; do not reintroduce a "نهائي" member here.
+export const JudgmentDegree = {
+  FIRST_INSTANCE: "ابتدائي",
+  APPEAL:         "استئنافي",
+} as const;
+
+export type JudgmentDegreeValue = typeof JudgmentDegree[keyof typeof JudgmentDegree];
+
+// One ruling on a case. See the caseJudgments table for the full model note.
+// Timestamps are ISO strings here and Date in the column, per the app-wide
+// convention — the conversion lives in the storage mapper.
+export interface CaseJudgment {
+  id: string;
+  caseId: string;
+  hearingId: string | null;
+  sequence: number;
+  degree: string;
+  outcome: string | null;
+  isFinal: boolean;
+  opensWindow: boolean;
+  deedReceivedDate: string | null;
+  objectionWindowDays: number | null;
+  objectionDeadline: string | null;
+  supersededAt: string | null;
+  supersededByJudgmentId: string | null;
+  recordedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// The صك on a ruling. Same shape as CaseAttachment, keyed on the judgment.
+// `missing` follows the ContractAttachment convention: runtime-derived on a GET
+// response, never stored. No response uses it yet — batch 1 is inert.
+export interface JudgmentAttachment {
+  id: string;
+  judgmentId: string;
   fileName: string;
   filePath: string;
   fileSize: number;

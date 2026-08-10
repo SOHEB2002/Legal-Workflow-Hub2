@@ -18,6 +18,7 @@ import {
   type MemoReview, type MemoCommitteeDecision, type MemoNoteOutcome,
   type Contract, type ContractAttachment, type ContractActivity,
   type CaseAttachment, type HearingAttachment,
+  type CaseJudgment, type JudgmentAttachment,
   CaseStatus, CaseStage, CaseClassification, ClosureReason, ConsultationStage, ConsultationStatus,
   ConsultationType, resolveConsultationType,
   ConsultationCategory, type ConsultationCategoryValue,
@@ -37,6 +38,7 @@ import {
   consultationActivityLog,
   contracts, contractAttachments, contractActivityLog,
   caseAttachments, hearingAttachments, hearingProducesNoMinutes,
+  caseJudgments, judgmentAttachments,
   memoActivityLog, generalTaskEvents,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes
 } from "@shared/schema";
@@ -602,6 +604,15 @@ export interface IStorage {
   getHearingAttachmentById(id: string): Promise<HearingAttachment | undefined>;
   deleteHearingAttachment(id: string): Promise<HearingAttachment | undefined>;
 
+  // ---- سجل الأحكام (READ-ONLY, batch 1) ----
+  // 🔴 THERE IS DELIBERATELY NO WRITER. Batch 1 declares the tables, ships the
+  // backfill SQL for the owner to apply by hand, and stops. No create, no update,
+  // no delete — so the only rows these can ever return are the backfilled ones,
+  // and reverting the batch is a code revert with no data to unwind.
+  getJudgmentsByCase(caseId: string): Promise<CaseJudgment[]>;
+  getLatestJudgmentForCase(caseId: string): Promise<CaseJudgment | undefined>;
+  getJudgmentAttachment(judgmentId: string): Promise<JudgmentAttachment | undefined>;
+
   // Initialization
   initializeDefaultData(): Promise<void>;
 }
@@ -1002,6 +1013,44 @@ function mapDbHearingAttachment(row: any): HearingAttachment {
   return {
     id: row.id,
     hearingId: row.hearingId,
+    fileName: row.fileName,
+    filePath: row.filePath,
+    fileSize: typeof row.fileSize === "number" ? row.fileSize : Number(row.fileSize ?? 0),
+    mimeType: row.mimeType,
+    uploadedBy: row.uploadedBy,
+    uploadedAt: toISOString(row.uploadedAt),
+  };
+}
+
+// Timestamps follow the app-wide convention: Date in the column, ISO string in
+// the interface. deed_received_date / objection_deadline are varchar DATE-ONLY
+// strings (mirroring law_cases.judgment_deed_received_date and
+// hearings.objection_deadline), NOT timestamps — they pass through untouched.
+function mapDbCaseJudgment(row: any): CaseJudgment {
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    hearingId: row.hearingId ?? null,
+    sequence: typeof row.sequence === "number" ? row.sequence : Number(row.sequence ?? 0),
+    degree: row.degree,
+    outcome: row.outcome ?? null,
+    isFinal: row.isFinal ?? false,
+    opensWindow: row.opensWindow ?? false,
+    deedReceivedDate: row.deedReceivedDate ?? null,
+    objectionWindowDays: row.objectionWindowDays ?? null,
+    objectionDeadline: row.objectionDeadline ?? null,
+    supersededAt: toISOStringOrNull(row.supersededAt),
+    supersededByJudgmentId: row.supersededByJudgmentId ?? null,
+    recordedBy: row.recordedBy ?? null,
+    createdAt: toISOString(row.createdAt),
+    updatedAt: toISOString(row.updatedAt),
+  };
+}
+
+function mapDbJudgmentAttachment(row: any): JudgmentAttachment {
+  return {
+    id: row.id,
+    judgmentId: row.judgmentId,
     fileName: row.fileName,
     filePath: row.filePath,
     fileSize: typeof row.fileSize === "number" ? row.fileSize : Number(row.fileSize ?? 0),
@@ -7849,6 +7898,40 @@ export class DatabaseStorage implements IStorage {
     if (rows.length === 0) return undefined;
     await db.delete(hearingAttachments).where(eq(hearingAttachments.id, id));
     return mapDbHearingAttachment(rows[0]);
+  }
+
+  // ==================== سجل الأحكام — READ-ONLY (batch 1) ====================
+  // Three accessors, no writer. They have NO CALLERS yet by design: batch 1 is
+  // inert, so nothing in the app can observe a difference whether or not the
+  // backfill has been applied. Adding a caller is batch 2's job.
+
+  // The case's rulings oldest-first. Ordered by `sequence`, never by created_at:
+  // the backfill stamps every row with the same now(), so created_at cannot
+  // order them, while sequence is UNIQUE per case and is the chain's own index.
+  async getJudgmentsByCase(caseId: string): Promise<CaseJudgment[]> {
+    const rows = await db.select().from(caseJudgments)
+      .where(eq(caseJudgments.caseId, caseId))
+      .orderBy(asc(caseJudgments.sequence));
+    return rows.map(mapDbCaseJudgment);
+  }
+
+  // The case's MOST RECENT ruling — highest sequence, regardless of whether it
+  // was later superseded by a quash. "Latest" here means last recorded, not
+  // "currently standing"; a caller that needs the live ruling filters on
+  // supersededAt itself, which is one IS NULL test on the returned row.
+  async getLatestJudgmentForCase(caseId: string): Promise<CaseJudgment | undefined> {
+    const rows = await db.select().from(caseJudgments)
+      .where(eq(caseJudgments.caseId, caseId))
+      .orderBy(desc(caseJudgments.sequence))
+      .limit(1);
+    return rows[0] ? mapDbCaseJudgment(rows[0]) : undefined;
+  }
+
+  // At most one row by the unique index on judgment_id.
+  async getJudgmentAttachment(judgmentId: string): Promise<JudgmentAttachment | undefined> {
+    const rows = await db.select().from(judgmentAttachments)
+      .where(eq(judgmentAttachments.judgmentId, judgmentId));
+    return rows[0] ? mapDbJudgmentAttachment(rows[0]) : undefined;
   }
 
   // ==================== Initialize Default Data ====================
