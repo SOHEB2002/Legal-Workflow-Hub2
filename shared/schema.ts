@@ -5755,9 +5755,39 @@ export function isHearingCheckInLate(
   return checkedInMs > cutoffMs;
 }
 
+// 🔴 RE-KEYED IN BATCH 4 TO THE CURRENT JUDGMENT'S HEARING.
+//
+// THE BUG IT FIXES: the date scan below picks the latest NON-FINAL حكم hearing,
+// which silently assumes a case has ONE judgment. After a quash-and-remand it
+// returns the hearing of the ruling that was QUASHED — a judgment that no longer
+// stands — and every caller then reasons about the wrong ruling.
+//
+// When the caller knows the case's CURRENT judgment (case_judgments, highest
+// sequence) it passes that judgment's hearing_id and gets that exact hearing.
+//
+// ⚠ hearing_id IS NULLABLE, and the fallback is deliberate rather than an
+// oversight. Two shapes reach it:
+//   • a judgment recorded WITHOUT a session in our system — POST /appeal-ruling
+//     writes hearingId null, which is every affirmation and every quash;
+//   • a hearing row that has since been deleted, so the id resolves to nothing.
+// Both fall back to the ORIGINAL date scan, which is byte-identical to the
+// pre-batch-4 behaviour — so a caller can never end up worse off than it was, and
+// a caller that passes nothing at all is completely unaffected.
 export function findPrimaryJudgmentHearing<
-  T extends { result?: string | null; judgmentFinal?: boolean | null; hearingDate?: string | null },
->(hearings: T[]): T | null {
+  T extends {
+    id?: string;
+    result?: string | null;
+    judgmentFinal?: boolean | null;
+    hearingDate?: string | null;
+  },
+>(hearings: T[], currentJudgmentHearingId?: string | null): T | null {
+  if (currentJudgmentHearingId) {
+    const exact = (hearings || []).find((h) => h && h.id === currentJudgmentHearingId);
+    // Returned WITHOUT the result/finality filter: the judgment record already
+    // asserts this hearing produced the ruling the case is living under, so
+    // re-testing the hearing's own columns could only ever second-guess it.
+    if (exact) return exact;
+  }
   const candidates = (hearings || [])
     .filter((h) => h && h.result === "حكم" && !h.judgmentFinal)
     .sort((a, b) => String(b.hearingDate || "").localeCompare(String(a.hearingDate || "")));
@@ -5922,9 +5952,18 @@ export function caseReachedJudgmentStage(c: {
     || stageWasReached(c, CaseStage.FINAL_JUDGMENT);
 }
 
+// 🔴 BATCH 4 — `currentJudgmentOutcome` NAMES THE LATEST RULING, NOT THE FIRST.
+// findLatestJudgmentHearing scans HEARINGS by date, which cannot see a ruling
+// recorded without a session (POST /appeal-ruling writes no hearing) and cannot
+// tell a standing ruling from a quashed one. On a remanded case it therefore
+// reports the outcome of a judgment that no longer stands. When the caller knows
+// the case's current judgment it passes that row's `outcome` and this uses it.
+// Omitted → the original hearing scan, unchanged, so every caller that does not
+// have it behaves exactly as before.
 export function resolveCaseOutcome(
   lawCase: OutcomeCaseInput,
   hearings: OutcomeHearingInput[],
+  currentJudgmentOutcome?: string | null,
 ): CaseOutcome {
   const stage = String(lawCase.currentStage || "");
   const reason = String(lawCase.closureReason || "").trim();
@@ -5936,7 +5975,12 @@ export function resolveCaseOutcome(
   // unusable Arabic ("صدر بها حكم ابتدائي (نهائي) لصالحنا"). The direction is the
   // whole answer. The OPEN judgment stage badges still name the stage the case is
   // in — a different question, deliberately untouched.
-  const direction = judgmentDirectionOf(findLatestJudgmentHearing(hearings || []));
+  // The judgment record wins when it is available. judgmentDirectionOf is still
+  // the ONE rule that validates a direction string, so a row carrying an
+  // unexpected value (or a quash, whose outcome is deliberately NULL) falls
+  // through to the hearing scan rather than printing something unreadable.
+  const direction = judgmentDirectionOf({ judgmentSide: currentJudgmentOutcome })
+    ?? judgmentDirectionOf(findLatestJudgmentHearing(hearings || []));
   if (direction) {
     return {
       kind: CaseOutcomeKind.JUDGMENT,
@@ -6009,8 +6053,11 @@ const CLOSURE_BADGE_MAX_CHARS = 40;
 export function caseClosureBadgeSuffix(
   lawCase: OutcomeCaseInput,
   hearings: OutcomeHearingInput[],
+  // Batch 4 — passed straight through to resolveCaseOutcome so the closed-case
+  // badge names the LATEST ruling. Optional for the same reason it is there.
+  currentJudgmentOutcome?: string | null,
 ): { text: string; tone: CaseOutcomeTone } | null {
-  const outcome = resolveCaseOutcome(lawCase, hearings);
+  const outcome = resolveCaseOutcome(lawCase, hearings, currentJudgmentOutcome);
   if (outcome.label) return { text: outcome.label, tone: outcome.tone };
 
   const raw = String(lawCase.closureReason || "").trim();

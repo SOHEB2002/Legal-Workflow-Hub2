@@ -119,8 +119,9 @@ import {
   isAwaitingJudgmentDeed,
   isAwaitingJudgmentDeedFile,
   caseHasHearingMissingMinutes,
-  caseHasDeedAttachment,
   caseHasJudgmentRecord,
+  caseCurrentJudgmentHasDeed,
+  caseCurrentJudgmentHearingId,
   caseReachedJudgment,
   isJudgmentMissingDeedFile,
   isHearingActor,
@@ -396,7 +397,14 @@ export default function CasesPage() {
     // the judgment-case close guard covers the later stages), so no button here
     // could succeed. Keyed on reachedJudgmentStage, the derived list field that
     // carries the SAME stageHistory test the server applies.
-    if (caseReachedJudgment(c) && !caseHasDeedAttachment(c)) return false;
+    // 🔴 BATCH 4 — the deed term now asks whether the CURRENT ruling has its own
+    // صك, mirroring the re-keyed server helper (isJudgmentDeedMissing) exactly.
+    // caseHasDeedAttachment answers a CASE-level question and would report cycle
+    // 1's file as satisfying a cycle-2 ruling: the button would render and the
+    // server would then 400 — the FE/server mismatch class this codebase keeps
+    // paying for. reachedJudgmentStage is KEPT as the scope term, byte-identical
+    // to the server's own pairing, so a case that never held a ruling is untouched.
+    if (caseReachedJudgment(c) && !caseCurrentJudgmentHasDeed(c)) return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
     if (
       user.role === "department_head" &&
@@ -2559,7 +2567,9 @@ export default function CasesPage() {
           // الصك" action right below deliberately stays visible — it is where the
           // user goes to satisfy this, and hiding it would leave a dead end.
           canRecordAppealOutcome:
-            canRecordAppealOutcomeStage(selectedCase) && caseHasDeedAttachment(selectedCase),
+            // Batch 4 — the appeal outcome is gated on THIS ruling's صك, matching
+            // the server's own /appeal-outcome deed gate (isJudgmentDeedMissing).
+            canRecordAppealOutcomeStage(selectedCase) && caseCurrentJudgmentHasDeed(selectedCase),
           onWeAppealed: () => { setAppealOutcomeKind("we_appealed"); setAppealOutcomeCase(selectedCase); },
           onOpponentAppealed: () => { setAppealOutcomeKind("opponent_appealed"); setAppealOutcomeCase(selectedCase); },
           onNoAppeal: () => { setAppealOutcomeKind("no_appeal"); setAppealOutcomeCase(selectedCase); },
@@ -3059,7 +3069,12 @@ export default function CasesPage() {
             // Same shared helpers the row and the server use, so the wording
             // ("لم نستأنف" vs "لم يستأنف الخصم") matches the button that opened it.
             const weAppeal = weAreTheAppellant(
-              judgmentDirectionOf(findPrimaryJudgmentHearing(getHearingsByCase(appealOutcomeCase.id))),
+              // Batch 4 — re-keyed to the CURRENT ruling's hearing so a remanded
+              // case reasons about the ruling that stands, not the quashed one.
+              judgmentDirectionOf(findPrimaryJudgmentHearing(
+                getHearingsByCase(appealOutcomeCase.id),
+                caseCurrentJudgmentHearingId(appealOutcomeCase),
+              )),
             );
             // Derived from the same inputs the server used: receipt + window.
             const receipt = appealOutcomeCase.judgmentDeedReceivedDate || "";

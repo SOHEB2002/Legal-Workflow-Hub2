@@ -594,6 +594,10 @@ export interface IStorage {
   // Batch 3 — the set of cases that have a ruling on record, for the
   // hasJudgmentRecord list stamp the re-keyed صك badges read.
   getCaseIdsWithJudgment(): Promise<Set<string>>;
+  // Batch 4 — per case, the facts about its CURRENT ruling that the client
+  // cannot derive: which hearing produced it, which way it went, and whether its
+  // OWN صك is on file. Two queries for the whole list, never one per case.
+  getCurrentJudgmentSummaries(): Promise<Map<string, CurrentJudgmentSummary>>;
 
   createHearingAttachment(input: {
     hearingId: string;
@@ -662,6 +666,16 @@ export interface IStorage {
   // Initialization
   initializeDefaultData(): Promise<void>;
 }
+
+// What GET /api/cases needs to know about a case's CURRENT ruling. Deliberately
+// NOT the whole CaseJudgment: only the three facts the client cannot compute for
+// itself, so nothing else about a ruling leaks onto a list response.
+export type CurrentJudgmentSummary = {
+  judgmentId: string;
+  hearingId: string | null;
+  outcome: string | null;
+  hasDeed: boolean;
+};
 
 // The handle drizzle hands a db.transaction callback. Derived from db itself
 // rather than imported, so it tracks the schema/driver generics automatically —
@@ -4357,8 +4371,28 @@ export class DatabaseStorage implements IStorage {
           list.push(h);
           hearingsByCase.set(h.caseId, list);
         }
+        // Batch 4 — the CURRENT ruling per case, so the owner is resolved from the
+        // hearing that produced the ruling actually awaiting its صك rather than
+        // from whichever judgment hearing happens to be latest by date.
+        const judgmentSummaries = await this.getCurrentJudgmentSummaries();
         for (const r of deedRows) {
-          const judgmentHearing = findPrimaryJudgmentHearing(hearingsByCase.get(r.id) || []);
+          // 🔴 RE-KEYED. The date scan alone returned the latest non-final حكم
+          // hearing, which on a remanded case is the hearing of the QUASHED
+          // ruling — so the "chase the صك" task went to the lawyer who attended a
+          // judgment that no longer stands.
+          //
+          // ⚠ hearing_id is NULLABLE. A ruling recorded through POST
+          // /appeal-ruling has no session in our system, so this falls back to the
+          // date scan — the pre-batch-4 behaviour, byte-identical. For a quash
+          // that means the cycle-1 attending lawyer, which is the best answer
+          // available: nobody attended the appeal ruling here, and that lawyer is
+          // the one who has been in this case's courtrooms. Whoever it resolves
+          // to, the fallback below still lands on the assigned lawyer if the
+          // hearing carries no attendee.
+          const judgmentHearing = findPrimaryJudgmentHearing(
+            hearingsByCase.get(r.id) || [],
+            judgmentSummaries.get(r.id)?.hearingId ?? null,
+          );
           const ownerId = judgmentHearing?.attendingLawyerId || r.primaryLawyerId || r.responsibleLawyerId || "";
           // Supervisors (branch_manager firm-wide, dept_head for their dept) see
           // every one; everyone else sees only the ones they own.
@@ -7979,6 +8013,50 @@ export class DatabaseStorage implements IStorage {
   async getCaseIdsWithJudgment(): Promise<Set<string>> {
     const rows = await db.select({ caseId: caseJudgments.caseId }).from(caseJudgments);
     return new Set(rows.map((r) => r.caseId));
+  }
+
+  // TWO queries for the whole list, same enrichment idiom as its neighbours.
+  // The "current" ruling is the highest sequence per case, resolved in JS from
+  // one ordered read rather than with a correlated subquery: a case has at most
+  // three rulings, so the whole table is smaller than the case list it enriches.
+  //
+  // hasDeed asks judgment_attachments — the ruling's OWN صك — and NOT
+  // case_attachments. That is the whole point of batch 4: a case whose cycle-1
+  // deed is on file has NOT satisfied a cycle-2 ruling, and the old
+  // case-keyed answer said it had.
+  async getCurrentJudgmentSummaries(): Promise<Map<string, CurrentJudgmentSummary>> {
+    const rows = await db.select({
+      id: caseJudgments.id,
+      caseId: caseJudgments.caseId,
+      hearingId: caseJudgments.hearingId,
+      outcome: caseJudgments.outcome,
+      sequence: caseJudgments.sequence,
+    }).from(caseJudgments).orderBy(asc(caseJudgments.caseId), asc(caseJudgments.sequence));
+
+    // Ordered ascending, so the last write per case wins — that is the highest
+    // sequence, i.e. the current ruling.
+    const current = new Map<string, { id: string; hearingId: string | null; outcome: string | null }>();
+    for (const r of rows) {
+      current.set(r.caseId, { id: r.id, hearingId: r.hearingId ?? null, outcome: r.outcome ?? null });
+    }
+
+    const attached = await db.select({ judgmentId: judgmentAttachments.judgmentId })
+      .from(judgmentAttachments);
+    const attachedIds = new Set(attached.map((a) => a.judgmentId));
+
+    // Array.from rather than iterating the Map directly: this project's tsconfig
+    // targets below es2015 without --downlevelIteration, so a bare `for…of` over a
+    // Map fails to compile (TS2802).
+    const out = new Map<string, CurrentJudgmentSummary>();
+    for (const [caseId, j] of Array.from(current.entries())) {
+      out.set(caseId, {
+        judgmentId: j.id,
+        hearingId: j.hearingId,
+        outcome: j.outcome,
+        hasDeed: attachedIds.has(j.id),
+      });
+    }
+    return out;
   }
 
   async createHearingAttachment(input: {

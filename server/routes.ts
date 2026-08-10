@@ -91,7 +91,11 @@ import {
   appealOutcomeSchema,
   opponentResponseSchema,
   appealRulingSchema,
-  findPrimaryJudgmentHearing,
+  // findPrimaryJudgmentHearing is no longer imported here. Its ONE use in this
+  // file was /judgment-deed re-deriving objectionability from the judgment
+  // hearing's columns; batch 4 reads opens_window and outcome off the judgment row
+  // instead, so the hearing is not consulted. It remains in shared/schema.ts with
+  // three live callers (my-tasks 1c, and the two appeal-outcome UI sites).
   caseReachedJudgmentStage,
   hearingProducesNoMinutes,
   // judgmentDirectionOf / weAreTheAppellant are no longer imported here: with
@@ -2300,6 +2304,30 @@ async function cancelOpenCaseChildrenOnClose(caseId: string): Promise<void> {
 // objection memo on the case is UPDATED to the new deadline rather than joined by
 // a second one, which is what makes correcting a mistyped receipt date safe.
 // Returns what it did so the caller can log/report it.
+// 🔴 RE-KEYED IN BATCH 4 TO THE JUDGMENT, VIA THE MEMO'S hearingId.
+//
+// THE BUG: the case-wide search below finds ANY non-cancelled objection memo and
+// RE-DATES it. That is exactly right within one judgment — it is what makes
+// correcting a mistyped receipt date safe — and exactly wrong across two. On a
+// second cycle it reached back into cycle 1's memo and overwrote its deadline:
+// the same row, with cycle 1's content, its author and its whole history, silently
+// re-purposed for a judgment it has nothing to do with. The lawyer would find a
+// filed objection whose deadline had moved for reasons invisible in its own record.
+//
+// THE KEY IS memos.hearingId MATCHED AGAINST THE JUDGMENT'S hearing_id. No schema
+// change: the objection memo has ALWAYS been created carrying the judgment
+// hearing's id, so the link already existed and only needed to be read.
+//
+// WHAT A NEW CYCLE NOW DOES: finds no memo for ITS judgment, so it CREATES a new
+// one. Cycle 1's memo is left completely untouched — see the caller's note for why
+// it is deliberately not cancelled.
+//
+// ⚠ FALLBACK WHEN THE JUDGMENT HAS NO hearing_id: the ORIGINAL case-wide search,
+// unchanged. A judgment with no hearing is written only by POST /appeal-ruling,
+// which always sets opens_window false and so can never produce an objection memo
+// at all — but keeping the old behaviour there means this can never start minting
+// duplicates on a shape it did not anticipate, which is the failure the case-wide
+// dedup was originally added to prevent.
 async function ensureObjectionMemoForCase(
   lawCase: LawCase,
   input: { deadline: string; judgmentType: string; hearingId?: string | null },
@@ -2307,9 +2335,12 @@ async function ensureObjectionMemoForCase(
   const memos = await storage.getMemosByCase(lawCase.id);
   // "ملغاة" is excluded so a cancelled objection can be legitimately re-raised;
   // every other status counts as already-existing work.
-  const existing = memos.find(
+  const objections = memos.filter(
     (m) => m.memoType === MemoType.OBJECTION && m.status !== "ملغاة",
   );
+  const existing = input.hearingId
+    ? objections.find((m) => m.hearingId === input.hearingId)
+    : objections[0];
   if (existing) {
     if (existing.deadline === input.deadline) {
       return { action: "skipped", memoId: existing.id };
@@ -2556,10 +2587,36 @@ async function promoteCaseOnObjectionFiled(
 // The protection is not lost by allowing those three: the case still cannot
 // CLOSE without the deed, which is the end-of-life control the owner asked for.
 //
-// One query against the same table the derived hasDeedAttachment list field
-// reads, so this can never disagree with the badge the user is looking at.
+// 🔴 RE-KEYED IN BATCH 4 — THE **CURRENT** RULING MUST HAVE **ITS OWN** صك.
+//
+// It used to ask case_attachments: "does this CASE have a deed on file?" That
+// silently assumes a case has one judgment. On a second cycle the cycle-1 deed
+// satisfied the gate for a cycle-2 ruling whose صك nobody had ever seen — the
+// case closed with a missing document and the gate reported success.
+//
+// THE PREDICATE, and each line is load-bearing:
+//   no judgment record   → NOT missing. Nothing was judged, so there is no deed
+//                          to require. This is the ONLY safe answer: the five
+//                          call sites read `true` as "refuse", and a case that
+//                          never held a ruling must never be refused. It also
+//                          makes the helper safe on its own, independently of the
+//                          caseReachedJudgmentStage scoping its callers apply.
+//   judgment, no file    → missing → the gate holds.
+//   judgment with a file → satisfied.
+//
+// 🔴 IT KEYS ON THE DEED AND NEVER ON THE WINDOW. A QUASH has a صك like any other
+// ruling but opens NO objection window (opens_window false, by owner decision), so
+// any predicate written in terms of the window would let a remanded case close
+// with its quash صك missing. opens_window is not consulted here and must not be —
+// it governs the objection TASK (my-tasks block 1d), never the document.
+//
+// STILL ONE QUERY PER CALL against the same table the derived
+// currentJudgmentHasDeed list field reads, so this can never disagree with the
+// badge the user is looking at.
 async function isJudgmentDeedMissing(caseId: string): Promise<boolean> {
-  return !(await storage.getCaseAttachment(caseId));
+  const judgment = await storage.getLatestJudgmentForCase(caseId);
+  if (!judgment) return false;
+  return !(await storage.getJudgmentAttachment(judgment.id));
 }
 
 // ⚠ findHearingMissingMinutes STOOD HERE and was DELETED with the case-close ضبط
@@ -3278,6 +3335,9 @@ export async function registerRoutes(
       // Batch 3 — one more set, one more query, same idiom. Feeds the
       // hasJudgmentRecord stamp below.
       const casesWithJudgment = await storage.getCaseIdsWithJudgment();
+      // Batch 4 — the CURRENT ruling's hearing, direction and deed state. Two more
+      // queries for the whole response; the client cannot derive any of the three.
+      const judgmentSummaries = await storage.getCurrentJudgmentSummaries();
       // Strip stageHistory from list responses — it can be 20-50 entries
       // per case and is only needed in the case detail view (GET
       // /api/cases/:id). Replace it with a derived boolean the cases-table
@@ -3307,6 +3367,22 @@ export async function registerRoutes(
         // gate has asked since batch 2, so badge and endpoint agree by construction.
         // Not on the LawCase interface, so it can never reach an insert or update.
         hasJudgmentRecord: casesWithJudgment.has(c.id),
+        // Batch 4 — three DERIVED facts about the case's CURRENT ruling, none of
+        // them stored and none on the LawCase interface.
+        //   • currentJudgmentHearingId — re-keys findPrimaryJudgmentHearing so the
+        //     appeal-outcome UI reasons about the ruling that STANDS, not the one
+        //     a remand quashed. Null when the ruling had no session in our system.
+        //   • currentJudgmentOutcome — lets the closed-case badge name the LATEST
+        //     ruling. Null for a quash, which decides procedure, not merits.
+        //   • currentJudgmentHasDeed — asks judgment_attachments, i.e. does THIS
+        //     ruling have its own صك. 🔴 This is what the client close-gate mirror
+        //     and both صك badges now read INSTEAD of hasDeedAttachment: the
+        //     case-keyed answer says "yes" for a cycle-2 ruling whose deed nobody
+        //     has seen, which would show a green case while the server refuses to
+        //     close it — the invisible hold the badges exist to prevent.
+        currentJudgmentHearingId: judgmentSummaries.get(c.id)?.hearingId ?? null,
+        currentJudgmentOutcome: judgmentSummaries.get(c.id)?.outcome ?? null,
+        currentJudgmentHasDeed: judgmentSummaries.get(c.id)?.hasDeed ?? false,
         // DERIVED, never stored, and computed HERE because this is the last point
         // at which stageHistory still exists — the destructure above strips it.
         // Uses the SHARED caseReachedJudgmentStage so the client's صك gates
@@ -7586,21 +7662,45 @@ export async function registerRoutes(
       const updated = await storage.getCaseById(lawCase.id);
       if (!updated) return res.status(500).json({ error: "فشل تسجيل استلام الصك" });
 
-      // Was the primary judgment objectionable? Read the lawyer's assessment
-      // back off the judgment hearing — that is where it was recorded.
-      const hearings = await storage.getHearingsByCase(lawCase.id);
-      const judgmentHearing = findPrimaryJudgmentHearing(hearings);
-      const judgmentType = String(judgmentHearing?.judgmentSide || "");
+      // 🔴 BATCH 4 — READ FROM THE JUDGMENT ROW, NOT FROM A HEARING SCAN.
+      // This used to call findPrimaryJudgmentHearing and re-derive the answer from
+      // that hearing's judgment_side + objection_feasible columns. Two reasons it
+      // moved, and the second is the important one:
+      //   • the scan picks the latest NON-FINAL حكم hearing, which on a remanded
+      //     case is the hearing of the QUASHED ruling — so the receipt for ruling
+      //     #3 was judged against ruling #1's objectionability;
+      //   • opens_window is STORED INTENT, decided when the ruling was recorded
+      //     from the answer the lawyer gave THEN. Re-deriving it lets a later edit
+      //     of the hearing change whether a window that has already run existed.
+      // The judgment row carries both facts about the ruling this receipt belongs
+      // to, so the hearing is no longer consulted here at all.
+      //
+      // ⚠ THE QUASH IS EXCLUDED BY opens_window, not by a stage or type test: an
+      // appeal ruling never opens a window, so no لائحة اعتراضية is ever raised for
+      // one — while its صك is still required by the close gate, which keys on the
+      // document and never on the window.
+      const judgmentType = String(judgment.outcome || "");
       const objectionDue =
-        (judgmentType === "ضدنا" || judgmentType === "جزئي") &&
-        judgmentHearing?.objectionFeasible === true;
+        judgment.opensWindow &&
+        (judgmentType === "ضدنا" || judgmentType === "جزئي");
 
       let memoOutcome: { action: string; memoId?: string } = { action: "not_applicable" };
       if (objectionDue) {
+        // 🔴 KEYED TO THIS RULING. The memo is found (and re-dated) only if it
+        // belongs to THIS judgment's hearing; a previous cycle's objection memo is
+        // never touched, and a new cycle gets a memo of its own.
+        //
+        // THE OLD MEMO IS DELIBERATELY NOT CANCELLED — see the report. In short: a
+        // filed لائحة اعتراضية is a real document with a real filing history, and
+        // the quash that superseded its judgment does not un-file it. Cancelling
+        // would also fight the existing lifecycle, which already cancels a case's
+        // open memos when any hearing result is recorded (with the objection
+        // deliberately excluded, because a ruling CREATES that work rather than
+        // spending it). Deciding an old objection is spent is a lawyer's call.
         memoOutcome = await ensureObjectionMemoForCase(updated, {
           deadline: deadlineStr,
           judgmentType,
-          hearingId: judgmentHearing?.id ?? null,
+          hearingId: judgment.hearingId,
         });
       }
 
