@@ -213,12 +213,29 @@ const attachmentObjectStore = new ObjectStorageClient();
 // Object-Storage key prefixes, one per attachment-bearing entity. The prefix
 // is also the bucket "folder", so keys are self-describing:
 //   contracts/<contractId>/<uuid>.pdf
-//   cases/<caseId>/<uuid>.pdf          — the judgment deed (صك)
+//   cases/<caseId>/<uuid>.pdf          — the judgment deed (صك), per CASE
 //   hearings/<hearingId>/<uuid>.pdf    — the minutes (ضبط الجلسة)
+//   judgments/<judgmentId>/<uuid>.pdf  — the صك, per RULING (سجل الأحكام)
+//
+// 🔴 THE FOURTH PREFIX IS REGISTERED IN BATCH 1 ON PURPOSE, BEFORE ANYTHING CAN
+// WRITE A KEY THAT USES IT. isAttachmentObjectKey FAILS CLOSED (see its note
+// below): an unrecognised prefix reads as "legacy dead disk path", so a key
+// written before the prefix was known would appear to upload fine and then
+// render as missing, 410 on download, and orphan its blob on delete — all
+// while typechecking cleanly. Registering the prefix first makes that
+// sequence impossible.
+//
+// Adding it is INERT for the other three: the verdict can only change for a
+// path that STARTS WITH "judgments/", and no contract, case or hearing row can
+// hold one — each of those file_path values is written by exactly one builder
+// (makeContractObjectKey / makeCaseDeedObjectKey / makeHearingMinutesObjectKey),
+// and the legacy rows are "./uploads/contracts/…" / "uploads/contracts/…".
+// There is no key builder for this prefix yet, because batch 1 has no writer.
 const OBJECT_KEY_PREFIXES = {
   contract: "contracts/",
   case:     "cases/",
   hearing:  "hearings/",
+  judgment: "judgments/",
 } as const;
 
 const ALL_OBJECT_KEY_PREFIXES: readonly string[] = Object.values(OBJECT_KEY_PREFIXES);
@@ -3280,6 +3297,20 @@ export async function registerRoutes(
   //     POST /api/cases/:id/comments                (:14666, WRITE)
   //     POST /api/cases/:id/notes                   (:14711, WRITE)
   // Those are untouched by this commit.
+  //
+  // 🔴 NOTE FOR THE سجل الأحكام BATCH 2 (no routes exist yet — batch 1 is inert).
+  // Express matches in REGISTRATION ORDER and a `:param` is a catch-all for one
+  // segment, so EVERY literal path must be registered BEFORE its `:id` sibling of
+  // the same method and segment count. This cost a full debugging round on
+  // /api/hearings/ring-state, which was registered after /api/hearings/:id and was
+  // therefore captured with id="ring-state" and 404'd — silently, because the
+  // polled query just returned empty and no error surfaced anywhere in the UI.
+  //   • /api/cases/:id/judgments — SAFE at any position: three segments after
+  //     /api, so it cannot be captured by this two-segment route.
+  //   • a future /api/judgments/<literal> — MUST precede /api/judgments/:id.
+  // After adding any literal route, re-run the whole-file shadowing sweep
+  // (compare every literal path against every earlier same-method :param route of
+  // matching segment count); the last sweep found no shadowed route among 209.
   app.get("/api/cases/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const caseItem = await storage.getCaseById(String(req.params.id));
