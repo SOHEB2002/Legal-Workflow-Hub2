@@ -766,6 +766,38 @@ export const hearingAttachments = pgTable("hearing_attachments", {
   hearingUniqueIdx: uniqueIndex("hearing_attachments_hearing_unique_idx").on(t.hearingId),
 }));
 
+// 🔔 "تم الاطلاع" — a per-PERSON acknowledgement of a pre-hearing ring.
+//
+// One row per (hearing, user). It silences the ring FOR THAT PERSON ONLY and
+// does NOT end the chain: later tiers still fire for everyone else, because the
+// tiers are derived from the clock and this table is consulted only when
+// deciding what to send to the acknowledging user.
+//
+// 🔴 IT IS NOT A CHECK-IN AND MUST NEVER BE READ AS ONE. "تحضير" writes
+// hearings.checked_in_at; this writes here. Nothing outside the ring-state
+// endpoint reads this table — not the hearings display, not the batch-2
+// auto-flag sweep, not isHearingCheckInLate.
+//
+// ⚠ APPLIED MANUALLY (db:push NOT run) — script/add-hearing-ring-ack.sql. The FK
+// is ACTIVE rather than commented: the Batch-M exemption exists because
+// retrofitting a constraint onto a POPULATED table can time out a deploy, and
+// this table was created empty, so there is no scan and no dev/prod drift.
+export const hearingRingAcknowledgements = pgTable("hearing_ring_acknowledgements", {
+  id:             varchar("id", { length: 255 }).primaryKey(),
+  hearingId:      varchar("hearing_id", { length: 255 }).notNull(),
+  userId:         varchar("user_id", { length: 255 }).notNull(),
+  acknowledgedAt: timestamp("acknowledged_at").defaultNow(),
+}, (t) => ({
+  hearingFk: foreignKey({
+    name: "hearing_ring_ack_hearing_id_fkey",
+    columns: [t.hearingId],
+    foreignColumns: [hearings.id],
+  }).onDelete("cascade"),
+  // Enforces one acknowledgement per person per hearing — which is what makes
+  // the endpoint idempotent — and doubles as the lookup index.
+  uniqueIdx: uniqueIndex("hearing_ring_ack_unique_idx").on(t.hearingId, t.userId),
+}));
+
 export const fieldTasks = pgTable("field_tasks", {
   id: varchar("id", { length: 255 }).primaryKey(),
   title: varchar("title", { length: 255 }).notNull(),
@@ -5380,8 +5412,30 @@ export function firmDateTimeToInstant(
 // check-in made afterwards is "حضر متأخراً بعد التصعيد".
 export const HearingCheckInLateCutoffMinutes = 6;
 
-// 🔔 How long before a session the pre-hearing RING opens (batch 3, tier 1 —
-// the attending lawyer). Batches 4's later tiers fire inside this same window.
+// 🔔 THE ESCALATION TIERS. Each is the SAME hearing instant with a different
+// lead, which is what makes accumulation free: at T-5 all four windows are open
+// at once, so all four tiers ring simultaneously with NOTHING tracking which of
+// them "already fired". A later tier can never silence an earlier one because
+// there is no state for it to silence.
+export const HearingRingTier = {
+  ATTENDING: "attending",
+  DEPARTMENT: "department",
+  ADMIN_SUPPORT: "admin_support",
+  BRANCH_MANAGER: "branch_manager",
+} as const;
+
+export type HearingRingTierValue = typeof HearingRingTier[keyof typeof HearingRingTier];
+
+export const HearingRingTierLeadMinutes: Record<HearingRingTierValue, number> = {
+  attending: 10,
+  department: 8,
+  admin_support: 6,
+  branch_manager: 5,
+};
+
+// The WIDEST window — the earliest any tier can start. Used to select candidate
+// hearings before per-tier leads are applied; it is by definition the maximum of
+// the map above.
 export const HearingRingLeadMinutes = 10;
 
 /**
@@ -5400,10 +5454,24 @@ export interface HearingRingItem {
   /** "HH:mm" as stored — for display only, never re-parsed by the client. */
   hearingTime: string;
   courtName: string;
-  /** Window opens — hearing instant minus HearingRingLeadMinutes. */
+  /**
+   * WHY this user is ringing. When a user qualifies for several tiers (the
+   * branch manager who is also the attending lawyer, say) the server sends the
+   * one with the LONGEST lead — the tier that actually decides when they start
+   * ringing, and the most truthful answer to "why am I being alerted".
+   */
+  tier: HearingRingTierValue;
+  /** Window opens — hearing instant minus THIS TIER's lead. */
   ringFromIso: string;
   /** Window closes — the hearing's own instant. */
   hearingAtIso: string;
+  /**
+   * Carried so the client can evaluate canCheckInHearing without fetching the
+   * hearing and its parent case: the modal must render تحضير only to those the
+   * server would accept, never a button that 403s.
+   */
+  attendingLawyerId: string | null;
+  caseDepartmentId: string | null;
 }
 
 /**
@@ -5414,6 +5482,48 @@ export interface HearingRingItem {
  * Half-open [ringFrom, hearingAt): the ring stops of its own accord at the
  * hearing's moment, which is exactly when the batch-2 auto-flag takes over.
  */
+/**
+ * Which ring tier does this user occupy for this hearing, if any?
+ *
+ * Returns the tier with the LONGEST lead among those that apply, or null when
+ * the user is in none. ONE implementation, shared by the ring-state endpoint
+ * (which answers for the requesting user) and the scheduler (which resolves the
+ * whole recipient set), so the two can never disagree about who rings.
+ *
+ * 🔴 viewer AND hr ARE EXCLUDED FROM THE DEPARTMENT TIER (owner-approved).
+ * `viewer` is blocked from every mutation by viewerWriteGuard, so it could not
+ * even acknowledge the ring it was given — an undismissable modal by
+ * construction. `hr` has no role in a court session. Both are pure noise, and
+ * they are excluded from the DEPARTMENT tier only: neither can reach the other
+ * three, which are keyed on being the attending lawyer or holding a specific
+ * role.
+ */
+export function resolveHearingRingTier(
+  user: { id: string; role: string; departmentId?: string | null } | null | undefined,
+  hearing: { attendingLawyerId?: string | null; caseDepartmentId?: string | null },
+): HearingRingTierValue | null {
+  if (!user) return null;
+  const tiers: HearingRingTierValue[] = [];
+  if (hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) {
+    tiers.push(HearingRingTier.ATTENDING);
+  }
+  // 🔴 !!user.departmentId is mandatory, per the standing rule: without it a
+  // user with a null department matches every case with a null department.
+  if (
+    user.role !== "viewer" && user.role !== "hr"
+    && !!user.departmentId
+    && !!hearing.caseDepartmentId
+    && user.departmentId === hearing.caseDepartmentId
+  ) {
+    tiers.push(HearingRingTier.DEPARTMENT);
+  }
+  if (user.role === "admin_support") tiers.push(HearingRingTier.ADMIN_SUPPORT);
+  if (user.role === "branch_manager") tiers.push(HearingRingTier.BRANCH_MANAGER);
+  if (tiers.length === 0) return null;
+  return tiers.reduce((best, t) =>
+    HearingRingTierLeadMinutes[t] > HearingRingTierLeadMinutes[best] ? t : best);
+}
+
 export function isRingWindowOpen(
   item: { ringFromIso: string; hearingAtIso: string },
   nowMs: number,

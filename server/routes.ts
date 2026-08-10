@@ -73,7 +73,8 @@ import {
   ClosureReason,
   firmToday,
   firmDateTimeToInstant,
-  HearingRingLeadMinutes,
+  HearingRingTierLeadMinutes,
+  resolveHearingRingTier,
   type HearingRingItem,
   NotificationType,
   type NotificationTypeValue,
@@ -11512,34 +11513,91 @@ export async function registerRoutes(
   // stop between polls, and what makes the ring derivable from data alone with
   // no memory of any pushed event.
   //
-  // Tier 1 ONLY in this batch: the hearing's ATTENDING LAWYER. The later tiers
-  // widen the recipient set, not this shape.
+  // ALL FOUR TIERS. The candidate query is no longer narrowed to the attending
+  // lawyer — every logged-in user asks the same question and
+  // resolveHearingRingTier decides which tier (if any) they occupy, and
+  // therefore which lead applies to them.
   app.get("/api/hearings/ring-state", requireAuth, async (req: AuthRequest, res) => {
     try {
       const user = req.user!;
-      const rows = await storage.getRingCandidateHearingsForDate(firmToday(), user.id);
+      const rows = await storage.getRingCandidateHearingsForDate(firmToday());
+      // Acknowledged hearings drop out for THIS USER ONLY — one narrow keyed
+      // read, and the sole consumer of the acknowledgement table.
+      const acknowledged = rows.length > 0
+        ? await storage.getAcknowledgedHearingIds(user.id, rows.map((r) => r.id))
+        : new Set<string>();
       const items: HearingRingItem[] = [];
       for (const r of rows) {
+        if (acknowledged.has(r.id)) continue;
+        const tier = resolveHearingRingTier(user, {
+          attendingLawyerId: r.attendingLawyerId,
+          caseDepartmentId: r.caseDepartmentId,
+        });
+        if (!tier) continue;
         // 🔴 firmDateTimeToInstant DIRECTLY, never parseHearingDateTime — that
         // wrapper substitutes 09:00 for a malformed hearing_time and would open
         // a ring window at a moment the session never had. Unparseable → skip;
         // a ring is an interruption and must never fire on a guess.
         const hearingAt = firmDateTimeToInstant(r.hearingDate, r.hearingTime);
         if (!hearingAt) continue;
+        const leadMs = HearingRingTierLeadMinutes[tier] * 60 * 1000;
         items.push({
           hearingId: r.id,
           caseId: r.caseId ?? null,
           caseNumber: r.caseNumber || "",
           hearingTime: r.hearingTime || "",
           courtName: r.courtName || "",
-          ringFromIso: new Date(hearingAt.getTime() - HearingRingLeadMinutes * 60 * 1000).toISOString(),
+          tier,
+          ringFromIso: new Date(hearingAt.getTime() - leadMs).toISOString(),
           hearingAtIso: hearingAt.toISOString(),
+          attendingLawyerId: r.attendingLawyerId ?? null,
+          caseDepartmentId: r.caseDepartmentId ?? null,
         });
       }
       res.json(items);
     } catch (error) {
       console.error("[GET /api/hearings/ring-state] error:", error);
       res.status(500).json({ error: "حدث خطأ في جلب حالة التنبيه" });
+    }
+  });
+
+  // 🔔 POST /api/hearings/:id/acknowledge — "تم الاطلاع".
+  //
+  // Silences the ring FOR THE CALLER ONLY. It does NOT end the chain: later
+  // tiers still fire for everyone else, and the hearing is still unprepared.
+  //
+  // 🔴 DELIBERATELY UNGATED BEYOND requireAuth. Anyone the ring reaches may
+  // dismiss their own noise — that is the entire point of this action, and it is
+  // why a department member or an admin_support user (neither of whom may press
+  // تحضير) is not left with an undismissable modal. Acknowledging a hearing you
+  // were never ringing for writes a harmless row nobody reads.
+  //
+  // ⚠ THIS IS NOT A CHECK-IN. It never touches hearings.checked_in_at, so the
+  // hearing still shows as unprepared, still auto-flags at its moment, and is
+  // never counted as a late check-in.
+  //
+  // NOTE the registration position — ABOVE /api/hearings/:id. Express matches in
+  // order and :id is a catch-all for one segment, so a literal route registered
+  // below it is captured as an id and 404s silently. That cost a full debugging
+  // round on ring-state; every /api/hearings/<literal> route goes here.
+  app.post("/api/hearings/:id/acknowledge", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const hearingId = String(req.params.id);
+      const hearing = await storage.getHearingById(hearingId);
+      if (!hearing) {
+        return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+      // Idempotent in the database via the unique (hearing_id, user_id) index —
+      // a double press or two racing tabs insert once.
+      await storage.acknowledgeHearingRing(hearingId, req.user!.id);
+      // Silence this user's OTHER TABS immediately. The 30s ring-state poll is
+      // the guarantee; this is the accelerator, and it is addressed to the
+      // acknowledging user alone — nobody else's ring is affected.
+      sendToUser(req.user!.id, { type: "hearing:ring-ack", payload: { hearingId } });
+      res.json({ acknowledged: true });
+    } catch (error) {
+      console.error("[POST /api/hearings/:id/acknowledge] error:", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل الاطلاع" });
     }
   });
 
