@@ -161,6 +161,9 @@ import {
   resolveAdminSupportAssignee,
   setAdminSupportTaskAssignmentSchema,
   SIDEBAR_SECTIONS,
+  StagesAtOrPastCourt,
+  caseIsAtOrPastCourt,
+  CaseStageLabels,
   type SidebarSectionValue,
   type UserRoleType,
   type PriorityType,
@@ -12214,15 +12217,17 @@ export async function registerRoutes(
               // محكوم_حكم_نهائي and everything after stay PROTECTED below: a final
               // judgment is not appealable in-app, and writing any earlier stage
               // over it would erase the judgment.
-              const STAGES_AT_OR_PAST_COURT = new Set([
-                "منظورة",
-                "منظورة_استئناف",
-                "محكوم_حكم_نهائي",
-                "تحصيل",
-                "مشطوبة",
-                "مؤرشفة",
-                "مقفلة",
-              ]);
+              //
+              // THE SET MOVED to shared/schema.ts as StagesAtOrPastCourt so the
+              // settlement guard on POST /api/hearings/:id/result and the client
+              // result dialog share this one rule instead of copying it. It now
+              // CONTAINS محكوم_حكم_ابتدائي, which the local copy omitted — so the
+              // opponent-appeal carve-out described just above, which used to be
+              // expressed implicitly by leaving that stage out of the set, is
+              // written explicitly as `isOpponentAppeal ||` on the branch below.
+              // Behaviour is identical: محكوم_حكم_ابتدائي reaches the promotion
+              // through the new disjunct, every other stage answers exactly as
+              // the local set did.
               // ⚠ NO صك GATE ON THIS PROMOTION, DELIBERATELY (2026-08-03). The
               // court has LISTED AN APPEAL SESSION — an external fact that has
               // already happened. Refusing to promote would leave the case
@@ -12243,7 +12248,7 @@ export async function registerRoutes(
                     ...(!caseForStage.clientRole ? { clientRole: "مدعي" } : {}),
                   }
                 : {};
-              if (!STAGES_AT_OR_PAST_COURT.has(currentStage)) {
+              if (isOpponentAppeal || !StagesAtOrPastCourt.has(currentStage as CaseStageValue)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
                 await storage.updateCase(caseForStage.id, {
                   currentStage: courtTargetStage,
@@ -12784,6 +12789,64 @@ export async function registerRoutes(
             error: "هذه جلسة صلح — النتائج المتاحة: موعد جديد، تم الصلح، أو لم يتم الصلح",
           });
         }
+      }
+
+      // ==================== 🔴 A SETTLEMENT RESULT CANNOT REACH A COURT-FILED CASE ====================
+      // THE 2026-08-09 PRODUCTION INCIDENT. Three cases at منظورة — filed, with
+      // court numbers and scheduled sessions — were pushed BACK to أغلق_طلب_الصلح
+      // within 22 seconds of each other, by لم_يتم_الصلح results recorded on stale
+      // تراضي hearings that had been left open when the cases advanced into court.
+      // Nothing in the settlement branches read the case's stage before writing
+      // one; the guard directly above is no help because it runs the OTHER way
+      // round (it restricts which RESULTS a settlement-stage case may take, so a
+      // case at منظورة simply fails its `مداولة_الصلح` test and sails past).
+      //
+      // 🔴 REJECT — DO NOT SILENTLY REPAIR, and note this is the opposite of what
+      // the JUDGMENT path does a few lines below. That asymmetry is the whole
+      // point. A judgment is PROOF the case is in court, so there the case row is
+      // the stale fact and promoting it forward is right. Here the relationship
+      // inverts: the case row is the RELIABLE fact (court number, live sessions)
+      // and the settlement result is the stale one, recorded against a hearing
+      // that events overtook. There is nothing to repair — the request asserts
+      // something that cannot be true. Silently dropping just the stage change
+      // would be worse than either: the user would believe they recorded it.
+      //
+      // COVERS تم_الصلح AS WELL AS لم_يتم_الصلح, and تم_الصلح is the more dangerous
+      // of the two: it routes to تحصيل, which is sealed against manual closure at
+      // EVERY tier including branch_manager, so a case dragged there would be
+      // permanently stuck. It is also offered on ordinary محكمة hearings by the
+      // result dialog, which لم_يتم_الصلح is not.
+      //
+      // PRE-COURT STAGES STAY PERMISSIVE (owner decision). قيد_التدقيق_في_ناجز,
+      // قيد_التدقيق_في_تراضي, مداولة_الصلح and the rest are untouched — a
+      // settlement concluding there is the designed flow, not a regression. The
+      // gate is StagesAtOrPastCourt and nothing else.
+      //
+      // The three inputs mirror the branch conditions further down EXACTLY, so
+      // this refuses precisely what would have moved the stage and no more: a
+      // bare صلح carrying no conciliationResult falls through to the default
+      // branch, which writes no stage, and is therefore left alone.
+      const isStageMovingSettlementResult =
+        data.result === HearingResult.SETTLEMENT_REACHED
+        || data.result === HearingResult.SETTLEMENT_FAILED
+        || (data.result === HearingResult.SETTLEMENT
+          && (data.conciliationResult === "تم_الصلح" || data.conciliationResult === "لم_يتم_الصلح"));
+      if (
+        isStageMovingSettlementResult
+        && settlementProbeCase
+        && caseIsAtOrPastCourt(settlementProbeCase.currentStage)
+      ) {
+        const stageLabel = CaseStageLabels[settlementProbeCase.currentStage as CaseStageValue]
+          || settlementProbeCase.currentStage;
+        // Names the sanctioned alternative on purpose: the user in the incident
+        // had no other way to clear a stale صلح hearing off their list, and a
+        // refusal that leaves them stuck invites them to find another route to
+        // the same damage. Cancelling is reachable by exactly this actor —
+        // POST /api/hearings/:id/cancel is gated on canActOnHearing, the same
+        // predicate that admitted them to this handler.
+        return res.status(400).json({
+          error: `لا يمكن تسجيل نتيجة صلح على قضية بلغت مرحلة "${stageLabel}" — القضية مرفوعة في المحكمة. إذا كانت هذه جلسة صلح قديمة تجاوزتها القضية، فألغِ الجلسة بدلاً من تسجيل نتيجتها.`,
+        });
       }
 
       // ==================== JUDGMENT MODEL (validated BEFORE any mutation) ====================

@@ -1893,6 +1893,54 @@ export const TerminalCaseStages: ReadonlySet<CaseStageValue> = new Set<CaseStage
   "مؤرشفة",
 ]);
 
+// ============ AT-OR-PAST-COURT — the case has been FILED (2026-08-11) ============
+//
+// "The suit is in front of a court, or already was." Hoisted here from a local
+// `STAGES_AT_OR_PAST_COURT` inside the hearing-CREATE handler (server/routes.ts)
+// so ONE rule now answers "is this case in court" for the server gate AND the
+// client dialog — the same reason judgmentDirectionOf / weAreTheAppellant were
+// hoisted: the UI must never offer a button the endpoint rejects.
+//
+// WHY IT EXISTS AT ALL — the production incident of 2026-08-09. Three cases at
+// منظورة, each with a court number and scheduled sessions, were pushed back to
+// أغلق_طلب_الصلح by a لم_يتم_الصلح result recorded on a STALE تراضي hearing that
+// had been left open when the case advanced into court. The settlement branches
+// of the hearing-result handler read no stage at all before writing one.
+//
+// 🔴 محكوم_حكم_ابتدائي IS A MEMBER HERE AND WAS NOT A MEMBER OF THE ORIGINAL.
+// Its absence there never claimed a first-instance judgment is somehow pre-court
+// — it was a CARVE-OUT local to hearing creation, where a court hearing on such
+// a case means THE OPPONENT APPEALED and the case must still be promoted onward
+// to منظورة_استئناف. That carve-out is now spelled out in code at that one call
+// site (`isOpponentAppeal ||`), which is exactly what the comment there already
+// said in prose, so the set itself can be honest. The settlement guard needs it
+// to be: a تم_الصلح recorded on a case holding a first-instance judgment would
+// otherwise still drag it to تحصيل — the worst landing of all, because تحصيل is
+// sealed against manual closure at every tier including branch_manager.
+//
+// NOT the same set as TerminalCaseStages above, and they must not be merged:
+// that one asks "is the WORK over" (منظورة is live, so it is absent there);
+// this one asks "has the case ENTERED COURT" (منظورة is the canonical member).
+export const StagesAtOrPastCourt: ReadonlySet<CaseStageValue> = new Set<CaseStageValue>([
+  "منظورة",
+  "محكوم_حكم_ابتدائي",
+  "منظورة_استئناف",
+  "محكوم_حكم_نهائي",
+  "تحصيل",
+  "مشطوبة",
+  "مؤرشفة",
+  "مقفلة",
+]);
+
+// Null-safe membership test. An unresolved stage (no linked case on the client,
+// a row with an empty stage) answers FALSE — i.e. PERMISSIVE. That direction is
+// deliberate and matches the server guard, which only rejects when it actually
+// holds the case row: this predicate gates a REFUSAL, so "I don't know" must
+// never manufacture one.
+export function caseIsAtOrPastCourt(stage: string | null | undefined): boolean {
+  return !!stage && StagesAtOrPastCourt.has(stage as CaseStageValue);
+}
+
 // Stage selection is keyed on the case's DEPARTMENT (a stable FK to the
 // departments table), not on caseType. caseType is a free-text user input
 // that often holds a sub-type label like "بيع وتوريد" / "نزاع تجاري" and

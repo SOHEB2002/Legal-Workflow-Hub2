@@ -15,7 +15,7 @@ import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
-import { HearingResult, HearingType, type Hearing } from "@shared/schema";
+import { HearingResult, HearingType, caseIsAtOrPastCourt, type Hearing } from "@shared/schema";
 
 // SHARED hearing-result dialog. Extracted verbatim from the hearings page so the
 // hearings screen AND the unified-tasks hub mount the SAME component → same
@@ -205,9 +205,30 @@ export function HearingResultDialog({
                   const ht = hearing?.hearingType;
                   const linkedCase = hearing?.caseId ? getCaseById(hearing.caseId) : null;
                   const isAdminCourt = ht === HearingType.COURT && linkedCase?.caseType === "إداري";
+                  // 🔴 THE CASE OVERRULES THE HEARING'S OWN TYPE (2026-08-11).
+                  // The two `||` arms below key on hearingType alone and ignored
+                  // the case entirely, so a تراضي hearing left open when its case
+                  // advanced into court kept offering the full settlement menu
+                  // forever. That is the surface that produced the 2026-08-09
+                  // incident: three filed cases at منظورة dragged back to
+                  // أغلق_طلب_الصلح from stale صلح sessions.
+                  //
+                  // POST /api/hearings/:id/result now REJECTS a settlement result
+                  // on a case at or past court, so these options must stop being
+                  // rendered there — visibility == authorization. Same shared
+                  // predicate on both sides (caseIsAtOrPastCourt, shared/schema),
+                  // so the dialog cannot drift from the endpoint.
+                  //
+                  // An unlinked hearing leaves inCourt false and the menu exactly
+                  // as it was, matching the server, which only refuses when it
+                  // actually holds the case row.
+                  const inCourt = caseIsAtOrPastCourt(linkedCase?.currentStage);
                   const isSettlementContext =
-                    (!!linkedCase?.isSettlementCase && linkedCase?.currentStage === "مداولة_الصلح")
-                    || ht === HearingType.TARADI || ht === HearingType.SETTLEMENT;
+                    !inCourt
+                    && (
+                      (!!linkedCase?.isSettlementCase && linkedCase?.currentStage === "مداولة_الصلح")
+                      || ht === HearingType.TARADI || ht === HearingType.SETTLEMENT
+                    );
                   if (isSettlementContext) {
                     return (
                       <>
@@ -232,7 +253,15 @@ export function HearingResultDialog({
                     <>
                       <SelectItem value="موعد_جديد">جلسة (موعد جديد)</SelectItem>
                       <SelectItem value="حكم">حكم</SelectItem>
-                      <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
+                      {/* تم_الصلح sits on the DEFAULT (court-hearing) menu too, and
+                          the server now refuses it once the case is in court —
+                          it routes to تحصيل, which is sealed against manual
+                          closure at every tier. Hidden CONDITIONALLY, exactly
+                          where the endpoint would 400. It stays offered for a
+                          pre-court case, where settling is the designed flow;
+                          removing it from this menu outright is a separate
+                          product question and is NOT what this does. */}
+                      {!inCourt && <SelectItem value="تم_الصلح">تم الصلح</SelectItem>}
                       <SelectItem value="شطب">شطب</SelectItem>
                       <SelectItem value="عدم_الاختصاص">عدم الاختصاص</SelectItem>
                     </>
