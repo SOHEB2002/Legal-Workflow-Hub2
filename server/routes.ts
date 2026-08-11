@@ -7146,6 +7146,27 @@ export async function registerRoutes(
       if (lawCase.currentStage !== "إحالة_للجنة_المراجعة") {
         return res.status(400).json({ error: "القضية ليست في مرحلة لجنة المراجعة" });
       }
+      // A SETTLEMENT case has no committee, so it has no committee decision either.
+      // Its path is InCourtSettlementStages — [استلام, مداولة_الصلح, تحصيل] — which
+      // contains neither إحالة_للجنة_المراجعة nor منظورة. The stage guard above does
+      // NOT catch this: it tests the case's ACTUAL current_stage, not its path, and
+      // a settlement case can be written to the committee stage through the flat
+      // transition table (it is not reachable from the ordinary UI, which refuses an
+      // off-path move, but it is reachable by direct PATCH). Without this term the
+      // APPROVED branch would send it to منظورة — off its own three-stage path — and
+      // strand it exactly the way case 4870079661 was stranded on جاهزة_للرفع.
+      //
+      // 🔴 SCOPED TO IN-COURT ON PURPOSE, and the classification term is NOT
+      // redundant. getStagesForClassification consults isSettlementCase ONLY inside
+      // the منظورة_بالمحكمة branch; a قيد_الدراسة case carrying the flag resolves to
+      // an ordinary UNDER-STUDY array, which does have a committee stage and whose
+      // post-committee target genuinely IS جاهزة_للرفع. Refusing that shape would be
+      // a behaviour change, not a fix — so it is deliberately still accepted.
+      if (lawCase.caseClassification === CaseClassification.IN_COURT && lawCase.isSettlementCase) {
+        return res.status(400).json({
+          error: "قضية الصلح لا تمر بلجنة المراجعة — مسارها: استلام ← مداولة الصلح ← تحصيل. تُسجَّل النتيجة من مرحلة مداولة الصلح (تم الصلح / لم يتم الصلح)، لا من اللجنة.",
+        });
+      }
       if (lawCase.pausedAt || lawCase.awaitingCompletion) {
         return res.status(400).json({ error: "القضية في حالة لا تسمح بقرار اللجنة" });
       }
