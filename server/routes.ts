@@ -68,6 +68,7 @@ import {
   insertContractSchema,
   InternalReviewDecision,
   CommitteeDecision,
+  ReviewDecision,
   NoteOutcome,
   ConsultationClosureReason,
   ClosureReason,
@@ -7075,6 +7076,159 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error: any) {
       console.error("[cases/return-to-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // ==================== POST /api/cases/:id/committee-decision ====================
+  // Body: { decision, notes }. THE COMMITTEE DECISION, decided SERVER-SIDE.
+  //
+  // 🔴 WHY THIS EXISTS. Cases were the only one of the four entities with no
+  // committee-decision endpoint: the decision was issued by the BROWSER, in
+  // approveCase (client/src/lib/cases-context.tsx), which hard-coded
+  // CaseStage.READY_TO_SUBMIT for every case and PATCHed it. جاهزة_للرفع means
+  // "ready to FILE" and exists only on the four UNDER-STUDY paths — an in-court
+  // case is already filed, and its post-committee stage is منظورة. PATCH accepted
+  // it because ALLOWED_CASE_TRANSITIONS is a flat from→to table with no
+  // classification awareness, and BOTH edges out of the committee stage exist in
+  // it (:984 → جاهزة_للرفع, :1063 → منظورة), so the server had no basis to prefer
+  // one. Production case 4870079661 — an in-court مدعى_عليه case — was walked
+  // تحرير_مذكرة_جوابية → مراجعة_داخلية → إحالة_للجنة_المراجعة → جاهزة_للرفع on
+  // 2026-08-05 and stranded there: جاهزة_للرفع is on none of its path's arrays, so
+  // its progress bar collapsed onto استلام and its only outbound edges led to
+  // filing-platform reviews it had no business entering.
+  //
+  // MODELLED ON THE CONTRACTS ENDPOINT (/api/contracts/:id/committee-decision),
+  // deliberately, not on consultations or memos: those two record the decision in
+  // a dedicated committee_decisions TABLE, and cases have none. Contracts prove
+  // the pattern works without one — decision into the entity's own review columns
+  // plus the activity log. No new table, no DDL.
+  //
+  // WHAT IT DOES NOT WRITE: law_cases.status (owner decision). All three sibling
+  // endpoints leave their status column alone, and law_cases.status has no value
+  // meaning "filed" that anything in the system actually produces.
+  app.post("/api/cases/:id/committee-decision", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      // FAST-DENY on the actor's own role, then the AUTHORITATIVE department-routed
+      // check after the case is loaded — the two-stage shape every sibling endpoint
+      // uses. This mirrors the gate inside PATCH /api/cases/:id (the committee
+      // block just after its validateStageTransition call); that gate STAYS, because
+      // the الأخذ_بالملاحظات arm of the committee — rejectCase — still goes through
+      // PATCH and must keep being governed by it.
+      const ctx = req.actingContext;
+      const ownRoleDecides = ["cases_review_head", "labor_review_head", "branch_manager"].includes(reqUser.role);
+      if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, String(req.params.id), "cases_review_head", "labor_review_head", "branch_manager"))) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لقرار اللجنة" });
+      }
+
+      const bodyCheck = workflowDecisionSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const decision = String(req.body?.decision || "");
+      const notes = String(req.body?.notes || "").trim();
+      const valid = (Object.values(CommitteeDecision) as string[]).includes(decision);
+      if (!valid) return res.status(400).json({ error: "قرار اللجنة غير صحيح" });
+      // Preserves the rule PATCH /api/cases/:id already enforces on this edge:
+      // a return to الأخذ_بالملاحظات must carry the committee's notes, because the
+      // notes ARE the work the lawyer is being sent back to do. اعتماد leaves them
+      // optional. Same asymmetry as the contracts endpoint.
+      if (decision === CommitteeDecision.NEEDS_NOTES && !notes) {
+        return res.status(400).json({ error: "يجب تحديد سبب الإرجاع وإضافة ملاحظات اللجنة" });
+      }
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      if (lawCase.currentStage !== "إحالة_للجنة_المراجعة") {
+        return res.status(400).json({ error: "القضية ليست في مرحلة لجنة المراجعة" });
+      }
+      if (lawCase.pausedAt || lawCase.awaitingCompletion) {
+        return res.status(400).json({ error: "القضية في حالة لا تسمح بقرار اللجنة" });
+      }
+      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+        return res.status(400).json({ error: "لا يمكن اتخاذ قرار اللجنة في قضية مغلقة أو مؤرشفة" });
+      }
+
+      // AUTHORITATIVE department-routed chair, reproducing PATCH /api/cases/:id's
+      // committee block: a case in عمالي is chaired by labor_review_head
+      // EXCLUSIVELY, everything else by cases_review_head. branch_manager always.
+      {
+        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
+        const committeeHead = (!!laborDeptId && lawCase.departmentId === laborDeptId)
+          ? "labor_review_head" : "cases_review_head";
+        const headDecides = [committeeHead, "branch_manager"].includes(reqUser.role);
+        if (!headDecides && !(ctx && hasEffectiveRole(ctx, lawCase.id, committeeHead, "branch_manager"))) {
+          return res.status(403).json({ error: "ليس لديك صلاحية لقرار لجنة المراجعة على هذه القضية" });
+        }
+      }
+
+      // 🔴 THE TARGET STAGE — the whole point of this endpoint.
+      //
+      // NEEDS_NOTES → الأخذ_بالملاحظات on every path (it is present in all four
+      // under-study arrays AND both in-court memo arrays).
+      //
+      // APPROVED → keyed on caseClassification ALONE. Measured across all eight
+      // path arrays, the stage following الأخذ_بالملاحظات is:
+      //     UnderStudy General / Commercial / Labor / Admin → جاهزة_للرفع
+      //     InCourt Defendant / Plaintiff                   → منظورة
+      // Department and clientRole do not change the answer — both in-court memo
+      // paths converge on منظورة, so a null or wrong clientRole (which
+      // getStagesForClassification silently reads as "plaintiff") cannot affect it.
+      //
+      // ⚠ DELIBERATELY NOT DERIVED FROM THE RESOLVED PATH. The obvious derivation
+      // — stages[indexOf("الأخذ_بالملاحظات") + 1] — has a silent failure mode: when
+      // الأخذ_بالملاحظات is absent, indexOf returns -1 and stages[0] is استلام, a
+      // DEFINED value, so an `undefined` fallback never fires and the committee
+      // would send the case back to reception. That is not hypothetical: removing
+      // the review stages from the in-court arrays is an approved future batch.
+      // The ternary is exact, needs no department lookup, and cannot drift.
+      //
+      // ⚠ And NOT index+1 on the committee stage itself: the LINEAR successor of
+      // إحالة_للجنة_المراجعة is الأخذ_بالملاحظات in every array — the REJECTION
+      // target, not the approval one.
+      const isApproved = decision === CommitteeDecision.APPROVED;
+      const targetStage: CaseStageValue = isApproved
+        ? (lawCase.caseClassification === CaseClassification.IN_COURT ? "منظورة" : "جاهزة_للرفع")
+        : "الأخذ_بالملاحظات";
+
+      // Mapped onto the stored review vocabulary, which is a DIFFERENT enum from the
+      // wire one: CommitteeDecision is Arabic (اعتماد / يوجد_ملاحظات), reviewDecision
+      // is the English ReviewDecision set the FE and PATCH already use.
+      const reviewDecision = isApproved ? ReviewDecision.APPROVED : ReviewDecision.REJECTED;
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+      const noteSuffix = notes ? ` — ${notes}` : "";
+      const historyNote = isApproved
+        ? `اعتماد اللجنة${noteSuffix}`
+        : `إرجاع من اللجنة للأخذ بالملاحظات${noteSuffix}`;
+
+      const updated = await storage.recordCaseCommitteeDecision(lawCase.id, {
+        targetStage,
+        reviewDecision,
+        reviewNotes: notes,
+        // 🔴 APPENDS through the shared helper, and CARRIES THE COMMITTEE'S NOTE.
+        // PATCH /api/cases/:id OVERWRITES req.body.stageHistory with an entry whose
+        // notes are `stageChangeNotes || ""`, so the "اعتماد اللجنة - {notes}" text
+        // approveCase composes today is silently discarded and the committee's
+        // reasoning never reaches the history. This endpoint is the reason that
+        // stops being true.
+        stageHistory: appendStageHistory(
+          lawCase, targetStage, { id: reqUser.id, name: performerName }, historyNote,
+        ) as CaseStageTransition[],
+        activityTitle: `تم تغيير المرحلة من ${lawCase.currentStage} إلى ${targetStage}`,
+        activityDetails: historyNote,
+        performedBy: reqUser.id,
+        performerName,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تسجيل قرار اللجنة" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/committee-decision] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
