@@ -161,6 +161,9 @@ import {
   resolveAdminSupportAssignee,
   setAdminSupportTaskAssignmentSchema,
   SIDEBAR_SECTIONS,
+  StagesAtOrPastCourt,
+  caseIsAtOrPastCourt,
+  CaseStageLabels,
   type SidebarSectionValue,
   type UserRoleType,
   type PriorityType,
@@ -12214,15 +12217,17 @@ export async function registerRoutes(
               // محكوم_حكم_نهائي and everything after stay PROTECTED below: a final
               // judgment is not appealable in-app, and writing any earlier stage
               // over it would erase the judgment.
-              const STAGES_AT_OR_PAST_COURT = new Set([
-                "منظورة",
-                "منظورة_استئناف",
-                "محكوم_حكم_نهائي",
-                "تحصيل",
-                "مشطوبة",
-                "مؤرشفة",
-                "مقفلة",
-              ]);
+              //
+              // THE SET MOVED to shared/schema.ts as StagesAtOrPastCourt so the
+              // settlement guard on POST /api/hearings/:id/result and the client
+              // result dialog share this one rule instead of copying it. It now
+              // CONTAINS محكوم_حكم_ابتدائي, which the local copy omitted — so the
+              // opponent-appeal carve-out described just above, which used to be
+              // expressed implicitly by leaving that stage out of the set, is
+              // written explicitly as `isOpponentAppeal ||` on the branch below.
+              // Behaviour is identical: محكوم_حكم_ابتدائي reaches the promotion
+              // through the new disjunct, every other stage answers exactly as
+              // the local set did.
               // ⚠ NO صك GATE ON THIS PROMOTION, DELIBERATELY (2026-08-03). The
               // court has LISTED AN APPEAL SESSION — an external fact that has
               // already happened. Refusing to promote would leave the case
@@ -12243,7 +12248,7 @@ export async function registerRoutes(
                     ...(!caseForStage.clientRole ? { clientRole: "مدعي" } : {}),
                   }
                 : {};
-              if (!STAGES_AT_OR_PAST_COURT.has(currentStage)) {
+              if (isOpponentAppeal || !StagesAtOrPastCourt.has(currentStage as CaseStageValue)) {
                 const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
                 await storage.updateCase(caseForStage.id, {
                   currentStage: courtTargetStage,
@@ -12786,6 +12791,64 @@ export async function registerRoutes(
         }
       }
 
+      // ==================== 🔴 A SETTLEMENT RESULT CANNOT REACH A COURT-FILED CASE ====================
+      // THE 2026-08-09 PRODUCTION INCIDENT. Three cases at منظورة — filed, with
+      // court numbers and scheduled sessions — were pushed BACK to أغلق_طلب_الصلح
+      // within 22 seconds of each other, by لم_يتم_الصلح results recorded on stale
+      // تراضي hearings that had been left open when the cases advanced into court.
+      // Nothing in the settlement branches read the case's stage before writing
+      // one; the guard directly above is no help because it runs the OTHER way
+      // round (it restricts which RESULTS a settlement-stage case may take, so a
+      // case at منظورة simply fails its `مداولة_الصلح` test and sails past).
+      //
+      // 🔴 REJECT — DO NOT SILENTLY REPAIR, and note this is the opposite of what
+      // the JUDGMENT path does a few lines below. That asymmetry is the whole
+      // point. A judgment is PROOF the case is in court, so there the case row is
+      // the stale fact and promoting it forward is right. Here the relationship
+      // inverts: the case row is the RELIABLE fact (court number, live sessions)
+      // and the settlement result is the stale one, recorded against a hearing
+      // that events overtook. There is nothing to repair — the request asserts
+      // something that cannot be true. Silently dropping just the stage change
+      // would be worse than either: the user would believe they recorded it.
+      //
+      // COVERS تم_الصلح AS WELL AS لم_يتم_الصلح, and تم_الصلح is the more dangerous
+      // of the two: it routes to تحصيل, which is sealed against manual closure at
+      // EVERY tier including branch_manager, so a case dragged there would be
+      // permanently stuck. It is also offered on ordinary محكمة hearings by the
+      // result dialog, which لم_يتم_الصلح is not.
+      //
+      // PRE-COURT STAGES STAY PERMISSIVE (owner decision). قيد_التدقيق_في_ناجز,
+      // قيد_التدقيق_في_تراضي, مداولة_الصلح and the rest are untouched — a
+      // settlement concluding there is the designed flow, not a regression. The
+      // gate is StagesAtOrPastCourt and nothing else.
+      //
+      // The three inputs mirror the branch conditions further down EXACTLY, so
+      // this refuses precisely what would have moved the stage and no more: a
+      // bare صلح carrying no conciliationResult falls through to the default
+      // branch, which writes no stage, and is therefore left alone.
+      const isStageMovingSettlementResult =
+        data.result === HearingResult.SETTLEMENT_REACHED
+        || data.result === HearingResult.SETTLEMENT_FAILED
+        || (data.result === HearingResult.SETTLEMENT
+          && (data.conciliationResult === "تم_الصلح" || data.conciliationResult === "لم_يتم_الصلح"));
+      if (
+        isStageMovingSettlementResult
+        && settlementProbeCase
+        && caseIsAtOrPastCourt(settlementProbeCase.currentStage)
+      ) {
+        const stageLabel = CaseStageLabels[settlementProbeCase.currentStage as CaseStageValue]
+          || settlementProbeCase.currentStage;
+        // Names the sanctioned alternative on purpose: the user in the incident
+        // had no other way to clear a stale صلح hearing off their list, and a
+        // refusal that leaves them stuck invites them to find another route to
+        // the same damage. Cancelling is reachable by exactly this actor —
+        // POST /api/hearings/:id/cancel is gated on canActOnHearing, the same
+        // predicate that admitted them to this handler.
+        return res.status(400).json({
+          error: `لا يمكن تسجيل نتيجة صلح على قضية بلغت مرحلة "${stageLabel}" — القضية مرفوعة في المحكمة. إذا كانت هذه جلسة صلح قديمة تجاوزتها القضية، فألغِ الجلسة بدلاً من تسجيل نتيجتها.`,
+        });
+      }
+
       // ==================== JUDGMENT MODEL (validated BEFORE any mutation) ====================
       // THE DEGREE IS DERIVED FROM THE CASE PATH, never asked. The opposite of
       // ابتدائي is استئنافي — NOT نهائي, which is a separate concept (can the
@@ -13008,6 +13071,48 @@ export async function registerRoutes(
           lastHearingDate: hearing.hearingDate,
         };
 
+        // ==================== 🔴 EVERY STAGE MOVE FROM HERE IS RECORDED ====================
+        // storage.updateCase does NOT append stage history — it destructures the
+        // date columns, spreads the rest into .set() and returns, so a stageHistory
+        // entry exists only if the CALLER supplies one. PATCH /api/cases/:id does
+        // that unconditionally on any stage change; this handler did it in only 2
+        // of its 8 stage-writing branches, so مشطوبة, تحصيل, محكوم_حكم_ابتدائي, the
+        // عدم_الاختصاص reset and every settlement landing were written to
+        // current_stage and left NO trace. The audit trail lied: the 2026-08-09
+        // incident cases showed a stage_history ending at قيد_التدقيق_في_ناجز /
+        // منظورة while sitting on أغلق_طلب_الصلح.
+        //
+        // That is not merely cosmetic — caseReachedJudgmentStage (both صك gates),
+        // deriveCurrentCaseNumber (which number the case displays) and the terminal
+        // progress bar all read stage_history, and were all being told a case had
+        // never been where it had in fact been.
+        //
+        // NOT A THIRD COPY OF THE APPEND LOGIC. appendStageHistory already exists
+        // and is exported from server/judgment-record.ts (imported above, used by
+        // the appeal-ruling route); the only thing added here is a closure binding
+        // the two arguments that are constant for this request, so each branch
+        // reads as one line naming its stage and its reason.
+        //
+        // BASE ROW: existingCase, read once at the top of the handler. Nothing
+        // between that read and these branches writes stage_history — the memo
+        // sweep above touches activeMemoCount only — so it is a valid base for
+        // every branch. The two branches that already appended keep chaining the
+        // way they did (the ضدنا close builds on the judgment entry it just made,
+        // so the record reads "final judgment, THEN closed" rather than losing one).
+        //
+        // ACTOR: actorDisplayName, matching PATCH /api/cases/:id, the canonical
+        // stage-history writer. It returns the plain name unchanged when no
+        // delegation applies, so non-delegated writes are byte-identical to what
+        // the two existing branches produced; a delegated one now carries the
+        // "(نيابةً عن …)" suffix here too instead of hiding the delegation.
+        const historyBaseCase = existingCase;
+        const historyActor = {
+          id: reqUser.id,
+          name: actorDisplayName(req.actingContext, effectiveCaseId, reqUser.name || reqUser.id),
+        };
+        const stageHistoryFor = (stage: CaseStageValue, notes: string) =>
+          appendStageHistory(historyBaseCase, stage, historyActor, notes);
+
         // ==================== PATH H: JURISDICTION DECLINED (عدم_الاختصاص) ====================
         // Court ruled it lacks jurisdiction → case moves to the target
         // department. Reset stage to استلام, clear lawyers, keep
@@ -13026,6 +13131,7 @@ export async function registerRoutes(
             ...caseUpdate,
             departmentId: toDeptId,
             currentStage: CaseStage.RECEPTION,
+            stageHistory: stageHistoryFor(CaseStage.RECEPTION, "عدم الاختصاص — إعادة القضية لمرحلة الاستلام في القسم المحوّل إليه"),
             primaryLawyerId: null,
             responsibleLawyerId: null,
             assignedLawyers: [],
@@ -13219,18 +13325,12 @@ export async function registerRoutes(
             // judgment stage is written and PERSISTS for لصالحنا/جزئي, and for
             // ضدنا the second write is a genuine, separately-recorded closure with
             // its own history entry — not a stage the case never occupied.
-            const finalStageHistory = Array.isArray(existingCase.stageHistory) ? existingCase.stageHistory : [];
+            // Converted onto the shared appendStageHistory closure — same entry
+            // this branch always wrote (it was one of the only two that did),
+            // just no longer hand-rolled. Identical output for a non-delegated
+            // actor; see the actor note where stageHistoryFor is defined.
             caseUpdate.currentStage = "محكوم_حكم_نهائي";
-            caseUpdate.stageHistory = [
-              ...finalStageHistory,
-              {
-                stage: "محكوم_حكم_نهائي",
-                timestamp: new Date().toISOString(),
-                userId: reqUser.id,
-                userName: reqUser.name || reqUser.id,
-                notes: `حكم نهائي ${judgmentType}`,
-              },
-            ];
+            caseUpdate.stageHistory = stageHistoryFor("محكوم_حكم_نهائي", `حكم نهائي ${judgmentType}`);
             await storage.updateCase(effectiveCaseId, caseUpdate);
 
             if (judgmentType === "لصالحنا" || judgmentType === "جزئي") {
@@ -13366,6 +13466,7 @@ export async function registerRoutes(
             // the lawyer plans to file an objection and supplies an
             // objectionDeadline.
             caseUpdate.currentStage = "محكوم_حكم_ابتدائي";
+            caseUpdate.stageHistory = stageHistoryFor("محكوم_حكم_ابتدائي", `حكم ابتدائي ${judgmentType}`);
             await storage.updateCase(effectiveCaseId, caseUpdate);
 
             // THE OBJECTION MEMO IS NO LONGER CREATED HERE (step 2, owner
@@ -13393,6 +13494,7 @@ export async function registerRoutes(
           caseUpdate.currentStage = "مشطوبة";
           caseUpdate.struckOffDate = todayStr;
           caseUpdate.struckOffReopenDeadline = reopenDeadline;
+          caseUpdate.stageHistory = stageHistoryFor("مشطوبة", `شطب الدعوى — الموعد النهائي لإعادة القيد: ${reopenDeadline}`);
           await storage.updateCase(effectiveCaseId, caseUpdate);
 
           await logCaseActivityActing(req, {
@@ -13446,6 +13548,7 @@ export async function registerRoutes(
           createdTasks.push({ type: "collection_task", id: collectionTask.id, description: "مهمة إعداد خطاب تحصيل" });
 
           caseUpdate.currentStage = "تحصيل";
+          caseUpdate.stageHistory = stageHistoryFor("تحصيل", "تم الصلح — انتقال لمرحلة التحصيل");
           await storage.updateCase(effectiveCaseId, caseUpdate);
         }
 
@@ -13492,9 +13595,13 @@ export async function registerRoutes(
             caseUpdate.status = "مغلق";
             caseUpdate.closedAt = new Date().toISOString();
             caseUpdate.closureReason = ClosureReason.SETTLEMENT_FAILED;
-            // taradiNumber / mohrNumber / taradiStatus / mohrStatus / clientRole /
-            // stageHistory are all left untouched — the settlement record must
-            // survive for history and for the PART B reopen.
+            // taradiNumber / mohrNumber / taradiStatus / mohrStatus / clientRole
+            // are all left untouched — the settlement record must survive for
+            // history and for the PART B reopen. stageHistory is now APPENDED to
+            // (it used to be listed here as "left untouched", which was true and
+            // was the defect: the close became invisible to the record the reopen
+            // and the progress bar both read).
+            caseUpdate.stageHistory = stageHistoryFor("مقفلة", "لم يتم الصلح — إغلاق تلقائي (مدعى عليه) بانتظار رفع الخصم للدعوى");
             await storage.updateCase(effectiveCaseId, caseUpdate);
             await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
@@ -13507,6 +13614,7 @@ export async function registerRoutes(
             caseUpdate.currentStage = "مقفلة";
             caseUpdate.status = "مغلق";
             caseUpdate.closedAt = new Date().toISOString();
+            caseUpdate.stageHistory = stageHistoryFor("مقفلة", "لم يتم الصلح — إغلاق القضية نهائياً");
             await storage.updateCase(effectiveCaseId, caseUpdate);
             await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
@@ -13529,6 +13637,7 @@ export async function registerRoutes(
             caseUpdate.currentStage = "أغلق_طلب_الصلح";
             caseUpdate.isSettlementCase = false;
             caseUpdate.caseClassification = "قيد_الدراسة";
+            caseUpdate.stageHistory = stageHistoryFor("أغلق_طلب_الصلح", "لم يتم الصلح — تحويل القضية لمسار التقاضي العادي");
             await storage.updateCase(effectiveCaseId, caseUpdate);
             await logCaseActivityActing(req, {
               caseId: effectiveCaseId,
@@ -13553,6 +13662,7 @@ export async function registerRoutes(
               caseUpdate.currentStage = "مقفلة";
               caseUpdate.status = "مغلق";
               caseUpdate.closedAt = new Date().toISOString();
+              caseUpdate.stageHistory = stageHistoryFor("مقفلة", "لم يتم الصلح — إغلاق تلقائي (لم يُحدَّد إجراء ما بعد فشل الصلح)");
               await storage.updateCase(effectiveCaseId, caseUpdate);
               await logCaseActivityActing(req, {
                 caseId: effectiveCaseId,
@@ -13562,7 +13672,13 @@ export async function registerRoutes(
                 title: "لم يتم الصلح — تم إغلاق القضية نهائياً (تلقائي)",
               });
             } else {
+              // 🔴 THE INCIDENT BRANCH. This is the one that moved the three
+              // production cases, and it was the most silent of the eleven stage
+              // writes in this handler: no history entry AND no activity row —
+              // the only branch here with neither. It is now guarded upstream
+              // (a court-filed case never reaches it) and recorded when it does.
               caseUpdate.currentStage = "أغلق_طلب_الصلح";
+              caseUpdate.stageHistory = stageHistoryFor("أغلق_طلب_الصلح", "لم يتم الصلح — العودة لمسار التقاضي");
               await storage.updateCase(effectiveCaseId, caseUpdate);
             }
           }
