@@ -1000,10 +1000,19 @@ export default function CasesPage() {
     setAssignData({ lawyerId: "", departmentId: "", internalReviewerId: "", litigatorId: "" });
   };
 
-  const handleApprove = (caseItem: LawCase) => {
-    approveCase(caseItem.id);
-    toast({ title: "تم اعتماد القضية — جاهزة للرفع" });
-    setSelectedCaseId(null);
+  // The toast names the stage THE SERVER LANDED ON, never a hard-coded one: the
+  // committee sends an under-study case to جاهزة_للرفع and an in-court case to
+  // منظورة, and this used to announce "جاهزة للرفع" for both. It also used to fire
+  // unconditionally — approveCase returned void, so a rejected request rolled the
+  // row back silently while the user read a success message.
+  const handleApprove = async (caseItem: LawCase) => {
+    try {
+      const updated = await approveCase(caseItem.id);
+      toast({ title: `تم اعتماد القضية — ${getStageLabel(updated.currentStage)}` });
+      setSelectedCaseId(null);
+    } catch (err) {
+      toast({ title: "تعذّر اعتماد القضية", description: extractApiError(err), variant: "destructive" });
+    }
   };
 
   const handleReject = () => {

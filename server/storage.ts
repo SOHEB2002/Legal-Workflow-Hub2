@@ -1,5 +1,5 @@
 import {
-  type User, type LawCase, type Client, type Consultation, type Hearing,
+  type User, type LawCase, type CaseStageTransition, type Client, type Consultation, type Hearing,
   type FieldTask, type GeneralTaskEvent, type ContactLog, type Notification, type DepartmentInfo, type Memo,
   type SupportTicket,
   type CaseActivity, type InsertCaseActivity,
@@ -432,6 +432,26 @@ export interface IStorage {
   skipCaseCommittee(
     id: string,
     input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<LawCase | undefined>;
+  // The COMMITTEE DECISION itself (إحالة_للجنة_المراجعة → منظورة | جاهزة_للرفع |
+  // الأخذ_بالملاحظات). Same one-transaction shape as skipCaseCommittee, plus the
+  // two review columns. Cases have NO committee-decisions table (consultations and
+  // memos do; contracts do not either) — this follows the CONTRACT precedent and
+  // records the decision in reviewDecision/reviewNotes + the activity log, so it
+  // needs no DDL. THE ROUTE DECIDES the target stage and composes stageHistory;
+  // this method writes, it does not decide.
+  recordCaseCommitteeDecision(
+    id: string,
+    input: {
+      targetStage: string;
+      reviewDecision: string;
+      reviewNotes: string;
+      stageHistory: CaseStageTransition[];
+      activityTitle: string;
+      activityDetails: string;
+      performedBy: string;
+      performerName: string;
+    },
   ): Promise<LawCase | undefined>;
   // Reopen a CLOSED case (مقفلة) at a caller-chosen stage. Same one-transaction
   // shape as skipCaseCommittee: stage update + stage-history entry + activity-log
@@ -6740,6 +6760,71 @@ export class DatabaseStorage implements IStorage {
         details: input.reason.slice(0, 120),
         previousValue: fromStage,
         newValue: targetStage,
+        createdAt: now,
+      });
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  // THE COMMITTEE DECISION for a case. One transaction: stage + the two review
+  // columns + stageHistory + a case_activity_log row. Mirrors skipCaseCommittee's
+  // shape exactly, with two deliberate differences:
+  //
+  //   • reviewDecision / reviewNotes ARE written here, where skipCaseCommittee
+  //     deliberately leaves them alone. A skip HAS no committee decision; this is
+  //     the decision. Both branches write it — PATCH /api/cases/:id's enforcement
+  //     block only ever covered the جاهزة_للرفع and الأخذ_بالملاحظات targets, so an
+  //     in-court approval to منظورة would otherwise record no decision at all.
+  //
+  //   • targetStage and stageHistory are INPUTS, not computed here. The target
+  //     depends on caseClassification and the route already holds the row for its
+  //     permission gates; and stageHistory is composed by the route through the
+  //     shared appendStageHistory helper (server/judgment-record.ts), which this
+  //     module cannot import — judgment-record.ts imports storage, so the reverse
+  //     would be a cycle. Same division of labour as reopenCase below, whose
+  //     lifecycle flags are likewise decided by its route.
+  //
+  // status is NOT written, deliberately (owner decision). The three sibling
+  // committee-decision endpoints do not write it either, and law_cases.status has
+  // no value meaning "filed" that anything in the system produces.
+  async recordCaseCommitteeDecision(
+    id: string,
+    input: {
+      targetStage: string;
+      reviewDecision: string;
+      reviewNotes: string;
+      stageHistory: CaseStageTransition[];
+      activityTitle: string;
+      activityDetails: string;
+      performedBy: string;
+      performerName: string;
+    },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      await tx.update(lawCases).set({
+        currentStage: input.targetStage,
+        reviewDecision: input.reviewDecision,
+        reviewNotes: input.reviewNotes,
+        stageHistory: input.stageHistory,
+        updatedAt: now,
+      }).where(eq(lawCases.id, id));
+      // Equivalent to the generic stage_changed row PATCH /api/cases/:id writes,
+      // so the case timeline reads the same whichever route moved the case.
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "stage_changed",
+        title: input.activityTitle,
+        details: input.activityDetails.slice(0, 120),
+        previousValue: fromStage,
+        newValue: input.targetStage,
         createdAt: now,
       });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));

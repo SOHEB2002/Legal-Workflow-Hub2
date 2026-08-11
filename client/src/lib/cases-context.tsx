@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
-import { CaseStatus, Priority, CaseStage, CaseClassification, getStagesForClassification, caseNotificationRecipientId } from "@shared/schema";
+import { CaseStatus, Priority, CaseStage, CaseClassification, CommitteeDecision, getStagesForClassification, caseNotificationRecipientId } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAssigned, notifyCaseReturnedForRevision } from "./notification-triggers";
@@ -15,7 +15,11 @@ interface CasesContextType {
   updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
   deleteCase: (id: string) => Promise<void>;
   assignCase: (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null, litigatorId?: string | null) => void;
-  approveCase: (id: string, notes?: string) => void;
+  // Returns the case as the SERVER left it, so callers can name the stage the
+  // committee actually landed on instead of assuming جاهزة_للرفع. Rejects on
+  // failure — it used to return void and swallow everything, so the toast fired
+  // unconditionally and lied whenever the request 400'd.
+  approveCase: (id: string, notes?: string) => Promise<LawCase>;
   rejectCase: (id: string, notes: string, decision: ReviewDecisionType) => void;
   markReadyToSubmit: (id: string) => void;
   markSubmitted: (id: string) => void;
@@ -305,22 +309,33 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     notifyCaseAssigned(id, lawCase?.caseNumber || "", lawyerId).catch(() => {});
   };
 
-  const approveCase = (id: string, notes?: string) => {
-    const lawCase = cases.find(c => c.id === id);
-    if (!lawCase || !user) return;
-    const newTransition = createStageTransitionRecord(
-      CaseStage.READY_TO_SUBMIT,
-      user.id,
-      user.name,
-      notes ? `اعتماد اللجنة - ${notes}` : "اعتماد اللجنة"
-    );
-    updateCase(id, {
-      status: CaseStatus.READY_TO_SUBMIT as CaseStatusValue,
-      currentStage: CaseStage.READY_TO_SUBMIT,
-      stageHistory: [...(lawCase.stageHistory || []), newTransition],
-      reviewDecision: "approved" as ReviewDecisionType,
-      reviewNotes: notes || "",
+  // 🔴 THE COMMITTEE DECISION IS NO LONGER MADE HERE. This used to hard-code
+  // CaseStage.READY_TO_SUBMIT (جاهزة_للرفع) for EVERY case and PATCH it — but that
+  // stage means "ready to FILE" and exists only on the four under-study paths. An
+  // in-court case is already filed and its post-committee stage is منظورة, so an
+  // in-court case approved here landed off its own path (production case
+  // 4870079661). It also wrote law_cases.status, which no committee-decision
+  // endpoint in this codebase does, and composed a stage-history note that
+  // PATCH then overwrote and discarded.
+  //
+  // POST /api/cases/:id/committee-decision now decides the stage from the case
+  // row and writes stage + reviewDecision + reviewNotes + history + activity row
+  // in one transaction. This function just relays the answer.
+  //
+  // Follows the skipDataCompletion precedent rather than invalidateQueries: take
+  // the row the server returns, splice it straight into state, then schedule the
+  // background refetch. Invalidating would blank the row and re-fetch the whole
+  // list, which reads as a stall on the one action the committee chair performs
+  // most. Returns the updated case so the caller can name the real target stage.
+  const approveCase = async (id: string, notes?: string): Promise<LawCase> => {
+    const response = await apiRequest("POST", `/api/cases/${id}/committee-decision`, {
+      decision: CommitteeDecision.APPROVED,
+      notes: notes || "",
     });
+    const updatedCase: LawCase = await response.json();
+    setCases((prev) => prev.map((c) => c.id === id ? migrateCase(updatedCase) : c));
+    scheduleBackgroundRefetch();
+    return migrateCase(updatedCase);
   };
 
   const rejectCase = (id: string, notes: string, decision: ReviewDecisionType) => {
