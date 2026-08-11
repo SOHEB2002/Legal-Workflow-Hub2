@@ -13074,6 +13074,55 @@ export async function registerRoutes(
         });
       }
 
+      // ==================== 🔴 …AND THE CASE MUST HAVE A SETTLEMENT TRACK AT ALL ====================
+      // ADDITIVE to the at-or-past-court guard above, not a replacement — both run.
+      // That one asks "has this case already gone PAST settlement"; this one asks
+      // "does this case have a settlement stage in the first place". A case can
+      // fail the second while passing the first, and that gap is what produced the
+      // 16 production rows sitting at تحصيل on InCourtNoMemoStages.
+      //
+      // THE HOLE IT CLOSES. caseIsAtOrPastCourt("دراسة") is FALSE, so an in-court
+      // case parked on a PRE-court stage sailed through — and the SETTLEMENT_REACHED
+      // branch further down reads no classification and no path before writing
+      // تحصيل. A تراضي/تسوية_ودية hearing can be created on such a case (hearing
+      // creation only auto-promotes to مداولة_الصلح from قيد_التدقيق_في_ناجز /
+      // قيد_التدقيق_في_تراضي / أغلق_طلب_الصلح, and simply leaves every other stage
+      // alone), so the session exists and "تم الصلح" was one click away.
+      //
+      // 🔴 WHICH PATHS ARE NEWLY REFUSED — measured, not assumed:
+      //     HAVE مداولة_الصلح (unchanged): USGeneral, USCommercial, USLabor,
+      //                                    InCourtSettlement
+      //     LACK it (newly refused):       USAdmin, InCourtDefendant,
+      //                                    InCourtPlaintiff, InCourtNoMemo
+      // ⚠ USAdmin IS IN THE SECOND GROUP. The admin path runs
+      // تحرير_صيغة_التظلم → … → انتظار_رد_التظلم → تحصيل and has NO مداولة_الصلح, so
+      // an admin case has no settlement-hearing flow to protect. Its collection
+      // route is the GRIEVANCE edge انتظار_رد_التظلم → تحصيل, which is a PATCH
+      // transition and never reaches this handler — so that flow is untouched.
+      //
+      // Resolved with getStagesForClassification on the same five arguments used
+      // everywhere else. departmentName is load-bearing here and not decorative:
+      // it is the ONLY thing separating USAdmin (no settlement) from the other
+      // three under-study paths (settlement), so an unresolved department would
+      // silently fall back to General and wrongly permit.
+      if (isStageMovingSettlementResult && settlementProbeCase) {
+        const settlementDept = settlementProbeCase.departmentId
+          ? await storage.getDepartmentById(settlementProbeCase.departmentId)
+          : null;
+        const settlementCasePath = getStagesForClassification(
+          settlementProbeCase.caseClassification as CaseClassificationValue,
+          settlementDept?.name,
+          settlementProbeCase.clientRole ?? undefined,
+          !!settlementProbeCase.memoRequired,
+          !!settlementProbeCase.isSettlementCase,
+        );
+        if (!settlementCasePath.includes("مداولة_الصلح")) {
+          return res.status(400).json({
+            error: "لا يمكن تسجيل نتيجة صلح على هذه القضية — مسارها لا يتضمّن مرحلة مداولة الصلح أصلاً. إذا كان الصلح وارداً فعلاً، صحّح تصنيف القضية أو مسارها أولاً؛ وإذا كانت هذه جلسة صلح أُنشئت بالخطأ، فألغِ الجلسة بدلاً من تسجيل نتيجتها.",
+          });
+        }
+      }
+
       // ==================== JUDGMENT MODEL (validated BEFORE any mutation) ====================
       // THE DEGREE IS DERIVED FROM THE CASE PATH, never asked. The opposite of
       // ابتدائي is استئنافي — NOT نهائي, which is a separate concept (can the
