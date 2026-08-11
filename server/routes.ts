@@ -7146,6 +7146,27 @@ export async function registerRoutes(
       if (lawCase.currentStage !== "إحالة_للجنة_المراجعة") {
         return res.status(400).json({ error: "القضية ليست في مرحلة لجنة المراجعة" });
       }
+      // A SETTLEMENT case has no committee, so it has no committee decision either.
+      // Its path is InCourtSettlementStages — [استلام, مداولة_الصلح, تحصيل] — which
+      // contains neither إحالة_للجنة_المراجعة nor منظورة. The stage guard above does
+      // NOT catch this: it tests the case's ACTUAL current_stage, not its path, and
+      // a settlement case can be written to the committee stage through the flat
+      // transition table (it is not reachable from the ordinary UI, which refuses an
+      // off-path move, but it is reachable by direct PATCH). Without this term the
+      // APPROVED branch would send it to منظورة — off its own three-stage path — and
+      // strand it exactly the way case 4870079661 was stranded on جاهزة_للرفع.
+      //
+      // 🔴 SCOPED TO IN-COURT ON PURPOSE, and the classification term is NOT
+      // redundant. getStagesForClassification consults isSettlementCase ONLY inside
+      // the منظورة_بالمحكمة branch; a قيد_الدراسة case carrying the flag resolves to
+      // an ordinary UNDER-STUDY array, which does have a committee stage and whose
+      // post-committee target genuinely IS جاهزة_للرفع. Refusing that shape would be
+      // a behaviour change, not a fix — so it is deliberately still accepted.
+      if (lawCase.caseClassification === CaseClassification.IN_COURT && lawCase.isSettlementCase) {
+        return res.status(400).json({
+          error: "قضية الصلح لا تمر بلجنة المراجعة — مسارها: استلام ← مداولة الصلح ← تحصيل. تُسجَّل النتيجة من مرحلة مداولة الصلح (تم الصلح / لم يتم الصلح)، لا من اللجنة.",
+        });
+      }
       if (lawCase.pausedAt || lawCase.awaitingCompletion) {
         return res.status(400).json({ error: "القضية في حالة لا تسمح بقرار اللجنة" });
       }
@@ -7280,16 +7301,23 @@ export async function registerRoutes(
       // UNDER-STUDY ONLY. The review committee belongs to the قيد_الدراسة workflow
       // (drafted → internal review → committee → جاهزة_للرفع). A منظورة_بالمحكمة case
       // is already filed: what goes to committee for it is the MEMO (its own entity,
-      // with its own lifecycle), never the case. An in-court case sitting at the
-      // committee stage is therefore a state the product does not recognise — the
-      // only known occurrence was corrupt seed data (T-1010/T-1011, seeded by a raw
-      // INSERT that bypassed the state machine) — so refuse to act on it rather than
-      // write a stage that isn't on that case's path.
+      // with its own lifecycle and its own /committee-decision endpoint), never the
+      // case.
       //
-      // THIS GUARD IS WHAT MAKES THE FIXED TARGET CORRECT: because only قيد_الدراسة
-      // cases can reach storage.skipCaseCommittee, its hard-coded جاهزة_للرفع target
-      // is unconditionally right (that IS the under-study post-committee stage). No
-      // classification-aware target logic is needed downstream.
+      // ⚠ AN IN-COURT CASE CAN NONETHELESS REACH THIS STAGE, and this comment used to
+      // deny it — it said the only known occurrence was corrupt seed data
+      // (T-1010/T-1011, raw INSERTs that bypassed the state machine). That was wrong.
+      // InCourtDefendantMemoStages and InCourtPlaintiffMemoStages BOTH contain
+      // مراجعة_داخلية and إحالة_للجنة_المراجعة, so moveToNextStage walks an in-court
+      // case in through the ordinary UI. Production case 4870079661 (in-court,
+      // مدعى_عليه) did exactly that on 2026-08-05.
+      //
+      // THE REFUSAL BELOW STAYS ANYWAY, for a different reason than the old one: the
+      // SKIP has a fixed جاهزة_للرفع target, which is the under-study post-committee
+      // stage and wrong for an in-court case. The committee DECISION endpoint
+      // (POST /api/cases/:id/committee-decision) is the path that handles both — it
+      // computes the target from caseClassification and routes an in-court case to
+      // منظورة. So an in-court case at this stage is not stuck; it just cannot skip.
       if (lawCase.caseClassification !== CaseClassification.UNDER_STUDY) {
         return res.status(400).json({ error: "لا يمكن تجاوز اللجنة لقضية منظورة بالمحكمة" });
       }
