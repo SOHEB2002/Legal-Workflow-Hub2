@@ -15,7 +15,7 @@ import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
-import { HearingResult, HearingType, caseIsAtOrPastCourt, type Hearing } from "@shared/schema";
+import { HearingResult, HearingType, caseIsAtOrPastCourt, getStagesForClassification, CaseClassification, type CaseClassificationValue, type Hearing } from "@shared/schema";
 
 // SHARED hearing-result dialog. Extracted verbatim from the hearings page so the
 // hearings screen AND the unified-tasks hub mount the SAME component → same
@@ -223,8 +223,35 @@ export function HearingResultDialog({
                   // as it was, matching the server, which only refuses when it
                   // actually holds the case row.
                   const inCourt = caseIsAtOrPastCourt(linkedCase?.currentStage);
+                  // …AND THE CASE MUST HAVE A SETTLEMENT TRACK AT ALL. Mirrors the
+                  // second server guard: the endpoint refuses a settlement result
+                  // when the case's RESOLVED PATH contains no مداولة_الصلح, so the
+                  // options must stop being offered there too.
+                  //
+                  // The at-or-past-court test above does NOT cover this. A case
+                  // parked on a PRE-court stage (دراسة, استكمال_البيانات) passes it
+                  // while having no settlement stage anywhere on its path — the gap
+                  // that produced the 16 rows sitting at تحصيل on
+                  // InCourtNoMemoStages. A تراضي hearing can exist on such a case,
+                  // so hearingType alone kept the menu open.
+                  //
+                  // Refused paths: USAdmin, InCourtDefendant, InCourtPlaintiff,
+                  // InCourtNoMemo. Unchanged: USGeneral, USCommercial, USLabor,
+                  // InCourtSettlement — every path that really does run through
+                  // مداولة_الصلح keeps the menu exactly as it is today.
+                  //
+                  // An unlinked hearing leaves hasSettlementTrack TRUE (permissive),
+                  // matching the server, which only refuses when it holds the case.
+                  const hasSettlementTrack = !linkedCase || getStagesForClassification(
+                    (linkedCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
+                    departments.find((d) => d.id === linkedCase.departmentId)?.name,
+                    linkedCase.clientRole || undefined,
+                    !!linkedCase.memoRequired,
+                    !!linkedCase.isSettlementCase,
+                  ).includes("مداولة_الصلح");
                   const isSettlementContext =
                     !inCourt
+                    && hasSettlementTrack
                     && (
                       (!!linkedCase?.isSettlementCase && linkedCase?.currentStage === "مداولة_الصلح")
                       || ht === HearingType.TARADI || ht === HearingType.SETTLEMENT
@@ -261,7 +288,7 @@ export function HearingResultDialog({
                           pre-court case, where settling is the designed flow;
                           removing it from this menu outright is a separate
                           product question and is NOT what this does. */}
-                      {!inCourt && <SelectItem value="تم_الصلح">تم الصلح</SelectItem>}
+                      {!inCourt && hasSettlementTrack && <SelectItem value="تم_الصلح">تم الصلح</SelectItem>}
                       <SelectItem value="شطب">شطب</SelectItem>
                       <SelectItem value="عدم_الاختصاص">عدم الاختصاص</SelectItem>
                     </>
