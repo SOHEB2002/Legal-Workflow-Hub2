@@ -9,7 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { caseHasReturnedFromReview } from "@/lib/case-stage-utils";
-import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf, caseClosureBadgeSuffix, getStageLabel } from "@shared/schema";
+import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf, caseClosureBadgeSuffix, getStageLabel, getStagesForClassification } from "@shared/schema";
 import { caseCurrentJudgmentOutcome } from "@/lib/attachment-indicators";
 import type { LawCase, CaseClassificationValue } from "@shared/schema";
 
@@ -244,10 +244,43 @@ export function CaseStagePanel({
       }}
       onInternalReviewSendBack={async (reviewerNotes) => {
         if (!user) return;
+        // 🔴 THE DRAFTING STAGE IS NOT THE SAME ON EVERY PATH. This used to
+        // hard-code تحرير_صحيفة_الدعوى for everything except the tazallum branch —
+        // but that is the PLAINTIFF pleading. An in-court مدعى_عليه case drafts
+        // تحرير_مذكرة_جوابية, so an internal reviewer sending a defendant case back
+        // landed it on the plaintiff drafting stage: the same class of defect as
+        // the committee approve button, one stage earlier. The server accepts
+        // either, because ALLOWED_CASE_TRANSITIONS is a flat from→to table and
+        // BOTH edges out of مراجعة_داخلية exist in it.
+        //
+        // Resolved from the case's OWN path instead: the send-back target is
+        // whatever sits immediately BEFORE مراجعة_داخلية in it. Measured across all
+        // six paths that have an internal-review stage, that predecessor is
+        // تحرير_مذكرة_جوابية on the in-court defendant path and تحرير_صحيفة_الدعوى
+        // on the other five — exactly the distinction the old ternary missed.
+        //
+        // The -1 case is SAFE here, unlike the committee target: a missing
+        // مراجعة_داخلية makes indexOf return -1 and stages[-2] is undefined, so the
+        // fallback genuinely fires rather than silently yielding stages[0].
+        //
+        // The مراجعة_داخلية_للتظلم branch is untouched — the grievance review has
+        // exactly one origin (تحرير_صيغة_التظلم, admin path only) and no
+        // path-dependent variant to resolve.
+        const resolveSendBackStage = (): string => {
+          const stages = getStagesForClassification(
+            (caseItem.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
+            getDepartmentName(caseItem.departmentId || ""),
+            caseItem.clientRole || undefined,
+            !!caseItem.memoRequired,
+            !!caseItem.isSettlementCase,
+          );
+          const reviewIdx = stages.indexOf("مراجعة_داخلية");
+          return reviewIdx > 0 ? stages[reviewIdx - 1] : "تحرير_صحيفة_الدعوى";
+        };
         const targetStage =
           caseItem.currentStage === "مراجعة_داخلية_للتظلم"
             ? "تحرير_صيغة_التظلم"
-            : "تحرير_صحيفة_الدعوى";
+            : resolveSendBackStage();
         setStageTransitioning(true);
         try {
           await updateCase(caseItem.id, {
