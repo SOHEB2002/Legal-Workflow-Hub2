@@ -1690,22 +1690,55 @@ function validateStageTransition(
     effectiveRoles.push("internal_reviewer");
   }
 
+  // ==================== THE CASE'S RESOLVED PATH — COMPUTED ONCE ====================
+  // HOISTED VERBATIM out of the rollback block immediately below, where these
+  // three values used to be declared. Pure refactor: same inputs, same call, same
+  // order, and there is not a single statement between this declaration and the
+  // block that consumed it — so nothing can mutate entityData, currentStage or
+  // targetStage in between, and getStagesForClassification is a pure lookup over
+  // module-level arrays. The rollback block still gates on
+  // `entityType === "case" && entityData`, so it reads exactly the values it
+  // computed for itself before.
+  //
+  // WHY HOIST AT ALL: the resolved path is the only thing in this function that
+  // knows a stage belongs to a DIFFERENT case shape, and it was reachable only in
+  // the rollback direction. Making it function-scope puts it in scope at the
+  // forward matcher further down. NOTHING READS IT THERE YET — that is a separate,
+  // separately-approved batch. This commit changes no outcome.
+  //
+  // 🔴 STAGE SELECTION ROUTES ON THE CASE'S DEPARTMENT, never on caseType, which is
+  // free-text user input ("بيع وتوريد" …). Callers stash the resolved name on
+  // entityData.departmentName before invoking this function — see PATCH
+  // /api/cases/:id. When it is absent, getStagesForClassification silently falls
+  // back to the GENERAL array, which is why that stash matters.
+  //
+  // 🔴 AND THE CALLER MUST KEEP PASSING THE POST-UPDATE SHAPE. PATCH builds
+  // `mergedCase = { ...existing, ...req.body }` precisely so a request that also
+  // changes caseClassification / memoRequired / clientRole / isSettlementCase
+  // resolves against what the case is BECOMING, not what it was. That is
+  // load-bearing, not incidental: the "لم يتم الصلح — استكمال الإجراءات" control
+  // (case-progress-bar.tsx, the handleSettlementDecision call for أغلق_طلب_الصلح)
+  // sends `{ isSettlementCase: false, caseClassification: "قيد_الدراسة" }` in the
+  // SAME request as the stage move. Resolved against `existing` the case would
+  // still look like a settlement case and land on the 3-stage settlement path;
+  // resolved against the merge it correctly lands on an under-study path that
+  // contains both endpoints. Never "simplify" that call site to pass `existing`.
+  const casePath: CaseStageValue[] | null =
+    (entityType === "case" && entityData)
+      ? getStagesForClassification(
+          entityData.caseClassification as CaseClassificationValue,
+          (entityData.departmentName as string | undefined) ?? undefined,
+          entityData.clientRole as string | undefined,
+          !!entityData.memoRequired,
+          !!entityData.isSettlementCase,
+        )
+      : null;
+  const caseCurrentIdx = casePath ? casePath.indexOf(currentStage as CaseStageValue) : -1;
+  const caseTargetIdx = casePath ? casePath.indexOf(targetStage as CaseStageValue) : -1;
+
   // Rollback logic for cases
   if (entityType === "case" && entityData) {
-    const classification = entityData.caseClassification as string;
-    // Stage selection routes on the case's DEPARTMENT, not on caseType
-    // (which is free-text user input). Callers stash the resolved
-    // department name on entityData.departmentName before invoking this
-    // function — see the PATCH /api/cases/:id handler.
-    const departmentName = (entityData.departmentName as string | undefined) ?? undefined;
-    const clientRole = entityData.clientRole as string | undefined;
-    const memoRequired = !!entityData.memoRequired;
-    const isSettlementCase = !!entityData.isSettlementCase;
-    const stages = getStagesForClassification(classification as CaseClassificationValue, departmentName, clientRole, memoRequired, isSettlementCase);
-    const currentIdx = stages.indexOf(currentStage as CaseStageValue);
-    const targetIdx = stages.indexOf(targetStage as CaseStageValue);
-
-    if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
+    if (caseCurrentIdx >= 0 && caseTargetIdx >= 0 && caseTargetIdx < caseCurrentIdx) {
       // This is a rollback
       const isLawyer = effectiveRoles.includes("assigned_lawyer");
       // Phase 5 B/M4 — dept_head rollback is scoped to their OWN department
@@ -1719,13 +1752,13 @@ function validateStageTransition(
       if (isBranchManager || isOwnDeptHead) {
         return { allowed: true }; // can go back to ANY previous stage
       }
-      if (grantInternalReviewer() && targetIdx === currentIdx - 1) {
+      if (grantInternalReviewer() && caseTargetIdx === caseCurrentIdx - 1) {
         return { allowed: true }; // reviewer can send back one stage (to drafting)
       }
-      if (isLawyer && targetIdx === currentIdx - 1) {
+      if (isLawyer && caseTargetIdx === caseCurrentIdx - 1) {
         return { allowed: true }; // can only go back ONE stage
       }
-      if (isLawyer && targetIdx < currentIdx - 1) {
+      if (isLawyer && caseTargetIdx < caseCurrentIdx - 1) {
         return { allowed: false, reason: "المحامي يمكنه الرجوع مرحلة واحدة فقط" };
       }
       return { allowed: false, reason: "ليس لديك صلاحية للرجوع في المراحل" };
@@ -4193,11 +4226,21 @@ export async function registerRoutes(
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
         // Use merged case data for validation when classification also changes simultaneously.
         // Stash the resolved department name on the merged copy under
-        // `departmentName` so validateStageTransition's rollback path —
+        // `departmentName` so validateStageTransition's path resolution —
         // which calls getStagesForClassification(classification, departmentName)
         // — picks the right commercial/labor/admin/general stage array. The
         // case's own caseType field is free-text user input ("بيع وتوريد"
         // etc.) and is NOT used for routing.
+        //
+        // 🔴 THE MERGE IS LOAD-BEARING — do NOT pass `existing` here. A request may
+        // change caseClassification / memoRequired / clientRole / isSettlementCase
+        // in the SAME body as the stage move, and the path must resolve against
+        // what the case is BECOMING. The "لم يتم الصلح — استكمال الإجراءات" control
+        // sends `{ isSettlementCase: false, caseClassification: "قيد_الدراسة" }`
+        // together with its move to أغلق_طلب_الصلح; against `existing` it would
+        // still resolve to the 3-stage settlement path, which contains neither
+        // endpoint. Full reasoning at the casePath declaration in
+        // validateStageTransition.
         const mergedCase: any = { ...existing, ...req.body };
         try {
           const dept = existing.departmentId
