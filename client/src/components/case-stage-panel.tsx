@@ -9,7 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { caseHasReturnedFromReview } from "@/lib/case-stage-utils";
-import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf, caseClosureBadgeSuffix } from "@shared/schema";
+import { CaseClassification, findLatestJudgmentHearing, judgmentDirectionOf, caseClosureBadgeSuffix, getStageLabel } from "@shared/schema";
 import { caseCurrentJudgmentOutcome } from "@/lib/attachment-indicators";
 import type { LawCase, CaseClassificationValue } from "@shared/schema";
 
@@ -283,11 +283,20 @@ export function CaseStagePanel({
       // handleReject bodies verbatim (same approveCase / rejectCase context fns,
       // same toasts); the dialog-close is routed through onClosed so the cases
       // page closes its detail dialog exactly as before.
-      onReviewCommitteeApprove={() => {
-        approveCase(caseItem.id);
-        toast({ title: "تم اعتماد القضية — جاهزة للرفع" });
-        onClosed?.();
-        onChanged?.();
+      // Awaited, and the toast names the stage the SERVER landed on — an
+      // under-study case goes to جاهزة_للرفع, an in-court one to منظورة, and this
+      // announced "جاهزة للرفع" for both. The dialog now closes only on success;
+      // a failure keeps it open with the server's own message, matching
+      // onReturnToCommittee above.
+      onReviewCommitteeApprove={async () => {
+        try {
+          const updated = await approveCase(caseItem.id);
+          toast({ title: `تم اعتماد القضية — ${getStageLabel(updated.currentStage)}` });
+          onClosed?.();
+          onChanged?.();
+        } catch (err) {
+          toast({ title: "تعذّر اعتماد القضية", description: extractApiError(err), variant: "destructive" });
+        }
       }}
       onReviewCommitteeAddNotes={(committeeNotes) => {
         rejectCase(caseItem.id, committeeNotes || "تم إضافة ملاحظات من لجنة المراجعة", "rejected");
