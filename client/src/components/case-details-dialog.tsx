@@ -674,9 +674,23 @@ export function CaseDetailsDialog({
                   reports.tsx:1024 and support.tsx:256 already pass dir="rtl" for
                   exactly this reason — this follows that precedent. */}
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full" dir="rtl">
-                <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
+                {/* 🔴 THE COLUMN COUNT IS COUPLED TO THE TRIGGER LIST BELOW —
+                    grid-cols-* must equal the number of TabsTrigger elements, or
+                    the row wraps ragged (the grid does not count them for you).
+                    NINE triggers today: 3 x 3 on small, one row of 9 on lg.
+                    ⚠ ADD OR REMOVE A TRIGGER AND YOU MUST EDIT THIS LINE TOO.
+                    A pending change (drop التعليقات, add المهام) touches this same
+                    block; it is trigger-count-neutral, but re-check the count
+                    against the list rather than assuming. */}
+                <TabsList className="grid w-full grid-cols-3 lg:grid-cols-9">
                   <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
                   <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
+                  {/* Placed between الجلسات and سجل المراحل on purpose: the court
+                      record reads sessions -> rulings -> stage history, and it
+                      leaves سجل الأحكام adjacent to the tab it used to live
+                      inside, so anyone who knew the old location finds it one tab
+                      over rather than at the far end of the row. */}
+                  <TabsTrigger value="judgments" data-testid="tab-judgments">سجل الأحكام</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
                   <TabsTrigger value="comments" data-testid="tab-comments">التعليقات</TabsTrigger>
                   <TabsTrigger value="activity" data-testid="tab-activity">النشاط</TabsTrigger>
@@ -1433,25 +1447,23 @@ export function CaseDetailsDialog({
                   })()}
                 </TabsContent>
 
-                <TabsContent value="history" className="mt-4">
-                  {/* ==================== سجل الأحكام ====================
-                      FOLDED INTO THIS TAB rather than given a ninth one, and that
-                      is a deliberate avoidance: the TabsList above is
-                      `grid-cols-4 lg:grid-cols-8` with the count hard-coded, and a
-                      separate pending change (drop التعليقات, add المهام) edits
-                      that same block. A ninth trigger would collide with it in the
-                      one line both changes must touch; a section inside an existing
-                      TabsContent collides with nothing.
+                {/* ==================== سجل الأحكام ====================
+                    ITS OWN TAB, like الجلسات (owner ruling). Batch 5 folded this
+                    panel into سجل المراحل specifically to avoid editing the
+                    hard-coded TabsList column count; the owner has since ruled the
+                    ruling chain is a first-class record, not a preamble to the
+                    stage list, so the count was edited instead — see the note on
+                    the TabsList above, which now says the coupling out loud.
+                    سجل المراحل is back to stage history alone, exactly as it was
+                    before batch 5.
 
-                      It sits ABOVE the stage list because it is the coarser story:
-                      which rulings this case has had, over a stage history that can
-                      run to dozens of entries.
-
-                      RENDERS NOTHING when the case has no ruling — no header, no
-                      empty state. A case that was never judged should look exactly
-                      as it does today. */}
-                  {judgments.length > 0 && (
-                    <div className="mb-6 space-y-3">
+                    Unlike the folded version, this one DOES render an empty state:
+                    a tab the user chose must answer, and a blank pane is
+                    indistinguishable from a failed load. The folded version could
+                    render nothing because the stage list was there to fill it. */}
+                <TabsContent value="judgments" className="mt-4">
+                  {judgments.length > 0 ? (
+                    <div className="space-y-3">
                       <p className="text-sm font-medium text-primary flex items-center gap-1">
                         <Scale className="w-4 h-4" /> سجل الأحكام
                       </p>
@@ -1568,7 +1580,14 @@ export function CaseDetailsDialog({
                         );
                       })}
                     </div>
+                  ) : (
+                    <p className="text-muted-foreground text-center py-8">لا توجد أحكام مسجَّلة على هذه القضية</p>
                   )}
+                </TabsContent>
+
+                {/* سجل المراحل — stage history ONLY, exactly as it was before
+                    batch 5 folded the ruling chain in above it. */}
+                <TabsContent value="history" className="mt-4">
                   {selectedCase.stageHistory && selectedCase.stageHistory.length > 0 ? (
                     <div className="space-y-3">
                       {[...selectedCase.stageHistory].reverse().map((transition, index) => (
