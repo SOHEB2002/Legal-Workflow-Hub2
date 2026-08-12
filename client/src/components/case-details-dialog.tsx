@@ -20,6 +20,7 @@ import {
   RotateCcw,
   FileText,
   Gavel,
+  Scale,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,7 +87,7 @@ import {
   hearingProducesNoMinutes,
   caseNotificationRecipientId,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue } from "@shared/schema";
+import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment } from "@shared/schema";
 
 // Stages that mark a REAL trip through internal review. Moved here verbatim with
 // the dialog — the actions tab's "إرجاع من المراجعة الداخلية" block is its only
@@ -291,6 +292,44 @@ export function CaseDetailsDialog({
     })();
     return () => { cancelled = true; };
   }, [open, caseItem?.id, caseItem?.updatedAt]);
+
+  // ---- سجل الأحكام — the case's ruling chain (batch 5) ----
+  // Fetched, not derived: the list response carries only the CURRENT ruling's
+  // three summary fields, and this panel is about the CHAIN. Mirrors the
+  // stageHistory graft above field-for-field — same effect shape, same
+  // updatedAt re-run, same silent fallback — because both answer "the list gave
+  // me a summary, fetch the full thing when the dialog opens".
+  //
+  // A FAILURE RENDERS NOTHING, deliberately. The endpoint is new and reads tables
+  // applied by hand; an error must not blank the سجل المراحل list it sits above,
+  // which is existing, working, and unrelated.
+  const [judgments, setJudgments] = useState<(CaseJudgment & { hasDeed?: boolean })[]>([]);
+  useEffect(() => {
+    if (!open || !caseItem?.id) { setJudgments([]); return; }
+    const id = caseItem.id;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("GET", `/api/cases/${id}/judgments`);
+        const body = await res.json();
+        if (!cancelled) setJudgments(Array.isArray(body?.judgments) ? body.judgments : []);
+      } catch {
+        if (!cancelled) setJudgments([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, caseItem?.id, caseItem?.updatedAt]);
+
+  // recorded_by is a bare varchar with NO FK (matching attending_lawyer_id /
+  // flagged_by / checked_in_by), and the backfill wrote the established "system"
+  // sentinel, which names no user. Resolve against the full roster rather than
+  // `lawyers` — a صك receipt can be recorded by a branch_manager, who is not in
+  // the assignable-lawyer list.
+  const getJudgmentActorName = (id: string | null): string => {
+    if (!id) return "-";
+    if (id === "system") return "النظام";
+    return users.find((u) => u.id === id)?.name || id;
+  };
 
   // The case we render: the LIVE row the host passed (so context mutations —
   // inline edits, stage transitions — keep re-rendering it exactly as before),
@@ -1395,6 +1434,108 @@ export function CaseDetailsDialog({
                 </TabsContent>
 
                 <TabsContent value="history" className="mt-4">
+                  {/* ==================== سجل الأحكام ====================
+                      FOLDED INTO THIS TAB rather than given a ninth one, and that
+                      is a deliberate avoidance: the TabsList above is
+                      `grid-cols-4 lg:grid-cols-8` with the count hard-coded, and a
+                      separate pending change (drop التعليقات, add المهام) edits
+                      that same block. A ninth trigger would collide with it in the
+                      one line both changes must touch; a section inside an existing
+                      TabsContent collides with nothing.
+
+                      It sits ABOVE the stage list because it is the coarser story:
+                      which rulings this case has had, over a stage history that can
+                      run to dozens of entries.
+
+                      RENDERS NOTHING when the case has no ruling — no header, no
+                      empty state. A case that was never judged should look exactly
+                      as it does today. */}
+                  {judgments.length > 0 && (
+                    <div className="mb-6 space-y-3">
+                      <p className="text-sm font-medium text-primary flex items-center gap-1">
+                        <Scale className="w-4 h-4" /> سجل الأحكام
+                      </p>
+                      {judgments.map((j) => {
+                        // The three deed states, the SAME partition
+                        // lib/attachment-indicators.ts draws for the badges:
+                        //   no receipt date        → بانتظار استلام الصك
+                        //   date but no file       → بانتظار إرفاق الصك
+                        //   file on record         → الصك مرفق
+                        // hasDeed asks judgment_attachments — THIS ruling's own صك.
+                        const hasDate = !!String(j.deedReceivedDate || "").trim();
+                        const deed = !hasDate
+                          ? { text: "بانتظار استلام الصك", tone: "text-amber-700 dark:text-amber-400" }
+                          : !j.hasDeed
+                          ? { text: "بانتظار إرفاق الصك", tone: "text-amber-700 dark:text-amber-400" }
+                          : { text: "الصك مرفق", tone: "text-green-700 dark:text-green-400" };
+                        const outcomeTone = j.outcome === "لصالحنا"
+                          ? "text-green-700 dark:text-green-400"
+                          : j.outcome === "ضدنا"
+                          ? "text-red-700 dark:text-red-400"
+                          : "text-amber-700 dark:text-amber-400";
+                        return (
+                          <div
+                            key={j.id}
+                            className={`flex items-start gap-4 p-3 border rounded-lg ${j.supersededAt ? "opacity-70 border-dashed" : ""}`}
+                            data-testid={`judgment-row-${j.sequence}`}
+                          >
+                            <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold shrink-0">
+                              {j.sequence}
+                            </div>
+                            <div className="flex-1 space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium">حكم {j.degree}</span>
+                                {j.outcome
+                                  ? <span className={`text-sm font-medium ${outcomeTone}`}>{j.outcome}</span>
+                                  : <span className="text-sm text-muted-foreground">دون تحديد جهة</span>}
+                                {j.isFinal && (
+                                  <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">نهائي</span>
+                                )}
+                              </div>
+                              <div className="text-sm text-muted-foreground flex items-center gap-2 flex-wrap">
+                                <span>{getJudgmentActorName(j.recordedBy)}</span>
+                                <span>•</span>
+                                <DualDateDisplay date={j.createdAt} showTime compact />
+                              </div>
+                              <div className="text-sm flex items-center gap-2 flex-wrap">
+                                <span className={deed.tone}>{deed.text}</span>
+                                {hasDate && (
+                                  <>
+                                    <span className="text-muted-foreground">•</span>
+                                    <span className="text-muted-foreground">
+                                      تاريخ الاستلام: <DualDateDisplay date={j.deedReceivedDate} compact />
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                              {/* 🔴 THE DEADLINE IS SHOWN ONLY WHEN THE RULING
+                                  ACTUALLY OPENED A WINDOW. objection_deadline is
+                                  populated by the shared receipt writer whenever a
+                                  date is supplied — including for an appeal ruling,
+                                  which opens no window by owner decision — so the
+                                  column alone is not evidence a deadline exists.
+                                  opens_window is the STORED INTENT, decided once
+                                  when the ruling was recorded, and it is the only
+                                  honest term here. Printing the bare column would
+                                  put a deadline on screen that nobody is owed. */}
+                              {j.opensWindow && !!String(j.objectionDeadline || "").trim() && (
+                                <div className="text-sm text-muted-foreground">
+                                  مهلة الاعتراض حتى <DualDateDisplay date={j.objectionDeadline} compact />
+                                </div>
+                              )}
+                              {j.supersededAt && (
+                                <p className="mt-1 text-sm bg-muted p-2 rounded">
+                                  لم يعد هذا الحكم قائماً — أُعيدت الدعوى للدرجة الأولى بموجب حكم لاحق
+                                  <span className="mx-1">•</span>
+                                  <DualDateDisplay date={j.supersededAt} showTime compact />
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   {selectedCase.stageHistory && selectedCase.stageHistory.length > 0 ? (
                     <div className="space-y-3">
                       {[...selectedCase.stageHistory].reverse().map((transition, index) => (
