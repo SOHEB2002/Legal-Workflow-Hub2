@@ -783,14 +783,22 @@ export const hearingAttachments = pgTable("hearing_attachments", {
 // law_cases.judgment_deed_received_date / objection_window_days are ONE slot, so
 // ruling #3 would overwrite ruling #1's deed date and silently rewrite history.
 //
-// 🔴 THE QUASH CYCLE DOES NOT RECUR (owner, settled). At most one quash, so at
-// most three rulings. The model is NOT built for unbounded N — but it does not
-// REFUSE it either: nothing here caps `sequence`, so a fourth row would insert
-// cleanly if the firm ever meets one. Do not add a CHECK that forbids it.
+// 🔴 THE REMAND CYCLE DOES NOT RECUR (owner, settled). At most one إعادة للدرجة
+// الأولى, so at most three rulings. The model is NOT built for unbounded N — but
+// it does not REFUSE it either: nothing here caps `sequence`, so a fourth row
+// would insert cleanly if the firm ever meets one. Do not add a CHECK that
+// forbids it.
 //
 // THE COURT CASE NUMBER IS NOT PER-CYCLE (owner, settled). A remand keeps the
 // same court_case_number on law_cases; there is deliberately no number column
-// here. Cassation (نقض) is out of scope entirely.
+// here.
+//
+// ⚠ THE ARABIC TERM IS "إعادة للدرجة الأولى", NEVER "نقض" (owner ruling). نقض is
+// SUPREME-COURT cassation and is already spent in this file on
+// MemoType.CASSATION ("لائحة_نقض") and LegalDeadlineType.cassation
+// ("مهلة النقض") — both STORED values with real rows behind them. This models the
+// APPEAL court returning the case to first instance, which is a different act by
+// a different court. Cassation itself remains out of scope entirely.
 //
 // DEGREE IS DERIVED FROM THE CASE PATH, NEVER ASKED — the model correction of
 // 2026-07-27. It is STORED here (not recomputed on read) because the case moves
