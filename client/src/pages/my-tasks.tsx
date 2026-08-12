@@ -39,7 +39,7 @@ import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { BidiText } from "@/components/ui/bidi-text";
 import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
-  AssignableAdminSupportTaskKind,
+  AssignableAdminSupportTaskKind, FollowUpStatus,
   GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo, type MemoStageValue,
   type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
@@ -327,7 +327,19 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
       return form.decision === "رفض"
         ? { method: "POST", url: `/api/delegations/${e}/reject`, body: { reason: form.notes } }
         : { method: "POST", url: `/api/delegations/${e}/approve` };
-    case MyTaskKind.CONTACT_FOLLOWUP: return { method: "PATCH", url: `/api/contact-logs/${e}`, body: { followUpCompleted: true } };
+    case MyTaskKind.CONTACT_FOLLOWUP:
+      // 🔴 WRITES BOTH COLUMNS. It used to write followUpCompleted alone, which
+      // the feed read and NOTHING ELSE did — so completing a follow-up here left
+      // the clients-page badge still reading "بانتظار المتابعة", left it in the
+      // dashboard's pending count, and left the scheduler still sending its
+      // reminders (scheduler.ts skips on followUpStatus, never on this flag).
+      // followUpStatus is the canonical column (NOT NULL, typed vocabulary, five
+      // readers incl. the scheduler); followUpCompleted is kept in the payload so
+      // the feed's other term and any row already carrying it stay consistent.
+      return { method: "PATCH", url: `/api/contact-logs/${e}`, body: {
+        followUpCompleted: true,
+        followUpStatus: FollowUpStatus.COMPLETED,
+      } };
     case MyTaskKind.LEGAL_DEADLINE: return { method: "PATCH", url: `/api/legal-deadlines/${e}`, body: { status: "مكتمل" } };
     case MyTaskKind.FIELD_TASK:
     case MyTaskKind.COLLECTION:

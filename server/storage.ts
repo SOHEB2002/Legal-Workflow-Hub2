@@ -4181,6 +4181,36 @@ export class DatabaseStorage implements IStorage {
     const memoNotPaused = sql`${memos.pausedAt} IS NULL`;
     const contractNotPaused = sql`${contracts.pausedAt} IS NULL`;
 
+    // 🔴 "IS THE PARENT CASE STILL LIVE?" — for the CHILD-ROW blocks, whose rows
+    // survive their case. Four blocks joined lawCases and never asked: a resulted
+    // hearing (report / ضبط / PDF export) and every active legal deadline kept
+    // emitting FOREVER after the case closed, to the lawyer who used to own it.
+    // cancelOpenCaseChildrenOnClose cancels only hearings still 'قادمة' and never
+    // touches legal_deadlines at all, so closure genuinely does not clear them.
+    //
+    // THREE TERMS, AND IT IS THE EXISTING PREDICATE, NOT A NEW VARIANT — the same
+    // one block 20 (paused_aging) already builds as its local `aliveCase`, term for
+    // term. Two variants existed in this method and the choice between them is
+    // load-bearing rather than cosmetic:
+    //   • the TWO-term form (status<>'مغلق' + isArchived), used by 1c/1e/7/21,
+    //     is NOT sufficient here. مشطوبة is reached by an ordinary stage TRANSITION
+    //     (منظورة → مشطوبة in ALLOWED_CASE_TRANSITIONS), not by a close handler, so
+    //     a struck-off case keeps status='مرفوع' and isArchived=false and would sail
+    //     straight through it.
+    //   • the stage triple alone (block 2's form) misses the raw-PATCH `status`
+    //     write documented on block 7.
+    // Only the union of both covers the ways a case stops being live.
+    //
+    // ⚠ Block 20's local copy is deliberately LEFT IN PLACE rather than collapsed
+    // into this one. The two are byte-identical, so there is nothing to reconcile
+    // today; the block is under review for removal from this page entirely, and a
+    // shared const it was the only other user of would be left dangling.
+    const caseAlive = and(
+      ne(lawCases.status, "مغلق"),
+      sql`${lawCases.isArchived} IS NOT TRUE`,
+      sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+    );
+
     // Admin_support per-type routing: resolve the owner of the assignable
     // kinds ONCE (identity-independent). Each goes to its mapped
     // assignee IFF that user is still an active admin_support, else "" (unassigned
@@ -4881,12 +4911,38 @@ export class DatabaseStorage implements IStorage {
       // column's default; NULL means محكمة, exactly as mapDbHearing coalesces it.
       // (A bare NOT IN would evaluate to NULL on those rows and silently drop
       // their minutes task.)
-      const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND (${hearings.reportCompleted} = false OR (${hearingAttachments.id} IS NULL AND COALESCE(${hearings.hearingType}, 'محكمة') NOT IN ('تراضي', 'تسوية_ودية')))))`;
-      const where = firmWideScoped
+      // 🔴 THE SECOND DISJUNCT NOW EXCLUDES A CANCELLED HEARING. It tested only
+      // "a result was recorded", with NO status term — so a hearing CANCELLED
+      // after its result was entered kept demanding its report and its ضبط
+      // forever. There is no such thing as obtaining minutes for a session that
+      // was struck from the calendar, and the ضبط close-gate (currently
+      // deferred) already carries `h.status !== CANCELLED` as one of its three
+      // predicate terms for exactly this reason — this brings the TASK into line
+      // with the GATE that will eventually enforce it.
+      //
+      // Applied to the RESULT arm only. The first disjunct is `status='قادمة'`,
+      // which excludes 'ملغية' by construction, so adding a term there would be
+      // dead weight.
+      const hActionable = sql`(${hearings.status} = 'قادمة' OR (${hearings.status} <> 'ملغية' AND ${hearings.result} IS NOT NULL AND ${hearings.result} <> '' AND (${hearings.reportCompleted} = false OR (${hearingAttachments.id} IS NULL AND COALESCE(${hearings.hearingType}, 'محكمة') NOT IN ('تراضي', 'تسوية_ودية')))))`;
+      // caseAlive wrapped ONCE around all three arms — the same shape block 1 uses
+      // for caseNotPaused, so a fourth arm cannot silently forget it. This query
+      // already innerJoins lawCases, so the term costs no extra join.
+      //
+      // ⚠ IT GOVERNS ALL FIVE OUTPUTS OF THIS BLOCK, not just report + minutes,
+      // and that is intended rather than collateral:
+      //   • attend / unrecorded — a NO-OP for an ordinary close, because
+      //     cancelOpenCaseChildrenOnClose already flips every 'قادمة' hearing to
+      //     'ملغية'. It bites only for a STRUCK-OFF (مشطوبة) case, whose hearings
+      //     are NOT cancelled because مشطوبة is a stage transition and not a close
+      //     — and a struck-off case's future sessions are correctly not attended.
+      //     Reinstating it (مشطوبة → منظورة, an existing edge) brings them back.
+      //   • agency verification — same reasoning, same no-op for a normal close.
+      const scopeWhere = firmWideScoped
         ? hActionable
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), hActionable)
         : and(eq(hearings.attendingLawyerId, uid), hActionable);
+      const where = and(scopeWhere, caseAlive);
       // clients LEFT-joined for the agency-verification grouping key (the موكّل's
       // exact name = individualName for individuals, companyName otherwise).
       const rows = await db.select({
@@ -5011,7 +5067,41 @@ export class DatabaseStorage implements IStorage {
       // (استلام / تحرير / الأخذ_بالملاحظات / جاهزة_للرفع) is genuinely the assignee's
       // turn and still surfaces. COALESCE keeps null-stage legacy memos surfacing
       // exactly as before (NULL NOT IN (…) would otherwise drop them).
-      const mActionable = sql`COALESCE(${memos.currentStage}, '') NOT IN ('مرفوعة', 'مراجعة_داخلية', 'لجنة_مراجعة') AND ${memos.status} <> 'ملغاة'`;
+      // 🔴 awaiting_completion ADDED. A memo explicitly parked "بانتظار استكمال
+      // البيانات" — a deliberate act, with a mandatory reason, recorded through
+      // POST /api/memos/:id/await-completion — still told its assignee "مذكرة
+      // بحاجة لإنجاز" while that same person was blocked waiting on the client.
+      // Worse, after 3 days the SAME memo also emitted data_completion_escalated
+      // to the SAME person, so one parked memo produced two rows: one asserting
+      // work that the record itself says is suspended, one stating the truth.
+      //
+      // Owner ruling: suppress this one; the data-completion task is the correct
+      // row to show and it stays.
+      //
+      // `IS NOT TRUE` rather than `= false` — the same reason COALESCE guards the
+      // stage term on the line below. The column is notNull with a false default
+      // today, so the two are equivalent, but IS NOT TRUE is null-safe if that
+      // ever changes and costs nothing.
+      //
+      // 🔴 THE WORK DOES NOT GO DARK — that is the whole point, and it is worth
+      // stating exactly where it goes, because this is a SUPPRESSION and the
+      // failure mode of a suppression is silence:
+      //   • day 0 onward — block 14d emits data_completion_memo to the mapped
+      //     admin_support (the same awaiting_completion latch drives it).
+      //   • day 3 onward — block 21 emits data_completion_escalated to the
+      //     ASSIGNEE, whose self arm is `eq(memos.assignedTo, uid)`, i.e. exactly
+      //     the person this guard just stopped nagging.
+      //   • the memo's own DEADLINE reminders are untouched: checkMemoDeadlines
+      //     has no pause or completion filter at all, so a court-imposed date
+      //     still surfaces through its own channel regardless of this.
+      //   ⚠ The assignee sees nothing on days 0-2. That is the intended shape —
+      //     they were just told the data is missing — and admin_support holds it
+      //     throughout. The one residual gap is the documented raw-PATCH class:
+      //     awaitMemoCompletion writes the AWAIT_COMPLETION activity row in the
+      //     SAME transaction as the latch, so every memo parked through the
+      //     endpoint escalates on time; only a direct column write would leave a
+      //     memo with no entry timestamp and therefore no escalation.
+      const mActionable = sql`COALESCE(${memos.currentStage}, '') NOT IN ('مرفوعة', 'مراجعة_داخلية', 'لجنة_مراجعة') AND ${memos.status} <> 'ملغاة' AND ${memos.awaitingCompletion} IS NOT TRUE`;
       // memoNotPaused suppresses a paused memo's own work item. It does NOT
       // silence that memo's DEADLINE: checkMemoDeadlines (scheduler) has no
       // pause filter and keeps sending the 3-day / 1-day / overdue reminders,
@@ -5356,13 +5446,24 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 9. Legal deadlines (approaching/overdue) — owned via parent case ----
+    // 🔴 caseAlive ADDED. This block asked ONLY `status='نشط'`, and
+    // cancelOpenCaseChildrenOnClose does not touch legal_deadlines at all — it
+    // cancels hearings, memos and field tasks and stops there — so every deadline
+    // on every closed case emitted forever to the lawyer who used to own it.
+    // Nothing in the close path ever set them to 'مكتمل'.
+    //
+    // ⚠ THE DATE WINDOW IS UNTOUCHED, deliberately. This block still has no upper
+    // or lower date bound, so a deadline months in the future is still presented
+    // as current work. That is a SEPARATE finding the owner has not ruled on, and
+    // widening the fix into it here would pre-empt that decision.
     {
-      const where = firmWideScoped
+      const scopeWhere = firmWideScoped
         ? eq(legalDeadlines.status, "نشط")
         : deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), eq(legalDeadlines.status, "نشط"))
         : and(eq(legalDeadlines.status, "نشط"),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
+      const where = and(scopeWhere, caseAlive);
       const rows = await db.select({
         id: legalDeadlines.id, caseId: legalDeadlines.caseId, title: legalDeadlines.title,
         deadlineDate: legalDeadlines.deadlineDate, caseNumber: lawCases.caseNumber,
@@ -5391,9 +5492,37 @@ export class DatabaseStorage implements IStorage {
       })
         .from(contactLogs)
         .leftJoin(clients, eq(contactLogs.clientId, clients.id))
+        // 🔴 TWO COLUMNS RECORD "THIS FOLLOW-UP IS DONE", AND THIS BLOCK READ THE
+        // WEAKER ONE. The clients page's own complete button
+        // (clients.tsx markFollowUpComplete) writes follow_up_STATUS; the مهامي
+        // action writes follow_up_COMPLETED. So a user pressed "complete" on the
+        // client file, watched the badge flip to "تمت المتابعة", and the مهامي row
+        // never went away — nothing in the system could clear it except the other
+        // button.
+        //
+        // follow_up_status IS THE CANONICAL ONE, on the evidence, not on taste:
+        //   • the column is varchar NOT NULL and createContactLog defaults it to
+        //     'بانتظار_المتابعة', so EVERY row carries a real value; follow_up_
+        //     completed is a nullable boolean with no default at the DB level;
+        //   • it has a typed vocabulary (FollowUpStatus) and a label map;
+        //   • it has FIVE readers — the clients-page badge, the overdue styling,
+        //     the button's own visibility gate, getPendingFollowUps (the dashboard
+        //     count, twice) — and, decisively, scheduler.ts:612, where the
+        //     follow-up REMINDER job skips a log whose status is 'تمت_المتابعة'.
+        //   • follow_up_completed has exactly ONE reader (this line) and ONE
+        //     writer (the مهامي button). The two were talking only to each other.
+        //
+        // BOTH TERMS ARE KEPT rather than switching to the canonical column alone.
+        // Reading follow_up_status by itself would RESURRECT every follow-up ever
+        // cleared from مهامي — those rows have completed=true but status still
+        // 'بانتظار_المتابعة' — which is the same class of defect pointing the other
+        // way. The writer is fixed in the same commit so the two columns converge
+        // from here on; this term is what keeps already-done work done meanwhile.
         .where(and(
           eq(contactLogs.createdBy, uid),
-          sql`COALESCE(${contactLogs.followUpRequired}, false) = true AND COALESCE(${contactLogs.followUpCompleted}, false) = false`,
+          sql`COALESCE(${contactLogs.followUpRequired}, false) = true
+            AND COALESCE(${contactLogs.followUpCompleted}, false) = false
+            AND COALESCE(${contactLogs.followUpStatus}, '') <> 'تمت_المتابعة'`,
         ));
       for (const r of rows) {
         const due = r.nextFollowUpDate || null;
@@ -5561,11 +5690,25 @@ export class DatabaseStorage implements IStorage {
     // branch_manager (team / unassigned "" pool when unset/inactive); emitted ONLY
     // for the assignee or the branch_manager — no broadcast. Litigation class
     // (hearing). Clears when sessionReportExported flips true.
+    // 🔴 caseAlive ADDED. This block had NO lifecycle filter of any kind, so every
+    // hearing ever reported-but-not-exported kept asking, firm-wide and forever,
+    // concentrated on ONE admin_support user — including hearings whose case
+    // closed months earlier.
+    //
+    // 🔴 THE CANCELLED-HEARING TERM, completing the batch-3 fix. This query lives
+    // apart from the shared hearings pre-filter and had the identical defect: no
+    // status term at all, so a hearing CANCELLED after its report was written
+    // still asked to be exported as a PDF. `ne(hearings.status, "ملغية")` is the
+    // SAME predicate the pre-filter's result arm now carries, not a variant of it
+    // — same column, same value, same direction; only the drizzle spelling
+    // differs, because that one is embedded in a larger sql`` template and this
+    // one stands alone in an and(...).
     if (sessionReportExportOwner === uid || firmWideScoped) {
       const rows = await db.select({ id: hearings.id, caseId: hearings.caseId, caseNumber: lawCases.caseNumber })
         .from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
         .where(and(eq(hearings.reportCompleted, true),
-          sql`COALESCE(${hearings.sessionReportExported}, false) = false`));
+          sql`COALESCE(${hearings.sessionReportExported}, false) = false`,
+          ne(hearings.status, "ملغية"), caseAlive));
       for (const r of rows) {
         const ownerId = sessionReportExportOwner;
         tasks.push({ id: `session_report_export:${r.id}`, kind: MyTaskKind.SESSION_REPORT_EXPORT,
