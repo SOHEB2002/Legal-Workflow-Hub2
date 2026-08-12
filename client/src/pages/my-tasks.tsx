@@ -197,6 +197,30 @@ const TASK_CARDS = [
 
 type TaskCardKey = typeof TASK_CARDS[number]["key"];
 
+// The card grid. ONE constant so every place cards are laid out stays in step.
+//
+// TWO COLUMNS FROM lg (1024px), one below it. Not md (768px): a half-width card
+// there is ~360px, and a TaskRow has to fit an Arabic title, a type label, the
+// matter identity line, up to three badges and up to three buttons on one row.
+// At lg a column is ~500px, which it does fit.
+//
+// 🔴 RTL — the first card sits on the RIGHT, and that is the grid's own
+// behaviour, not something to add. CSS Grid places items along the INLINE axis,
+// which `direction: rtl` reverses; the page root carries dir="rtl". Verified
+// against the precedent in this same app rather than assumed: the case-details
+// TabsList is `grid grid-cols-4 lg:grid-cols-8` under a dir="rtl" DialogContent,
+// and its first DOM child (المعلومات) is the RIGHTMOST tab on screen — the owner
+// has been reading and requesting edits to that tab strip in that order. No
+// physical-direction utilities (ml-/mr-/left-/right-) are used here, so nothing
+// can override the logical flow.
+//
+// items-start, NOT the default stretch. Cards differ wildly in height (twelve
+// rows beside two), and stretching turns the short one into a tall mostly-empty
+// bordered box, which reads as broken. Sizing each to its content leaves a
+// ragged bottom edge inside a row — the honest trade, and the lesser of the two:
+// a ragged edge looks like a list, an empty box looks like a bug.
+const CARD_GRID = "grid grid-cols-1 lg:grid-cols-2 gap-3 items-start";
+
 // 🔴 KEYED ON entityType, NOT kind, and that is forced by the data rather than
 // chosen: review_pending is ONE kind emitted for FOUR entity types (case, memo,
 // consultation, contract). A kind→card map would have to force all four into one
@@ -1403,7 +1427,7 @@ export default function MyTasksPage() {
           {/* No urgent section: PINNED_KINDS float to the top INSIDE each card
               via pinAndSort, so a hearing still leads جلسات without a band of its
               own above everything. */}
-          <section className="space-y-3" data-testid="section-own-cards">
+          <section data-testid="section-own-cards">
             {own.length === 0 && team.length === 0 ? (
               // Distinguishes "you have nothing to do" from "your filters
               // matched nothing" — the same blank page otherwise, and the second
@@ -1412,7 +1436,12 @@ export default function MyTasksPage() {
                 {isFiltering ? "لا توجد نتائج مطابقة." : "لا توجد مهام."}
               </p>
             ) : (
-              TASK_CARDS.map((card) => renderTaskCard(card, ownCards, "card"))
+              // renderTaskCard returns null for an empty card, and a null child
+              // occupies no grid cell — so hidden cards leave no gap and the
+              // remaining ones close up.
+              <div className={CARD_GRID}>
+                {TASK_CARDS.map((card) => renderTaskCard(card, ownCards, "card"))}
+              </div>
             )}
           </section>
 
@@ -1426,7 +1455,9 @@ export default function MyTasksPage() {
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" /> مهام الفريق
               </h2>
-              {TASK_CARDS.map((card) => renderTaskCard(card, teamCards, "team-card"))}
+              <div className={CARD_GRID}>
+                {TASK_CARDS.map((card) => renderTaskCard(card, teamCards, "team-card"))}
+              </div>
             </section>
           )}
 
