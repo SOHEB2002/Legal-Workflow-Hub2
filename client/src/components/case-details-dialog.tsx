@@ -1508,6 +1508,39 @@ export function CaseDetailsDialog({
                                   </>
                                 )}
                               </div>
+                              {/* THE FILE ITSELF, per ruling. Until now this row
+                                  said "الصك مرفق" and stopped there — there was
+                                  no endpoint that could serve ONE ruling's deed,
+                                  so a superseded ruling's صك was unreachable.
+
+                                  SingleAttachmentControl with canEdit={false} is
+                                  the SAME control the case-level صك uses in the
+                                  المعلومات tab and the ضبط uses on a hearing —
+                                  reused, not re-implemented, so preview, download,
+                                  the missing-file warning and the transport all
+                                  behave identically here. canEdit={false} renders
+                                  preview + download whenever a file exists and
+                                  hides upload/replace/delete, which is exactly the
+                                  read-only split this surface needs: writing the
+                                  deed still happens ONLY through the existing
+                                  "تسجيل استلام الصك" / late-attach dialogs, whose
+                                  POST owns the dual-write and the reference-counted
+                                  blob delete. No second write path.
+
+                                  RENDERED ONLY WHEN hasDeed. A ruling with no file
+                                  keeps exactly the line it has today — the control's
+                                  own empty state would otherwise repeat, in a box,
+                                  what the amber "بانتظار إرفاق الصك" text above
+                                  already says. */}
+                              {j.hasDeed && (
+                                <div className="pt-1">
+                                  <SingleAttachmentControl
+                                    endpoint={`/api/judgments/${j.id}/deed-attachment`}
+                                    label="ملف صك الحكم"
+                                    canEdit={false}
+                                  />
+                                </div>
+                              )}
                               {/* 🔴 THE DEADLINE IS SHOWN ONLY WHEN THE RULING
                                   ACTUALLY OPENED A WINDOW. objection_deadline is
                                   populated by the shared receipt writer whenever a
