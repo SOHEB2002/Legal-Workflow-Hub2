@@ -15,6 +15,7 @@ import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
   ChevronDown, ChevronLeft, ListChecks, Clock, Archive, Send, Eye, Briefcase, Paperclip, PauseCircle,
+  MessageSquare,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useDepartments } from "@/lib/departments-context";
@@ -79,6 +80,10 @@ function isCaseStageKind(task: MyTaskItem): boolean {
 // Each task kind → an icon and a short Arabic type label (shown under the title).
 const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> = {
   case_work: { icon: Scale, label: "عمل على قضية" },
+  // The consultation twin of case_work. Its own icon rather than case_work's
+  // Scale or memo_pending's FileText, because those two already carry meanings
+  // in this list and a third row wearing either would read as one of them.
+  consultation_work: { icon: MessageSquare, label: "عمل على استشارة" },
   case_unassigned: { icon: UserPlus, label: "قضية بحاجة لإسناد" },
   consultation_unassigned: { icon: UserPlus, label: "استشارة بحاجة لإسناد" },
   contract_unassigned: { icon: UserPlus, label: "عقد بحاجة لإسناد" },
@@ -479,7 +484,12 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   const wasReturned = task.kind === MyTaskKind.GENERAL_TASK
     && !!getTaskById(task.entityId)?.reviewNote?.trim();
   const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind)
-    || isCaseStageKind(task) || task.kind === MyTaskKind.MEMO_PENDING;
+    || isCaseStageKind(task) || task.kind === MyTaskKind.MEMO_PENDING
+    // consultation_work has no modal and no endpoint of its own — its action is
+    // to OPEN the consultation, handled by a deep-link in handleAction. Listed
+    // here so the button enables; see there for why no workflow action was
+    // invented for it.
+    || task.kind === MyTaskKind.CONSULTATION_WORK;
   return (
     <div
       dir="rtl"
@@ -803,6 +813,22 @@ export default function MyTasksPage() {
     }
     if (task.id.startsWith("opponent_response:")) {
       setLocation(`/cases?openCase=${task.caseId || task.entityId}&action=opponent-response`);
+      return;
+    }
+    // consultation_work → OPEN THE CONSULTATION. Deliberately not a workflow
+    // action: advancing a consultation is stage-, type- and cycle-dependent
+    // (written / phone / procedural / تعقيبية each resolve a different stage
+    // list), the controls live in the consultation's own stage bar, and there is
+    // no shared panel this page could mount the way CaseStagePanel and
+    // MemoAdvancePanel are mounted above. Inventing a generic "advance" modal
+    // here would be a second, thinner implementation of that logic — exactly the
+    // divergence the no-DRY workflow rule exists to prevent. So the button does
+    // the honest thing and takes the user to where the real controls are.
+    // Same mechanism as the judgment_deed / appeal_window / opponent_response
+    // deep-links above; the target route already supports ?openConsultation=<id>
+    // and opens the details dialog once the row lands in the loaded list.
+    if (task.kind === MyTaskKind.CONSULTATION_WORK) {
+      setLocation(`/consultations?openConsultation=${task.entityId}`);
       return;
     }
     if (isCaseStageKind(task)) {

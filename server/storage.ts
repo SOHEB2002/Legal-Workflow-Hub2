@@ -4228,9 +4228,52 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
-    // Conservative "lawyer must act" stage set (see report: exact set is a
-    // refinement point). Excludes review/committee/platform/admin-owned stages.
-    const LAWYER_WORK_STAGES = ["دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
+    // Conservative "lawyer must act" stage set. Excludes review/committee/
+    // platform/admin-owned stages.
+    //
+    // 🔴 استلام ADDED — owner ruling: an ASSIGNED case at استلام is immediate work
+    // for its lawyer. It was measured at 119 production cases carrying a
+    // primary_lawyer_id and emitting NOTHING to anyone: the head assigns, the
+    // case_unassigned row leaves HIS list, and it appears on nobody else's.
+    //
+    // WHY THE STAGE NEVER MOVED ON ITS OWN, which is what made this invisible:
+    // assignCase writes `status: CaseStatus.STUDY` but NEVER currentStage — and
+    // CaseStatus.STUDY is the string "دراسة", identical to the STAGE دراسة, so a
+    // row reading status='دراسة' / current_stage='استلام' looks self-consistent
+    // and is not. The مهامي CASE_UNASSIGNED action is narrower still: it PATCHes
+    // primaryLawyerId alone.
+    //
+    // 🔴 EXTENDED THIS ARRAY RATHER THAN ADDING A PARALLEL BLOCK, deliberately.
+    // Every property the new stage needs is already carried here and would have
+    // had to be re-implemented (and could then drift): the three scope arms, the
+    // hasAnyLawyer requirement, caseNotPaused, and the ownerId chain. A sibling
+    // block is only justified when the TRIGGER differs in kind — which is why 1b
+    // (a different stage but a client-contact title/hint), 1c (ruling-presence,
+    // attending-lawyer owner) and 1d (a date comparison) are separate. This is
+    // the same trigger on one more stage.
+    //
+    // AN ASSIGNEE IS REQUIRED, and it already is, on every arm: the two
+    // supervisory arms carry hasAnyLawyer and the self arm can only match a user
+    // who IS one of the lawyers. So an UNASSIGNED case at استلام cannot emit
+    // here — it belongs to block 2 (case_unassigned → the department head), and
+    // hasNoLawyer is the EXACT logical inverse of hasAnyLawyer, defined adjacent
+    // for precisely this reason. The two cannot both fire.
+    //   ⚠ ONE PRE-EXISTING EDGE, unchanged by this and true of the other five
+    //   stages already: a case with assignedLawyers=[X] but BOTH lawyer columns
+    //   empty satisfies hasNoLawyer (→ block 2, to the head) AND the self arm's
+    //   assignedToMe (→ here, to X). Two different rows for two different people,
+    //   not a duplicate. Unreachable through the assign dialog, which always
+    //   writes primaryLawyerId alongside the array.
+    //
+    // NO closed/archived term is added, matching the five sibling stages exactly.
+    // It would be dead weight through every live path: an ordinary close writes
+    // currentStage='مقفلة', auto-archive refuses any case not already at مقفلة,
+    // and a DEPARTMENT TRANSFER — the one flow that resets a case to استلام —
+    // nulls primaryLawyerId, responsibleLawyerId AND assignedLawyers in the same
+    // write, so a transferred case has no assignee and lands in block 2 instead.
+    // The only way to hold استلام while closed is the raw-PATCH `status` write
+    // documented on block 7, and these six stages share that exposure equally.
+    const LAWYER_WORK_STAGES = ["استلام", "دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
     {
       // Wrapped rather than repeated per arm: the pause guard applies to all
       // three scopes identically, so applying it ONCE here makes it impossible
@@ -4342,7 +4385,7 @@ export class DatabaseStorage implements IStorage {
     // ⚠ NO LONGER MUTUALLY EXCLUSIVE WITH 1a/1b BY STAGE, and the old claim here
     // said it was. Dropping the stage term means a case that HAS a ruling and sits
     // on a drafting stage would emit both — reachable only by REOPENING a judged
-    // case onto one of the five LAWYER_WORK_STAGES (منظورة, where a quash-remand
+    // case onto one of the six LAWYER_WORK_STAGES (منظورة, where a quash-remand
     // lands, is not among them). If it happens both statements are true — the case
     // is being worked AND its صك is outstanding — and the id prefixes are distinct,
     // so nothing collides. Still mutually exclusive with 1d, which requires the
@@ -4714,6 +4757,98 @@ export class DatabaseStorage implements IStorage {
           title: `عقد غير مُسند بحاجة لإسناد — ${r.contractNumber}`,
           entityType: "contract", entityId: r.id, caseId: null,
           ownerId: deptHeadId, ownerScope: scopeOf(deptHeadId), dueDate: null, isOverdue: false, actionHint: "assign",
+        });
+      }
+    }
+
+    // ---- 2d. consultation_work — the ASSIGNEE's own consultation ----
+    // 🔴 NET-NEW, and it closes the larger half of the invisible-work gap. Before
+    // this, `consultations.assignedTo` appeared in the whole feed exactly three
+    // times: once as an UNASSIGNED test (block 2b, above — which goes to the
+    // DEPARTMENT HEAD and stops the instant someone is assigned) and twice inside
+    // the aging backstops (paused ≥3 days, data-completion ≥3 days), both of which
+    // render a DISABLED button. There was no consultation analogue of case_work at
+    // any stage. Measured: 38 assigned consultations emitting nothing, 32 of them
+    // still sitting at استلام.
+    //
+    // Placed HERE, immediately after block 2b, because it is that block's EXACT
+    // INVERSE and the pair should be read together: 2b requires
+    // `assigned_to IS NULL OR = ''`, this requires it non-empty. A consultation
+    // can never satisfy both, so assigning one moves it from the head's list to
+    // the assignee's with nothing in between and nothing double-counted.
+    //
+    // THE STAGE SET — the stages at which the ASSIGNEE is unambiguously the person
+    // who must act, and the exclusions are as deliberate as the inclusions:
+    //   استلام               ✅ owner ruling. NOT transient: the /assign endpoint
+    //                          writes { assignedTo } and nothing else — despite a
+    //                          stale comment on the client claiming it advances
+    //                          RECEIVED → STUDY — so an assigned consultation
+    //                          simply STAYS here. That is the 32 rows.
+    //   دراسة / تحرير        ✅ the drafting body of the written workflow.
+    //   الأخذ_بالملاحظات     ✅ the committee has just handed the file BACK to the
+    //                          assignee with notes. The worst of the silent
+    //                          stages: someone is explicitly waiting on them.
+    //   جاري_العمل            ✅ the procedural (إجرائية) workflow's entire working
+    //                          stage — its analogue of دراسة.
+    //   مراجعة_داخلية        ❌ the designated reviewer's turn (review_pending).
+    //   لجنة_مراجعة          ❌ the committee head's turn (review_pending).
+    //   استكمال_المرفقات…    ❌ admin_support owns day 0 (block 14b) and the
+    //                          assignee already gets the 3-day escalation (21).
+    //   جاهزة_للإرسال/منجزة  ❌ admin_support's to close (block 13). Considered and
+    //                          dropped: the work product is finished, and adding a
+    //                          second owner here would duplicate a live task.
+    //   مغلقة                ❌ terminal.
+    //
+    // WHERE CONSULTATIONS DIFFER STRUCTURALLY FROM CASES, and what was done:
+    //   • PAUSE. Cases need an explicit caseNotPaused because pauseCase leaves
+    //     status alone; pauseConsultation FLIPS status to "paused", so
+    //     `status = 'active'` already excludes a paused row. No second term is
+    //     added — the same reasoning block 2b records, and the reason only three
+    //     pause fragments exist at the top of this method rather than four.
+    //   • LIFECYCLE. There is no isArchived and no مغلق status here: `active`
+    //     excludes closed and converted too, so ONE term does the work of the
+    //     case side's `ne(status,'مغلق') + isArchived IS NOT TRUE` pair.
+    //   • ASSIGNEE. Cases carry three columns (primary / responsible /
+    //     assignedLawyers) and need the or(...) triple; consultations carry ONE
+    //     nullable assigned_to — which can be NULL *or* the "" sentinel, so both
+    //     are tested, exactly as block 2b does. `IS NULL` alone would miss every
+    //     record unassigned through the transfer/unassign paths.
+    //   • FOLLOW-UP CYCLES. A تعقيبية consultation (followUpCount > 0) resolves
+    //     against the 3-stage mini-list, whose working stage IS استلام — already
+    //     in the set, so cycles are covered with no special case.
+    {
+      const consultAssigned = sql`(${consultations.assignedTo} IS NOT NULL AND ${consultations.assignedTo} <> '')`;
+      const CONSULTATION_WORK_STAGES = [
+        ConsultationStage.RECEIVED,
+        ConsultationStage.STUDY,
+        ConsultationStage.DRAFTING,
+        ConsultationStage.TAKING_NOTES,
+        ConsultationStage.IN_PROGRESS,
+      ];
+      // Same three-arm shape as case_work. The supervisory arms require an
+      // assignee (consultAssigned) exactly as case_work's require hasAnyLawyer;
+      // the self arm implies one by matching on it.
+      const consultWorkWhere = firmWideScoped
+        ? and(eq(consultations.status, ConsultationStatus.ACTIVE),
+            inArray(consultations.currentStage, CONSULTATION_WORK_STAGES), consultAssigned)
+        : deptHeadScoped
+        ? and(eq(consultations.departmentId, userDept!), eq(consultations.status, ConsultationStatus.ACTIVE),
+            inArray(consultations.currentStage, CONSULTATION_WORK_STAGES), consultAssigned)
+        : and(eq(consultations.status, ConsultationStatus.ACTIVE),
+            inArray(consultations.currentStage, CONSULTATION_WORK_STAGES), eq(consultations.assignedTo, uid));
+      const consultWorkRows = await db.select({
+        id: consultations.id, consultationNumber: consultations.consultationNumber,
+        stage: consultations.currentStage, assignedTo: consultations.assignedTo,
+      }).from(consultations).where(consultWorkWhere);
+      for (const r of consultWorkRows) {
+        const ownerId = r.assignedTo || "";
+        tasks.push({
+          id: `consultation_work:${r.id}`, kind: MyTaskKind.CONSULTATION_WORK,
+          // Mirrors case_work's title shape, stage interpolation included, so the
+          // row says WHICH step is owed rather than only that something is.
+          title: `العمل على الاستشارة ${r.consultationNumber} — ${r.stage}`,
+          entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "draft",
         });
       }
     }
