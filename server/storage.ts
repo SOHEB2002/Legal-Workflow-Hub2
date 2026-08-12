@@ -5458,9 +5458,37 @@ export class DatabaseStorage implements IStorage {
       })
         .from(contactLogs)
         .leftJoin(clients, eq(contactLogs.clientId, clients.id))
+        // 🔴 TWO COLUMNS RECORD "THIS FOLLOW-UP IS DONE", AND THIS BLOCK READ THE
+        // WEAKER ONE. The clients page's own complete button
+        // (clients.tsx markFollowUpComplete) writes follow_up_STATUS; the مهامي
+        // action writes follow_up_COMPLETED. So a user pressed "complete" on the
+        // client file, watched the badge flip to "تمت المتابعة", and the مهامي row
+        // never went away — nothing in the system could clear it except the other
+        // button.
+        //
+        // follow_up_status IS THE CANONICAL ONE, on the evidence, not on taste:
+        //   • the column is varchar NOT NULL and createContactLog defaults it to
+        //     'بانتظار_المتابعة', so EVERY row carries a real value; follow_up_
+        //     completed is a nullable boolean with no default at the DB level;
+        //   • it has a typed vocabulary (FollowUpStatus) and a label map;
+        //   • it has FIVE readers — the clients-page badge, the overdue styling,
+        //     the button's own visibility gate, getPendingFollowUps (the dashboard
+        //     count, twice) — and, decisively, scheduler.ts:612, where the
+        //     follow-up REMINDER job skips a log whose status is 'تمت_المتابعة'.
+        //   • follow_up_completed has exactly ONE reader (this line) and ONE
+        //     writer (the مهامي button). The two were talking only to each other.
+        //
+        // BOTH TERMS ARE KEPT rather than switching to the canonical column alone.
+        // Reading follow_up_status by itself would RESURRECT every follow-up ever
+        // cleared from مهامي — those rows have completed=true but status still
+        // 'بانتظار_المتابعة' — which is the same class of defect pointing the other
+        // way. The writer is fixed in the same commit so the two columns converge
+        // from here on; this term is what keeps already-done work done meanwhile.
         .where(and(
           eq(contactLogs.createdBy, uid),
-          sql`COALESCE(${contactLogs.followUpRequired}, false) = true AND COALESCE(${contactLogs.followUpCompleted}, false) = false`,
+          sql`COALESCE(${contactLogs.followUpRequired}, false) = true
+            AND COALESCE(${contactLogs.followUpCompleted}, false) = false
+            AND COALESCE(${contactLogs.followUpStatus}, '') <> 'تمت_المتابعة'`,
         ));
       for (const r of rows) {
         const due = r.nextFollowUpDate || null;
