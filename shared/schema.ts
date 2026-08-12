@@ -7073,6 +7073,14 @@ export const MyTaskKind = {
   // its life, including دراسة / تحرير / الأخذ_بالملاحظات, where the assignee is
   // unambiguously the only person who can act.
   CONSULTATION_WORK: "consultation_work",
+  // "the صك arrived and its FILE is still not on the case." A DISTINCT step from
+  // chasing the receipt (the judgment_deed item, which reuses CASE_WORK): that one
+  // ends when the DATE is recorded, and this one begins there. Its own kind rather
+  // than a third CASE_WORK title because it is the only feed item whose completion
+  // UNBLOCKS a server gate — isJudgmentDeedMissing refuses both the case close and
+  // the advance out of the judgment stage until the file exists — so it needs to be
+  // filterable and countable on its own.
+  JUDGMENT_DEED_ATTACH: "judgment_deed_attach",
   CASE_UNASSIGNED: "case_unassigned",     // unassigned case in dept (dept_head assigns)
   // Siblings of the above for the other two assignable record types. Separate
   // kinds rather than one shared "unassigned" kind because each routes to its

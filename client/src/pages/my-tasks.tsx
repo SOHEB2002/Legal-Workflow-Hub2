@@ -84,6 +84,10 @@ const KIND_META: Record<MyTaskKindValue, { icon: typeof Scale; label: string }> 
   // Scale or memo_pending's FileText, because those two already carry meanings
   // in this list and a third row wearing either would read as one of them.
   consultation_work: { icon: MessageSquare, label: "عمل على استشارة" },
+  // The صك arrived; its FILE is still not on the case. Paperclip matches
+  // hearing_minutes, the app's other "a document is missing" item, so the two
+  // attachment chores read as the same kind of work at a glance.
+  judgment_deed_attach: { icon: Paperclip, label: "إرفاق صك الحكم" },
   case_unassigned: { icon: UserPlus, label: "قضية بحاجة لإسناد" },
   consultation_unassigned: { icon: UserPlus, label: "استشارة بحاجة لإسناد" },
   contract_unassigned: { icon: UserPlus, label: "عقد بحاجة لإسناد" },
@@ -501,7 +505,9 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
     // to OPEN the consultation, handled by a deep-link in handleAction. Listed
     // here so the button enables; see there for why no workflow action was
     // invented for it.
-    || task.kind === MyTaskKind.CONSULTATION_WORK;
+    || task.kind === MyTaskKind.CONSULTATION_WORK
+    // Deep-links to the صك dialog (see handleAction) — no modal of its own.
+    || task.kind === MyTaskKind.JUDGMENT_DEED_ATTACH;
   return (
     <div
       dir="rtl"
@@ -803,6 +809,21 @@ export default function MyTasksPage() {
     // الإجراءات tab. The stage panel would be a dead end — محكوم_حكم_ابتدائي is a
     // terminal stage, so the progress bar shows a badge and no advance button.
     // Deep-link to the case instead (/cases?openCase=<id>, cases.tsx:451-473).
+    // The صك ATTACH task shares the receipt task's destination. The same
+    // "تسجيل استلام الصك" dialog carries the file control and opens wherever a
+    // ruling exists (canRecordJudgmentDeed = caseHasJudgmentRecord &&
+    // canActOnCaseWorkflow — a ruling test, not a stage one), and this task's
+    // population has a ruling by construction. So no second deep-link action and
+    // no new dialog is needed; the lawyer lands on the control they need.
+    //
+    // ⚠ MATCHED ON THE KIND, NOT THE ID PREFIX. `judgment_deed_attach:…` does NOT
+    // satisfy startsWith("judgment_deed:") — the colon differs at index 13 — so
+    // the branch below would silently miss it, and the row would fall through to
+    // the generic modal and throw "no action".
+    if (task.kind === MyTaskKind.JUDGMENT_DEED_ATTACH) {
+      setLocation(`/cases?openCase=${task.caseId || task.entityId}&action=judgment-deed`);
+      return;
+    }
     if (task.id.startsWith("judgment_deed:")) {
       // &action=judgment-deed auto-opens the صك receipt dialog on arrival, so the
       // button performs the ACTION instead of dropping the user in the case file

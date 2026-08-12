@@ -4404,6 +4404,17 @@ export class DatabaseStorage implements IStorage {
     // click-through to the case-details dialog (where "تسجيل استلام الصك" lives)
     // instead of the stage-advance panel.
     // Kind REUSES CASE_WORK — no new MyTaskKind, no KIND_META wiring needed.
+    //
+    // ⬇ THESE THREE FRAGMENTS ARE HOISTED OUT OF THE BLOCK because 1c-bis below
+    // shares two of them (hasJudgmentRecord, deedCaseLive). Shared by reference
+    // rather than restated, so the two halves of the صك lifecycle cannot drift
+    // apart in what they consider a live case with a ruling on it.
+    const hasJudgmentRecord = sql`EXISTS (SELECT 1 FROM case_judgments j WHERE j.case_id = ${lawCases.id})`;
+    const deedMissing = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL OR ${lawCases.judgmentDeedReceivedDate} = '')`;
+    const deedCaseLive = and(
+      ne(lawCases.status, "مغلق"),
+      sql`${lawCases.isArchived} IS NOT TRUE`,
+    );
     {
       // 🔴 RE-KEYED IN BATCH 3 — the stage term is GONE, replaced by "the case has
       // a ruling on record". `currentStage === محكوم_حكم_ابتدائي` was wrong in both
@@ -4425,12 +4436,6 @@ export class DatabaseStorage implements IStorage {
       // the terms the mirror CANNOT express (existence here, opens_window in 1d)
       // are read from case_judgments — so no reader in this batch reads the same
       // fact from two places.
-      const hasJudgmentRecord = sql`EXISTS (SELECT 1 FROM case_judgments j WHERE j.case_id = ${lawCases.id})`;
-      const deedMissing = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL OR ${lawCases.judgmentDeedReceivedDate} = '')`;
-      const deedCaseLive = and(
-        ne(lawCases.status, "مغلق"),
-        sql`${lawCases.isArchived} IS NOT TRUE`,
-      );
       // The personal scope cannot be expressed in SQL here: the owner may be the
       // ATTENDING lawyer, who is on the hearing row, not the case. Candidates are
       // fetched by ruling-presence (+ dept for a head) and filtered by resolved
@@ -4486,6 +4491,72 @@ export class DatabaseStorage implements IStorage {
             title: `تابع استلام صك الحكم — قضية ${r.caseNumber}`,
             entityType: "case", entityId: r.id, caseId: r.id,
             ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          });
+        }
+      }
+    }
+
+    // ---- 1c-bis. judgment_deed_attach — the صك ARRIVED but its FILE is missing ----
+    // 🔴 NET-NEW, and it is the only state in the app that BLOCKS A CASE with no
+    // task to explain it. Measured: 12 production cases sit here right now, each
+    // refused both a close and an advance out of the judgment stage by
+    // isJudgmentDeedMissing, with nobody told why.
+    //
+    // No feed block read judgment_attachments or case_attachments before this one.
+    // The "file not attached" state had a BADGE (lib/attachment-indicators) and a
+    // server GATE, and nothing in between.
+    //
+    // 🔴 "CURRENT RULING" IS DEFINED EXACTLY AS THE GATE DEFINES IT, and this was
+    // checked rather than assumed — a task that clears without unblocking the case
+    // would be worse than no task:
+    //   • the gate:  isJudgmentDeedMissing → storage.getLatestJudgmentForCase,
+    //                which is `ORDER BY sequence DESC LIMIT 1`, then asks
+    //                getJudgmentAttachment for that judgment id.
+    //   • this task: getCurrentJudgmentSummaries, which reads the chain ordered by
+    //                sequence ASC and lets the LAST write per case win — the same
+    //                highest-sequence row — and stamps hasDeed from the very same
+    //                judgment_attachments table.
+    // Same ruling, same attachment table, same answer. Completing this task is
+    // exactly what makes the gate pass.
+    //
+    // EXACT INVERSE OF 1c ABOVE, so the two can never both fire for one case: 1c
+    // requires judgment_deed_received_date EMPTY, this requires it SET. Together
+    // they partition the gate's whole population — date empty → chase the receipt,
+    // date set + no file → attach it, file present → the gate is satisfied and
+    // neither fires.
+    //
+    // OWNER = the case's assignee, the same caseNotificationRecipientId as 1c and
+    // for the same reason: attaching goes through POST /api/cases/:id/deed-attachment,
+    // whose write gate (canAttachCaseJudgmentDeed) is branch_manager | admin_support
+    // | own-dept department_head | assigned lawyer. The attending lawyer is not in
+    // it. Same scope arms, same alive and pause exclusions as 1c — deedCaseLive and
+    // caseNotPaused are reused verbatim from that block rather than restated.
+    {
+      const deedPresent = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL AND ${lawCases.judgmentDeedReceivedDate} <> '')`;
+      const attachWhere = deptHeadScoped
+        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedPresent, deedCaseLive, caseNotPaused)
+        : and(hasJudgmentRecord, deedPresent, deedCaseLive, caseNotPaused);
+      const attachRows = await db.select({
+        id: lawCases.id, caseNumber: lawCases.caseNumber,
+        primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+      }).from(lawCases).where(attachWhere);
+      if (attachRows.length > 0) {
+        // ONE query for every case's current ruling + whether it has a file, rather
+        // than a per-case attachment lookup. Fetched only when there is at least one
+        // candidate, so a firm with no judgments pays nothing.
+        const summaries = await this.getCurrentJudgmentSummaries();
+        for (const r of attachRows) {
+          const summary = summaries.get(r.id);
+          // No summary = no judgment row at all; hasJudgmentRecord should already
+          // have excluded it, so this is belt-and-braces rather than a live branch.
+          if (!summary || summary.hasDeed) continue;
+          const ownerId = caseNotificationRecipientId(r);
+          if (!firmWideScoped && !deptHeadScoped && ownerId !== uid) continue;
+          tasks.push({
+            id: `judgment_deed_attach:${r.id}`, kind: MyTaskKind.JUDGMENT_DEED_ATTACH,
+            title: `إرفاق ملف صك الحكم — قضية ${r.caseNumber}`,
+            entityType: "case", entityId: r.id, caseId: r.id,
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "record",
           });
         }
       }
