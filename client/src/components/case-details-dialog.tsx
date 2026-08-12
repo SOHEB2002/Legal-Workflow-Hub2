@@ -690,7 +690,7 @@ export function CaseDetailsDialog({
                       leaves سجل الأحكام adjacent to the tab it used to live
                       inside, so anyone who knew the old location finds it one tab
                       over rather than at the far end of the row. */}
-                  <TabsTrigger value="judgments" data-testid="tab-judgments">سجل الأحكام</TabsTrigger>
+                  <TabsTrigger value="judgments" data-testid="tab-judgments">الأحكام</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
                   <TabsTrigger value="comments" data-testid="tab-comments">التعليقات</TabsTrigger>
                   <TabsTrigger value="activity" data-testid="tab-activity">النشاط</TabsTrigger>
