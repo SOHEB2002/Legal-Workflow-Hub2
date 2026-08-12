@@ -613,6 +613,145 @@ function canModifyConsultation(user: CaseActorIdentity, consultation: any, ctx?:
 // validateStageTransition) and the dedicated /internal-review reviewer guard
 // stay HUMAN. The dedicated committee/take-notes role gates are left un-expanded
 // (deferred with the requireRole role-gate pass).
+// ==================== BATCH 1.5b — THE OWNER CHECK, WARN-ONLY ====================
+// 🔴 THIS BLOCK REFUSES NOTHING. It observes and logs; every request proceeds
+// exactly as before, with the same status, the same body and the same writes.
+//
+// WHY IT EXISTS. Five endpoints gate on canModifyCase(parentCase) — the broad
+// "may this actor touch this case at all" rule, which passes branch_manager,
+// admin_support, cases_review_head, consultations_review_head and viewer
+// firm-wide, plus the case's own lawyers. Every viewer of a case-scoped task
+// list passes it by construction, which is precisely why they can see the list.
+// So today the case's assigned lawyer can complete an admin_support COLLECTION
+// task, and that fires maybeCloseCaseAfterPostJudgmentTasks — which can
+// auto-close the case.
+//
+// WHY WARN-ONLY AND NOT A REFUSAL. field_tasks records who a task is ASSIGNED
+// to (assigned_to / assigned_by / worker_id) but NEVER WHO COMPLETED IT, so the
+// 52 completed rows in production cannot answer whether anyone acts on tasks
+// that are not theirs. The owner believes nobody does. Believes is not knows,
+// and a refusal shipped on a belief breaks a live workflow silently. This
+// commit MEASURES for a period; the refusal is a later, informed commit.
+//
+// 🔴 OWNERSHIP IS NOT "assigned_to". For COLLECTION, EXECUTION and AGENCY
+// ISSUANCE the feed IGNORES the stored assigned_to and resolves the owner LIVE
+// from the admin_support task-type mapping (storage.ts blocks 16/17/18, the
+// "Option C" parity note), so that a mapping change applies immediately. A
+// predicate reading assigned_to alone would warn on EVERY legitimate
+// admin_support completion and bury the signal it exists to surface. The
+// resolver below reproduces the feed's rule per kind — see resolveFieldTaskOwnerIds.
+type TaskOwnerWarnInput = {
+  endpoint: string;
+  taskId: string;
+  taskType: string;
+  rightfulOwnerIds: string[];
+  caseId: string | null;
+  assignedTo: string | null;
+};
+
+// ONE implementation, five call sites. Delegation-aware in the same shape the
+// identity-tight gates already use (the general-task /review gate on
+// originalRequesterId): the acting set is every identity the caller currently
+// stands for, scoped to this task's parent case, or [self] with no context.
+//
+// TOTAL BY CONSTRUCTION — the whole body is inside a try/catch that only logs,
+// so a fault in the observation can never affect the request it is observing.
+function warnIfNotTaskOwner(req: AuthRequest, input: TaskOwnerWarnInput): void {
+  try {
+    const user = req.user!;
+    if (!user) return;
+    const actingIds = req.actingContext
+      ? actingIdentitiesFor(req.actingContext, input.caseId).map((i) => i.userId)
+      : [user.id];
+    const owners = input.rightfulOwnerIds.filter((id) => !!id);
+    // No resolvable owner (unmapped type, or an unassigned "" pool task) → nobody
+    // is the rightful actor, so this is reportable too. It is a DIFFERENT finding
+    // from "the wrong person acted" and the empty assignedTo in the line says so.
+    const isOwner = owners.some((id) => actingIds.includes(id));
+    if (isOwner) return;
+    // Single-line structured JSON so a Replit log grep returns parseable records.
+    console.warn("[task-owner-check] NOT_OWNER " + JSON.stringify({
+      endpoint: input.endpoint,
+      taskId: input.taskId,
+      taskType: input.taskType,
+      actingUserId: user.id,
+      actingUserRole: user.role,
+      assignedTo: input.assignedTo ?? "",
+      caseId: input.caseId ?? "",
+      // Not in the requested shape, but free here and the difference between a
+      // report you can act on and one you cannot: WHO the feed would have shown
+      // this task to, and whether a delegation was in play.
+      rightfulOwnerIds: owners,
+      actingAs: actingIds.filter((id) => id !== user.id),
+    }));
+  } catch (e) {
+    console.error("[task-owner-check] observation failed (request unaffected):", e);
+  }
+}
+
+// The feed's own ownership rule for a stored field_task row, reproduced.
+//   • COLLECTION  (title "إعداد خطاب تحصيل…") → the LIVE mapping only.
+//   • AGENCY ISSUANCE (title "إصدار وكالة…")  → the LIVE mapping only.
+//     Both are SKIPPED by feed block 8 and emitted solely by their own
+//     live-routed blocks, so the mapped user is the one and only rightful actor.
+//   • EXECUTION (title "رفع طلب تنفيذ…") → the mapping OR the stored assignee.
+//     Deliberately BOTH: block 8 does NOT skip the execution prefix, so an
+//     execution row surfaces TWICE — as a field_task to its stored assignee and
+//     as an execution task to the mapped owner, under two different feed ids.
+//     Two feed paths present it, so either actor reached it legitimately and
+//     warning on one of them would be a false positive. (That double-emission is
+//     pre-existing and is NOT touched here.)
+//   • everything else (generic field tasks, general عام tasks) → assigned_to.
+// The mapping costs two reads, so it is loaded ONLY for the three live-routed
+// prefixes; a plain field task resolves with no extra query at all.
+async function resolveFieldTaskOwnerIds(
+  task: { title: string; assignedTo: string; taskType: string },
+): Promise<{ ownerIds: string[]; taskType: string }> {
+  const isCollection = task.title.startsWith(CollectionTaskTitlePrefix);
+  const isExecution = task.title.startsWith(ExecutionTaskTitlePrefix);
+  // No named constant exists for this prefix — feed blocks 8 and 18 both match
+  // the literal, so matching it here keeps all three in step.
+  const isAgencyIssuance = task.title.startsWith("إصدار وكالة");
+  if (!isCollection && !isExecution && !isAgencyIssuance) {
+    return {
+      ownerIds: [task.assignedTo || ""],
+      taskType: task.taskType === FieldTaskType.GENERAL ? "general" : "field_task",
+    };
+  }
+  const assignments = await storage.getAdminSupportTaskAssignments();
+  const users = await storage.getAllUsers();
+  const mapped = resolveAdminSupportAssignee(
+    isCollection ? AssignableAdminSupportTaskKind.COLLECTION
+      : isExecution ? AssignableAdminSupportTaskKind.EXECUTION
+      : AssignableAdminSupportTaskKind.AGENCY_ISSUANCE,
+    assignments,
+    users,
+  );
+  return {
+    ownerIds: isExecution ? [mapped, task.assignedTo || ""] : [mapped],
+    taskType: isCollection ? "collection" : isExecution ? "execution" : "agency_issuance",
+  };
+}
+
+// A legal deadline's authority is ENTIRELY its parent case's — the table has no
+// assignee, no creator column and no department of its own. So this is just
+// canModifyCase(parent), with the parent resolved and BOTH unresolvable states
+// answering false: a falsy caseId (unreachable — the column is notNull and the
+// insert schema is .min(1)) and a case that will not load (an orphan surviving
+// on a DB without the CASCADE FK). The old inline gate treated both as PASS.
+// Extracted rather than written twice because PATCH and DELETE must agree; two
+// copies of a fail-closed rule is how one of them later stops being one.
+async function canModifyDeadlineParentCase(
+  user: CaseActorIdentity,
+  deadline: { caseId: string | null },
+  ctx: ActingContext | undefined,
+): Promise<boolean> {
+  if (!deadline.caseId) return false;
+  const parentCase = await storage.getCaseById(deadline.caseId);
+  if (!parentCase) return false;
+  return canModifyCase(user, parentCase, ctx);
+}
+
 async function canActOnMemo(
   user: CaseActorIdentity,
   memo: any,
@@ -6887,6 +7026,25 @@ export async function registerRoutes(
       if (!canModifyCase(user, lawCase, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
+      // Batch 1.5b — OBSERVE ONLY. Purely LIVE-mapped: feed block 14 emits this
+      // task to dataCompletionCaseOwner (or the branch_manager pool when unset),
+      // and the case row carries no assignee for it, so the mapping is the whole
+      // rule — no stored-assignee arm to OR in, unlike execution. The ack writes
+      // data_completion_last_ack_at, which SUPPRESSES admin_support's own task for
+      // two days, so the wrong actor here silences the right one.
+      {
+        const assignments = await storage.getAdminSupportTaskAssignments();
+        const users = await storage.getAllUsers();
+        warnIfNotTaskOwner(req, {
+          endpoint: "POST /api/cases/:id/ack-data-completion",
+          taskId: lawCase.id,
+          taskType: "data_completion_case",
+          rightfulOwnerIds: [resolveAdminSupportAssignee(
+            AssignableAdminSupportTaskKind.DATA_COMPLETION_CASE, assignments, users)],
+          caseId: lawCase.id,
+          assignedTo: null,
+        });
+      }
       const updated = await storage.updateCase(String(req.params.id), { dataCompletionLastAckAt: new Date().toISOString() });
       res.json(updated);
     } catch (error) {
@@ -6974,6 +7132,20 @@ export async function registerRoutes(
       if (task.assignedTo !== user.id && !canModifyParent) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
+      // Batch 1.5b — OBSERVE ONLY. Same resolver as the field-task PATCH, so
+      // the execution "mapping OR stored assignee" rule cannot drift between
+      // the two routes that can complete an execution task.
+      {
+        const ownership = await resolveFieldTaskOwnerIds(task);
+        warnIfNotTaskOwner(req, {
+          endpoint: "POST /api/field-tasks/:id/execution-request",
+          taskId: task.id,
+          taskType: ownership.taskType,
+          rightfulOwnerIds: ownership.ownerIds,
+          caseId: task.caseId ?? null,
+          assignedTo: task.assignedTo,
+        });
+      }
       const executionRequestNumber = String(req.body?.executionRequestNumber ?? "").trim();
       if (!executionRequestNumber) {
         return res.status(400).json({ error: "رقم طلب التنفيذ مطلوب" });
@@ -7047,6 +7219,23 @@ export async function registerRoutes(
           return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
         }
         members.push({ task, caseId: task.caseId });
+      }
+      // Batch 1.5b — OBSERVE ONLY, once the whole group has passed its gate.
+      // PER MEMBER, not once for the group: the group is keyed on the موكّل, so
+      // its members can span cases, and a per-group line would hide which task
+      // was acted on. In practice all members share one mapped owner, so a
+      // wrong actor produces one line per member — that is the honest count of
+      // rows they touched, not duplication.
+      for (const { task } of members) {
+        const ownership = await resolveFieldTaskOwnerIds(task);
+        warnIfNotTaskOwner(req, {
+          endpoint: "POST /api/field-tasks/agency-issuance-group",
+          taskId: task.id,
+          taskType: ownership.taskType,
+          rightfulOwnerIds: ownership.ownerIds,
+          caseId: task.caseId ?? null,
+          assignedTo: task.assignedTo,
+        });
       }
       // One confirm satisfies all: log + complete + clear the latch per member.
       for (const { task, caseId } of members) {
@@ -15031,6 +15220,21 @@ export async function registerRoutes(
       if (existingTask.assignedTo !== user.id && !canModifyParent && !isUnassignedAssign) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
+      // Batch 1.5b — OBSERVE ONLY, after the gate has already passed. Nothing
+      // below this line is conditional on it. Deliberately NOT applied to the
+      // assign arm (isUnassignedAssign): handing out an unassigned task is a
+      // manager action by design, not someone acting on another's task.
+      if (!isUnassignedAssign) {
+        const ownership = await resolveFieldTaskOwnerIds(existingTask);
+        warnIfNotTaskOwner(req, {
+          endpoint: "PATCH /api/field-tasks/:id",
+          taskId: existingTask.id,
+          taskType: ownership.taskType,
+          rightfulOwnerIds: ownership.ownerIds,
+          caseId: existingTask.caseId ?? null,
+          assignedTo: existingTask.assignedTo,
+        });
+      }
       if (req.body.assignedTo) {
         const { valid } = await validateAssignedUsersActive([req.body.assignedTo]);
         if (!valid) {
@@ -15528,12 +15732,52 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/contact-logs/:id", requireAuth, async (req, res) => {
+  // 🔴 WAS requireAuth AND NOTHING ELSE — a full IDOR. The handler spread the
+  // body straight into updateContactLog, so ANY authenticated non-viewer could
+  // rewrite ANY contact log in the firm: the client it names, its dates, its
+  // notes, its follow-up state. Found during the المهام-tab investigation; not
+  // caused by it, and reachable today with no tab and no UI.
+  //
+  // THE PREDICATE IS ASSEMBLED FROM SHAPES THAT ALREADY EXIST HERE, not invented:
+  //   1. the CREATOR — contact_logs has no assignee; `created_by` is the only
+  //      ownership column it has, and it is exactly what مهامي already treats as
+  //      ownership (getMyTasks block 11 filters `eq(contactLogs.createdBy, uid)`,
+  //      commented "owner = createdBy"). The مهامي "إنهاء متابعة العميل" action
+  //      PATCHes this route, so arm 1 alone keeps that whole path working.
+  //   2. a MANAGER via canAssignFieldTasks (branch_manager | admin_support) —
+  //      the file's established management pair, reused rather than re-listed.
+  //      admin_support is in it because client contact IS their work; DELETE
+  //      stays branch_manager-only above, so this does not widen deletion.
+  //   3. anyone who can modify the LINKED CASE — the same `canModifyCase(parent)`
+  //      arm the field-task and legal-deadline gates use. case_id is NULLABLE on
+  //      this table (unlike legal_deadlines), so this arm is conditional by
+  //      necessity, and it FAILS CLOSED: a case-less log falls through to arms
+  //      1-2 rather than skipping the check (the exact bug fixed below).
+  //
+  // ⚠️ ONE LIVE PATH NARROWS, and it is called out in the batch report rather
+  // than hidden: clients.tsx renders a follow-up-complete button with NO client
+  // gate for every contact of any client the user opens, so a non-creator,
+  // non-manager acting on a CASE-LESS log now gets a 403 where they used to
+  // succeed. That is the IDOR, seen from the UI side. If it turns out to be a
+  // used workflow, the fix is to widen arm 3 — not to reopen the route.
+  app.patch("/api/contact-logs/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
       const bodyCheck = contactLogBodySchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const user = req.user!;
+      const existingLog = await storage.getContactLogById(String(req.params.id));
+      if (!existingLog) return res.status(404).json({ error: "سجل التواصل غير موجود" });
+      let mayEditLog =
+        existingLog.createdBy === user.id || canAssignFieldTasks(user.role);
+      if (!mayEditLog && existingLog.caseId) {
+        const parentCase = await storage.getCaseById(existingLog.caseId);
+        mayEditLog = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+      }
+      if (!mayEditLog) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       const updated = await storage.updateContactLog(String(req.params.id), req.body);
       if (!updated) {
@@ -17156,14 +17400,57 @@ export async function registerRoutes(
       }
       // Phase 5 A2/M2 — only someone who can modify the parent case may edit
       // its deadlines (was requireAuth-only IDOR).
+      //
+      // 🔴 THE GATE USED TO BE SKIPPABLE TWO WAYS, and both are closed here. It
+      // read `if (caseId) { if (targetCase && !canModifyCase(…)) 403 }`, so a
+      // falsy caseId skipped it entirely and a case that failed to load skipped
+      // it too — an unresolvable parent silently became "allowed". Both now FAIL
+      // CLOSED via resolveDeadlineParentCase.
+      //
+      // WHAT THOSE TWO STATES ACTUALLY ARE (checked, not assumed):
+      //   • caseId falsy — UNREACHABLE through any live route. The column is
+      //     `notNull()` (schema.ts:1330) AND insertLegalDeadlineSchema types it
+      //     `z.string().min(1)` (schema.ts:5291), so the create route 400s on a
+      //     missing or empty value before storage sees it, and the DB would
+      //     reject NULL regardless. LegalDeadline is $inferSelect, so `caseId` is
+      //     `string` — TypeScript never thought it could be null either. There is
+      //     no such thing as a case-less legal deadline and nobody legitimately
+      //     edits one; only a raw SQL insert of "" could manufacture it.
+      //   • targetCase falsy — an ORPHAN: the parent case was deleted. Batch M's
+      //     legal_deadlines_case_id_fkey is ON DELETE CASCADE, so this cannot
+      //     survive on a database that has the FK — but the FK is one of the
+      //     commented declarations that live only where apply-fk-constraints.sql
+      //     has been run, so a dev DB reset since the last run CAN hold orphans.
+      // Neither is a capability. Refusing both is the only honest answer: there
+      // is no case against which to evaluate authority, so authority is absent.
       const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
       if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
       const user = req.user!;
-      if (existingDeadline.caseId) {
-        const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
-          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-        }
+      if (!await canModifyDeadlineParentCase(user, existingDeadline, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+      // Batch 1.5b — OBSERVE ONLY. legal_deadlines has NO assignee column of any
+      // kind, so ownership is entirely the parent case's: feed block 9 sets
+      // ownerId = primaryLawyerId || responsibleLawyerId || "", which IS
+      // caseNotificationRecipientId — the canonical resolution, used via the
+      // shared helper rather than re-writing the chain. assignedTo is reported as
+      // "" because the row genuinely has none; rightfulOwnerIds carries the lawyer.
+      // The parent case is re-read here rather than threaded out of the gate: this
+      // route is low-traffic, and the alternative is reshaping a gate that must
+      // stay a pure boolean. DELETE is deliberately NOT observed — deleting a
+      // deadline is not "completing someone's task".
+      {
+        const parentCase = existingDeadline.caseId
+          ? await storage.getCaseById(existingDeadline.caseId)
+          : null;
+        warnIfNotTaskOwner(req, {
+          endpoint: "PATCH /api/legal-deadlines/:id",
+          taskId: existingDeadline.id,
+          taskType: "legal_deadline",
+          rightfulOwnerIds: [caseNotificationRecipientId(parentCase)],
+          caseId: existingDeadline.caseId ?? null,
+          assignedTo: null,
+        });
       }
       const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
       if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
@@ -17178,14 +17465,13 @@ export async function registerRoutes(
       // Phase 5 A2/M2 — only someone who can modify the parent case may delete
       // its deadlines (was requireAuth-only IDOR; deletes also previously
       // returned success even for a non-existent id).
+      // Same two skippable holes as the PATCH above, closed the same way and for
+      // the same reasons — see that comment for what each state actually is.
       const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
       if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
       const user = req.user!;
-      if (existingDeadline.caseId) {
-        const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
-          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-        }
+      if (!await canModifyDeadlineParentCase(user, existingDeadline, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       await storage.deleteLegalDeadline(String(req.params.id));
       res.json({ success: true });

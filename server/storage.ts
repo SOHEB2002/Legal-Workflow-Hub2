@@ -171,6 +171,7 @@ export interface IStorage {
 
   // Contact Logs
   getAllContactLogs(): Promise<ContactLog[]>;
+  getContactLogById(id: string): Promise<ContactLog | undefined>;
   getContactLogsByClient(clientId: string): Promise<ContactLog[]>;
   createContactLog(data: Partial<ContactLog>, createdBy: string): Promise<ContactLog>;
   updateContactLog(id: string, data: Partial<ContactLog>): Promise<ContactLog | undefined>;
@@ -2589,6 +2590,15 @@ export class DatabaseStorage implements IStorage {
   async getAllContactLogs(): Promise<ContactLog[]> {
     const result = await db.select().from(contactLogs);
     return result.map(mapDbContactLog);
+  }
+
+  // Single-row read, added for the PATCH /api/contact-logs/:id ownership gate —
+  // that route needs the row's created_by / case_id BEFORE deciding, and the
+  // only reads available were "all logs" and "all logs for a client". Mirrors
+  // getFieldTaskById / getLegalDeadlineById exactly.
+  async getContactLogById(id: string): Promise<ContactLog | undefined> {
+    const result = await db.select().from(contactLogs).where(eq(contactLogs.id, id));
+    return result[0] ? mapDbContactLog(result[0]) : undefined;
   }
 
   async getContactLogsByClient(clientId: string): Promise<ContactLog[]> {
