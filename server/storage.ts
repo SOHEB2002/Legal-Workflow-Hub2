@@ -4761,6 +4761,98 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // ---- 2d. consultation_work — the ASSIGNEE's own consultation ----
+    // 🔴 NET-NEW, and it closes the larger half of the invisible-work gap. Before
+    // this, `consultations.assignedTo` appeared in the whole feed exactly three
+    // times: once as an UNASSIGNED test (block 2b, above — which goes to the
+    // DEPARTMENT HEAD and stops the instant someone is assigned) and twice inside
+    // the aging backstops (paused ≥3 days, data-completion ≥3 days), both of which
+    // render a DISABLED button. There was no consultation analogue of case_work at
+    // any stage. Measured: 38 assigned consultations emitting nothing, 32 of them
+    // still sitting at استلام.
+    //
+    // Placed HERE, immediately after block 2b, because it is that block's EXACT
+    // INVERSE and the pair should be read together: 2b requires
+    // `assigned_to IS NULL OR = ''`, this requires it non-empty. A consultation
+    // can never satisfy both, so assigning one moves it from the head's list to
+    // the assignee's with nothing in between and nothing double-counted.
+    //
+    // THE STAGE SET — the stages at which the ASSIGNEE is unambiguously the person
+    // who must act, and the exclusions are as deliberate as the inclusions:
+    //   استلام               ✅ owner ruling. NOT transient: the /assign endpoint
+    //                          writes { assignedTo } and nothing else — despite a
+    //                          stale comment on the client claiming it advances
+    //                          RECEIVED → STUDY — so an assigned consultation
+    //                          simply STAYS here. That is the 32 rows.
+    //   دراسة / تحرير        ✅ the drafting body of the written workflow.
+    //   الأخذ_بالملاحظات     ✅ the committee has just handed the file BACK to the
+    //                          assignee with notes. The worst of the silent
+    //                          stages: someone is explicitly waiting on them.
+    //   جاري_العمل            ✅ the procedural (إجرائية) workflow's entire working
+    //                          stage — its analogue of دراسة.
+    //   مراجعة_داخلية        ❌ the designated reviewer's turn (review_pending).
+    //   لجنة_مراجعة          ❌ the committee head's turn (review_pending).
+    //   استكمال_المرفقات…    ❌ admin_support owns day 0 (block 14b) and the
+    //                          assignee already gets the 3-day escalation (21).
+    //   جاهزة_للإرسال/منجزة  ❌ admin_support's to close (block 13). Considered and
+    //                          dropped: the work product is finished, and adding a
+    //                          second owner here would duplicate a live task.
+    //   مغلقة                ❌ terminal.
+    //
+    // WHERE CONSULTATIONS DIFFER STRUCTURALLY FROM CASES, and what was done:
+    //   • PAUSE. Cases need an explicit caseNotPaused because pauseCase leaves
+    //     status alone; pauseConsultation FLIPS status to "paused", so
+    //     `status = 'active'` already excludes a paused row. No second term is
+    //     added — the same reasoning block 2b records, and the reason only three
+    //     pause fragments exist at the top of this method rather than four.
+    //   • LIFECYCLE. There is no isArchived and no مغلق status here: `active`
+    //     excludes closed and converted too, so ONE term does the work of the
+    //     case side's `ne(status,'مغلق') + isArchived IS NOT TRUE` pair.
+    //   • ASSIGNEE. Cases carry three columns (primary / responsible /
+    //     assignedLawyers) and need the or(...) triple; consultations carry ONE
+    //     nullable assigned_to — which can be NULL *or* the "" sentinel, so both
+    //     are tested, exactly as block 2b does. `IS NULL` alone would miss every
+    //     record unassigned through the transfer/unassign paths.
+    //   • FOLLOW-UP CYCLES. A تعقيبية consultation (followUpCount > 0) resolves
+    //     against the 3-stage mini-list, whose working stage IS استلام — already
+    //     in the set, so cycles are covered with no special case.
+    {
+      const consultAssigned = sql`(${consultations.assignedTo} IS NOT NULL AND ${consultations.assignedTo} <> '')`;
+      const CONSULTATION_WORK_STAGES = [
+        ConsultationStage.RECEIVED,
+        ConsultationStage.STUDY,
+        ConsultationStage.DRAFTING,
+        ConsultationStage.TAKING_NOTES,
+        ConsultationStage.IN_PROGRESS,
+      ];
+      // Same three-arm shape as case_work. The supervisory arms require an
+      // assignee (consultAssigned) exactly as case_work's require hasAnyLawyer;
+      // the self arm implies one by matching on it.
+      const consultWorkWhere = firmWideScoped
+        ? and(eq(consultations.status, ConsultationStatus.ACTIVE),
+            inArray(consultations.currentStage, CONSULTATION_WORK_STAGES), consultAssigned)
+        : deptHeadScoped
+        ? and(eq(consultations.departmentId, userDept!), eq(consultations.status, ConsultationStatus.ACTIVE),
+            inArray(consultations.currentStage, CONSULTATION_WORK_STAGES), consultAssigned)
+        : and(eq(consultations.status, ConsultationStatus.ACTIVE),
+            inArray(consultations.currentStage, CONSULTATION_WORK_STAGES), eq(consultations.assignedTo, uid));
+      const consultWorkRows = await db.select({
+        id: consultations.id, consultationNumber: consultations.consultationNumber,
+        stage: consultations.currentStage, assignedTo: consultations.assignedTo,
+      }).from(consultations).where(consultWorkWhere);
+      for (const r of consultWorkRows) {
+        const ownerId = r.assignedTo || "";
+        tasks.push({
+          id: `consultation_work:${r.id}`, kind: MyTaskKind.CONSULTATION_WORK,
+          // Mirrors case_work's title shape, stage interpolation included, so the
+          // row says WHICH step is owed rather than only that something is.
+          title: `العمل على الاستشارة ${r.consultationNumber} — ${r.stage}`,
+          entityType: "consultation", entityId: r.id, caseId: null,
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "draft",
+        });
+      }
+    }
+
     // ---- 3-5 + agency. Hearings (attend / unrecorded-overdue / report) ----
     // GUARDED (mirrors the data_completion / execution / agency blocks): a failure
     // here degrades to "no hearing tasks this run" and never throws out of

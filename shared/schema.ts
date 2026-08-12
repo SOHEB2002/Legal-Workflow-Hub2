@@ -7063,6 +7063,16 @@ export type SidebarCounts = Record<SidebarSectionValue, number>;
 // responsible owner + scope so a dept_head's view can split "my" vs "team".
 export const MyTaskKind = {
   CASE_WORK: "case_work",                 // assigned lawyer must act at a lawyer-work stage
+  // The consultation twin of CASE_WORK. NET-NEW: until this kind existed the
+  // feed had NO work item for consultations at all — consultations.assignedTo
+  // appeared in exactly three places, once as an UNASSIGNED test (the
+  // consultation_unassigned block, which goes to the department head and stops
+  // the moment someone is assigned) and twice inside the two aging backstops
+  // (paused ≥3d, data-completion ≥3d), both of which render a disabled button.
+  // So an assigned consultation was invisible to its assignee at EVERY stage of
+  // its life, including دراسة / تحرير / الأخذ_بالملاحظات, where the assignee is
+  // unambiguously the only person who can act.
+  CONSULTATION_WORK: "consultation_work",
   CASE_UNASSIGNED: "case_unassigned",     // unassigned case in dept (dept_head assigns)
   // Siblings of the above for the other two assignable record types. Separate
   // kinds rather than one shared "unassigned" kind because each routes to its
