@@ -7659,6 +7659,98 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/judgments/:judgmentId/deed-attachment           — metadata
+  // GET /api/judgments/:judgmentId/deed-attachment/download  — the file
+  //
+  // THE READ PATH FOR ONE RULING'S صك. judgment_attachments already holds a
+  // SEPARATE file per ruling (judgments/<judgmentId>/<uuid>) and the سجل الأحكام
+  // panel already prints "الصك مرفق" per ruling — but nothing could serve a
+  // SPECIFIC ruling's deed, so a superseded ruling's صك had no download path at
+  // all. The case-level route cannot stand in for one: it reads
+  // case_attachments, which holds ONE row per CASE, so it always answers with
+  // the CURRENT cycle's file — exactly the substitution batch 4 forbade when it
+  // made hasDeed ask judgment_attachments instead.
+  //
+  // 🔴 READ GATE = requireAuth ONLY (owner decision 2026-08-04: every employee
+  // may read any case, any صك and any ضبط). The same rule and the same reasoning
+  // as GET /api/cases/:id/deed-attachment and GET /api/cases/:id/judgments
+  // directly above — and it must be the same, because this serves the panel that
+  // route feeds. Anything narrower would repeat the mistake both of those were
+  // corrected for: a gate narrower than the read that leads to it, producing a
+  // control that silently shows nothing rather than a refusal. viewer reaches
+  // these and nothing more — viewerWriteGuard 403s every non-GET before any
+  // handler runs.
+  //
+  // ⚠ NO WRITE ROUTE IS ADDED. judgment_attachments is still written ONLY by the
+  // case-level POST/DELETE dual-write, which owns the reference-counted blob
+  // delete (one Object-Storage key can be named by a row in each table). A
+  // second writer here would break that accounting.
+  //
+  // ⚠ ONE DELIBERATE ASYMMETRY between the two routes, and it is the endpoint
+  // contract rather than an oversight: the METADATA route answers
+  // `{ attachment: null }` for a ruling with no file, while the DOWNLOAD route
+  // 404s. `{attachment: …|null}` is the shape both sibling GETs return and the
+  // shape SingleAttachmentControl documents and parses; making it 404 instead
+  // would push a normal, expected state through the component's catch, which
+  // renders the SAME empty box it renders for a genuine read failure — the
+  // indistinguishable-silent-failure class this codebase keeps paying for.
+  // There is nothing to stream for a missing file, so download says so out loud.
+  //
+  // ROUTE ORDER — the documented trap. Express matches in REGISTRATION ORDER and
+  // a :param is a catch-all for one segment, so a literal path registered AFTER
+  // its :id sibling is captured and 404s SILENTLY (the /api/hearings/ring-state
+  // debugging round). Findings for this commit: these are the FIRST
+  // /api/judgments routes in the file — there is no /api/judgments/:id to be
+  // captured by — and there is no /api/:param route anywhere, so no earlier
+  // route of matching segment count can capture either path. Safe at this
+  // position, beside the سجل الأحكام read they serve.
+  // 🔴 A FUTURE /api/judgments/:id MUST BE REGISTERED AFTER THESE TWO.
+  // The whole-file sweep (every literal path against every earlier same-method
+  // :param route of matching segment count) was re-run: no shadowed route.
+  app.get("/api/judgments/:judgmentId/deed-attachment", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const att = await storage.getJudgmentAttachment(String(req.params.judgmentId));
+      // `missing` mirrors the contracts convention: runtime-derived on the
+      // response, never stored — the same line the case-deed and
+      // hearing-minutes GETs return, so the shared control renders identically
+      // on all four surfaces.
+      res.json({ attachment: att ? { ...att, missing: !isAttachmentObjectKey(att.filePath) } : null });
+    } catch (error: any) {
+      console.error("[judgments/deed-attachment GET] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Same gate and same reasoning as the metadata route above; the two must agree
+  // or the control fetches a file it cannot then open. Streams via the SHARED
+  // streamAttachmentToResponse — the one implementation of the subtle
+  // stream-error translation (a JSON envelope only while no bytes have gone
+  // out), reused verbatim from the case-deed download rather than re-written.
+  app.get("/api/judgments/:judgmentId/deed-attachment/download", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const att = await storage.getJudgmentAttachment(String(req.params.judgmentId));
+      if (!att) return res.status(404).json({ error: "لا يوجد صك مرفق على هذا الحكم" });
+      if (!isAttachmentObjectKey(att.filePath)) {
+        return res.status(410).json({ error: "الملف مفقود — يرجى إعادة الرفع من جديد" });
+      }
+      const safeAscii = att.fileName.replace(/[^\x20-\x7E]/g, "_");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(att.fileName)}`,
+      );
+      res.setHeader("Content-Type", att.mimeType || "application/octet-stream");
+      if (att.fileSize) res.setHeader("Content-Length", String(att.fileSize));
+      streamAttachmentToResponse(attachmentObjectStore, att, res, "judgments/deed-attachment download");
+    } catch (error: any) {
+      console.error("[judgments/deed-attachment download] error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // POST /api/cases/:id/appeal-ruling
   // Body: { outcome: "affirmed" | "remanded_first_instance", judgmentDeedReceivedDate?,
   //         objectionWindowDays?, notes? }.
