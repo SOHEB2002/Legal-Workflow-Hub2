@@ -152,6 +152,11 @@ const ACTION_LABEL: Record<MyTaskActionHint, string> = {
 // (shared with field_task/collection/legal_deadline) but is really a "تم
 // التواصل" acknowledgement, and session_report_export confirms the export.
 const KIND_ACTION_LABEL: Partial<Record<MyTaskKindValue, string>> = {
+  // The task is to ATTACH A FILE, not to record anything. Without this override
+  // the row inherited ACTION_LABEL.record ("تسجيل") from its generic actionHint —
+  // the same hint hearing_report and hearing_unrecorded carry, where "record" IS
+  // the verb. This is the fifth kind to need exactly this treatment.
+  [MyTaskKind.HEARING_MINUTES]: "إرفاق",
   [MyTaskKind.SESSION_REPORT_EXPORT]: "تأكيد التصدير",
   [MyTaskKind.CONTRACT_SEND]: "تم الإرسال",
   [MyTaskKind.DATA_COMPLETION_CASE]: "تم الطلب من العميل",
@@ -507,7 +512,12 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
     // invented for it.
     || task.kind === MyTaskKind.CONSULTATION_WORK
     // Deep-links to the صك dialog (see handleAction) — no modal of its own.
-    || task.kind === MyTaskKind.JUDGMENT_DEED_ATTACH;
+    || task.kind === MyTaskKind.JUDGMENT_DEED_ATTACH
+    // Opens the case dialog ON the الجلسات tab, scrolled to THIS hearing, where
+    // the ضبط upload control lives. It has no inline modal — attaching needs a
+    // file picker the generic action dialog has no mode for — but "no modal" is
+    // not "no action", which is what leaving it disabled had been saying.
+    || task.kind === MyTaskKind.HEARING_MINUTES;
   return (
     <div
       dir="rtl"
@@ -704,6 +714,11 @@ export default function MyTasksPage() {
   // Full case-details modal (the shared <CaseDetailsDialog>) target — the whole
   // case view, opened OVER this page so the user never leaves مهامي.
   const [detailsCase, setDetailsCase] = useState<LawCase | null>(null);
+  // Where that modal should LAND. The Briefcase button leaves both null and gets
+  // the المعلومات tab exactly as before; the ضبط task sets them so the user
+  // arrives on الجلسات with their own hearing scrolled to and ringed.
+  const [detailsTab, setDetailsTab] = useState<string | null>(null);
+  const [detailsHearingId, setDetailsHearingId] = useState<string | null>(null);
   // Memo advance panel (the shared component) target
   const [advanceMemo, setAdvanceMemo] = useState<Memo | null>(null);
   // General (عام) task details ("تفاصيل") target — requester + full description +
@@ -772,9 +787,20 @@ export default function MyTasksPage() {
   // with a by-id fetch as the cold-context fallback. Either way the dialog itself
   // hydrates the real stageHistory from GET /api/cases/:id — the list response
   // strips it — so "سجل المراحل" shows the true history here.
-  async function openCaseDetails(task: MyTaskItem) {
+  //
+  // `landing` is how a TASK opens this dialog somewhere other than المعلومات.
+  // Set BEFORE the case itself in both branches, so the dialog never renders one
+  // frame on the default tab and then jumps — and cleared when absent, so the
+  // Briefcase button (which passes nothing) can never inherit the previous
+  // task's landing.
+  async function openCaseDetails(
+    task: MyTaskItem,
+    landing?: { tab?: string; hearingId?: string },
+  ) {
     const caseId = task.caseId;
     if (!caseId) return;
+    setDetailsTab(landing?.tab ?? null);
+    setDetailsHearingId(landing?.hearingId ?? null);
     const known = getCaseById(caseId);
     if (known) { setDetailsCase(known); return; }
     try {
@@ -809,6 +835,23 @@ export default function MyTasksPage() {
     // الإجراءات tab. The stage panel would be a dead end — محكوم_حكم_ابتدائي is a
     // terminal stage, so the progress bar shows a badge and no advance button.
     // Deep-link to the case instead (/cases?openCase=<id>, cases.tsx:451-473).
+    // إرفاق ضبط الجلسة → the case dialog, ON the الجلسات tab, scrolled to and
+    // ringed on THIS hearing — where the ضبط upload control already lives.
+    //
+    // NO NEW UPLOAD PATH, deliberately. The per-hearing paperclip popover there
+    // renders SingleAttachmentControl against /api/hearings/:id/minutes-attachment,
+    // the same component and endpoint the hearing dialog uses; a second file
+    // picker on this page would be a second implementation of the one thing that
+    // must never diverge. This row's job is to get the user to it.
+    //
+    // Targets the SPECIFIC hearing because the task names one: entityType is
+    // "hearing" and entityId IS the hearing id, while caseId is its parent. The
+    // tab alone would still have left the user hunting the right row, which on a
+    // long-running case is the actual difficulty.
+    if (task.kind === MyTaskKind.HEARING_MINUTES) {
+      await openCaseDetails(task, { tab: "hearings", hearingId: task.entityId });
+      return;
+    }
     // The صك ATTACH task shares the receipt task's destination. The same
     // "تسجيل استلام الصك" dialog carries the file control and opens wherever a
     // ruling exists (canRecordJudgmentDeed = caseHasJudgmentRecord &&
@@ -1573,7 +1616,17 @@ export default function MyTasksPage() {
       <CaseDetailsDialog
         caseItem={detailsCase}
         open={!!detailsCase}
-        onOpenChange={(o) => { if (!o) setDetailsCase(null); }}
+        initialTab={detailsTab}
+        highlightHearingId={detailsHearingId}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDetailsCase(null);
+            // Clear the landing with the dialog. Leaving it set would make the
+            // NEXT Briefcase click reopen on الجلسات with a stale hearing ringed.
+            setDetailsTab(null);
+            setDetailsHearingId(null);
+          }
+        }}
       />
 
       {/* ===== Case stage panel (shared with the cases page) ===== */}
