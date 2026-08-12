@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, CaseComment, UserRoleType, CaseClassificationValue } from "@shared/schema";
+import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, UserRoleType, CaseClassificationValue } from "@shared/schema";
 import { CaseStatus, Priority, CaseStage, CaseClassification, CommitteeDecision, getStagesForClassification, caseNotificationRecipientId } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
@@ -9,7 +9,6 @@ import { useDepartments } from "./departments-context";
 
 interface CasesContextType {
   cases: LawCase[];
-  comments: CaseComment[];
   isLoading: boolean;
   addCase: (data: Partial<LawCase>, createdBy: string, createdByName: string) => Promise<LawCase>;
   updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
@@ -27,9 +26,6 @@ interface CasesContextType {
   moveToNextStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>, explicitTargetStage?: string) => Promise<boolean>;
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
-  addComment: (caseId: string, userId: string, userName: string, content: string) => Promise<void>;
-  fetchComments: (caseId: string) => Promise<void>;
-  getCommentsByCaseId: (caseId: string) => CaseComment[];
   getCaseById: (id: string) => LawCase | undefined;
   getCasesByDepartment: (departmentId: string) => LawCase[];
   getCasesByLawyer: (lawyerId: string) => LawCase[];
@@ -88,7 +84,6 @@ const migrateCase = (c: LawCase): LawCase => {
 export function CasesProvider({ children }: { children: React.ReactNode }) {
   const [cases, setCases] = useState<LawCase[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [comments, setComments] = useState<CaseComment[]>([]);
   const { user } = useAuth();
   const { getDepartmentName } = useDepartments();
   const backgroundRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -275,7 +270,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const deleteCase = async (id: string): Promise<void> => {
     await apiRequest("DELETE", `/api/cases/${id}`);
     setCases((prev) => prev.filter((c) => c.id !== id));
-    setComments((prev) => prev.filter((c) => c.caseId !== id));
+    // The sibling setComments prune went with the comments cache. It was a
+    // LOCAL cache eviction only — it never deleted a row — so removing it
+    // changes nothing about what deleteCase leaves in case_comments.
   };
 
   const assignCase = (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null, litigatorId?: string | null) => {
@@ -550,33 +547,15 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const fetchComments = async (caseId: string) => {
-    try {
-      const response = await apiRequest("GET", `/api/cases/${caseId}/comments`);
-      const data: CaseComment[] = await response.json();
-      setComments((prev) => [
-        ...prev.filter((c) => c.caseId !== caseId),
-        ...data,
-      ]);
-    } catch {
-      // fetch comments failed silently
-    }
-  };
-
-  const addComment = async (caseId: string, userId: string, userName: string, content: string) => {
-    const response = await apiRequest("POST", `/api/cases/${caseId}/comments`, { content });
-    const saved: CaseComment = await response.json();
-    setComments((prev) => [...prev, saved]);
-  };
-
-  const getCommentsByCaseId = (caseId: string) =>
-    comments.filter((c) => c.caseId === caseId);
-
+  // NOTE: addComment / fetchComments / getCommentsByCaseId and the `comments`
+  // state they fed were REMOVED with the التعليقات tab, which was their only
+  // consumer anywhere in client/src. The case_comments TABLE and both routes
+  // (GET/POST /api/cases/:id/comments) are deliberately KEPT — additive-only
+  // posture — so the table is now write-dead rather than dropped.
   return (
     <CasesContext.Provider
       value={{
         cases,
-        comments,
         isLoading,
         addCase,
         updateCase,
@@ -590,9 +569,6 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         moveToNextStage,
         moveToPreviousStage,
         skipDataCompletion,
-        addComment,
-        fetchComments,
-        getCommentsByCaseId,
         getCaseById,
         getCasesByDepartment,
         getCasesByLawyer,

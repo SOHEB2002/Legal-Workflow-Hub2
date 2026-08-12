@@ -626,9 +626,10 @@ export default function CasesPage() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const selectedCase = selectedCaseId ? getCaseById(selectedCaseId) || null : null;
   // awaitInfo + its activity-log fetch, the attachments state/handlers, the
-  // new-comment box, the active tab, the inline-edit fields and the تراضي/الموارد
-  // registration inputs all moved INTO <CaseDetailsDialog> — that dialog was their
-  // only reader, and it now loads its own attachments/comments when it opens.
+  // active tab, the inline-edit fields and the تراضي/الموارد registration inputs
+  // all moved INTO <CaseDetailsDialog> — that dialog was their only reader, and it
+  // now loads its own attachments when it opens. (The new-comment box moved with
+  // them and was then deleted outright with the التعليقات tab.)
   const [rejectNotes, setRejectNotes] = useState("");
 
   const [showReminderDialog, setShowReminderDialog] = useState(false);
@@ -1263,9 +1264,10 @@ export default function CasesPage() {
   const openDetailsDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
     setShowDetailsDialog(true);
-    // The attachments + comments fetches that used to fire here moved INTO
-    // <CaseDetailsDialog> (it loads them when it opens), so every host gets a
-    // primed dialog without having to remember to prime it.
+    // The attachments fetch that used to fire here moved INTO
+    // <CaseDetailsDialog> (it loads it when it opens), so every host gets a
+    // primed dialog without having to remember to prime it. (A comments fetch
+    // moved with it and was later removed with the التعليقات tab.)
     addRecentVisit("case", caseItem.id, `${caseItem.caseNumber} - ${getClientName(caseItem.clientId)}`);
   };
 

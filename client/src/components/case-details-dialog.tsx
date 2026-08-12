@@ -41,7 +41,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Table,
@@ -70,7 +69,6 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
 import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment, caseCurrentJudgmentHearingId } from "@/lib/attachment-indicators";
-import { extractApiError } from "@/lib/utils";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
   CaseStageLabels,
@@ -249,7 +247,7 @@ export function CaseDetailsDialog({
   // rather than a dialog of its own.
   initialTab?: string | null;
 }) {
-  const { updateCase, moveToNextStage, addComment, fetchComments, getCommentsByCaseId, refreshCases } = useCases();
+  const { updateCase, moveToNextStage, refreshCases } = useCases();
   const { getClientName } = useClients();
   const { getDepartmentName } = useDepartments();
   const { user, users } = useAuth();
@@ -354,22 +352,11 @@ export function CaseDetailsDialog({
     if (!open) return;
     setActiveTab(initialTab || "info");
   }, [open, initialTab]);
-  const [newComment, setNewComment] = useState("");
   const [stageTransitioning, setStageTransitioning] = useState(false);
   const [inlineEditField, setInlineEditField] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
   const [registrationDialogType, setRegistrationDialogType] = useState<"" | "taradi" | "mohr">("");
   const [registrationNumberInput, setRegistrationNumberInput] = useState("");
-  // Comments are loaded when the dialog OPENS for a case. On the cases page this
-  // fetch used to fire inside openDetailsDialog; it moves here with the state it
-  // feeds, so any host (cases page or hub) gets the same loaded dialog without
-  // having to remember to prime it.
-  const openCaseId = open && selectedCase ? selectedCase.id : null;
-  useEffect(() => {
-    if (!openCaseId) return;
-    fetchComments(openCaseId);
-  }, [openCaseId]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Phase-8 — surface the await reason / who / when in the awaiting
   // banner. The data lives only in case_activity_log (not on the case
   // row itself, unlike pauseReason), so we fetch the log when the
@@ -676,12 +663,12 @@ export function CaseDetailsDialog({
                 {/* 🔴 THE COLUMN COUNT IS COUPLED TO THE TRIGGER LIST BELOW —
                     grid-cols-* must equal the number of TabsTrigger elements, or
                     the row wraps ragged (the grid does not count them for you).
-                    NINE triggers today: 3 x 3 on small, one row of 9 on lg.
+                    EIGHT triggers today: 4 x 2 on small, one row of 8 on lg.
                     ⚠ ADD OR REMOVE A TRIGGER AND YOU MUST EDIT THIS LINE TOO.
-                    A pending change (drop التعليقات, add المهام) touches this same
-                    block; it is trigger-count-neutral, but re-check the count
-                    against the list rather than assuming. */}
-                <TabsList className="grid w-full grid-cols-3 lg:grid-cols-9">
+                    It went 8 -> 9 when الأحكام was added and back to 8 when
+                    التعليقات was removed; the المهام tab that replaces التعليقات
+                    returns it to 9. Count the triggers, never assume. */}
+                <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
                   <TabsTrigger value="info" data-testid="tab-info">المعلومات</TabsTrigger>
                   <TabsTrigger value="hearings" data-testid="tab-hearings">الجلسات</TabsTrigger>
                   {/* Placed between الجلسات and سجل المراحل on purpose: the court
@@ -691,7 +678,6 @@ export function CaseDetailsDialog({
                       over rather than at the far end of the row. */}
                   <TabsTrigger value="judgments" data-testid="tab-judgments">الأحكام</TabsTrigger>
                   <TabsTrigger value="history" data-testid="tab-history">سجل المراحل</TabsTrigger>
-                  <TabsTrigger value="comments" data-testid="tab-comments">التعليقات</TabsTrigger>
                   <TabsTrigger value="activity" data-testid="tab-activity">النشاط</TabsTrigger>
                   <TabsTrigger value="notes" data-testid="tab-notes">ملاحظات</TabsTrigger>
                   <TabsTrigger value="deadlines" data-testid="tab-deadlines">مواعيد</TabsTrigger>
@@ -1608,67 +1594,6 @@ export function CaseDetailsDialog({
                   ) : (
                     <p className="text-muted-foreground text-center py-8">لا يوجد سجل للمراحل</p>
                   )}
-                </TabsContent>
-
-                <TabsContent value="comments" className="mt-4">
-                  <div className="space-y-4">
-                    <div className="flex gap-2">
-                      <Textarea
-                        data-testid="input-new-comment"
-                        placeholder="اكتب تعليقك هنا..."
-                        value={newComment}
-                        onChange={(e) => setNewComment(e.target.value)}
-                        rows={2}
-                        className="flex-1"
-                      />
-                      <Button
-                        data-testid="button-add-comment"
-                        onClick={async () => {
-                          if (!user || !newComment.trim()) {
-                            return;
-                          }
-                          try {
-                            await addComment(selectedCase.id, user.id, user.name, newComment.trim());
-                            setNewComment("");
-                            toast({ title: "تم إضافة التعليق" });
-                          } catch (err) {
-                            // eslint-disable-next-line no-console
-                            console.error("[add-comment] failed", err);
-                            toast({
-                              title: "تعذّر إضافة التعليق",
-                              description: extractApiError(err),
-                              variant: "destructive",
-                            });
-                          }
-                        }}
-                        disabled={!newComment.trim()}
-                      >
-                        إضافة
-                      </Button>
-                    </div>
-                    
-                    {(() => {
-                      const caseComments = getCommentsByCaseId(selectedCase.id);
-                      if (caseComments.length === 0) {
-                        return <p className="text-muted-foreground text-center py-4">لا توجد تعليقات</p>;
-                      }
-                      return (
-                        <div className="space-y-3">
-                          {caseComments.map((comment) => (
-                            <div key={comment.id} className="p-3 border rounded-lg">
-                              <div className="flex items-center gap-2 mb-2">
-                                <span className="font-medium">{comment.userName}</span>
-                                <span className="text-xs text-muted-foreground">
-                                  <DualDateDisplay date={comment.createdAt} showTime compact />
-                                </span>
-                              </div>
-                              <p className="text-sm">{comment.content}</p>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
                 </TabsContent>
 
                 <TabsContent value="activity" className="mt-4">
