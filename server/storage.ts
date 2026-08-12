@@ -5695,17 +5695,20 @@ export class DatabaseStorage implements IStorage {
     // concentrated on ONE admin_support user — including hearings whose case
     // closed months earlier.
     //
-    // ⚠ FOUND AND NOT FIXED, because it was not in the ruling: this query also has
-    // no `hearings.status <> 'ملغية'` term, so a CANCELLED hearing whose report was
-    // already written still asks to be exported. It is the same defect the shared
-    // hearings pre-filter above just had closed, but it lives in this separate
-    // query and the ruling named only hearing_report and hearing_minutes. Reported
-    // rather than folded in silently — one line, whenever it is ruled on.
+    // 🔴 THE CANCELLED-HEARING TERM, completing the batch-3 fix. This query lives
+    // apart from the shared hearings pre-filter and had the identical defect: no
+    // status term at all, so a hearing CANCELLED after its report was written
+    // still asked to be exported as a PDF. `ne(hearings.status, "ملغية")` is the
+    // SAME predicate the pre-filter's result arm now carries, not a variant of it
+    // — same column, same value, same direction; only the drizzle spelling
+    // differs, because that one is embedded in a larger sql`` template and this
+    // one stands alone in an and(...).
     if (sessionReportExportOwner === uid || firmWideScoped) {
       const rows = await db.select({ id: hearings.id, caseId: hearings.caseId, caseNumber: lawCases.caseNumber })
         .from(hearings).innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
         .where(and(eq(hearings.reportCompleted, true),
-          sql`COALESCE(${hearings.sessionReportExported}, false) = false`, caseAlive));
+          sql`COALESCE(${hearings.sessionReportExported}, false) = false`,
+          ne(hearings.status, "ملغية"), caseAlive));
       for (const r of rows) {
         const ownerId = sessionReportExportOwner;
         tasks.push({ id: `session_report_export:${r.id}`, kind: MyTaskKind.SESSION_REPORT_EXPORT,
