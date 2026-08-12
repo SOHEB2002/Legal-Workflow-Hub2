@@ -1074,7 +1074,7 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
 
   { from: "منظورة_استئناف", to: "محكوم_حكم_نهائي", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "منظورة_استئناف", to: "مشطوبة", allowedRoles: ["assigned_lawyer", "department_head"] },
-  // THE REMAND EDGE (نقض وإحالة). The appeal court quashed the ruling below and
+  // THE REMAND EDGE (إعادة للدرجة الأولى). The appeal court set aside the ruling below and
   // sent the case back to first instance, so it returns to منظورة DIRECTLY
   // (owner-settled) to await a NEW first-instance ruling. Before this, منظورة_استئناف
   // had no path back and a quashed case had nowhere to go.
@@ -7618,11 +7618,65 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/cases/:id/judgments — سجل الأحكام, the case's ruling chain.
+  //
+  // Returns `{ judgments: [ …CaseJudgment, hasDeed ] }` oldest-first by `sequence`.
+  // This is the FIRST caller of storage.getJudgmentsByCase, which has existed
+  // unused since batch 1.
+  //
+  // 🔴 READ GATE = requireAuth ONLY, matching the owner's dated decision (2026-08-04)
+  // that every employee may read any case, any صك and any ضبط — and matching the
+  // read this sits behind: GET /api/cases is requireAuth + getAllCases() with NO
+  // scoping, so every authenticated user already holds every case row. Anything
+  // narrower here would repeat the mistake the deed-attachment GET and the
+  // minutes-attachment GET were both corrected for: a gate narrower than the list
+  // that leads to it, producing a silently empty panel rather than a refusal.
+  // viewer reaches this and nothing more — viewerWriteGuard 403s every non-GET.
+  //
+  // hasDeed asks judgment_attachments — THIS ruling's own صك — never
+  // case_attachments, which holds one row per CASE and would report an older
+  // cycle's file as satisfying a newer ruling. Same rule batch 4 established for
+  // currentJudgmentHasDeed; one batched query for the whole chain.
+  //
+  // ROUTE ORDER: four segments after /api, so /api/cases/:id (three) cannot
+  // capture it — the shadowing note above GET /api/cases/:id already cleared this
+  // exact path by name. Safe at any position.
+  app.get("/api/cases/:id/judgments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const judgments = await storage.getJudgmentsByCase(lawCase.id);
+      const withDeed = await storage.getJudgmentIdsWithAttachment(judgments.map((j) => j.id));
+      res.json({
+        judgments: judgments.map((j) => ({ ...j, hasDeed: withDeed.has(j.id) })),
+      });
+    } catch (error: any) {
+      console.error("[cases/judgments GET] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ في جلب سجل الأحكام" });
+    }
+  });
+
   // POST /api/cases/:id/appeal-ruling
-  // Body: { outcome: "affirmed" | "quashed_remanded", judgmentDeedReceivedDate?,
+  // Body: { outcome: "affirmed" | "remanded_first_instance", judgmentDeedReceivedDate?,
   //         objectionWindowDays?, notes? }.
   //
   // THE APPEAL COURT'S RULING on a case sitting at منظورة_استئناف.
+  //
+  // 🔴 KEPT, NOT SUPERSEDED, now that batch 5.3 records a remand from the
+  // hearing-result dialog. This endpoint exists for an appeal ruling reached with
+  // NO SESSION RECORDED IN OUR SYSTEM — which is why it writes hearingId: null and
+  // why findPrimaryJudgmentHearing carries a fallback for exactly that shape. The
+  // two doors split cleanly: the hearing path when a session exists, this when it
+  // does not. They share appealRulingTargetStage so they cannot disagree about
+  // where a remanded case lands.
+  //
+  // ⚠ ONE DELIBERATE DIVERGENCE: this endpoint writes outcome NULL on a remand
+  // (no session was observed, so no side is known), while the hearing path KEEPS
+  // the outcome the lawyer recorded at the session. Same event, two knowledge
+  // states, two honest answers.
   //
   // 🔴 A SIBLING OF /appeal-outcome, NOT AN OVERLOAD OF IT — the two answer
   // different questions at different stages and must not merge:
@@ -7635,22 +7689,30 @@ export async function registerRoutes(
   // the stage guard on each is what keeps them from double-firing.
   //
   // TWO OUTCOMES:
-  //   affirmed          — the ruling below stands. New judgment row (degree
-  //                       استئنافي, outcome inherited from the ruling it upheld),
-  //                       case → محكوم_حكم_نهائي on the EXISTING transition edge.
-  //   quashed_remanded  — نقض وإحالة. The ruling below is quashed and the case
-  //                       goes back to first instance: the prior judgment is
-  //                       stamped superseded, a new appeal-degree row is written
-  //                       with outcome NULL, and the case → منظورة on the edge
-  //                       added in this batch.
+  //   affirmed                — the ruling below stands. New judgment row (degree
+  //                             استئنافي, outcome inherited from the ruling it
+  //                             upheld), case → محكوم_حكم_نهائي on the EXISTING
+  //                             transition edge.
+  //   remanded_first_instance — إعادة للدرجة الأولى. The ruling below ceases to
+  //                             stand and the case goes back to first instance:
+  //                             the prior judgment is stamped superseded, a new
+  //                             appeal-degree row is written with outcome NULL,
+  //                             and the case → منظورة on the edge added in batch 2.
+  //
+  // 🔴 NOT CALLED نقض, and that is a correctness point. نقض is SUPREME-COURT
+  // cassation, already spent in this codebase on MemoType.CASSATION ("لائحة_نقض")
+  // and LegalDeadlineType.cassation ("مهلة النقض") — both stored values with real
+  // rows. This is the APPEAL court sending the case back to first instance, which
+  // is why the target is منظورة. "إعادة للدرجة الأولى" says exactly that and
+  // competes with nothing.
   //
   // NEITHER OUTCOME OPENS AN OBJECTION WINDOW (owner-settled): an appeal ruling
-  // is final by nature and the quash's own صك is not objectionable. Cassation
-  // (نقض) is out of scope.
+  // is final by nature and the remand ruling's own صك is not objectionable.
+  // Cassation is out of scope.
   //
-  // ⚠ THE QUASH DOES NOT RECUR. At most one quash per case, so at most three
-  // rulings. Nothing here enforces that cap — the model does not refuse a fourth,
-  // it simply is not built for one.
+  // ⚠ THE REMAND DOES NOT RECUR. At most one per case, so at most three rulings.
+  // Nothing here enforces that cap — the model does not refuse a fourth, it
+  // simply is not built for one.
   //
   // AUTHORIZED ROLES: canActOnMohrSettlement — branch_manager | department_head of
   // the case's own department | assigned lawyer, delegation-aware. admin_support
@@ -7670,9 +7732,9 @@ export async function registerRoutes(
       const outcome = String(req.body?.outcome ?? "").trim();
       if (
         outcome !== AppealRulingOutcome.AFFIRMED &&
-        outcome !== AppealRulingOutcome.QUASHED_REMANDED
+        outcome !== AppealRulingOutcome.REMANDED_FIRST_INSTANCE
       ) {
-        return res.status(400).json({ error: "يجب تحديد نتيجة حكم الاستئناف (تأييد / نقض وإحالة)" });
+        return res.status(400).json({ error: "يجب تحديد نتيجة حكم الاستئناف (تأييد / إعادة للدرجة الأولى)" });
       }
       const rulingOutcome = outcome as AppealRulingOutcomeValue;
 
@@ -7711,7 +7773,7 @@ export async function registerRoutes(
 
       const performer = await storage.getUser(reqUser.id);
       const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
-      const isQuash = rulingOutcome === AppealRulingOutcome.QUASHED_REMANDED;
+      const isRemand = rulingOutcome === AppealRulingOutcome.REMANDED_FIRST_INSTANCE;
       const payload = appealRulingPayload(rulingOutcome, priorJudgment);
 
       // WRITE 1 — the new judgment row, and (on a quash) the superseded stamp on
@@ -7730,7 +7792,7 @@ export async function registerRoutes(
         isFinal: payload.isFinal,
         opensWindow: payload.opensWindow,
         recordedBy: reqUser.id,
-        supersedesJudgmentId: isQuash ? priorJudgment.id : null,
+        supersedesJudgmentId: isRemand ? priorJudgment.id : null,
       });
 
       // WRITE 2 — the ruling's own صك, when it was supplied. Routed through the
@@ -7747,14 +7809,14 @@ export async function registerRoutes(
       }
 
       // WRITE 3 — the stage. affirmed → محكوم_حكم_نهائي (existing edge);
-      // quashed_remanded → منظورة (the edge added in this batch). The transition
+      // remanded_first_instance → منظورة (the edge added in batch 2). The transition
       // table is not consulted here, matching every sibling judgment-lifecycle
       // action (moveCaseFromPrimaryJudgment, skip-committee, reopen): those edges
       // exist so the GENERIC advance route can offer them, and this endpoint is
       // the authorised path with its own gate.
       const targetStage = appealRulingTargetStage(rulingOutcome);
-      const note = String(req.body?.notes ?? "").trim() || (isQuash
-        ? "نقض حكم الاستئناف للحكم الابتدائي وإعادة القضية للنظر"
+      const note = String(req.body?.notes ?? "").trim() || (isRemand
+        ? "حكم الاستئناف — إعادة الدعوى للدرجة الأولى"
         : "تأييد الحكم — أصبح الحكم نهائياً");
       const updated = await storage.updateCase(lawCase.id, {
         currentStage: targetStage,
@@ -7771,9 +7833,9 @@ export async function registerRoutes(
         caseId: lawCase.id,
         userId: reqUser.id,
         userName: performerName,
-        actionType: isQuash ? "appeal_ruling_quashed" : "appeal_ruling_affirmed",
-        title: isQuash
-          ? "حكم الاستئناف — نقض وإحالة، عادت القضية للنظر"
+        actionType: isRemand ? "appeal_ruling_remanded" : "appeal_ruling_affirmed",
+        title: isRemand
+          ? "حكم الاستئناف — إعادة الدعوى للدرجة الأولى"
           : "حكم الاستئناف — تأييد الحكم، أصبح نهائياً",
         previousValue: "منظورة_استئناف",
         newValue: targetStage,
@@ -7781,13 +7843,13 @@ export async function registerRoutes(
           outcome: rulingOutcome,
           judgmentId: judgment.id,
           judgmentSequence: judgment.sequence,
-          supersededJudgmentId: isQuash ? priorJudgment.id : null,
+          supersededJudgmentId: isRemand ? priorJudgment.id : null,
           deedReceivedDate: rawReceived || null,
           objectionDeadline: deedDeadline,
         }),
       });
 
-      res.json({ case: updated, judgment, supersededJudgmentId: isQuash ? priorJudgment.id : null });
+      res.json({ case: updated, judgment, supersededJudgmentId: isRemand ? priorJudgment.id : null });
     } catch (error: any) {
       console.error("[cases/appeal-ruling] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
@@ -13145,6 +13207,10 @@ export async function registerRoutes(
       const judgmentType = data.judgmentType || data.judgmentSide || null;
       let judgmentIsAppealRuling = false;
       let judgmentDerivedFinal = false;
+      // إعادة للدرجة الأولى — the appeal court returned the case to first instance.
+      // Derived here beside the rest of the judgment model so PATH B branches on
+      // already-validated values and cannot reach a different conclusion.
+      let judgmentRemands = false;
       if (data.result === HearingResult.JUDGMENT) {
         if (!judgmentType) {
           return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
@@ -13186,6 +13252,13 @@ export async function registerRoutes(
           }
         }
         judgmentDerivedFinal = judgmentIsAppealRuling || data.objectionFeasible === false;
+        // 🔴 THE REMAND IS GATED ON THE CASE, NOT ON THE REQUEST. `judgmentIsAppealRuling`
+        // is read from the case's own stage a few lines above, so a first-instance
+        // ruling cannot remand even if the field is sent — the client omits it, and
+        // a hand-rolled request that includes it is ignored rather than obeyed.
+        // A remand off a first-instance ruling is not a thing a court does, and
+        // honouring it would write منظورة over a case that is already there.
+        judgmentRemands = judgmentIsAppealRuling && data.remandToFirstInstance === true;
       }
 
       const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
@@ -13562,14 +13635,53 @@ export async function registerRoutes(
           const judgmentDegree = judgmentDegreeForStage(
             judgmentIsAppealRuling ? "منظورة_استئناف" : existingCase.currentStage,
           );
+          // 🔴 RESOLVED BEFORE recordJudgment, and the ORDER IS THE POINT.
+          // currentJudgmentFor returns the HIGHEST sequence; the moment the new row
+          // is inserted that is the new row itself, so asking afterwards would have
+          // the remand supersede ITSELF. Only fetched when remanding — an ordinary
+          // ruling costs no extra query.
+          //
+          // ⚠ NO PRIOR RULING IS NOT AN ERROR HERE, and this deliberately diverges
+          // from POST /appeal-ruling, which 400s in that case. That endpoint has
+          // nothing else to go on; this one is recording a session that HAPPENED,
+          // and the handler's standing principle is to repair or proceed rather
+          // than refuse a fact (the same reason the blocking guard at judgment time
+          // was replaced by silent promotion). A case reaching منظورة_استئناف with
+          // no ruling on record is a data gap, and refusing to record the appeal
+          // ruling would neither close the gap nor let the court's decision be
+          // filed. The remand still records; only the stamp is skipped.
+          const supersededJudgment = judgmentRemands
+            ? await currentJudgmentFor(effectiveCaseId)
+            : undefined;
           await recordJudgment({
             caseId: effectiveCaseId,
             hearingId,
             degree: judgmentDegree,
+            // 🔴 THE OUTCOME IS KEPT ON A REMAND (owner decision). This is where
+            // the hearing path is deliberately RICHER than POST /appeal-ruling,
+            // which writes outcome NULL on a quash because it treats a remand as
+            // purely procedural. Recorded from a session we attended, both facts
+            // are known — which way the appeal court went AND that it sent the
+            // case back — so both are stored.
+            //
+            // ⚠ THIS IS WHY appealRulingPayload IS NOT REUSED HERE. Three of its
+            // four outputs (degree, isFinal, opensWindow) are already computed
+            // identically by the derivation above; the fourth is the outcome, and
+            // it returns null for exactly this case. Calling it and then
+            // overwriting that one field would be a reuse that hides an override.
+            // appealRulingTargetStage IS reused, below, where it fits exactly.
             outcome: judgmentType,
             isFinal: judgmentDerivedFinal,
             opensWindow: !judgmentIsAppealRuling && data.objectionFeasible === true,
             recordedBy: reqUser.id,
+            // The remand marker: superseded_at + superseded_by_judgment_id land on
+            // the ruling that WAS returned, pointing at this one. No new column —
+            // "did this ruling remand?" is that reverse pointer, exactly the model
+            // POST /appeal-ruling already established.
+            //
+            // Re-saving is safe: recordJudgment is idempotent on hearingId, so a
+            // second save returns the existing row and re-stamps nothing.
+            supersedesJudgmentId: supersededJudgment?.id ?? null,
           });
 
           // PLEADINGS ARE OVER once a ruling issues — the case's still-open memos
@@ -13578,7 +13690,77 @@ export async function registerRoutes(
           // OBJECTION excluded and the "صدور حكم" wording on the reason. Nothing
           // to do here; see that block for the ordering guarantees.
 
-          if (isFinal) {
+          if (judgmentRemands) {
+            // === إعادة للدرجة الأولى — THE CASE GOES BACK, IT DOES NOT END ===
+            //
+            // Placed BEFORE the isFinal arm and not inside it, because a remand is
+            // isFinal TRUE (an appeal ruling is final by nature — that is what
+            // judgmentDerivedFinal forces) while being the one final ruling that
+            // does not finish the case. Reading `isFinal` as "the case is over" is
+            // exactly the conflation this arm exists to break. The first-instance
+            // arm below is unreachable from here and untouched: judgmentRemands
+            // requires judgmentIsAppealRuling.
+            //
+            // 🔴 THE STAGE IS COMPUTED SERVER-SIDE, from the answer, via the SHARED
+            // appealRulingTargetStage — the same function POST /appeal-ruling uses,
+            // so the two doors into a remand cannot land a case on different
+            // stages. The request body carries a BOOLEAN and never a stage.
+            const remandStage = appealRulingTargetStage(AppealRulingOutcome.REMANDED_FIRST_INSTANCE);
+            caseUpdate.currentStage = remandStage;
+            // 🔴 CLEAR isSettlementCase (owner decision). getStagesForClassification
+            // consults this flag FIRST for an in-court case and returns the
+            // three-stage InCourtSettlementStages — [استلام, مداولة_الصلح, تحصيل] —
+            // which does not contain منظورة. Writing منظورة while the flag stands
+            // lands the case OFF ITS OWN RESOLVED PATH, the data-shaped version of
+            // the bug that stranded case 4870079661. The owner's reasoning is that
+            // the flag is stale by definition here: a case that genuinely settled
+            // never reaches منظورة at all, let alone an appeal. Same precedent as
+            // POST /api/cases/:id/reopen, which clears it when منظورة is chosen.
+            caseUpdate.isSettlementCase = false;
+            caseUpdate.stageHistory = stageHistoryFor(
+              remandStage,
+              `حكم استئنافي ${judgmentType} — إعادة الدعوى للدرجة الأولى`,
+            );
+            await storage.updateCase(effectiveCaseId, caseUpdate);
+
+            // NO COLLECTION OR EXECUTION TASK, for any outcome — including لصالحنا.
+            // Both tasks exist to enforce a judgment, and a remanded case has none
+            // to enforce: it is going back for a NEW first-instance ruling. This is
+            // not a preference, it is a hazard avoided — completing a collection
+            // task fires maybeCloseCaseAfterPostJudgmentTasks, which would close a
+            // LIVE case sitting at منظورة with تم_التحصيل. POST /appeal-ruling
+            // likewise creates no task on a remand.
+            //
+            // AND NO AUTO-CLOSE ON ضدنا. The ضدنا arm below closes the case on the
+            // stated reasoning that "a FINAL judgment AGAINST US leaves nothing to
+            // do: no collection, no execution, and — because it is final — no
+            // objection and no appeal." Every one of those premises is false under
+            // a remand: the case has been returned for reconsideration, so there is
+            // a great deal to do. ضدنا + إعادة is a live case, not a closed one.
+            //
+            // NO OBJECTION MEMO either, and nothing was needed to prevent one:
+            // opensWindow is false for every appeal ruling, and the memo is created
+            // by the صك-receipt flow off that flag. The case's prior pleadings were
+            // already cancelled by the UNIVERSAL block above with the لائحة
+            // اعتراضية excluded — correct here, since a filed objection is a real
+            // document that a remand does not un-file (batch 4's decision).
+            await logCaseActivityActing(req, {
+              caseId: effectiveCaseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: "appeal_ruling_remanded",
+              title: `حكم الاستئناف — إعادة الدعوى للدرجة الأولى (${judgmentType})`,
+              previousValue: "منظورة_استئناف",
+              newValue: remandStage,
+              details: JSON.stringify({
+                outcome: judgmentType,
+                supersededJudgmentId: supersededJudgment?.id ?? null,
+                hearingId,
+              }),
+              relatedEntityType: "hearing",
+              relatedEntityId: hearingId,
+            });
+          } else if (isFinal) {
             // === FINAL JUDGMENTS — the case RESTS at محكوم_حكم_نهائي ===
             // Judgment-lifecycle step 1 (owner decision). Previously this block
             // wrote محكوم_حكم_نهائي and then IMMEDIATELY overwrote it in a second,

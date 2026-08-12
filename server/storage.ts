@@ -639,6 +639,8 @@ export interface IStorage {
   getJudgmentsByCase(caseId: string): Promise<CaseJudgment[]>;
   getLatestJudgmentForCase(caseId: string): Promise<CaseJudgment | undefined>;
   getJudgmentAttachment(judgmentId: string): Promise<JudgmentAttachment | undefined>;
+  // Batch 5 — per-ruling صك presence for ONE case's chain, in one query.
+  getJudgmentIdsWithAttachment(judgmentIds: string[]): Promise<Set<string>>;
   // Idempotency key for the hearing-result hook: one judgment per judgment
   // hearing, so a re-save finds the existing row and creates nothing.
   getJudgmentByHearingId(hearingId: string): Promise<CaseJudgment | undefined>;
@@ -8229,6 +8231,25 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(caseJudgments.sequence))
       .limit(1);
     return rows[0] ? mapDbCaseJudgment(rows[0]) : undefined;
+  }
+
+  // Which of THESE judgments have a صك on file — one query for a whole case's
+  // chain instead of one per ruling.
+  //
+  // SCOPED with inArray, unlike getCaseIdsWithJudgment / getCurrentJudgmentSummaries
+  // beside it, and the difference is deliberate: those two enrich the UNPAGINATED
+  // cases list, where an IN(…) would carry thousands of bind parameters, so they
+  // read the (small) whole table instead. This one serves ONE case, whose chain is
+  // at most three or four rows, so the scoped read is both smaller and exact.
+  //
+  // An empty input short-circuits: `inArray(col, [])` compiles to a false-y SQL
+  // fragment in some drizzle versions and is a pointless round-trip in all of them.
+  async getJudgmentIdsWithAttachment(judgmentIds: string[]): Promise<Set<string>> {
+    if (judgmentIds.length === 0) return new Set();
+    const rows = await db.select({ judgmentId: judgmentAttachments.judgmentId })
+      .from(judgmentAttachments)
+      .where(inArray(judgmentAttachments.judgmentId, judgmentIds));
+    return new Set(rows.map((r) => r.judgmentId));
   }
 
   // At most one row by the unique index on judgment_id.

@@ -170,12 +170,22 @@ export async function recordDeedReceipt(input: {
 
 // ==================== THE APPEAL RULING ====================
 // The two shapes an appeal ruling can take, and what each means for the case.
+//
+// 🔴 THE VOCABULARY IS "إعادة للدرجة الأولى", NOT "نقض" — owner ruling, and it is a
+// correctness point rather than a preference. نقض is what the SUPREME COURT does
+// (cassation), and this codebase already spends that word on it: MemoType.CASSATION
+// = "لائحة_نقض" and LegalDeadlineType.cassation = "مهلة النقض", both stored values
+// with real rows behind them (the memo type appears in the memo zod enum and in the
+// dev seed). What THIS models is the APPEAL court returning the case to first
+// instance — which is why the target stage is منظورة — so calling it نقض put two
+// different courts' acts behind one word while three comments in this very feature
+// declared cassation out of scope. Renamed in one pass; nothing competes now.
 export const AppealRulingOutcome = {
   // The appeal court UPHELD the ruling below. The case is finished on the merits.
   AFFIRMED: "affirmed",
-  // The appeal court QUASHED the ruling and REMANDED the case. The ruling below
-  // ceases to stand and the case returns to first instance for a NEW ruling.
-  QUASHED_REMANDED: "quashed_remanded",
+  // The appeal court RETURNED the case to first instance. The ruling below ceases
+  // to stand and the case goes back for a NEW first-instance ruling.
+  REMANDED_FIRST_INSTANCE: "remanded_first_instance",
 } as const;
 
 export type AppealRulingOutcomeValue =
@@ -189,15 +199,22 @@ export type AppealRulingOutcomeValue =
 //   isFinal     — always true. An appeal ruling is final BY NATURE; that is what
 //                 distinguishes it from a first-instance one, and it is why the
 //                 objectionability question is never asked for it.
-//   opensWindow — always false, for BOTH outcomes. Owner-settled: the quash's own
-//                 صك is not objectionable, and an affirmation is final. Cassation
-//                 (نقض) is out of scope, so nothing downstream of an appeal ruling
-//                 opens another objection window.
+//   opensWindow — always false, for BOTH outcomes. Owner-settled: the remand
+//                 ruling's own صك is not objectionable, and an affirmation is
+//                 final. Cassation (نقض — the Supreme Court, a different act by a
+//                 different court) is out of scope, so nothing downstream of an
+//                 appeal ruling opens another objection window.
 //
-// OUTCOME CARRIES FORWARD ON AN AFFIRMATION and is NULL on a quash. Affirming a
+// OUTCOME CARRIES FORWARD ON AN AFFIRMATION and is NULL on a remand. Affirming a
 // ruling means its merits stand, so the appeal row inherits لصالحنا / ضدنا / جزئي
-// from the ruling it upheld. A quash decides PROCEDURE, not the merits — there is
-// no side to record, and inventing one would misreport the case's outcome.
+// from the ruling it upheld. A remand recorded HERE decides procedure only — this
+// endpoint exists for a ruling reached with no session in the system, so no side
+// was observed and inventing one would misreport the case's outcome.
+//
+// ⚠ THE HEARING PATH DIVERGES ON EXACTLY THIS FIELD, on purpose (batch 5.3). When
+// the remand is recorded from a session we attended, the outcome IS known and is
+// kept alongside the remand — the owner's stated reason for that design. That is
+// why the hearing handler does NOT call this function; see its note.
 export function appealRulingPayload(
   outcome: AppealRulingOutcomeValue,
   priorJudgment: CaseJudgment | undefined,
@@ -211,9 +228,11 @@ export function appealRulingPayload(
 }
 
 // The stage a case moves to after an appeal ruling.
-//   affirmed          → محكوم_حكم_نهائي (the existing منظورة_استئناف edge)
-//   quashed_remanded  → منظورة, back to first instance for a NEW ruling
-//                       (the edge added in batch 2)
+//   affirmed                 → محكوم_حكم_نهائي (the existing منظورة_استئناف edge)
+//   remanded_first_instance  → منظورة, back to first instance for a NEW ruling
+//                              (the edge added in batch 2)
+// SHARED BY BOTH DOORS into a remand — POST /appeal-ruling and the hearing-result
+// حكم branch — so neither can land a case on a stage the other would not.
 // Owner-settled: the remanded case returns to منظورة DIRECTLY, and it keeps the
 // same court_case_number — a remand is not a new case.
 export function appealRulingTargetStage(outcome: AppealRulingOutcomeValue): CaseStageValue {

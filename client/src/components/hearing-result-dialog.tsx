@@ -52,6 +52,16 @@ export function HearingResultDialog({
     // The former "درجة الحكم" select is GONE: the degree is derived from the
     // case's stage (منظورة → ابتدائي، منظورة_استئناف → استئنافي), never asked.
     objectionAnswer: "" as "" | "نعم" | "لا",
+    // إعادة للدرجة الأولى — asked ONLY for an appeal ruling, and DEFAULTED TO "لا"
+    // rather than left blank. That is the one deliberate departure from the
+    // tri-state rule beside it, and the reason is that the two questions are not
+    // the same shape: objectionAnswer has no safe default (a blank was being saved
+    // as "not objectionable" and dead-ending the case, which is why it became a
+    // required tri-state), whereas a remand is the EXCEPTION — the ordinary appeal
+    // ruling simply decides the case, and "لا" is what that means. Defaulting to
+    // blank would force an answer on every ordinary appeal ruling to restate the
+    // norm.
+    remandAnswer: "لا" as "نعم" | "لا",
     // objectionDeadline removed with step 2 — the deadline is derived from the
     // صك receipt date, not entered at the session.
     nextHearingDate: "",
@@ -68,7 +78,7 @@ export function HearingResultDialog({
   useEffect(() => {
     setResultForm({
       result: "", resultDetails: "", judgmentSide: "",
-      objectionAnswer: "", nextHearingDate: "",
+      objectionAnswer: "", remandAnswer: "لا", nextHearingDate: "",
       nextHearingTime: "", responseRequired: false, opponentResponseRequired: false,
       caseId: "", afterFailedSettlementChoice: "", transferToDepartmentId: "", transferReason: "",
     });
@@ -151,6 +161,13 @@ export function HearingResultDialog({
         // exactly that case and stores null for an appeal ruling.
         if (judgmentNeedsObjectionAnswer) {
           data.objectionFeasible = resultForm.objectionAnswer === "نعم";
+        }
+        // إعادة للدرجة الأولى — sent ONLY for an appeal ruling, the same
+        // send-only-when-the-question-applies rule as objectionFeasible directly
+        // above. A boolean: whether the court remanded. The server derives the
+        // stage from it; nothing here names a stage.
+        if (judgmentIsAppealRuling) {
+          data.remandToFirstInstance = resultForm.remandAnswer === "نعم";
         }
         // objectionDeadline is NO LONGER sent (step 2): the objection window runs
         // from the day the صك is RECEIVED, days after this session, so it cannot
@@ -377,6 +394,44 @@ export function HearingResultDialog({
               <p className="text-xs text-muted-foreground" data-testid="text-judgment-degree">
                 درجة الحكم: <strong>{judgmentIsAppealRuling ? "استئنافي (نهائي بطبيعته)" : "ابتدائي"}</strong> — مُستمدة من مرحلة القضية.
               </p>
+              {/* ==================== إعادة للدرجة الأولى ====================
+                  A FOLLOW-UP QUESTION INSIDE THE حكم FLOW, not a fifth result and
+                  not a button elsewhere: a remand IS the content of an appeal
+                  ruling, so it belongs beside the outcome that ruling carried, in
+                  the one dialog that records what a session decided.
+
+                  RENDERED ONLY FOR AN APPEAL RULING. A first-instance حكم cannot
+                  remand anything and is untouched by this block in every respect.
+
+                  NOT CALLED نقض. نقض is Supreme-Court cassation and is already
+                  taken in this codebase by MemoType.CASSATION (لائحة_نقض) and
+                  LegalDeadlineType.cassation, both with real stored rows behind
+                  them; this is the APPEAL court returning the case to first
+                  instance, which is what إعادة للدرجة الأولى says exactly. */}
+              {judgmentIsAppealRuling && (
+                <div>
+                  <Label>هل يتضمّن الحكم إعادة الدعوى للدرجة الأولى؟</Label>
+                  <Select
+                    value={resultForm.remandAnswer}
+                    onValueChange={(value) => setResultForm({ ...resultForm, remandAnswer: value as "نعم" | "لا" })}
+                  >
+                    <SelectTrigger data-testid="select-remand-first-instance"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="لا">لا — الحكم يفصل في الدعوى</SelectItem>
+                      <SelectItem value="نعم">نعم — تُعاد الدعوى للدرجة الأولى</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {resultForm.remandAnswer === "نعم" ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      ستعود القضية إلى "منظورة" لإصدار حكم ابتدائي جديد، ويُسجَّل أن الحكم السابق لم يعد قائماً. لا تُنشأ مهام تحصيل أو تنفيذ، ولا تُغلق القضية.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      ستنتقل القضية إلى "محكوم حكم نهائي".
+                    </p>
+                  )}
+                </div>
+              )}
               {/* Objection sub-form. Shown for ضدنا AND جزئي: a partial judgment is
                   partially against us, so it can warrant an objection too. This gate
                   mirrors the SERVER's objection-memo branch verbatim (routes.ts:8203,
