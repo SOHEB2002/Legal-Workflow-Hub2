@@ -238,6 +238,70 @@ function groupIntoCards(items: MyTaskItem[]): Map<TaskCardKey, MyTaskItem[]> {
   return byCard;
 }
 
+// ===== TYPE FILTER =====
+// 🔴 THE case_work COLLISION. Five feed items share kind CASE_WORK and differ
+// only by the id PREFIX the server stamps — filtering on `kind` alone would
+// collapse "chase the صك", "record the objection outcome" and "chase the
+// opponent's reply" into one option called "عمل على قضية", which is exactly the
+// distinction a user reaching for a type filter is trying to make.
+//
+// SPLIT ON THE PREFIX, and it is FOUR options rather than five: blocks 1 and 1b
+// (stage work / labor settlement direction) BOTH emit `case_work:<id>` and are
+// mutually exclusive by stage, so they are one thing to the user anyway.
+//
+// ⚠ THIS IS STRING PARSING, AND I AM SHIPPING IT WITH A CAVEAT RATHER THAN
+// SILENTLY. It is not a NEW fragility — handleAction already routes on these
+// same three prefixes, so the coupling to the server's id format exists today
+// and is load-bearing. What is new is that a prefix change would break the
+// filter SILENTLY (an option that matches nothing) where it breaks handleAction
+// loudly (a row that falls through to "no action"). The durable fix is a
+// server-side `subKind` on MyTaskItem; until then the prefixes live in ONE
+// place here, and handleAction's copies must stay in step.
+const CASE_WORK_PREFIXES = [
+  { prefix: "judgment_deed:",     key: "judgment_deed",     label: "متابعة استلام الصك" },
+  { prefix: "appeal_window:",     key: "appeal_window",     label: "نتيجة مهلة الاعتراض" },
+  { prefix: "opponent_response:", key: "opponent_response", label: "متابعة رد الخصم" },
+] as const;
+
+// The filter key for one task: its kind, except that CASE_WORK splits four ways.
+function taskTypeKey(task: MyTaskItem): string {
+  if (task.kind !== MyTaskKind.CASE_WORK) return task.kind;
+  const hit = CASE_WORK_PREFIXES.find((p) => task.id.startsWith(p.prefix));
+  return hit ? hit.key : MyTaskKind.CASE_WORK;
+}
+
+function taskTypeLabel(key: string): string {
+  const split = CASE_WORK_PREFIXES.find((p) => p.key === key);
+  if (split) return split.label;
+  return KIND_META[key as MyTaskKindValue]?.label ?? key;
+}
+
+// ===== SEARCH =====
+// Everything the ITEM already carries that a user might type, plus the owner's
+// NAME — which is not on the item but is resolvable from the loaded user list.
+// `title` is the richest field: the server composes it with the case/memo/
+// consultation number already inside, so a plain substring match over it covers
+// most of what anyone types.
+//
+// ⚠ clientName IS ABSENT ON CONSULTATION AND CONTRACT TASKS. The feed's identity
+// enrichment (getCaseIdentitiesForFeed) is keyed on caseId, so consultations and
+// contracts — which have clients of their own in the DB — carry no clientName.
+// Searching a client's name therefore finds their CASE and MEMO and HEARING
+// tasks and silently misses their consultations and contracts. Closing it means
+// enriching those two entity types server-side; see the batch report.
+function taskMatchesSearch(task: MyTaskItem, needle: string, ownerName: string): boolean {
+  if (!needle) return true;
+  const haystack = [
+    task.title,
+    task.caseNumber ?? "",
+    task.clientName ?? "",
+    task.opponentName ?? "",
+    ownerName,
+    KIND_META[task.kind]?.label ?? "",
+  ].join(" ").toLowerCase();
+  return haystack.includes(needle);
+}
+
 function byTime(a: MyTaskItem, b: MyTaskItem): number {
   if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
   if (!a.dueDate && !b.dueDate) return 0;
@@ -751,6 +815,13 @@ export default function MyTasksPage() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const [specialtyFilter, setSpecialtyFilter] = useState<"all" | TaskSpecialtyValue>("all");
+  // Search + the two zero-cost filters. All three are CLIENT-SIDE over the
+  // already-loaded feed — no new request, no server field.
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  // "case:<caseNumber>" | "client:<name>" | "all" — the two are one control
+  // because the owner named them as one filter ("القضية أو العميل").
+  const [matterFilter, setMatterFilter] = useState<string>("all");
 
   // Active action dialog
   const [actionTask, setActionTask] = useState<MyTaskItem | null>(null);
@@ -1106,9 +1177,46 @@ export default function MyTasksPage() {
   }
 
   // admin_support specialty filter (ترافع / استشارات).
-  const visible = isAdminSupport && specialtyFilter !== "all"
+  const specialtyScoped = isAdminSupport && specialtyFilter !== "all"
     ? tasks.filter((t) => t.specialtyClass === specialtyFilter)
     : tasks;
+
+  // ----- Filter option lists, derived from what is actually on the page -----
+  // Both dropdowns are built from the LOADED tasks rather than from a roster or
+  // the cases list: the options are then guaranteed to match something, the
+  // lists stay short, and neither needs a extra fetch. Derived from
+  // specialtyScoped (not the filtered result) so choosing one option does not
+  // erase the others from the dropdown.
+  const typeOptions = Array.from(new Set(specialtyScoped.map(taskTypeKey)))
+    .map((key) => ({ key, label: taskTypeLabel(key) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "ar"));
+  const matterOptions = [
+    ...Array.from(new Set(specialtyScoped.map((t) => t.caseNumber).filter((n): n is string => !!n)))
+      .sort((a, b) => a.localeCompare(b, "ar"))
+      .map((n) => ({ value: `case:${n}`, label: `قضية ${n}` })),
+    ...Array.from(new Set(specialtyScoped.map((t) => t.clientName).filter((n): n is string => !!n)))
+      .sort((a, b) => a.localeCompare(b, "ar"))
+      .map((n) => ({ value: `client:${n}`, label: `العميل: ${n}` })),
+  ];
+
+  // ----- Apply search + filters, GLOBALLY, before the cards are built -----
+  // Not per-card: one predicate over the whole feed, and a card that ends up
+  // empty simply does not render — which is already the card rule, so filtering
+  // needs no extra hiding logic. The consequence is that filtering can empty the
+  // page entirely, which the empty state below distinguishes from "no tasks".
+  const needle = search.trim().toLowerCase();
+  const visible = specialtyScoped.filter((t) => {
+    if (!taskMatchesSearch(t, needle, userName(t.ownerId))) return false;
+    if (typeFilter !== "all" && taskTypeKey(t) !== typeFilter) return false;
+    if (matterFilter !== "all") {
+      const [scope, ...rest] = matterFilter.split(":");
+      const value = rest.join(":");
+      if (scope === "case" && t.caseNumber !== value) return false;
+      if (scope === "client" && t.clientName !== value) return false;
+    }
+    return true;
+  });
+  const isFiltering = !!needle || typeFilter !== "all" || matterFilter !== "all";
 
   // OWN AND TEAM DO NOT MIX (owner ruling): the six own cards render first, then
   // a separated team region with its own six. ownerScope is server-computed —
@@ -1252,6 +1360,41 @@ export default function MyTasksPage() {
           with the person-grouped layout. Each card now carries its own count in
           its header, and "المستعجلة" no longer exists as a bucket to count. */}
 
+      {/* ===== Search + filters — all client-side over the loaded feed ===== */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="ابحث في المهام…"
+          className="w-full sm:w-[260px]"
+          data-testid="input-task-search"
+        />
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-[180px]" data-testid="select-type-filter"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">كل الأنواع</SelectItem>
+            {typeOptions.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={matterFilter} onValueChange={setMatterFilter}>
+          <SelectTrigger className="w-[220px]" data-testid="select-matter-filter"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">كل القضايا والعملاء</SelectItem>
+            {matterOptions.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {isFiltering && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setSearch(""); setTypeFilter("all"); setMatterFilter("all"); }}
+            data-testid="button-clear-filters"
+          >
+            مسح
+          </Button>
+        )}
+      </div>
+
       {isLoading ? (
         <div className="flex items-center justify-center py-16 text-muted-foreground">جارٍ التحميل…</div>
       ) : (
@@ -1261,8 +1404,13 @@ export default function MyTasksPage() {
               via pinAndSort, so a hearing still leads جلسات without a band of its
               own above everything. */}
           <section className="space-y-3" data-testid="section-own-cards">
-            {own.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">لا توجد مهام.</p>
+            {own.length === 0 && team.length === 0 ? (
+              // Distinguishes "you have nothing to do" from "your filters
+              // matched nothing" — the same blank page otherwise, and the second
+              // one is a dead end the user has to guess their way out of.
+              <p className="text-sm text-muted-foreground py-4">
+                {isFiltering ? "لا توجد نتائج مطابقة." : "لا توجد مهام."}
+              </p>
             ) : (
               TASK_CARDS.map((card) => renderTaskCard(card, ownCards, "card"))
             )}
