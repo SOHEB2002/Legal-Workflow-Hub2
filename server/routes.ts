@@ -7618,6 +7618,47 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/cases/:id/judgments — سجل الأحكام, the case's ruling chain.
+  //
+  // Returns `{ judgments: [ …CaseJudgment, hasDeed ] }` oldest-first by `sequence`.
+  // This is the FIRST caller of storage.getJudgmentsByCase, which has existed
+  // unused since batch 1.
+  //
+  // 🔴 READ GATE = requireAuth ONLY, matching the owner's dated decision (2026-08-04)
+  // that every employee may read any case, any صك and any ضبط — and matching the
+  // read this sits behind: GET /api/cases is requireAuth + getAllCases() with NO
+  // scoping, so every authenticated user already holds every case row. Anything
+  // narrower here would repeat the mistake the deed-attachment GET and the
+  // minutes-attachment GET were both corrected for: a gate narrower than the list
+  // that leads to it, producing a silently empty panel rather than a refusal.
+  // viewer reaches this and nothing more — viewerWriteGuard 403s every non-GET.
+  //
+  // hasDeed asks judgment_attachments — THIS ruling's own صك — never
+  // case_attachments, which holds one row per CASE and would report an older
+  // cycle's file as satisfying a newer ruling. Same rule batch 4 established for
+  // currentJudgmentHasDeed; one batched query for the whole chain.
+  //
+  // ROUTE ORDER: four segments after /api, so /api/cases/:id (three) cannot
+  // capture it — the shadowing note above GET /api/cases/:id already cleared this
+  // exact path by name. Safe at any position.
+  app.get("/api/cases/:id/judgments", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const judgments = await storage.getJudgmentsByCase(lawCase.id);
+      const withDeed = await storage.getJudgmentIdsWithAttachment(judgments.map((j) => j.id));
+      res.json({
+        judgments: judgments.map((j) => ({ ...j, hasDeed: withDeed.has(j.id) })),
+      });
+    } catch (error: any) {
+      console.error("[cases/judgments GET] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ في جلب سجل الأحكام" });
+    }
+  });
+
   // POST /api/cases/:id/appeal-ruling
   // Body: { outcome: "affirmed" | "quashed_remanded", judgmentDeedReceivedDate?,
   //         objectionWindowDays?, notes? }.
