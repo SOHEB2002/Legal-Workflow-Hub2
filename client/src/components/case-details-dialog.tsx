@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import {
   Plus,
@@ -234,6 +234,7 @@ export function CaseDetailsDialog({
   onHearingPrompt,
   onClosed,
   initialTab,
+  highlightHearingId,
 }: {
   caseItem: LawCase | null;
   open: boolean;
@@ -246,6 +247,12 @@ export function CaseDetailsDialog({
   // the مهامي follow-up deep-links whose action is a ROW in the الإجراءات tab
   // rather than a dialog of its own.
   initialTab?: string | null;
+  // Scroll to and highlight ONE hearing row in the الجلسات tab. Added for the
+  // مهامي "إرفاق ضبط الجلسة" row, whose task names a specific hearing — landing
+  // on the tab alone left the user to find it among all of the case's hearings,
+  // which on a long-running case is the whole difficulty.
+  // Optional and null-by-default, so every existing caller is unaffected.
+  highlightHearingId?: string | null;
 }) {
   const { updateCase, moveToNextStage, refreshCases } = useCases();
   const { getClientName } = useClients();
@@ -352,6 +359,32 @@ export function CaseDetailsDialog({
     if (!open) return;
     setActiveTab(initialTab || "info");
   }, [open, initialTab]);
+
+  // ---- Hearing highlight (مهامي "إرفاق ضبط الجلسة") ----
+  // A CALLBACK REF rather than an effect keyed on the hearings array, and the
+  // difference matters: the الجلسات tab's content is unmounted while another tab
+  // is active, and the hearings themselves arrive from a context that may still
+  // be loading when the dialog opens. A callback ref fires exactly when the row
+  // node first attaches — whichever of those two happens last — so it needs no
+  // dependency list and cannot race the data.
+  //
+  // The flag makes it fire ONCE per (open, target): without it, every re-render
+  // that re-attaches the node would yank the user's scroll position back while
+  // they were reading something else.
+  const scrolledToHearingRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) scrolledToHearingRef.current = null;
+  }, [open]);
+  const highlightRowRef = (el: HTMLTableRowElement | null) => {
+    if (!el || !highlightHearingId) return;
+    if (scrolledToHearingRef.current === highlightHearingId) return;
+    scrolledToHearingRef.current = highlightHearingId;
+    // block:"center" rather than the default "start": the row's ACTIONS cell —
+    // which holds the ضبط paperclip — is what the user came for, and centring
+    // keeps it clear of the dialog's sticky header.
+    el.scrollIntoView({ block: "center" });
+  };
+
   const [stageTransitioning, setStageTransitioning] = useState(false);
   const [inlineEditField, setInlineEditField] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
@@ -1325,7 +1358,22 @@ export function CaseDetailsDialog({
                             </TableHeader>
                             <TableBody>
                               {caseHearings.map((hearing) => (
-                                <TableRow key={hearing.id}>
+                                <TableRow
+                                  key={hearing.id}
+                                  // The targeted row (مهامي's ضبط task names ONE
+                                  // hearing). Ring + tint rather than a timed flash:
+                                  // the user arrives to attach a file, which takes
+                                  // longer than any fade, and a marker that vanishes
+                                  // mid-task is worse than none. It clears when the
+                                  // dialog closes, because the prop goes with it.
+                                  ref={hearing.id === highlightHearingId ? highlightRowRef : undefined}
+                                  className={hearing.id === highlightHearingId
+                                    ? "ring-2 ring-primary ring-inset bg-primary/5"
+                                    : undefined}
+                                  data-testid={hearing.id === highlightHearingId
+                                    ? `hearing-row-highlighted-${hearing.id}`
+                                    : undefined}
+                                >
                                   <TableCell><DualDateDisplay date={hearing.hearingDate} compact /></TableCell>
                                   <TableCell><LtrInline>{formatTimeAmPm(hearing.hearingTime)}</LtrInline></TableCell>
                                   <TableCell>{hearing.courtName}</TableCell>
