@@ -20,7 +20,6 @@ import {
   RotateCcw,
   FileText,
   Gavel,
-  Scale,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1464,9 +1463,6 @@ export function CaseDetailsDialog({
                 <TabsContent value="judgments" className="mt-4">
                   {judgments.length > 0 ? (
                     <div className="space-y-3">
-                      <p className="text-sm font-medium text-primary flex items-center gap-1">
-                        <Scale className="w-4 h-4" /> سجل الأحكام
-                      </p>
                       {judgments.map((j) => {
                         // The three deed states, the SAME partition
                         // lib/attachment-indicators.ts draws for the badges:
