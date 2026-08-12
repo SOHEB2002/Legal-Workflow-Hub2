@@ -4228,9 +4228,52 @@ export class DatabaseStorage implements IStorage {
     }
 
     // ---- 1. case_work — assigned lawyer at a lawyer-work stage ----
-    // Conservative "lawyer must act" stage set (see report: exact set is a
-    // refinement point). Excludes review/committee/platform/admin-owned stages.
-    const LAWYER_WORK_STAGES = ["دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
+    // Conservative "lawyer must act" stage set. Excludes review/committee/
+    // platform/admin-owned stages.
+    //
+    // 🔴 استلام ADDED — owner ruling: an ASSIGNED case at استلام is immediate work
+    // for its lawyer. It was measured at 119 production cases carrying a
+    // primary_lawyer_id and emitting NOTHING to anyone: the head assigns, the
+    // case_unassigned row leaves HIS list, and it appears on nobody else's.
+    //
+    // WHY THE STAGE NEVER MOVED ON ITS OWN, which is what made this invisible:
+    // assignCase writes `status: CaseStatus.STUDY` but NEVER currentStage — and
+    // CaseStatus.STUDY is the string "دراسة", identical to the STAGE دراسة, so a
+    // row reading status='دراسة' / current_stage='استلام' looks self-consistent
+    // and is not. The مهامي CASE_UNASSIGNED action is narrower still: it PATCHes
+    // primaryLawyerId alone.
+    //
+    // 🔴 EXTENDED THIS ARRAY RATHER THAN ADDING A PARALLEL BLOCK, deliberately.
+    // Every property the new stage needs is already carried here and would have
+    // had to be re-implemented (and could then drift): the three scope arms, the
+    // hasAnyLawyer requirement, caseNotPaused, and the ownerId chain. A sibling
+    // block is only justified when the TRIGGER differs in kind — which is why 1b
+    // (a different stage but a client-contact title/hint), 1c (ruling-presence,
+    // attending-lawyer owner) and 1d (a date comparison) are separate. This is
+    // the same trigger on one more stage.
+    //
+    // AN ASSIGNEE IS REQUIRED, and it already is, on every arm: the two
+    // supervisory arms carry hasAnyLawyer and the self arm can only match a user
+    // who IS one of the lawyers. So an UNASSIGNED case at استلام cannot emit
+    // here — it belongs to block 2 (case_unassigned → the department head), and
+    // hasNoLawyer is the EXACT logical inverse of hasAnyLawyer, defined adjacent
+    // for precisely this reason. The two cannot both fire.
+    //   ⚠ ONE PRE-EXISTING EDGE, unchanged by this and true of the other five
+    //   stages already: a case with assignedLawyers=[X] but BOTH lawyer columns
+    //   empty satisfies hasNoLawyer (→ block 2, to the head) AND the self arm's
+    //   assignedToMe (→ here, to X). Two different rows for two different people,
+    //   not a duplicate. Unreachable through the assign dialog, which always
+    //   writes primaryLawyerId alongside the array.
+    //
+    // NO closed/archived term is added, matching the five sibling stages exactly.
+    // It would be dead weight through every live path: an ordinary close writes
+    // currentStage='مقفلة', auto-archive refuses any case not already at مقفلة,
+    // and a DEPARTMENT TRANSFER — the one flow that resets a case to استلام —
+    // nulls primaryLawyerId, responsibleLawyerId AND assignedLawyers in the same
+    // write, so a transferred case has no assignee and lands in block 2 instead.
+    // The only way to hold استلام while closed is the raw-PATCH `status` write
+    // documented on block 7, and these six stages share that exposure equally.
+    const LAWYER_WORK_STAGES = ["استلام", "دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
     {
       // Wrapped rather than repeated per arm: the pause guard applies to all
       // three scopes identically, so applying it ONCE here makes it impossible
@@ -4342,7 +4385,7 @@ export class DatabaseStorage implements IStorage {
     // ⚠ NO LONGER MUTUALLY EXCLUSIVE WITH 1a/1b BY STAGE, and the old claim here
     // said it was. Dropping the stage term means a case that HAS a ruling and sits
     // on a drafting stage would emit both — reachable only by REOPENING a judged
-    // case onto one of the five LAWYER_WORK_STAGES (منظورة, where a quash-remand
+    // case onto one of the six LAWYER_WORK_STAGES (منظورة, where a quash-remand
     // lands, is not among them). If it happens both statements are true — the case
     // is being worked AND its صك is outstanding — and the id prefixes are distinct,
     // so nothing collides. Still mutually exclusive with 1d, which requires the
