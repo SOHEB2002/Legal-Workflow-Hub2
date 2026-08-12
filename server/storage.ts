@@ -25,7 +25,10 @@ import {
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType, ContractStageLabels, type ContractStageValue,
   HearingStatus,
-  CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, findPrimaryJudgmentHearing,
+  // findPrimaryJudgmentHearing dropped with block 1c's attending-lawyer owner
+  // chain — the feed no longer resolves anyone from a judgment hearing. It stays
+  // exported from shared/schema for the three client surfaces that still use it.
+  CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix,
   type NotificationLinkedContext,
   CaseStageLabels, type CaseStageValue,
   MemoStageLabels, type MemoStageValue,
@@ -4440,42 +4443,41 @@ export class DatabaseStorage implements IStorage {
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
       }).from(lawCases).where(deedWhere);
       if (deedRows.length > 0) {
-        const deedCaseIds = deedRows.map((r) => r.id);
-        const deedHearings = await db.select({
-          id: hearings.id, caseId: hearings.caseId, result: hearings.result,
-          judgmentFinal: hearings.judgmentFinal, hearingDate: hearings.hearingDate,
-          attendingLawyerId: hearings.attendingLawyerId,
-        }).from(hearings).where(inArray(hearings.caseId, deedCaseIds));
-        const hearingsByCase = new Map<string, typeof deedHearings>();
-        for (const h of deedHearings) {
-          if (!h.caseId) continue;
-          const list = hearingsByCase.get(h.caseId) || [];
-          list.push(h);
-          hearingsByCase.set(h.caseId, list);
-        }
-        // Batch 4 — the CURRENT ruling per case, so the owner is resolved from the
-        // hearing that produced the ruling actually awaiting its صك rather than
-        // from whichever judgment hearing happens to be latest by date.
-        const judgmentSummaries = await this.getCurrentJudgmentSummaries();
         for (const r of deedRows) {
-          // 🔴 RE-KEYED. The date scan alone returned the latest non-final حكم
-          // hearing, which on a remanded case is the hearing of the QUASHED
-          // ruling — so the "chase the صك" task went to the lawyer who attended a
-          // judgment that no longer stands.
+          // 🔴 THE OWNER IS THE CASE'S LAWYER, NOT THE ATTENDING LAWYER.
           //
-          // ⚠ hearing_id is NULLABLE. A ruling recorded through POST
-          // /appeal-ruling has no session in our system, so this falls back to the
-          // date scan — the pre-batch-4 behaviour, byte-identical. For a quash
-          // that means the cycle-1 attending lawyer, which is the best answer
-          // available: nobody attended the appeal ruling here, and that lawyer is
-          // the one who has been in this case's courtrooms. Whoever it resolves
-          // to, the fallback below still lands on the assigned lawyer if the
-          // hearing carries no attendee.
-          const judgmentHearing = findPrimaryJudgmentHearing(
-            hearingsByCase.get(r.id) || [],
-            judgmentSummaries.get(r.id)?.hearingId ?? null,
-          );
-          const ownerId = judgmentHearing?.attendingLawyerId || r.primaryLawyerId || r.responsibleLawyerId || "";
+          // It used to be `judgmentHearing?.attendingLawyerId || primary ||
+          // responsible`, resolved through a per-case hearing scan. Measured on
+          // production: of 41 assigned cases at the two judgment stages, 33 had a
+          // ruling on record and no deed date — so this block WAS firing for all
+          // 33, and every one of them was addressed to the attending lawyer while
+          // the assignee saw nothing.
+          //
+          // THE ATTENDING LAWYER CANNOT ACT ON IT, which is what makes the old
+          // chain a bug rather than a preference: POST /api/cases/:id/judgment-deed
+          // is gated canActOnMohrSettlement — branch_manager | department_head of
+          // the case's own department | assigned lawyer — and the attending lawyer
+          // is in none of those sets unless they are also one of them. The row's
+          // deep-link (/cases?openCase=…&action=judgment-deed) re-checks that
+          // permission on arrival and degrades to merely opening the case, so the
+          // old behaviour was a task that silently did nothing for its recipient.
+          // Sending it to them was the defect; sending it to the assignee is the fix.
+          //
+          // caseNotificationRecipientId is the canonical resolution
+          // (primaryLawyerId || responsibleLawyerId), used via the shared helper
+          // rather than re-writing the chain — the same rule every sibling case
+          // block here uses.
+          //
+          // ⚠ NOBODY IS LEFT WITHOUT IT. Where the attending lawyer WAS the
+          // assignee, nothing changes. Where they were not, the task moves to the
+          // person who can actually record the receipt, and the attending lawyer
+          // loses a row that never worked for them. Supervisors are unaffected —
+          // both scoped arms bypass this check entirely.
+          //
+          // The per-case hearing scan and the getCurrentJudgmentSummaries call that
+          // fed it are GONE with the chain they existed to serve: two queries per
+          // feed read removed, on a method polled every 30s.
+          const ownerId = caseNotificationRecipientId(r);
           // Supervisors (branch_manager firm-wide, dept_head for their dept) see
           // every one; everyone else sees only the ones they own.
           if (!firmWideScoped && !deptHeadScoped && ownerId !== uid) continue;
