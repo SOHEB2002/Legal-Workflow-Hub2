@@ -4540,6 +4540,16 @@ export const hearingResultSchema = z.object({
   judgmentSide: z.enum(["لصالحنا", "ضدنا", "جزئي"]).nullable().optional(),
   objectionFeasible: z.boolean().nullable().optional(),
   objectionDeadline: z.string().nullable().optional(),
+  // إعادة للدرجة الأولى — does the APPEAL ruling send the case back to first
+  // instance? Asked only for an appeal ruling (the case is at منظورة_استئناف);
+  // meaningless and ignored for a first-instance one.
+  //
+  // 🔴 A BOOLEAN, NEVER A STAGE. The resulting stage is computed SERVER-SIDE from
+  // this answer via appealRulingTargetStage. A stage taken from a request body is
+  // exactly how case 4870079661 was stranded off its own path, and this field is
+  // shaped so that mistake is not available: the client says WHETHER the court
+  // remanded, never WHERE the case should land.
+  remandToFirstInstance: z.boolean().nullable().optional(),
   // Session/postponement fields
   nextHearingDate: z.string().nullable().optional(),
   nextHearingTime: z.string().nullable().optional(),

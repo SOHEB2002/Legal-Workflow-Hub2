@@ -13186,6 +13186,10 @@ export async function registerRoutes(
       const judgmentType = data.judgmentType || data.judgmentSide || null;
       let judgmentIsAppealRuling = false;
       let judgmentDerivedFinal = false;
+      // إعادة للدرجة الأولى — the appeal court returned the case to first instance.
+      // Derived here beside the rest of the judgment model so PATH B branches on
+      // already-validated values and cannot reach a different conclusion.
+      let judgmentRemands = false;
       if (data.result === HearingResult.JUDGMENT) {
         if (!judgmentType) {
           return res.status(400).json({ error: "يجب تحديد نوع الحكم (لصالحنا / ضدنا / جزئي)" });
@@ -13227,6 +13231,13 @@ export async function registerRoutes(
           }
         }
         judgmentDerivedFinal = judgmentIsAppealRuling || data.objectionFeasible === false;
+        // 🔴 THE REMAND IS GATED ON THE CASE, NOT ON THE REQUEST. `judgmentIsAppealRuling`
+        // is read from the case's own stage a few lines above, so a first-instance
+        // ruling cannot remand even if the field is sent — the client omits it, and
+        // a hand-rolled request that includes it is ignored rather than obeyed.
+        // A remand off a first-instance ruling is not a thing a court does, and
+        // honouring it would write منظورة over a case that is already there.
+        judgmentRemands = judgmentIsAppealRuling && data.remandToFirstInstance === true;
       }
 
       const effectiveCaseId = hearing.caseId || (data.caseId && data.caseId !== "none" ? data.caseId : null);
@@ -13603,14 +13614,53 @@ export async function registerRoutes(
           const judgmentDegree = judgmentDegreeForStage(
             judgmentIsAppealRuling ? "منظورة_استئناف" : existingCase.currentStage,
           );
+          // 🔴 RESOLVED BEFORE recordJudgment, and the ORDER IS THE POINT.
+          // currentJudgmentFor returns the HIGHEST sequence; the moment the new row
+          // is inserted that is the new row itself, so asking afterwards would have
+          // the remand supersede ITSELF. Only fetched when remanding — an ordinary
+          // ruling costs no extra query.
+          //
+          // ⚠ NO PRIOR RULING IS NOT AN ERROR HERE, and this deliberately diverges
+          // from POST /appeal-ruling, which 400s in that case. That endpoint has
+          // nothing else to go on; this one is recording a session that HAPPENED,
+          // and the handler's standing principle is to repair or proceed rather
+          // than refuse a fact (the same reason the blocking guard at judgment time
+          // was replaced by silent promotion). A case reaching منظورة_استئناف with
+          // no ruling on record is a data gap, and refusing to record the appeal
+          // ruling would neither close the gap nor let the court's decision be
+          // filed. The remand still records; only the stamp is skipped.
+          const supersededJudgment = judgmentRemands
+            ? await currentJudgmentFor(effectiveCaseId)
+            : undefined;
           await recordJudgment({
             caseId: effectiveCaseId,
             hearingId,
             degree: judgmentDegree,
+            // 🔴 THE OUTCOME IS KEPT ON A REMAND (owner decision). This is where
+            // the hearing path is deliberately RICHER than POST /appeal-ruling,
+            // which writes outcome NULL on a quash because it treats a remand as
+            // purely procedural. Recorded from a session we attended, both facts
+            // are known — which way the appeal court went AND that it sent the
+            // case back — so both are stored.
+            //
+            // ⚠ THIS IS WHY appealRulingPayload IS NOT REUSED HERE. Three of its
+            // four outputs (degree, isFinal, opensWindow) are already computed
+            // identically by the derivation above; the fourth is the outcome, and
+            // it returns null for exactly this case. Calling it and then
+            // overwriting that one field would be a reuse that hides an override.
+            // appealRulingTargetStage IS reused, below, where it fits exactly.
             outcome: judgmentType,
             isFinal: judgmentDerivedFinal,
             opensWindow: !judgmentIsAppealRuling && data.objectionFeasible === true,
             recordedBy: reqUser.id,
+            // The remand marker: superseded_at + superseded_by_judgment_id land on
+            // the ruling that WAS returned, pointing at this one. No new column —
+            // "did this ruling remand?" is that reverse pointer, exactly the model
+            // POST /appeal-ruling already established.
+            //
+            // Re-saving is safe: recordJudgment is idempotent on hearingId, so a
+            // second save returns the existing row and re-stamps nothing.
+            supersedesJudgmentId: supersededJudgment?.id ?? null,
           });
 
           // PLEADINGS ARE OVER once a ruling issues — the case's still-open memos
@@ -13619,7 +13669,80 @@ export async function registerRoutes(
           // OBJECTION excluded and the "صدور حكم" wording on the reason. Nothing
           // to do here; see that block for the ordering guarantees.
 
-          if (isFinal) {
+          if (judgmentRemands) {
+            // === إعادة للدرجة الأولى — THE CASE GOES BACK, IT DOES NOT END ===
+            //
+            // Placed BEFORE the isFinal arm and not inside it, because a remand is
+            // isFinal TRUE (an appeal ruling is final by nature — that is what
+            // judgmentDerivedFinal forces) while being the one final ruling that
+            // does not finish the case. Reading `isFinal` as "the case is over" is
+            // exactly the conflation this arm exists to break. The first-instance
+            // arm below is unreachable from here and untouched: judgmentRemands
+            // requires judgmentIsAppealRuling.
+            //
+            // 🔴 THE STAGE IS COMPUTED SERVER-SIDE, from the answer, via the SHARED
+            // appealRulingTargetStage — the same function POST /appeal-ruling uses,
+            // so the two doors into a remand cannot land a case on different
+            // stages. The request body carries a BOOLEAN and never a stage.
+            // (The constant still carries its original name here; commit 5.4
+            // renames the pre-existing vocabulary in one pass. Strings NEW in this
+            // commit are already written in the final vocabulary.)
+            const remandStage = appealRulingTargetStage(AppealRulingOutcome.QUASHED_REMANDED);
+            caseUpdate.currentStage = remandStage;
+            // 🔴 CLEAR isSettlementCase (owner decision). getStagesForClassification
+            // consults this flag FIRST for an in-court case and returns the
+            // three-stage InCourtSettlementStages — [استلام, مداولة_الصلح, تحصيل] —
+            // which does not contain منظورة. Writing منظورة while the flag stands
+            // lands the case OFF ITS OWN RESOLVED PATH, the data-shaped version of
+            // the bug that stranded case 4870079661. The owner's reasoning is that
+            // the flag is stale by definition here: a case that genuinely settled
+            // never reaches منظورة at all, let alone an appeal. Same precedent as
+            // POST /api/cases/:id/reopen, which clears it when منظورة is chosen.
+            caseUpdate.isSettlementCase = false;
+            caseUpdate.stageHistory = stageHistoryFor(
+              remandStage,
+              `حكم استئنافي ${judgmentType} — إعادة الدعوى للدرجة الأولى`,
+            );
+            await storage.updateCase(effectiveCaseId, caseUpdate);
+
+            // NO COLLECTION OR EXECUTION TASK, for any outcome — including لصالحنا.
+            // Both tasks exist to enforce a judgment, and a remanded case has none
+            // to enforce: it is going back for a NEW first-instance ruling. This is
+            // not a preference, it is a hazard avoided — completing a collection
+            // task fires maybeCloseCaseAfterPostJudgmentTasks, which would close a
+            // LIVE case sitting at منظورة with تم_التحصيل. POST /appeal-ruling
+            // likewise creates no task on a remand.
+            //
+            // AND NO AUTO-CLOSE ON ضدنا. The ضدنا arm below closes the case on the
+            // stated reasoning that "a FINAL judgment AGAINST US leaves nothing to
+            // do: no collection, no execution, and — because it is final — no
+            // objection and no appeal." Every one of those premises is false under
+            // a remand: the case has been returned for reconsideration, so there is
+            // a great deal to do. ضدنا + إعادة is a live case, not a closed one.
+            //
+            // NO OBJECTION MEMO either, and nothing was needed to prevent one:
+            // opensWindow is false for every appeal ruling, and the memo is created
+            // by the صك-receipt flow off that flag. The case's prior pleadings were
+            // already cancelled by the UNIVERSAL block above with the لائحة
+            // اعتراضية excluded — correct here, since a filed objection is a real
+            // document that a remand does not un-file (batch 4's decision).
+            await logCaseActivityActing(req, {
+              caseId: effectiveCaseId,
+              userId: reqUser.id,
+              userName: reqUser.name || reqUser.id,
+              actionType: "appeal_ruling_remanded",
+              title: `حكم الاستئناف — إعادة الدعوى للدرجة الأولى (${judgmentType})`,
+              previousValue: "منظورة_استئناف",
+              newValue: remandStage,
+              details: JSON.stringify({
+                outcome: judgmentType,
+                supersededJudgmentId: supersededJudgment?.id ?? null,
+                hearingId,
+              }),
+              relatedEntityType: "hearing",
+              relatedEntityId: hearingId,
+            });
+          } else if (isFinal) {
             // === FINAL JUDGMENTS — the case RESTS at محكوم_حكم_نهائي ===
             // Judgment-lifecycle step 1 (owner decision). Previously this block
             // wrote محكوم_حكم_نهائي and then IMMEDIATELY overwrote it in a second,
