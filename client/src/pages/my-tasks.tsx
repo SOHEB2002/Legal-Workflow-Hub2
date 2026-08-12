@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
-  UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Flame, Users, Plus,
+  UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Users, Plus,
   ChevronDown, ChevronLeft, ListChecks, Clock, Archive, Send, Eye, Briefcase, Paperclip, PauseCircle,
   MessageSquare,
 } from "lucide-react";
@@ -41,7 +40,7 @@ import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
   AssignableAdminSupportTaskKind, FollowUpStatus,
   GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
-  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo, type MemoStageValue,
+  type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type MyTaskEntityType, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo, type MemoStageValue,
   type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
 } from "@shared/schema";
 
@@ -181,6 +180,127 @@ const PINNED_KINDS = new Set<MyTaskKindValue>([
   // until a head acts, so it must not sink below assigned items.
   MyTaskKind.CONSULTATION_UNASSIGNED, MyTaskKind.CONTRACT_UNASSIGNED,
 ]);
+
+// ===== THE SIX CARDS =====
+// Stacked cards on one page, in the owner's order. A card renders ONLY when it
+// holds at least one item for the viewer, and THAT is what makes the page
+// role-specific — a lawyer sees قضايا + جلسات, admin_support sees their own set,
+// the branch_manager sees all six. No per-role rules, no configuration.
+const TASK_CARDS = [
+  { key: "cases",         label: "قضايا",     icon: Scale },
+  { key: "memos",         label: "مذكرات",    icon: FileText },
+  { key: "consultations", label: "استشارات",  icon: MessageSquare },
+  { key: "contracts",     label: "عقود",      icon: FileSignature },
+  { key: "hearings",      label: "جلسات",     icon: Gavel },
+  { key: "other",         label: "مهام أخرى", icon: ClipboardList },
+] as const;
+
+type TaskCardKey = typeof TASK_CARDS[number]["key"];
+
+// 🔴 KEYED ON entityType, NOT kind, and that is forced by the data rather than
+// chosen: review_pending is ONE kind emitted for FOUR entity types (case, memo,
+// consultation, contract). A kind→card map would have to force all four into one
+// arbitrary card; entityType puts a memo review in مذكرات and a contract review
+// in عقود automatically, with no special case.
+//
+// EXHAUSTIVE Record<MyTaskEntityType, …> on purpose: adding a new entityType to
+// the feed fails the build here rather than silently dropping its tasks off the
+// page. Every one of the nine values has exactly one home.
+//
+// legal_deadline → قضايا by owner ruling. Its case_id is notNull, so a legal
+// deadline always belongs to a case; it is the only entityType with no card of
+// its own name.
+const CARD_BY_ENTITY_TYPE: Record<MyTaskEntityType, TaskCardKey> = {
+  case:           "cases",
+  legal_deadline: "cases",
+  memo:           "memos",
+  consultation:   "consultations",
+  contract:       "contracts",
+  hearing:        "hearings",
+  field_task:     "other",
+  contact_log:    "other",
+  delegation:     "other",
+};
+
+// Bucket a task list into the six cards, each bucket sorted by the SHARED
+// pinAndSort — urgent kinds float to the top, then overdue-first, then dueDate
+// ascending with nulls last. Cards the viewer has nothing for come back empty
+// and are not rendered.
+function groupIntoCards(items: MyTaskItem[]): Map<TaskCardKey, MyTaskItem[]> {
+  const byCard = new Map<TaskCardKey, MyTaskItem[]>();
+  for (const t of items) {
+    const card = CARD_BY_ENTITY_TYPE[t.entityType];
+    const arr = byCard.get(card) ?? [];
+    arr.push(t);
+    byCard.set(card, arr);
+  }
+  for (const [k, v] of Array.from(byCard.entries())) byCard.set(k, pinAndSort(v));
+  return byCard;
+}
+
+// ===== TYPE FILTER =====
+// 🔴 THE case_work COLLISION. Five feed items share kind CASE_WORK and differ
+// only by the id PREFIX the server stamps — filtering on `kind` alone would
+// collapse "chase the صك", "record the objection outcome" and "chase the
+// opponent's reply" into one option called "عمل على قضية", which is exactly the
+// distinction a user reaching for a type filter is trying to make.
+//
+// SPLIT ON THE PREFIX, and it is FOUR options rather than five: blocks 1 and 1b
+// (stage work / labor settlement direction) BOTH emit `case_work:<id>` and are
+// mutually exclusive by stage, so they are one thing to the user anyway.
+//
+// ⚠ THIS IS STRING PARSING, AND I AM SHIPPING IT WITH A CAVEAT RATHER THAN
+// SILENTLY. It is not a NEW fragility — handleAction already routes on these
+// same three prefixes, so the coupling to the server's id format exists today
+// and is load-bearing. What is new is that a prefix change would break the
+// filter SILENTLY (an option that matches nothing) where it breaks handleAction
+// loudly (a row that falls through to "no action"). The durable fix is a
+// server-side `subKind` on MyTaskItem; until then the prefixes live in ONE
+// place here, and handleAction's copies must stay in step.
+const CASE_WORK_PREFIXES = [
+  { prefix: "judgment_deed:",     key: "judgment_deed",     label: "متابعة استلام الصك" },
+  { prefix: "appeal_window:",     key: "appeal_window",     label: "نتيجة مهلة الاعتراض" },
+  { prefix: "opponent_response:", key: "opponent_response", label: "متابعة رد الخصم" },
+] as const;
+
+// The filter key for one task: its kind, except that CASE_WORK splits four ways.
+function taskTypeKey(task: MyTaskItem): string {
+  if (task.kind !== MyTaskKind.CASE_WORK) return task.kind;
+  const hit = CASE_WORK_PREFIXES.find((p) => task.id.startsWith(p.prefix));
+  return hit ? hit.key : MyTaskKind.CASE_WORK;
+}
+
+function taskTypeLabel(key: string): string {
+  const split = CASE_WORK_PREFIXES.find((p) => p.key === key);
+  if (split) return split.label;
+  return KIND_META[key as MyTaskKindValue]?.label ?? key;
+}
+
+// ===== SEARCH =====
+// Everything the ITEM already carries that a user might type, plus the owner's
+// NAME — which is not on the item but is resolvable from the loaded user list.
+// `title` is the richest field: the server composes it with the case/memo/
+// consultation number already inside, so a plain substring match over it covers
+// most of what anyone types.
+//
+// ⚠ clientName IS ABSENT ON CONSULTATION AND CONTRACT TASKS. The feed's identity
+// enrichment (getCaseIdentitiesForFeed) is keyed on caseId, so consultations and
+// contracts — which have clients of their own in the DB — carry no clientName.
+// Searching a client's name therefore finds their CASE and MEMO and HEARING
+// tasks and silently misses their consultations and contracts. Closing it means
+// enriching those two entity types server-side; see the batch report.
+function taskMatchesSearch(task: MyTaskItem, needle: string, ownerName: string): boolean {
+  if (!needle) return true;
+  const haystack = [
+    task.title,
+    task.caseNumber ?? "",
+    task.clientName ?? "",
+    task.opponentName ?? "",
+    ownerName,
+    KIND_META[task.kind]?.label ?? "",
+  ].join(" ").toLowerCase();
+  return haystack.includes(needle);
+}
 
 function byTime(a: MyTaskItem, b: MyTaskItem): number {
   if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
@@ -610,23 +730,19 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   );
 }
 
-function SummaryCard({ label, value, tone }: { label: string; value: number; tone?: "danger" }) {
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className={`text-2xl font-bold ${tone === "danger" ? "text-red-600" : ""}`}>{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
+// SummaryCard (the four counter tiles) was removed with the person-grouped
+// layout — each of the six cards carries its own count in its header now, and
+// tsc --noUnusedLocals is held at 0, so an unreferenced component cannot stay.
+// It is in git at 7f5d036 if the redesign wants counters back.
 
-// Clickable collapse/expand header (chevron + title + optional count badge),
-// used for every department / member / pool group in the supervisory views.
+// Clickable collapse/expand header (chevron + optional icon + title + optional
+// count badge), used by the six task cards and by the منجزة archive groups.
 // RTL: open → chevron points down; collapsed → points right (ChevronLeft).
-function GroupHeader({ open, onToggle, title, count, titleClass, testId }: {
+function GroupHeader({ open, onToggle, title, count, titleClass, testId, icon: Icon }: {
   open: boolean; onToggle: () => void; title: string; count?: number;
   titleClass?: string; testId?: string;
+  // Optional so the archive's own headers are untouched; the six cards pass one.
+  icon?: typeof Scale;
 }) {
   return (
     <button
@@ -638,6 +754,7 @@ function GroupHeader({ open, onToggle, title, count, titleClass, testId }: {
       {open
         ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
         : <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />}
+      {Icon && <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />}
       <span className={`flex-1 min-w-0 ${titleClass ?? ""}`}><BidiText>{title}</BidiText></span>
       {typeof count === "number" && (
         <Badge variant="secondary" className="text-[10px]">{count}</Badge>
@@ -698,6 +815,13 @@ export default function MyTasksPage() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const [specialtyFilter, setSpecialtyFilter] = useState<"all" | TaskSpecialtyValue>("all");
+  // Search + the two zero-cost filters. All three are CLIENT-SIDE over the
+  // already-loaded feed — no new request, no server field.
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  // "case:<caseNumber>" | "client:<name>" | "all" — the two are one control
+  // because the owner named them as one filter ("القضية أو العميل").
+  const [matterFilter, setMatterFilter] = useState<string>("all");
 
   // Active action dialog
   const [actionTask, setActionTask] = useState<MyTaskItem | null>(null);
@@ -737,7 +861,8 @@ export default function MyTasksPage() {
     deptId: "", assigneeId: "",
   });
   const [creating, setCreating] = useState(false);
-  // Collapsed group keys (dept:<id> / member:<id> / pool:<id>). Empty = all
+  // Collapsed group keys (card:<key> / team-card:<key> / archive-member:<id>,
+  // three prefixes that cannot collide). Empty = all
   // expanded by default; a key present means that group is collapsed.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const isOpen = (key: string) => !collapsed.has(key);
@@ -1052,52 +1177,73 @@ export default function MyTasksPage() {
   }
 
   // admin_support specialty filter (ترافع / استشارات).
-  const visible = isAdminSupport && specialtyFilter !== "all"
+  const specialtyScoped = isAdminSupport && specialtyFilter !== "all"
     ? tasks.filter((t) => t.specialtyClass === specialtyFilter)
     : tasks;
 
+  // ----- Filter option lists, derived from what is actually on the page -----
+  // Both dropdowns are built from the LOADED tasks rather than from a roster or
+  // the cases list: the options are then guaranteed to match something, the
+  // lists stay short, and neither needs a extra fetch. Derived from
+  // specialtyScoped (not the filtered result) so choosing one option does not
+  // erase the others from the dropdown.
+  const typeOptions = Array.from(new Set(specialtyScoped.map(taskTypeKey)))
+    .map((key) => ({ key, label: taskTypeLabel(key) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "ar"));
+  const matterOptions = [
+    ...Array.from(new Set(specialtyScoped.map((t) => t.caseNumber).filter((n): n is string => !!n)))
+      .sort((a, b) => a.localeCompare(b, "ar"))
+      .map((n) => ({ value: `case:${n}`, label: `قضية ${n}` })),
+    ...Array.from(new Set(specialtyScoped.map((t) => t.clientName).filter((n): n is string => !!n)))
+      .sort((a, b) => a.localeCompare(b, "ar"))
+      .map((n) => ({ value: `client:${n}`, label: `العميل: ${n}` })),
+  ];
+
+  // ----- Apply search + filters, GLOBALLY, before the cards are built -----
+  // Not per-card: one predicate over the whole feed, and a card that ends up
+  // empty simply does not render — which is already the card rule, so filtering
+  // needs no extra hiding logic. The consequence is that filtering can empty the
+  // page entirely, which the empty state below distinguishes from "no tasks".
+  const needle = search.trim().toLowerCase();
+  const visible = specialtyScoped.filter((t) => {
+    if (!taskMatchesSearch(t, needle, userName(t.ownerId))) return false;
+    if (typeFilter !== "all" && taskTypeKey(t) !== typeFilter) return false;
+    if (matterFilter !== "all") {
+      const [scope, ...rest] = matterFilter.split(":");
+      const value = rest.join(":");
+      if (scope === "case" && t.caseNumber !== value) return false;
+      if (scope === "client" && t.clientName !== value) return false;
+    }
+    return true;
+  });
+  const isFiltering = !!needle || typeFilter !== "all" || matterFilter !== "all";
+
+  // OWN AND TEAM DO NOT MIX (owner ruling): the six own cards render first, then
+  // a separated team region with its own six. ownerScope is server-computed —
+  // scopeOf() returns "team" only for a supervisor looking at someone else's row,
+  // so for a plain employee `team` is empty and the region never renders.
+  //
+  // The unassigned pool (ownerId "") lands in the TEAM region by that same rule,
+  // so those rows are still on the page for the people who can assign them —
+  // inside their entity card rather than under a heading of their own.
   const own = visible.filter((t) => t.ownerScope === "self");
   const team = visible.filter((t) => t.ownerScope === "team");
 
-  const pinned = own.filter((t) => PINNED_KINDS.has(t.kind)).sort(byTime);
-  const rest = own.filter((t) => !PINNED_KINDS.has(t.kind)).sort(byTime);
-  // Count EVERY overdue row the user actually sees (own + team), so the card
-  // matches the red rows. The old `own`-only count read 0 for a manager whose
-  // overdue rows are all team-scoped (ownerScope:"team").
-  const overdueCount = visible.filter((t) => t.isOverdue).length;
+  const ownCards = groupIntoCards(own);
+  const teamCards = groupIntoCards(team);
 
-  const teamByMember = new Map<string, MyTaskItem[]>();
-  for (const t of team) {
-    const arr = teamByMember.get(t.ownerId) ?? [];
-    arr.push(t);
-    teamByMember.set(t.ownerId, arr);
-  }
-
-  // ----- Supervisory rosters (dept_head "team" + branch_manager firm view) -----
-  // Driven by the USER ROSTER, not just task-owners, so every member shows even
-  // with zero tasks ("لا يوجد") and never silently disappears (item 5). Members
-  // sorted by Arabic name; their tasks urgent-first via pinAndSort.
-  const activeUsers = users.filter((u) => u.isActive);
-  const isLawyerRole = (r: string) => r === "employee" || r === "department_head";
-  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, "ar");
-  const memberTasks = (id: string) => pinAndSort(teamByMember.get(id) ?? []);
-  const memberTaskCount = (id: string) => teamByMember.get(id)?.length ?? 0;
-
-  // admin_support has no department, so it gets a dedicated section (item 8).
-  const adminSupportMembers = activeUsers.filter((u) => u.role === "admin_support").sort(byName);
-  // Each department → its lawyer members (employee + department_head) (item 5).
-  const deptRoster = departments
-    .map((d) => ({ dept: d, members: activeUsers.filter((u) => isLawyerRole(u.role) && u.departmentId === d.id).sort(byName) }))
-    .filter((g) => g.members.length > 0);
-  // Owners that appear in team tasks but aren't covered by the rosters above
-  // (data drift / a non-lawyer non-admin_support owner) — surfaced under a
-  // fallback group so a task is NEVER hidden. "" (unassigned) is the pool below.
-  const rosterIds = new Set<string>([
-    ...adminSupportMembers.map((u) => u.id),
-    ...deptRoster.flatMap((g) => g.members.map((u) => u.id)),
-  ]);
-  const leftoverOwnerIds = Array.from(teamByMember.keys()).filter((id) => id !== "" && !rosterIds.has(id));
-  const unassignedPool = pinAndSort(teamByMember.get("") ?? []);
+  // ⚠ THE SUPERVISORY ROSTER IS GONE, and it is a real loss rather than a
+  // refactor. It was driven by the USER LIST, not by the tasks: every lawyer in
+  // the department (and, for the branch_manager, every department, plus a
+  // dedicated قسم الدعم الإداري group and an "أعضاء آخرون" fallback) appeared by
+  // NAME with a per-person count, and a member with nothing to do rendered
+  // "لا يوجد". A card layout is grouped by ENTITY, so a person with zero tasks
+  // has nowhere to appear — the structure cannot express them. Their TASKS are
+  // all still on the page, inside the team cards; what is no longer answerable
+  // here is "who on my team has nothing on". See the batch report.
+  //
+  // The unassigned pool ("" owner) is likewise still present — scopeOf tags it
+  // "team", so it lands in the team cards — but no longer under its own heading.
 
   // ----- "منجزة" archive derivation -----
   // Newest-closed first (completedAt, falling back to updatedAt/createdAt so a
@@ -1115,19 +1261,40 @@ export default function MyTasksPage() {
     archiveByMember.set(memberId, arr);
   }
 
-  // One member row: collapsible header (name + task count), then the member's
-  // tasks or "لا يوجد" when they have none.
-  const renderMemberRow = (id: string, name: string) => {
-    const key = `member:${id}`;
+  // ONE card. Renders nothing when it holds nothing — that emptiness IS the
+  // role-specificity, so there is no "لا توجد مهام" state inside a card.
+  //
+  // COLLAPSE KEYS are `card:<key>` and `team-card:<key>`. The existing prefixes in
+  // the same `collapsed` Set are `dept:`, `member:`, `pool:` and `archive-member:`
+  // — none of which can collide, and the archive's keep working untouched. An
+  // empty Set means expanded, so all six start open with no extra state.
+  const renderTaskCard = (
+    card: typeof TASK_CARDS[number],
+    byCard: Map<TaskCardKey, MyTaskItem[]>,
+    keyPrefix: "card" | "team-card",
+  ) => {
+    const items = byCard.get(card.key) ?? [];
+    if (items.length === 0) return null;
+    const key = `${keyPrefix}:${card.key}`;
     const open = isOpen(key);
-    const items = memberTasks(id);
     return (
-      <div key={id} className="space-y-2 ps-2">
-        <GroupHeader open={open} onToggle={() => toggle(key)} title={name} count={items.length}
-          titleClass="text-xs font-semibold text-muted-foreground" testId={`team-member-${id}`} />
-        {open && (items.length === 0
-          ? <p className="ps-6 text-xs text-muted-foreground">لا يوجد</p>
-          : <div className="space-y-2">{items.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>)}
+      <div key={key} className="rounded-lg border p-3 space-y-2" data-testid={`task-card-${keyPrefix}-${card.key}`}>
+        <GroupHeader
+          open={open}
+          onToggle={() => toggle(key)}
+          title={card.label}
+          count={items.length}
+          icon={card.icon}
+          titleClass="text-sm font-bold"
+          testId={`task-card-header-${keyPrefix}-${card.key}`}
+        />
+        {open && (
+          <div className="space-y-2">
+            {items.map((t) => (
+              <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />
+            ))}
+          </div>
+        )}
       </div>
     );
   };
@@ -1189,53 +1356,77 @@ export default function MyTasksPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <SummaryCard label="مهامي" value={own.length} />
-        <SummaryCard label="متأخرة" value={overdueCount} tone="danger" />
-        <SummaryCard label="المستعجلة" value={pinned.length} />
-        {(isDeptHead || isBranchManager) && <SummaryCard label="مهام الفريق" value={team.length} />}
+      {/* The four counter tiles (مهامي / متأخرة / المستعجلة / مهام الفريق) went
+          with the person-grouped layout. Each card now carries its own count in
+          its header, and "المستعجلة" no longer exists as a bucket to count. */}
+
+      {/* ===== Search + filters — all client-side over the loaded feed ===== */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="ابحث في المهام…"
+          className="w-full sm:w-[260px]"
+          data-testid="input-task-search"
+        />
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-[180px]" data-testid="select-type-filter"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">كل الأنواع</SelectItem>
+            {typeOptions.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={matterFilter} onValueChange={setMatterFilter}>
+          <SelectTrigger className="w-[220px]" data-testid="select-matter-filter"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">كل القضايا والعملاء</SelectItem>
+            {matterOptions.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {isFiltering && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setSearch(""); setTypeFilter("all"); setMatterFilter("all"); }}
+            data-testid="button-clear-filters"
+          >
+            مسح
+          </Button>
+        )}
       </div>
 
       {isLoading ? (
         <div className="flex items-center justify-center py-16 text-muted-foreground">جارٍ التحميل…</div>
       ) : (
         <>
-          {pinned.length > 0 && (
-            <section className="space-y-2" data-testid="section-pinned">
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <Flame className="h-4 w-4" /> المستعجلة — جلسات وإسناد قضايا
-              </h2>
-              <div className="space-y-2">{pinned.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>
-            </section>
-          )}
-
-          <section className="space-y-2" data-testid="section-rest">
-            <h2 className="text-sm font-semibold text-muted-foreground">مهامي الأخرى</h2>
-            {rest.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">لا توجد مهام أخرى.</p>
+          {/* ===== THE SIX CARDS — the viewer's OWN tasks ===== */}
+          {/* No urgent section: PINNED_KINDS float to the top INSIDE each card
+              via pinAndSort, so a hearing still leads جلسات without a band of its
+              own above everything. */}
+          <section className="space-y-3" data-testid="section-own-cards">
+            {own.length === 0 && team.length === 0 ? (
+              // Distinguishes "you have nothing to do" from "your filters
+              // matched nothing" — the same blank page otherwise, and the second
+              // one is a dead end the user has to guess their way out of.
+              <p className="text-sm text-muted-foreground py-4">
+                {isFiltering ? "لا توجد نتائج مطابقة." : "لا توجد مهام."}
+              </p>
             ) : (
-              <div className="space-y-2">{rest.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>
+              TASK_CARDS.map((card) => renderTaskCard(card, ownCards, "card"))
             )}
           </section>
 
-          {/* dept_head — every member of THEIR department (item 5), each
-              member's list collapsible (item 6). */}
-          {isDeptHead && (
-            <section className="space-y-3" data-testid="section-team">
+          {/* ===== THE TEAM REGION — the same six cards, ownerScope "team" =====
+              Rendered only when there is something in it, which by construction
+              means only for a supervisor: scopeOf() tags a row "team" only for a
+              department_head looking at their department or a branch_manager
+              looking firm-wide. A plain employee never reaches this. */}
+          {team.length > 0 && (
+            <section className="space-y-3 border-t pt-5" data-testid="section-team-cards">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" /> مهام الفريق
               </h2>
-              {activeUsers
-                .filter((u) => isLawyerRole(u.role) && !!user?.departmentId && u.departmentId === user.departmentId)
-                .sort(byName)
-                .map((u) => renderMemberRow(u.id, u.name))}
-              {leftoverOwnerIds.map((id) => renderMemberRow(id, userName(id)))}
-              {unassignedPool.length > 0 && (
-                <div className="space-y-2">
-                  <h3 className="text-xs font-semibold text-muted-foreground">مهام غير مُسندة</h3>
-                  <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>
-                </div>
-              )}
+              {TASK_CARDS.map((card) => renderTaskCard(card, teamCards, "team-card"))}
             </section>
           )}
 
@@ -1243,64 +1434,6 @@ export default function MyTasksPage() {
               both levels, item 6), a dedicated admin_support section (item 8,
               also where turki/item 3 lands), every member shown even at zero
               tasks (item 5), and the unassigned pool to assign from (item 2). */}
-          {isBranchManager && (
-            <section className="space-y-4" data-testid="section-firm">
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <Users className="h-4 w-4" /> مهام الفرع (حسب القسم)
-              </h2>
-              {deptRoster.map(({ dept, members }) => {
-                const key = `dept:${dept.id}`;
-                const open = isOpen(key);
-                const count = members.reduce((n, u) => n + memberTaskCount(u.id), 0);
-                return (
-                  <div key={dept.id} className="space-y-2 rounded-md border p-3">
-                    <GroupHeader open={open} onToggle={() => toggle(key)} title={dept.name} count={count}
-                      titleClass="text-sm font-bold" testId={`team-dept-${dept.id}`} />
-                    {open && members.map((u) => renderMemberRow(u.id, u.name))}
-                  </div>
-                );
-              })}
-
-              {adminSupportMembers.length > 0 && (() => {
-                const key = "dept:admin_support";
-                const open = isOpen(key);
-                const count = adminSupportMembers.reduce((n, u) => n + memberTaskCount(u.id), 0);
-                return (
-                  <div className="space-y-2 rounded-md border p-3">
-                    <GroupHeader open={open} onToggle={() => toggle(key)} title="قسم الدعم الإداري" count={count}
-                      titleClass="text-sm font-bold" testId="team-dept-admin-support" />
-                    {open && adminSupportMembers.map((u) => renderMemberRow(u.id, u.name))}
-                  </div>
-                );
-              })()}
-
-              {leftoverOwnerIds.length > 0 && (() => {
-                const key = "dept:other";
-                const open = isOpen(key);
-                const count = leftoverOwnerIds.reduce((n, id) => n + memberTaskCount(id), 0);
-                return (
-                  <div className="space-y-2 rounded-md border p-3">
-                    <GroupHeader open={open} onToggle={() => toggle(key)} title="أعضاء آخرون" count={count}
-                      titleClass="text-sm font-bold" testId="team-dept-other" />
-                    {open && leftoverOwnerIds.map((id) => renderMemberRow(id, userName(id)))}
-                  </div>
-                );
-              })()}
-
-              {unassignedPool.length > 0 && (() => {
-                const key = "pool:unassigned";
-                const open = isOpen(key);
-                return (
-                  <div className="space-y-2 rounded-md border p-3">
-                    <GroupHeader open={open} onToggle={() => toggle(key)} title="مهام غير مُسندة" count={unassignedPool.length}
-                      titleClass="text-sm font-bold" testId="team-pool-unassigned" />
-                    {open && <div className="space-y-2 ps-2">{unassignedPool.map((t) => <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />)}</div>}
-                  </div>
-                );
-              })()}
-            </section>
-          )}
-
           {/* ===== "منجزة" archive — collapsed by default, at the bottom.
               Closed general tasks move here out of the active feed. Lazy-loaded
               on expand; grouped by worker for supervisors, flat for a user. ===== */}
