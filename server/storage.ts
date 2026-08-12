@@ -4275,7 +4275,7 @@ export class DatabaseStorage implements IStorage {
     //   not a duplicate. Unreachable through the assign dialog, which always
     //   writes primaryLawyerId alongside the array.
     //
-    // NO closed/archived term is added, matching the five sibling stages exactly.
+    // NO closed/archived term is added, matching the sibling stages exactly.
     // It would be dead weight through every live path: an ordinary close writes
     // currentStage='مقفلة', auto-archive refuses any case not already at مقفلة,
     // and a DEPARTMENT TRANSFER — the one flow that resets a case to استلام —
@@ -4283,7 +4283,32 @@ export class DatabaseStorage implements IStorage {
     // write, so a transferred case has no assignee and lands in block 2 instead.
     // The only way to hold استلام while closed is the raw-PATCH `status` write
     // documented on block 7, and these six stages share that exposure equally.
-    const LAWYER_WORK_STAGES = ["استلام", "دراسة", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "تحرير_صيغة_التظلم", "الأخذ_بالملاحظات"];
+    //
+    // 🔴 أغلق_طلب_الصلح AND تحديد_تاريخ_التقادم ADDED (owner ruling). Both are
+    // unambiguously the lawyer's turn, established from the transition table
+    // rather than from the stage names:
+    //   • أغلق_طلب_الصلح — settlement is over and the case must now be taken to
+    //     court. ALL FOUR outbound edges admit assigned_lawyer (→ منظورة,
+    //     → قيد_التدقيق_في_ناجز, → قيد_التدقيق_في_معين, → تحرير_صحيفة_الدعوى).
+    //     The owner framed this as "when we are the PLAINTIFF", and that
+    //     condition needs no expression here because it is satisfied BY
+    //     CONSTRUCTION: a defendant case can never reach this stage. When the
+    //     client is مدعى_عليه and settlement fails the case AUTO-CLOSES to مقفلة
+    //     with closureReason لم_يتم_الصلح and no choice dialog — only the
+    //     plaintiff branch is offered "استكمال إجراءاتها", which is what leads
+    //     here. (Belt and braces: for an under-study case getClientRoleLabel
+    //     hard-returns "مدعي" before it ever reads the stored column, which is
+    //     force-nulled at creation for that classification.)
+    //   • تحديد_تاريخ_التقادم — a single-purpose intake step (record the
+    //     limitation date). Its one outbound edge, → استكمال_البيانات, admits
+    //     assigned_lawyer. It is in CaseStagesOrder but in NO path array, so the
+    //     progress bar cannot render it — a separate, known finding that this
+    //     does not touch and does not depend on.
+    //
+    // ⚠ مداولة_الصلح IS DELIBERATELY ABSENT. Owner ruling: the only thing owed at
+    // that stage is ATTENDING the settlement session, which hearing_attend already
+    // covers, so its 19 cases are correctly silent. Do not add it here.
+    const LAWYER_WORK_STAGES = ["استلام", "تحديد_تاريخ_التقادم", "دراسة", "تحرير_صيغة_التظلم", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "الأخذ_بالملاحظات", "أغلق_طلب_الصلح"];
     {
       // Wrapped rather than repeated per arm: the pause guard applies to all
       // three scopes identically, so applying it ONCE here makes it impossible
@@ -4395,7 +4420,7 @@ export class DatabaseStorage implements IStorage {
     // ⚠ NO LONGER MUTUALLY EXCLUSIVE WITH 1a/1b BY STAGE, and the old claim here
     // said it was. Dropping the stage term means a case that HAS a ruling and sits
     // on a drafting stage would emit both — reachable only by REOPENING a judged
-    // case onto one of the six LAWYER_WORK_STAGES (منظورة, where a quash-remand
+    // case onto one of the LAWYER_WORK_STAGES (منظورة, where a quash-remand
     // lands, is not among them). If it happens both statements are true — the case
     // is being worked AND its صك is outstanding — and the id prefixes are distinct,
     // so nothing collides. Still mutually exclusive with 1d, which requires the
