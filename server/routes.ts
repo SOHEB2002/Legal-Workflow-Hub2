@@ -613,6 +613,25 @@ function canModifyConsultation(user: CaseActorIdentity, consultation: any, ctx?:
 // validateStageTransition) and the dedicated /internal-review reviewer guard
 // stay HUMAN. The dedicated committee/take-notes role gates are left un-expanded
 // (deferred with the requireRole role-gate pass).
+// A legal deadline's authority is ENTIRELY its parent case's — the table has no
+// assignee, no creator column and no department of its own. So this is just
+// canModifyCase(parent), with the parent resolved and BOTH unresolvable states
+// answering false: a falsy caseId (unreachable — the column is notNull and the
+// insert schema is .min(1)) and a case that will not load (an orphan surviving
+// on a DB without the CASCADE FK). The old inline gate treated both as PASS.
+// Extracted rather than written twice because PATCH and DELETE must agree; two
+// copies of a fail-closed rule is how one of them later stops being one.
+async function canModifyDeadlineParentCase(
+  user: CaseActorIdentity,
+  deadline: { caseId: string | null },
+  ctx: ActingContext | undefined,
+): Promise<boolean> {
+  if (!deadline.caseId) return false;
+  const parentCase = await storage.getCaseById(deadline.caseId);
+  if (!parentCase) return false;
+  return canModifyCase(user, parentCase, ctx);
+}
+
 async function canActOnMemo(
   user: CaseActorIdentity,
   memo: any,
@@ -15528,12 +15547,52 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/contact-logs/:id", requireAuth, async (req, res) => {
+  // 🔴 WAS requireAuth AND NOTHING ELSE — a full IDOR. The handler spread the
+  // body straight into updateContactLog, so ANY authenticated non-viewer could
+  // rewrite ANY contact log in the firm: the client it names, its dates, its
+  // notes, its follow-up state. Found during the المهام-tab investigation; not
+  // caused by it, and reachable today with no tab and no UI.
+  //
+  // THE PREDICATE IS ASSEMBLED FROM SHAPES THAT ALREADY EXIST HERE, not invented:
+  //   1. the CREATOR — contact_logs has no assignee; `created_by` is the only
+  //      ownership column it has, and it is exactly what مهامي already treats as
+  //      ownership (getMyTasks block 11 filters `eq(contactLogs.createdBy, uid)`,
+  //      commented "owner = createdBy"). The مهامي "إنهاء متابعة العميل" action
+  //      PATCHes this route, so arm 1 alone keeps that whole path working.
+  //   2. a MANAGER via canAssignFieldTasks (branch_manager | admin_support) —
+  //      the file's established management pair, reused rather than re-listed.
+  //      admin_support is in it because client contact IS their work; DELETE
+  //      stays branch_manager-only above, so this does not widen deletion.
+  //   3. anyone who can modify the LINKED CASE — the same `canModifyCase(parent)`
+  //      arm the field-task and legal-deadline gates use. case_id is NULLABLE on
+  //      this table (unlike legal_deadlines), so this arm is conditional by
+  //      necessity, and it FAILS CLOSED: a case-less log falls through to arms
+  //      1-2 rather than skipping the check (the exact bug fixed below).
+  //
+  // ⚠️ ONE LIVE PATH NARROWS, and it is called out in the batch report rather
+  // than hidden: clients.tsx renders a follow-up-complete button with NO client
+  // gate for every contact of any client the user opens, so a non-creator,
+  // non-manager acting on a CASE-LESS log now gets a 403 where they used to
+  // succeed. That is the IDOR, seen from the UI side. If it turns out to be a
+  // used workflow, the fix is to widen arm 3 — not to reopen the route.
+  app.patch("/api/contact-logs/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
       const bodyCheck = contactLogBodySchema.safeParse(req.body);
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const user = req.user!;
+      const existingLog = await storage.getContactLogById(String(req.params.id));
+      if (!existingLog) return res.status(404).json({ error: "سجل التواصل غير موجود" });
+      let mayEditLog =
+        existingLog.createdBy === user.id || canAssignFieldTasks(user.role);
+      if (!mayEditLog && existingLog.caseId) {
+        const parentCase = await storage.getCaseById(existingLog.caseId);
+        mayEditLog = !!parentCase && canModifyCase(user, parentCase, req.actingContext);
+      }
+      if (!mayEditLog) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       const updated = await storage.updateContactLog(String(req.params.id), req.body);
       if (!updated) {
@@ -17156,14 +17215,34 @@ export async function registerRoutes(
       }
       // Phase 5 A2/M2 — only someone who can modify the parent case may edit
       // its deadlines (was requireAuth-only IDOR).
+      //
+      // 🔴 THE GATE USED TO BE SKIPPABLE TWO WAYS, and both are closed here. It
+      // read `if (caseId) { if (targetCase && !canModifyCase(…)) 403 }`, so a
+      // falsy caseId skipped it entirely and a case that failed to load skipped
+      // it too — an unresolvable parent silently became "allowed". Both now FAIL
+      // CLOSED via resolveDeadlineParentCase.
+      //
+      // WHAT THOSE TWO STATES ACTUALLY ARE (checked, not assumed):
+      //   • caseId falsy — UNREACHABLE through any live route. The column is
+      //     `notNull()` (schema.ts:1330) AND insertLegalDeadlineSchema types it
+      //     `z.string().min(1)` (schema.ts:5291), so the create route 400s on a
+      //     missing or empty value before storage sees it, and the DB would
+      //     reject NULL regardless. LegalDeadline is $inferSelect, so `caseId` is
+      //     `string` — TypeScript never thought it could be null either. There is
+      //     no such thing as a case-less legal deadline and nobody legitimately
+      //     edits one; only a raw SQL insert of "" could manufacture it.
+      //   • targetCase falsy — an ORPHAN: the parent case was deleted. Batch M's
+      //     legal_deadlines_case_id_fkey is ON DELETE CASCADE, so this cannot
+      //     survive on a database that has the FK — but the FK is one of the
+      //     commented declarations that live only where apply-fk-constraints.sql
+      //     has been run, so a dev DB reset since the last run CAN hold orphans.
+      // Neither is a capability. Refusing both is the only honest answer: there
+      // is no case against which to evaluate authority, so authority is absent.
       const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
       if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
       const user = req.user!;
-      if (existingDeadline.caseId) {
-        const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
-          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-        }
+      if (!await canModifyDeadlineParentCase(user, existingDeadline, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       const deadline = await storage.updateLegalDeadline(String(req.params.id), req.body);
       if (!deadline) return res.status(404).json({ message: "موعد غير موجود" });
@@ -17178,14 +17257,13 @@ export async function registerRoutes(
       // Phase 5 A2/M2 — only someone who can modify the parent case may delete
       // its deadlines (was requireAuth-only IDOR; deletes also previously
       // returned success even for a non-existent id).
+      // Same two skippable holes as the PATCH above, closed the same way and for
+      // the same reasons — see that comment for what each state actually is.
       const existingDeadline = await storage.getLegalDeadlineById(String(req.params.id));
       if (!existingDeadline) return res.status(404).json({ message: "موعد غير موجود" });
       const user = req.user!;
-      if (existingDeadline.caseId) {
-        const targetCase = await storage.getCaseById(existingDeadline.caseId);
-        if (targetCase && !canModifyCase(user, targetCase, req.actingContext)) {
-          return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
-        }
+      if (!await canModifyDeadlineParentCase(user, existingDeadline, req.actingContext)) {
+        return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       }
       await storage.deleteLegalDeadline(String(req.params.id));
       res.json({ success: true });
