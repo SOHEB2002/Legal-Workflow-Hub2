@@ -739,19 +739,46 @@ async function autoArchiveClosedCases() {
   }
 }
 
-// Recurring Najiz-review reminder: while a case sits in "قيد_التدقيق_في_ناجز",
-// remind the responsible lawyer to verify the request status. The first reminder
-// fires 3 days after the case entered the stage, then recurs every 3 days. Once
-// the lawyer confirms the request was accepted — i.e. advances the case out of
-// this stage (to "منظورة") — any still-open reminders are auto-cancelled so they
-// stop recurring.
+// Recurring PLATFORM-review reminder: while a case sits at one of the three
+// "قيد_التدقيق_في_*" stages — ناجز, تراضي or معين — remind the responsible lawyer
+// to verify the request status on that platform. The first reminder fires 3 days
+// after the case entered the stage, then recurs every 3 days. Once the lawyer
+// confirms the request was accepted — i.e. advances the case out of the stage —
+// any still-open reminders are auto-cancelled so they stop recurring.
+//
+// The function name still says Najiz because ناجز was the only stage it covered
+// when it was written; renaming it would touch the cron registration and the
+// error string for no behavioural gain, so the docs carry the correction instead.
 async function checkNajizReviewReminders() {
   try {
     const allCases = await storage.getAllCases();
     const allTasks = await storage.getAllFieldTasks();
     const DAY = 24 * 60 * 60 * 1000;
     const now = Date.now();
-    const TITLE_KEY = "التأكد من حالة الطلب في ناجز";
+    // 🔴 THE THREE PLATFORM-REVIEW STAGES, not just ناجز. تراضي and معين had no
+    // reminder of any kind: a case parked at either sat there with nothing
+    // watching it, exactly as ناجز did before this job existed.
+    //
+    // The stage → platform-name map drives BOTH the title and the description, so
+    // a reminder always names the platform the lawyer has to go and check.
+    const REVIEW_STAGE_PLATFORMS: Record<string, string> = {
+      "قيد_التدقيق_في_ناجز": "ناجز",
+      "قيد_التدقيق_في_تراضي": "تراضي",
+      "قيد_التدقيق_في_معين": "معين",
+    };
+    // 🔴 THE TITLE KEY IS NOW THE PLATFORM-AGNOSTIC PREFIX, and it has to be.
+    // It used to be the full "التأكد من حالة الطلب في ناجز", which is how this
+    // job recognises its OWN previous reminders — there is no dedicated taskType.
+    // Emitting a تراضي reminder while still matching on the ناجز string would have
+    // broken the job in both directions at once: the 3-day recurrence guard would
+    // never find the previous reminder, so it would create a NEW ONE EVERY DAY,
+    // and the auto-cancel arm would never see them, so they would keep recurring
+    // after the case left the stage. A reminder that never cancels is worse than
+    // no reminder.
+    //
+    // The prefix is a strict prefix of the old string, so it still matches every
+    // ناجز reminder already sitting in production — no backfill, no orphans.
+    const TITLE_KEY = "التأكد من حالة الطلب في";
 
     // Group existing najiz reminders by case (title-matched — there is no
     // dedicated taskType for them) for O(1) lookup.
@@ -767,7 +794,12 @@ async function checkNajizReviewReminders() {
     for (const caseItem of allCases) {
       const reminders = remindersByCase.get(caseItem.id) ?? [];
 
-      if (caseItem.currentStage === "قيد_التدقيق_في_ناجز") {
+      // Set membership instead of one literal. The `else if` arm below — which
+      // cancels still-open reminders once the case LEAVES the stage — keys off
+      // this same condition, so widening it here widens the cancel automatically
+      // and the two halves cannot drift.
+      const reviewPlatform = REVIEW_STAGE_PLATFORMS[String(caseItem.currentStage ?? "")];
+      if (reviewPlatform) {
         const assignee = caseNotificationRecipientId(caseItem);
         if (!assignee) continue; // no responsible lawyer to remind
 
@@ -790,8 +822,11 @@ async function checkNajizReviewReminders() {
         if (dueForReminder) {
           await storage.createFieldTask(
             {
-              title: `التأكد من حالة الطلب في ناجز — قضية رقم ${caseItem.caseNumber}`,
-              description: `يرجى التأكد من حالة القيد/الطلب في منصة ناجز. يتكرّر هذا التذكير كل 3 أيام حتى يتم تحديث حالة القضية.`,
+              // Both strings name the platform from the stage. The title keeps the
+              // TITLE_KEY prefix byte-for-byte, which is what makes the recurrence
+              // guard and the auto-cancel find this row again.
+              title: `${TITLE_KEY} ${reviewPlatform} — قضية رقم ${caseItem.caseNumber}`,
+              description: `يرجى التأكد من حالة القيد/الطلب في منصة ${reviewPlatform}. يتكرّر هذا التذكير كل 3 أيام حتى يتم تحديث حالة القضية.`,
               taskType: "متابعة_محكمة",
               caseId: caseItem.id,
               assignedTo: assignee,
@@ -802,8 +837,20 @@ async function checkNajizReviewReminders() {
           );
         }
       } else if (reminders.length) {
-        // Case left najiz review (request accepted → advanced to منظورة, or closed):
-        // cancel any still-open reminders so they stop recurring.
+        // Case left platform review (request accepted → advanced on, or closed):
+        // cancel any still-open reminders so they stop recurring. This arm is the
+        // exact negation of the `if` above, so widening that condition widened
+        // this one too and all three stages are covered.
+        //
+        // ⚠ IT FIRES ONLY WHEN THE CASE IS AT NO REVIEW STAGE AT ALL. A case
+        // moving DIRECTLY from one review stage to another keeps the first
+        // platform's reminders open, and — because TITLE_KEY is now shared across
+        // the three — they also count toward the 3-day recurrence guard, so the
+        // new platform's first reminder can be delayed by up to 3 days. Accepted:
+        // ALLOWED_CASE_TRANSITIONS has no review→review edge (each is reached from
+        // أغلق_طلب_الصلح or مداولة_الصلح), so the path always passes through a
+        // non-review stage where this arm cancels. It is recorded because a future
+        // edge would make it reachable.
         for (const t of reminders) {
           if (t.status === "قيد_الانتظار" || t.status === "قيد_التنفيذ") {
             await storage.updateFieldTask(t.id, { status: "ملغي" });
