@@ -204,6 +204,20 @@ function getMemoDisplayStage(m: Memo): MemoStageValue | null {
   return (m.currentStage as MemoStageValue | null) ?? null;
 }
 
+// ===== STAGE-FILTER LABELS =====
+// 🔴 FILTER-ONLY — MemoStageLabels drives the per-row badge and is shared.
+// getMemoDisplayStage folds lifecycle state into two stage values, so those two
+// options select more than their name says:
+//   • مرفوعة ← every CANCELLED memo as well as every genuinely filed one.
+//   • تحرير  ← every PAUSED memo, at any real stage.
+// Labels below name every member, using only vocabulary already in this file
+// (ملغاة is MemoStatusLabels' own term and is offered as its own option too;
+// معلّقة is the pause wording used across the page).
+const STAGE_FILTER_LABEL: Record<string, string> = {
+  "مرفوعة": "مرفوعة أو ملغاة",
+  "تحرير": "تحرير أو معلّقة",
+};
+
 function getDeadlineColor(deadline: string): string {
   const days = differenceInDays(new Date(deadline), new Date());
   if (days < 0) return "text-destructive font-bold";
@@ -432,8 +446,14 @@ export default function MemosPage() {
   const [unpauseMemoNotes, setUnpauseMemoNotes] = useState("");
   const [pauseMemoInProgress, setPauseMemoInProgress] = useState(false);
 
+  // 🔴 ملغاة ADDED TO THE ACCEPTED DOMAIN. The validator listed MemoStage values
+  // only, but the dropdown has always offered ملغاة (MemoStatus.CANCELLED) as a
+  // deliberate status-axis option — so choosing it, navigating away and coming
+  // back silently discarded the selection as out-of-domain. Same defect class as
+  // the consultations persisted-filter bug fixed in 4e39695.
   const [filterStatus, setFilterStatus] = usePersistedFilter<string>(
-    "memos", "status", "all", oneOf(Object.values(MemoStage) as readonly string[], "all"),
+    "memos", "status", "all",
+    oneOf([...Object.values(MemoStage), MemoStatus.CANCELLED] as readonly string[], "all"),
   );
   // DEFAULT = the user's OWN department when they have one; "all" otherwise.
   const [filterDept, setFilterDept] = usePersistedFilter<string>(
@@ -450,7 +470,16 @@ export default function MemosPage() {
     "memos", "adv", EMPTY_MEMOS_ADV_FILTERS,
     objectLike(EMPTY_MEMOS_ADV_FILTERS, {
       memoTypes: Object.values(MemoType) as readonly string[],
-      statuses: Object.values(MemoStatus) as readonly string[],
+      // 🔴 THE WORST INSTANCE OF THIS DEFECT IN THE APP, and it was silent. The
+      // advanced "الحالة" control offers Object.values(MemoStage) + ملغاة (see
+      // memos-advanced-filters.tsx statusOptions) and the predicate below
+      // compares against the DISPLAY STAGE — but this validator accepted
+      // MemoStatus values. Those two enums INTERSECT IN ONE VALUE (مرفوعة), so
+      // six of the eight offered options (استلام / تحرير / مراجعة_داخلية /
+      // لجنة_مراجعة / الأخذ_بالملاحظات / جاهزة_للرفع) were thrown away as
+      // out-of-domain on every reload: pick one, navigate away, come back, gone.
+      // The accepted domain is now exactly what the control offers.
+      statuses: [...Object.values(MemoStage), MemoStatus.CANCELLED] as readonly string[],
     }),
   );
 
@@ -1177,6 +1206,37 @@ export default function MemosPage() {
   const overdueMemos = getOverdueMemos();
   const assignableUsers = users.filter(u => u.canBeAssignedCases && u.isActive);
 
+  // ===== THE الحالة OPTIONS, DERIVED FROM THE LOADED MEMOS =====
+  // Derived from getMemoDisplayStage — the very value the quick filter compares —
+  // so an option that matches nothing is impossible by construction.
+  //
+  // SAFE TO DERIVE: GET /api/memos returns every row (getAllMemos is a bare
+  // db.select with no LIMIT/OFFSET) and this page's paging is a client-side
+  // .slice(). Checked before writing.
+  //
+  // SCOPED TO NOTHING ELSE, deliberately — unlike the consultations page, where
+  // the TYPE filter genuinely determines which stages are reachable, a memo's
+  // stage does not depend on its type, department or assignee. Scoping to any of
+  // them would only create a way for one control to strand a live selection in
+  // another. The full loaded set is the honest domain here.
+  //
+  // ملغاة is NOT part of this list: the predicate matches it by STATUS, not by
+  // display stage (a cancelled memo displays as مرفوعة), so it is offered
+  // separately in the dropdown and gated on hasCancelledMemos by the same
+  // every-option-matches rule.
+  const stageFilterOptions = useMemo(() => {
+    const present = new Set<string>();
+    for (const m of memos) {
+      const ds = getMemoDisplayStage(m);
+      if (ds) present.add(ds);
+    }
+    return (Object.values(MemoStage) as string[]).filter((s) => present.has(s));
+  }, [memos]);
+  const hasCancelledMemos = useMemo(
+    () => memos.some((m) => m.status === MemoStatus.CANCELLED),
+    [memos],
+  );
+
   const filteredMemos = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
@@ -1337,10 +1397,20 @@ export default function MemosPage() {
                     "ملغاة" stays here as a special option that filters
                     by legacy status (orthogonal lifecycle, not a stage). */}
                 <SelectItem value="all">جميع الحالات</SelectItem>
-                {Object.entries(MemoStageLabels).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                {/* Options DERIVED from the loaded memos' DISPLAY stage — the
+                    same value this filter compares (getMemoDisplayStage) — so an
+                    option cannot fail to match. See stageFilterOptions. */}
+                {stageFilterOptions.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {STAGE_FILTER_LABEL[value] || MemoStageLabels[value as MemoStageValue] || value}
+                  </SelectItem>
                 ))}
-                <SelectItem value={MemoStatus.CANCELLED}>{MemoStatusLabels[MemoStatus.CANCELLED]}</SelectItem>
+                {/* ملغاة is matched by STATUS, not by display stage (the
+                    predicate branches on it), so it is offered separately and
+                    only when cancelled memos are actually present. */}
+                {hasCancelledMemos && (
+                  <SelectItem value={MemoStatus.CANCELLED}>{MemoStatusLabels[MemoStatus.CANCELLED]}</SelectItem>
+                )}
               </SelectContent>
             </Select>
             <Select value={filterDept} onValueChange={setFilterDept}>
