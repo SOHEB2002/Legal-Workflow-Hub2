@@ -61,7 +61,6 @@ import { useDepartments } from "@/lib/departments-context";
 import type {
   Consultation,
   ConsultationStageValue,
-  ConsultationTypeValue,
   InternalReviewDecisionValue,
   CommitteeDecisionValue,
   NoteOutcomeValue,
@@ -463,6 +462,47 @@ function getConsultationDisplayStage(c: Consultation): ConsultationStageValue {
   return c.currentStage;
 }
 
+// ===== STAGE-FILTER LABELS =====
+// 🔴 FILTER-ONLY. This does NOT touch ConsultationStageLabels, which drives the
+// per-row badge and is shared across the app — only the wording inside the
+// المرحلة dropdown.
+//
+// WHY IT IS NEEDED: getConsultationDisplayStage (directly above) deliberately
+// FOLDS lifecycle state into two stage values, so those two options select more
+// than their stage name says:
+//   • منجزة  ← every closed and every converted consultation, at ANY real stage,
+//              PLUS the ones genuinely sitting at منجزة. So a consultation closed
+//              while at جاهزة_للإرسال is selected by an option reading
+//              "جاهزة للإغلاق" — which is the opposite of true: it is already shut.
+//   • استكمال_المرفقات_والبيانات ← every PAUSED consultation, at any stage.
+// Both names described one member of the set and hid the rest. The labels below
+// name every member, using ONLY vocabulary the page already uses
+// (ConsultationStatusDisplayLabels: مقفلة / محولة لقضية / معلّقة) — nothing is
+// invented, and each row already carries the matching lifecycle pill, so the
+// dropdown and the table now say the same thing.
+const STAGE_FILTER_LABEL: Partial<Record<ConsultationStageValue, string>> = {
+  [ConsultationStage.COMPLETED]: "جاهزة للإغلاق أو مقفلة أو محولة",
+  [ConsultationStage.RECEIVED_PENDING_COMPLETION]: "استكمال المرفقات والبيانات أو معلّقة",
+};
+
+// Canonical ordering for the derived stage options. The workflow order, with the
+// two terminal buckets last — the raw ConsultationStagesAll could not be reused
+// because it places مغلقة (CLOSED_FINAL) mid-array, which put a terminal state
+// between تحرير and جاري العمل in the dropdown.
+const STAGE_FILTER_ORDER: ConsultationStageValue[] = [
+  ConsultationStage.RECEIVED,
+  ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  ConsultationStage.STUDY,
+  ConsultationStage.IN_PROGRESS,
+  ConsultationStage.DRAFTING,
+  ConsultationStage.INTERNAL_REVIEW,
+  ConsultationStage.COMMITTEE,
+  ConsultationStage.TAKING_NOTES,
+  ConsultationStage.READY,
+  ConsultationStage.COMPLETED,
+  ConsultationStage.CLOSED_FINAL,
+];
+
 function getConsultationDisplayBadge(c: Consultation): { label: string; className: string } {
   const stage = getConsultationDisplayStage(c);
   return {
@@ -833,7 +873,14 @@ export default function ConsultationsPage() {
     { ...EMPTY_CONSULTATIONS_FILTERS, departmentId: user?.departmentId || "" },
     (raw) => {
       const shaped = objectLike(EMPTY_CONSULTATIONS_FILTERS, {
-        stages: ConsultationStagesAll as readonly string[],
+        // 🔴 EVERY stage value, not ConsultationStagesAll — the THIRD site with
+        // the raw-enum-vs-display-stage mismatch, and it would have quietly
+        // undone the fix. ConsultationStagesAll omits منجزة (COMPLETED) and
+        // جاري_العمل (IN_PROGRESS), so a saved filter naming either was rejected
+        // as out-of-domain on the next load: the user picks منجزة, navigates
+        // away, comes back and the selection is gone. Object.values covers the
+        // whole enum, which is the honest domain for a persisted stage value.
+        stages: Object.values(ConsultationStage) as readonly string[],
         consultationTypes: Object.values(ConsultationType) as readonly string[],
       })(raw);
       return shaped === undefined ? undefined : { ...shaped, search: "" };
@@ -890,23 +937,70 @@ export default function ConsultationsPage() {
   // لجنة_مراجعة), drop any selected stages that are no longer valid so
   // an invisible filter doesn't keep constraining results. Mirrors the
   // advanced-filter prune effect in consultations-advanced-filters.tsx.
+  // ===== THE المرحلة OPTIONS, DERIVED FROM THE LOADED CONSULTATIONS =====
+  // 🔴 DERIVED FROM THE VERY VALUE THE FILTER COMPARES — getConsultationDisplayStage
+  // — so an option that matches nothing is impossible BY CONSTRUCTION rather than
+  // by anyone remembering to keep two lists in step.
+  //
+  // WHAT IT REPLACES, and the bug it kills: the options used to come from the raw
+  // stage enum (ConsultationStagesAll + IN_PROGRESS + COMPLETED) while the
+  // predicate compared the DISPLAY stage. The two disagreed, and مغلقة was DEAD —
+  // reaching that stage flips status to 'closed' in the same operation
+  // (routes.ts, the CLOSED_FINAL transition comment), and a closed consultation
+  // displays as منجزة, so no row could ever display as مغلقة. Selecting it always
+  // returned an empty list.
+  //
+  // SAFE TO DERIVE: GET /api/consultations returns every row the user may see —
+  // getAllConsultations is a bare `db.select().from(consultations)` with no LIMIT
+  // or OFFSET, and this page's paging is a client-side `.slice()`. So the options
+  // cover the whole visible set, not just the current page. (Checked before
+  // writing this — a paginated source would have made derived options silently
+  // incomplete, which is worse than the visible defect it replaces.)
+  //
+  // SCOPED BY THE TYPE FILTER, so the two COMPOSE instead of contradicting.
+  // Previously choosing مكتوبة narrowed the list to that path's RAW stages, which
+  // ends at مغلقة and excludes منجزة — while every closed written consultation
+  // displays as منجزة. The result was a type+stage combination with NO option
+  // that could match it. Deriving from the type-scoped rows makes that
+  // unreachable. Scoped by type ONLY, deliberately: scoping by department or
+  // lawyer as well would let a later change to those controls strand an already
+  // chosen stage, and type is the one facet that genuinely determines which
+  // stages a consultation can reach.
+  const stageFilterOptions = useMemo(() => {
+    const scoped = advFilters.consultationTypes.length > 0
+      ? consultations.filter((c) =>
+          advFilters.consultationTypes.includes(resolveConsultationType(c.consultationType)))
+      : consultations;
+    const present = new Set<ConsultationStageValue>();
+    for (const c of scoped) present.add(getConsultationDisplayStage(c));
+    return STAGE_FILTER_ORDER.filter((s) => present.has(s));
+  }, [consultations, advFilters.consultationTypes]);
+
+  // 🔴 THE PRUNE NOW SHARES stageFilterOptions — THE SAME LIST THE DROPDOWN
+  // RENDERS — and that is required, not tidying. It used to build its own
+  // `allowed` set from the RAW stage enum, which after the derivation change
+  // would have DEFEATED the fix: منجزة is absent from WRITTEN's raw stage list,
+  // so the moment a user picked it (legitimately — every closed written
+  // consultation displays as منجزة) this effect would have seen it as invalid and
+  // silently wiped the selection. The filter would have looked broken in a new
+  // way. One list, one source of truth, no drift possible.
+  //   ⚠ The two lists were ALREADY inconsistent before this: the dropdown
+  //   appended COMPLETED while this prune appended CLOSED_FINAL.
+  //
+  // The empty guard matters: `consultations` is [] on first paint, so without it
+  // the derived set would be empty and this would clear a stage that a DEEP LINK
+  // had just set (?status=pending_review sets COMMITTEE in the effect above)
+  // before any data arrived.
   useEffect(() => {
-    const allowed = new Set<string>(
-      advFilters.consultationTypes.length === 1
-        ? getConsultationStagesForType(advFilters.consultationTypes[0] as ConsultationTypeValue)
-        : [
-            ...ConsultationStagesAll,
-            ConsultationStage.IN_PROGRESS,
-            ConsultationStage.CLOSED_FINAL,
-          ],
-    );
+    if (consultations.length === 0) return;
+    const allowed = new Set<string>(stageFilterOptions);
     if (advFilters.stages.some((s) => !allowed.has(s))) {
       setAdvFilters((prev) => ({
         ...prev,
         stages: prev.stages.filter((s) => allowed.has(s)),
       }));
     }
-  }, [advFilters.consultationTypes, advFilters.stages]);
+  }, [consultations.length, stageFilterOptions, advFilters.stages]);
 
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
 
@@ -2360,25 +2454,18 @@ export default function ConsultationsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل المراحل</SelectItem>
-                  {/* When exactly one type is selected, scope the stage
-                      list to that type's flow. Otherwise show the full
-                      cross-type list: ConsultationStagesAll already ends
-                      with CLOSED_FINAL (WRITTEN's terminal), so we only
-                      append the PHONE/PROCEDURAL-exclusive stages not in
-                      it — IN_PROGRESS (procedural) and COMPLETED
-                      ("جاهزة للإغلاق", phone/procedural pre-closure).
-                      CLOSED_FINAL is NOT re-appended (would duplicate the
-                      React key). */}
-                  {(advFilters.consultationTypes.length === 1
-                    ? getConsultationStagesForType(advFilters.consultationTypes[0] as ConsultationTypeValue)
-                    : [
-                        ...ConsultationStagesAll,
-                        ConsultationStage.IN_PROGRESS,
-                        ConsultationStage.COMPLETED,
-                      ]
-                  ).map((s) => (
+                  {/* Options are now DERIVED from the loaded consultations'
+                      DISPLAY stage (stageFilterOptions above) — the same value
+                      this filter compares against — instead of from the raw
+                      stage enum. That removes the dead مغلقة option and the
+                      type+stage combination that had no matching option; see the
+                      derivation for the full reasoning.
+                      STAGE_FILTER_LABEL overrides the wording for the two
+                      display stages that bundle lifecycle state, so each option
+                      names everything it selects. */}
+                  {stageFilterOptions.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {ConsultationStageLabels[s] || s}
+                      {STAGE_FILTER_LABEL[s] || ConsultationStageLabels[s] || s}
                     </SelectItem>
                   ))}
                 </SelectContent>
