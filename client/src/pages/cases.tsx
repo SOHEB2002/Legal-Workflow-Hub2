@@ -135,9 +135,26 @@ import { ReviewChecklist } from "@/components/review-checklist";
 import {
   CasesAdvancedFilters,
   EMPTY_ADV_FILTERS,
-  getFilterStages,
   type AdvancedCasesFilters,
 } from "@/components/cases-advanced-filters";
+
+// ===== STAGE-FILTER LABELS =====
+// 🔴 FILTER-ONLY. CaseStageLabels drives the per-row badge and is shared
+// app-wide; only the wording inside the المرحلة dropdown is overridden here.
+//
+// getCaseDisplayStage FOLDS lifecycle state into two stage values, so those two
+// options select more than their stage name says:
+//   • استكمال_البيانات ← every PAUSED case, at any real stage, plus the ones
+//                        genuinely at that stage.
+//   • مقفلة           ← every ARCHIVED case as well as every closed one.
+// Both names described one member of the set and hid the rest. The labels below
+// name every member using vocabulary already on this page (the معلّقة pill on
+// each paused row, and مؤرشفة which is a stage label in its own right), so the
+// dropdown and the table now agree. Nothing is invented.
+const STAGE_FILTER_LABEL: Record<string, string> = {
+  "استكمال_البيانات": "استكمال البيانات أو معلّقة",
+  "مقفلة": "مقفلة أو مؤرشفة",
+};
 
 function getStageColor(stage: CaseStageValue | string) {
   switch (stage) {
@@ -1153,20 +1170,55 @@ export default function CasesPage() {
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap]);
 
   const basicAllowedStages = useMemo(() => {
-    // "منتهية" is not a CaseClassification, so it must not be fed to
-    // getFilterStages — it would match no classification and return an empty
-    // stage list, emptying the STAGE dropdown whenever منتهية is selected.
-    // Treated as "no classification constraint": the stage dropdown keeps
-    // offering every stage, and the concluded filter does its own narrowing.
-    const cls = classificationFilter !== "all" && classificationFilter !== CONCLUDED_FILTER_VALUE
-      ? [classificationFilter]
-      : [];
-    const deptName = deptFilter !== "all"
-      ? departments.find((d) => String(d.id) === deptFilter)?.name
-      : undefined;
-    const deptNames = deptName ? [deptName] : [];
-    return getFilterStages(cls, deptNames);
-  }, [classificationFilter, deptFilter, departments]);
+    // ⚠ getFilterStages IS NO LONGER CALLED HERE, and with it goes the "منتهية is
+    // not a CaseClassification" workaround it needed — that guard existed only to
+    // stop the path lookup returning an empty list and emptying the dropdown.
+    // Deriving from the rows themselves has no such failure mode: منتهية narrows
+    // the scoped set like any other value and the stages present in it are what
+    // gets offered.
+    // 🔴 DERIVED FROM THE LOADED CASES' DISPLAY STAGE — the same value the filter
+    // COMPARES (matchesStatus / matchesAdvStage both test getCaseDisplayStage) —
+    // intersected with the path-based list rather than taking it wholesale.
+    //
+    // WHY: the path list and the compared value disagreed, exactly as they did on
+    // the consultations page (fixed in 4e39695), and it broke both ways:
+    //   • مؤرشفة was a NEAR-DEAD option. getCaseDisplayStage returns مقفلة for an
+    //     archived case, so no row can display as مؤرشفة; picking it returned an
+    //     empty list.
+    //   • WORSE, and the mirror of the consultations type+stage trap: getFilterStages
+    //     returns PATH arrays once a classification or department is chosen, and
+    //     مقفلة is in NO path array. So narrowing by department made مقفلة vanish
+    //     from the list — and the prune effect below then CLEARED a live مقفلة
+    //     selection — even though every closed case in that department displays
+    //     as exactly that. Closed cases became unfilterable the moment you picked
+    //     a department.
+    // Intersecting with what is actually on the page fixes both at once: an
+    // option cannot fail to match, and a stage that IS present cannot be missing.
+    //
+    // SAFE TO DERIVE: GET /api/cases returns every row the user may see
+    // (getAllCases is a bare db.select with no LIMIT/OFFSET) and this page's
+    // paging is a client-side .slice(). Checked before writing.
+    //
+    // SCOPED TO CLASSIFICATION + DEPARTMENT ONLY — the same two facets that
+    // already scoped this list, and the two that genuinely determine which stages
+    // a case can reach. Deliberately NOT scoped to the lawyer or search filters:
+    // those would let an unrelated change strand a live stage selection, which is
+    // the reasoning applied to the consultations type filter.
+    const scoped = cases.filter((c) => {
+      if (deptFilter !== "all" && c.departmentId !== deptFilter) return false;
+      if (classificationFilter === "all") return true;
+      const concluded = isCaseConcluded(c);
+      return classificationFilter === CONCLUDED_FILTER_VALUE
+        ? concluded
+        : c.caseClassification === classificationFilter && !concluded;
+    });
+    const present = new Set<string>(scoped.map((c) => getCaseDisplayStage(c) as string));
+    // Ordered by CaseStagesOrder, the canonical enum order, so the dropdown still
+    // reads as the workflow does. The path list is no longer consulted at all:
+    // intersecting with it would have re-introduced the مقفلة hole, since مقفلة
+    // is in no path array yet is a legitimate display stage for every closed case.
+    return (CaseStagesOrder as unknown as string[]).filter((s) => present.has(s));
+  }, [cases, classificationFilter, deptFilter, departments]);
 
   const departmentFilteredLawyers = useMemo(() => {
     if (deptFilter === "all") return filterLawyers;
@@ -1472,7 +1524,9 @@ export default function CasesPage() {
                 <SelectItem value="all">جميع المراحل</SelectItem>
                 {basicAllowedStages.map((stage) => (
                   <SelectItem key={stage} value={stage}>
-                    {CaseStageLabels[stage as keyof typeof CaseStageLabels] || stage}
+                    {STAGE_FILTER_LABEL[stage]
+                      || CaseStageLabels[stage as keyof typeof CaseStageLabels]
+                      || stage}
                   </SelectItem>
                 ))}
               </SelectContent>
