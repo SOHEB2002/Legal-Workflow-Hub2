@@ -1367,7 +1367,20 @@ export default function MyTasksPage() {
   // WHAT IS GENUINELY LOST, stated plainly rather than approximated: the
   // department-level COLLAPSE and the department-level AGGREGATE COUNT. There is
   // no member card to hang either on.
-  const rosterMembers: { id: string; name: string; deptLabel: string }[] = isBranchManager
+  // 🔴 admin_support TAKES THE BRANCH_MANAGER ROSTER, and this branch is REQUIRED
+  // rather than cosmetic. The server now tags admin_support's feed with
+  // ownerScope:"team", so the team region renders for them — but this derivation
+  // only had branches for branch_manager and department_head, and admin_support
+  // is neither. They would have fallen through to `[]`, i.e. an EMPTY roster
+  // while team tasks exist, and every one of those tasks would then have been
+  // swept into leftoverMembers — the أعضاء آخرون fallback — appearing as a flat
+  // list of unlabelled member cards with no department names and no zero-task
+  // members. The tasks would still be reachable, so nothing would break loudly;
+  // the roster would simply be silently wrong for the one role that just gained
+  // it. Sharing the firm-wide branch keeps the client scoped exactly as the
+  // server is, which is the property the whole roster is built on.
+  const isFirmWideViewer = isBranchManager || isAdminSupport;
+  const rosterMembers: { id: string; name: string; deptLabel: string }[] = isFirmWideViewer
     ? [
         ...departments.flatMap((d) =>
           rosterCandidates
