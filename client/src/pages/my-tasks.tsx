@@ -197,6 +197,12 @@ const TASK_CARDS = [
 
 type TaskCardKey = typeof TASK_CARDS[number]["key"];
 
+// The department filter's sentinel for "this record belongs to no department".
+// A literal rather than "" because Radix SelectItem rejects an empty value, and
+// distinct from "all" so the two cannot be confused. Prefixed so it can never
+// collide with a real departmentId.
+const NO_DEPARTMENT = "__none__";
+
 // The card grid. ONE constant so every place cards are laid out stays in step.
 //
 // TWO COLUMNS FROM lg (1024px), one below it. Not md (768px): a half-width card
@@ -862,6 +868,12 @@ export default function MyTasksPage() {
   // they have sat unmoved, so this toggle reaches most of the feed rather than
   // the dated slice of it.
   const [overdueOnly, setOverdueOnly] = useState(false);
+  // The department filter. "all" | a departmentId | NO_DEPARTMENT.
+  // Keyed on the RECORD's department, stamped server-side (MyTaskItem.departmentId)
+  // — deriving it from the owner client-side was rejected: admin_support has no
+  // department and the unassigned pool has no owner, so both would have dropped
+  // out of the filter entirely.
+  const [deptFilter, setDeptFilter] = useState<string>("all");
 
   // Active action dialog
   const [actionTask, setActionTask] = useState<MyTaskItem | null>(null);
@@ -1259,6 +1271,22 @@ export default function MyTasksPage() {
     .sort((a, b) => a.localeCompare(b, "ar"));
   const clientOptions = Array.from(new Set(specialtyScoped.map((t) => t.clientName).filter((n): n is string => !!n)))
     .sort((a, b) => a.localeCompare(b, "ar"));
+  // 🔴 DERIVED FROM THE LOADED TASKS, NOT FROM THE DEPARTMENTS LIST — the same
+  // rule as every other filter here, and for the same reason: every option is
+  // then guaranteed to match something. Offering all five departments would let
+  // a user pick one that empties the page, which is exactly the dead end the
+  // "لا توجد نتائج مطابقة" state had to be invented for.
+  // The departments CONTEXT is still used, but only to resolve id → NAME; it
+  // never contributes options of its own. An id with no matching department row
+  // falls back to the raw id rather than disappearing.
+  const deptOptions = Array.from(new Set(
+    specialtyScoped.map((t) => t.departmentId).filter((id): id is string => !!id)))
+    .map((id) => ({ id, name: departments.find((d) => d.id === id)?.name || id }))
+    .sort((a, b) => a.name.localeCompare(b.name, "ar"));
+  // Shown ONLY when something actually has no department — same
+  // every-option-matches rule. Delegations and case-less general tasks live
+  // here; without it they would be unreachable once the filter is used.
+  const hasNoDeptTasks = specialtyScoped.some((t) => !t.departmentId);
 
   // ----- Apply search + filters, GLOBALLY, before the cards are built -----
   // Not per-card: one predicate over the whole feed, and a card that ends up
@@ -1272,11 +1300,17 @@ export default function MyTasksPage() {
     // AND, not OR — the two compose, which is the point of splitting them.
     if (caseFilter !== "all" && t.caseNumber !== caseFilter) return false;
     if (clientFilter !== "all" && t.clientName !== clientFilter) return false;
+    if (deptFilter === NO_DEPARTMENT) {
+      if (t.departmentId) return false;
+    } else if (deptFilter !== "all" && t.departmentId !== deptFilter) {
+      return false;
+    }
     if (overdueOnly && !t.isOverdue) return false;
     return true;
   });
   const isFiltering = !!needle || typeFilter !== "all"
-    || caseFilter !== "all" || clientFilter !== "all" || overdueOnly;
+    || caseFilter !== "all" || clientFilter !== "all"
+    || deptFilter !== "all" || overdueOnly;
 
   // OWN AND TEAM DO NOT MIX (owner ruling): the six own cards render first, then
   // a separated team region with its own six. ownerScope is server-computed —
@@ -1623,6 +1657,20 @@ export default function MyTasksPage() {
             {clientOptions.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
           </SelectContent>
         </Select>
+        {/* القسم — the RECORD's department, from the server-stamped
+            MyTaskItem.departmentId. Rendered only when the loaded feed actually
+            spans something to choose between: with one department and no
+            department-less tasks the control could only ever be a no-op. */}
+        {(deptOptions.length > 1 || (deptOptions.length === 1 && hasNoDeptTasks)) && (
+          <Select value={deptFilter} onValueChange={setDeptFilter}>
+            <SelectTrigger className="w-[160px]" data-testid="select-dept-filter"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">كل الأقسام</SelectItem>
+              {deptOptions.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+              {hasNoDeptTasks && <SelectItem value={NO_DEPARTMENT}>بدون قسم</SelectItem>}
+            </SelectContent>
+          </Select>
+        )}
         {/* The overdue toggle. A Button whose variant flips, NOT a new Toggle /
             Switch / Checkbox: this row is built from Input + Select + Button and
             Button is already imported, so a variant swap adds no visual language.
@@ -1651,7 +1699,8 @@ export default function MyTasksPage() {
               // NOT reset — it lives in the page header, is admin_support-only,
               // and was never cleared by مسح before this batch either.
               setSearch(""); setTypeFilter("all");
-              setCaseFilter("all"); setClientFilter("all"); setOverdueOnly(false);
+              setCaseFilter("all"); setClientFilter("all");
+              setDeptFilter("all"); setOverdueOnly(false);
             }}
             data-testid="button-clear-filters"
           >

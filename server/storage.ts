@@ -6208,8 +6208,18 @@ export class DatabaseStorage implements IStorage {
     const caseIdentities = await this.getCaseIdentitiesForFeed(
       Array.from(new Set(merged.map((t) => t.caseId).filter((id): id is string => !!id))),
     );
+    // The consultation/contract sibling pass. Both id lists are collected from
+    // the SAME merged set, so the two lookups add no traversal of their own, and
+    // each query is skipped when its list is empty.
+    const recordIdentities = await this.getRecordIdentitiesForFeed(
+      Array.from(new Set(merged.filter((t) => t.entityType === "consultation").map((t) => t.entityId))),
+      Array.from(new Set(merged.filter((t) => t.entityType === "contract").map((t) => t.entityId))),
+    );
     return merged.map((t) => {
       const identity = t.caseId ? caseIdentities.get(t.caseId) : undefined;
+      const record = t.entityType === "consultation" || t.entityType === "contract"
+        ? recordIdentities.get(`${t.entityType}:${t.entityId}`)
+        : undefined;
       return {
         ...t,
         specialtyClass: taskSpecialtyClass(t.entityType, t.caseId),
@@ -6217,8 +6227,14 @@ export class DatabaseStorage implements IStorage {
         // ?? (not ||) so a name an emission block already resolved from its own
         // link wins — the contact-follow-up client is the LOG's client, which is
         // not necessarily the client of the case the log happens to reference.
-        clientName: t.clientName ?? identity?.clientName,
+        // The record pass comes LAST for the same reason: it is the fallback for
+        // the two entity types the case pass structurally cannot reach.
+        clientName: t.clientName ?? identity?.clientName ?? record?.clientName,
         opponentName: t.opponentName ?? identity?.opponentName,
+        // Case-linked items resolve through the case; consultations and contracts
+        // through their own row; everything else (delegations, case-less general
+        // tasks) is legitimately null and gets the filter's "بدون قسم" option.
+        departmentId: identity?.departmentId ?? record?.departmentId ?? null,
       };
     });
   }
@@ -6229,11 +6245,15 @@ export class DatabaseStorage implements IStorage {
   // columns collapse to undefined so the FE renders only what exists.
   private async getCaseIdentitiesForFeed(
     caseIds: string[],
-  ): Promise<Map<string, { caseNumber: string; clientName?: string; opponentName?: string }>> {
-    const byCaseId = new Map<string, { caseNumber: string; clientName?: string; opponentName?: string }>();
+  ): Promise<Map<string, { caseNumber: string; clientName?: string; opponentName?: string; departmentId: string | null }>> {
+    const byCaseId = new Map<string, { caseNumber: string; clientName?: string; opponentName?: string; departmentId: string | null }>();
     if (caseIds.length === 0) return byCaseId; // inArray([]) is not a valid predicate
     const rows = await db.select({
       id: lawCases.id, caseNumber: lawCases.caseNumber, opponentName: lawCases.opponentName,
+      // The department filter's key for every case-linked item. FREE: this query
+      // already reads law_cases, so it is one more column on an existing SELECT
+      // — no join and no extra statement.
+      departmentId: lawCases.departmentId,
       clientType: clients.clientType, clientIndividualName: clients.individualName,
       clientCompanyName: clients.companyName,
     })
@@ -6245,9 +6265,77 @@ export class DatabaseStorage implements IStorage {
         caseNumber: r.caseNumber,
         clientName: clientDisplayName(r) || undefined,
         opponentName: r.opponentName?.trim() || undefined,
+        departmentId: r.departmentId ?? null,
       });
     }
     return byCaseId;
+  }
+
+  // The sibling of getCaseIdentitiesForFeed for the two entity types that are
+  // NOT reached through a case: consultations and contracts. Both carry their own
+  // department and their own client, so neither can be resolved by the case pass
+  // above — their feed items have caseId null by construction.
+  //
+  // 🔴 THIS ALSO CLOSES THE clientName GAP, which is why it does both fields
+  // rather than only the department. Until now clientName was stamped ONLY from
+  // the case pass, so a client's consultation and contract tasks were invisible
+  // to the client filter and to a search on the client's name — they simply had
+  // no name on them. Resolving it here costs NOTHING extra: the row must be read
+  // for its department anyway, and the client join is the same leftJoin idiom.
+  //
+  // ✅ BOTH ENTITIES GENUINELY HAVE A CLIENT — checked, not assumed:
+  // consultations.client_id and contracts.client_id are both varchar NOT NULL, as
+  // are both department_id columns. So neither field is a best-effort guess, and
+  // neither is left silently empty. (The join stays a leftJoin so a dangling id
+  // yields no name rather than dropping the row and its department with it.)
+  //
+  // COST: at most TWO extra statements per feed read, each a single indexed IN
+  // lookup, and each SKIPPED entirely when the feed holds none of that entity
+  // type — a lawyer with no consultation tasks pays for neither. That ceiling is
+  // deliberate: this method is polled every 30s per user, and eight queries per
+  // read is exactly what got feed blocks 20/21 deleted.
+  //
+  // Keyed "<entityType>:<id>" rather than by bare id: the two id spaces are
+  // distinct tables, and prefixing makes a collision impossible by construction
+  // instead of by assumption.
+  private async getRecordIdentitiesForFeed(
+    consultationIds: string[],
+    contractIds: string[],
+  ): Promise<Map<string, { clientName?: string; departmentId: string | null }>> {
+    const byKey = new Map<string, { clientName?: string; departmentId: string | null }>();
+    if (consultationIds.length > 0) {
+      const rows = await db.select({
+        id: consultations.id, departmentId: consultations.departmentId,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      })
+        .from(consultations)
+        .leftJoin(clients, eq(consultations.clientId, clients.id))
+        .where(inArray(consultations.id, consultationIds));
+      for (const r of rows) {
+        byKey.set(`consultation:${r.id}`, {
+          clientName: clientDisplayName(r) || undefined,
+          departmentId: r.departmentId ?? null,
+        });
+      }
+    }
+    if (contractIds.length > 0) {
+      const rows = await db.select({
+        id: contracts.id, departmentId: contracts.departmentId,
+        clientType: clients.clientType, clientIndividualName: clients.individualName,
+        clientCompanyName: clients.companyName,
+      })
+        .from(contracts)
+        .leftJoin(clients, eq(contracts.clientId, clients.id))
+        .where(inArray(contracts.id, contractIds));
+      for (const r of rows) {
+        byKey.set(`contract:${r.id}`, {
+          clientName: clientDisplayName(r) || undefined,
+          departmentId: r.departmentId ?? null,
+        });
+      }
+    }
+    return byKey;
   }
 
   async markSectionViewed(userId: string, section: SidebarSectionValue): Promise<void> {
