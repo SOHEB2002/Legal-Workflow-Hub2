@@ -939,14 +939,18 @@ export default function MyTasksPage() {
   // already-loaded feed — no new request, no server field.
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
-  // 🔴 SPLIT (owner ruling) — القضية and العميل are now TWO independent controls,
-  // where they used to be one "القضية أو العميل" select holding both option sets
-  // behind "case:" / "client:" value prefixes. They COMPOSE: choosing a case and
-  // a client narrows to tasks matching both, which the single control could not
-  // express at all — its value was one string, so picking a client REPLACED the
-  // chosen case. The prefix parsing (split(":") + rejoin) is gone with it; each
-  // select now holds raw values.
-  const [caseFilter, setCaseFilter] = useState<string>("all");
+  // ⚠ THE القضية FILTER WAS REMOVED (owner, after seeing it on screen), which
+  // SUPERSEDES the batch-7.5 ruling that split "القضية أو العميل" into two
+  // controls. That split still stands for العميل — this is not a return to the
+  // combined control, and the "case:" / "client:" prefix parsing does NOT come
+  // back. Only the القضية half is gone.
+  //
+  // Nothing is lost that the page cannot already do: the SEARCH box matches
+  // task.caseNumber (taskMatchesSearch reads it directly), so typing a case
+  // number still narrows to that case — and the server composes the number into
+  // every case-linked title, so it matches there too. What goes is one dropdown
+  // that could hold hundreds of options on a firm-wide feed, which is exactly the
+  // control that got least use for the most width.
   const [clientFilter, setClientFilter] = useState<string>("all");
   // The overdue toggle — a boolean, not a select, because it has exactly two
   // meaningful states ("everything" / "only the late ones") and a third
@@ -1357,8 +1361,6 @@ export default function MyTasksPage() {
   // — from specialtyScoped, so choosing a case does not shorten the client list
   // (and vice versa) and neither can strand the other on an option that no
   // longer matches anything.
-  const caseOptions = Array.from(new Set(specialtyScoped.map((t) => t.caseNumber).filter((n): n is string => !!n)))
-    .sort((a, b) => a.localeCompare(b, "ar"));
   const clientOptions = Array.from(new Set(specialtyScoped.map((t) => t.clientName).filter((n): n is string => !!n)))
     .sort((a, b) => a.localeCompare(b, "ar"));
   // 🔴 DERIVED FROM THE LOADED TASKS, NOT FROM THE DEPARTMENTS LIST — the same
@@ -1387,8 +1389,6 @@ export default function MyTasksPage() {
   const visible = specialtyScoped.filter((t) => {
     if (!taskMatchesSearch(t, needle, userName(t.ownerId))) return false;
     if (typeFilter !== "all" && taskTypeKey(t) !== typeFilter) return false;
-    // AND, not OR — the two compose, which is the point of splitting them.
-    if (caseFilter !== "all" && t.caseNumber !== caseFilter) return false;
     if (clientFilter !== "all" && t.clientName !== clientFilter) return false;
     if (deptFilter === NO_DEPARTMENT) {
       if (t.departmentId) return false;
@@ -1399,8 +1399,7 @@ export default function MyTasksPage() {
     return true;
   });
   const isFiltering = !!needle || typeFilter !== "all"
-    || caseFilter !== "all" || clientFilter !== "all"
-    || deptFilter !== "all" || overdueOnly;
+    || clientFilter !== "all" || deptFilter !== "all" || overdueOnly;
 
   // OWN AND TEAM DO NOT MIX (owner ruling): the six own cards render first, then
   // a separated team region with its own six. ownerScope is server-computed —
@@ -1746,13 +1745,6 @@ export default function MyTasksPage() {
             {typeOptions.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={caseFilter} onValueChange={setCaseFilter}>
-          <SelectTrigger className="w-[180px]" data-testid="select-case-filter"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">كل القضايا</SelectItem>
-            {caseOptions.map((n) => <SelectItem key={n} value={n}>{`قضية ${n}`}</SelectItem>)}
-          </SelectContent>
-        </Select>
         <Select value={clientFilter} onValueChange={setClientFilter}>
           <SelectTrigger className="w-[180px]" data-testid="select-client-filter"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -1802,7 +1794,7 @@ export default function MyTasksPage() {
               // NOT reset — it lives in the page header, is admin_support-only,
               // and was never cleared by مسح before this batch either.
               setSearch(""); setTypeFilter("all");
-              setCaseFilter("all"); setClientFilter("all");
+              setClientFilter("all");
               setDeptFilter("all"); setOverdueOnly(false);
             }}
             data-testid="button-clear-filters"
