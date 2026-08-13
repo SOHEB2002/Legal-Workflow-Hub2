@@ -7243,6 +7243,23 @@ export interface MyTaskItem {
   caseNumber?: string;
   clientName?: string;
   opponentName?: string;
+  // ---- The RECORD's department (FILTER KEY, not display) ----
+  // 🔴 THE RECORD'S DEPARTMENT, NEVER THE OWNER'S. Deriving it client-side from
+  // the owner was considered and is wrong twice over: admin_support carries no
+  // departmentId at all, and the unassigned pool has no owner to read one from —
+  // so both would drop out of a department filter entirely. It is therefore
+  // stamped SERVER-side from the record itself, in the same enrichment pass as
+  // the matter identity above.
+  //
+  // Resolution per entity: case / memo / hearing / legal_deadline and any
+  // case-linked field task or contact log → law_cases.department_id (reached via
+  // the caseId every one of them already carries); consultation →
+  // consultations.department_id; contract → contracts.department_id.
+  //
+  // null is a REAL, REACHABLE value, not an error: delegations and case-less
+  // general tasks belong to no department. The filter gives them an explicit
+  // "بدون قسم" option so they stay selectable rather than vanishing.
+  departmentId?: string | null;
   // GROUPED agency tasks only (agency_verification / agency_issuance): the
   // underlying entity ids a single completion must act on — hearing ids for
   // verify, field_task ids for issuance. Same-client (exact name) + same-lawyer
