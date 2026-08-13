@@ -4170,7 +4170,10 @@ export class DatabaseStorage implements IStorage {
     const uid = user.id;
     const isDeptHead = user.role === "department_head";
     const isAdminSupport = user.role === "admin_support";
-    const isManager = user.role === "branch_manager" || user.role === "admin_support";
+    // isManager (branch_manager || admin_support) was DELETED here, not renamed:
+    // with admin_support now firm-wide it became character-for-character the same
+    // predicate as firmWideScoped below, and two names for one condition is how
+    // they drift. Its two uses now read firmWideScoped — see block 8/10 and 8b.
     const isCasesReviewHead = user.role === "cases_review_head";
     const isConsultationsReviewHead = user.role === "consultations_review_head";
     const isLaborReviewHead = user.role === "labor_review_head";
@@ -4182,7 +4185,24 @@ export class DatabaseStorage implements IStorage {
     // drops the departmentId filter so every department is included. Parity:
     // for a normal user both are false (self-only, byte-identical to before);
     // for a dept_head only deptHeadScoped is true (dept filter still applied).
-    const firmWideScoped = user.role === "branch_manager";
+    // 🔴 admin_support IS NOW FIRM-WIDE, exactly like branch_manager (owner
+    // ruling). This ONE predicate is the whole visibility change: every block
+    // below already branches on it, so adding the role here opens all of them at
+    // once rather than needing a per-block edit.
+    //
+    // WHAT IT DOES NOT DO — and this is the important half: it changes only what
+    // admin_support can SEE. Not one server permission gate is touched, so what
+    // they can DO is byte-identical to yesterday. That gap is real and measured;
+    // it is written up in the batch report, because several kinds now reach their
+    // page carrying a button their own role will be refused on (internal review
+    // being the largest). Nothing here hides or disables those rows — that is a
+    // deliberate follow-up decision, not an oversight of this commit.
+    //
+    // ⚠ teamScoped follows from this, which is the second-order effect worth
+    // knowing: admin_support now gets ownerScope:"team" rows for the first time,
+    // so the مهامي team region renders for them and blocks gated on teamScoped
+    // (the three *_unassigned blocks and delegation approvals) begin emitting.
+    const firmWideScoped = user.role === "branch_manager" || user.role === "admin_support";
     const teamScoped = deptHeadScoped || firmWideScoped;
     const today = new Date().toISOString().split("T")[0];
     // ONE instant for the whole feed read, so every age-arm decision in a single
@@ -5605,12 +5625,14 @@ export class DatabaseStorage implements IStorage {
               eq(fieldTasks.routedDepartmentId, userDept!),
             )))
         : await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, uid), ftActionable));
-      // The firm-wide query already includes the unassigned "" tasks; only the
-      // non-firm-wide managers (admin_support) need the separate pool query.
-      const unassigned = isManager && !firmWideScoped
-        ? await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, ""), ftActionable))
-        : [];
-      for (const r of [...rows, ...unassigned]) {
+      // The separate ""-pool query that used to run here is GONE, and its removal
+      // is a consequence of the scope change rather than a cleanup of its own. It
+      // existed for "managers who are NOT firm-wide", which meant admin_support
+      // and nobody else; now that they ARE firm-wide, the firm-wide query above
+      // already returns the unassigned "" tasks (it filters on nothing but
+      // ftActionable), so the extra statement could only ever have produced
+      // duplicate rows. One fewer query per feed read for admin_support.
+      for (const r of rows) {
         // Collection (تحصيل) is emitted by the dedicated LIVE-resolve block below
         // (Option C parity): its owner comes from the mapping, not the stored
         // assigned_to, so it must NOT be emitted here (where ownerId would read the
@@ -5674,7 +5696,11 @@ export class DatabaseStorage implements IStorage {
     // sight of it. Emit it to them as an informational row (no action). Managers
     // already see it via the firm-wide / "" -pool queries, so skip them here to
     // avoid a duplicate row.
-    if (!isManager) {
+    // firmWideScoped, formerly the identical isManager. Unchanged in meaning:
+    // both firm-wide roles already see these rows through the queries above, so
+    // they are skipped here to avoid a duplicate; everyone else gets the
+    // requester's informational copy.
+    if (!firmWideScoped) {
       const myRouted = await db.select({
         id: fieldTasks.id, caseId: fieldTasks.caseId, title: fieldTasks.title, dueDate: fieldTasks.dueDate,
         routedDepartmentId: fieldTasks.routedDepartmentId,

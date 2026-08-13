@@ -197,6 +197,85 @@ const TASK_CARDS = [
 
 type TaskCardKey = typeof TASK_CARDS[number]["key"];
 
+// ===== VISIBILITY === AUTHORITY =====
+// ca44f57 made admin_support firm-wide, which handed them rows whose action the
+// server will refuse. Block 7 in storage.ts had capped supervisory visibility at
+// branch_manager for exactly that reason — widening it "would hand them a button
+// that always 403s, breaking visibility === authorization" — so this restores the
+// invariant on the CLIENT side instead: the row stays (seeing that a review is
+// stalled is the whole value of a firm-wide view), the false promise goes.
+//
+// 🔴 THE PREDICATE IS ABOUT AUTHORITY, NOT ABOUT A ROLE NAME. `role ===
+// "admin_support"` would have been shorter and wrong: a department_head looking
+// at ANOTHER department's record has the identical problem, and any future
+// firm-wide role would silently reinherit the bug. What the three server gates
+// below actually share is one shape — the designated actor, OR the branch
+// manager, OR a department_head whose department matches the RECORD's — so that
+// shape is what is expressed here.
+//
+// The client can evaluate it because the server already stamps everything it
+// needs: ownerScope ("self" = the viewer IS the designated actor for this row,
+// computed by scopeOf) and departmentId (the RECORD's department, added in
+// d661b9a). No new field, no extra request, and no re-derivation of who the
+// designated reviewer or assignee is.
+function canActingUserAct(
+  task: MyTaskItem,
+  user: { role?: string; departmentId?: string | null } | null,
+): boolean {
+  // The viewer is the row's own actor — the designated reviewer, the department
+  // head the unassigned record was filed under, the case's lawyer. Always able.
+  if (task.ownerScope === "self") return true;
+  if (user?.role === "branch_manager") return true;
+  // 🔴 !!user.departmentId — the standing rule. Without it a head with a null
+  // department matches every record with a null department.
+  if (user?.role === "department_head") {
+    return !!user.departmentId && user.departmentId === task.departmentId;
+  }
+  return false;
+}
+
+// The kinds whose server gate has EXACTLY the shape canActingUserAct models, so
+// applying it to them is honest rather than a guess. Every one was traced to its
+// endpoint; kinds are absent from this set either because their gate admits a
+// wider actor set or because they are stage-dependent (see the memo note below).
+//
+// ⚠ MEMO_PENDING IS DELIBERATELY ABSENT, and that is a finding rather than an
+// omission. Its gate is ALLOWED_MEMO_TRANSITIONS, which is per-EDGE: admin_support
+// is granted استلام → تحرير and جاهزة_للرفع → مرفوعة (filing is their job) and
+// refused the four middle edges. So the kind is PARTLY actionable for them, the
+// feed item carries no stage to tell which, and blanket-disabling it would remove
+// a capability they genuinely hold. Left enabled; the server answers with a 400
+// and its own Arabic reason on the edges they cannot take.
+//
+// ⚠ LEGAL_DEADLINE IS ABSENT because it is NOT refused: its gate resolves to
+// canModifyCase on the parent case, whose adminRoles list admits admin_support
+// unconditionally. Traced, not assumed.
+const AUTHORITY_GATED_KINDS = new Set<MyTaskKindValue>([
+  // Server: designated internal reviewer | own-dept department_head |
+  // branch_manager. Committee rows share this kind but are always ownerScope
+  // "self" (their block stamps ownerId: uid), so they never reach the blocked arm.
+  MyTaskKind.REVIEW_PENDING,
+  // Server: canActAtDepartmentTier → entityActorTier, which returns "manager"
+  // for branch_manager ONLY, "department" for an own-dept head and "assignee"
+  // for an assigned lawyer. admin_support is outside that ladder entirely.
+  MyTaskKind.CASE_UNASSIGNED,
+  MyTaskKind.CONSULTATION_UNASSIGNED,
+  MyTaskKind.CONTRACT_UNASSIGNED,
+]);
+
+// The honest reason, per kind. Each mirrors the SERVER's own refusal wording so
+// the tooltip and the 403 a determined user could still provoke say the same
+// thing. NEVER the generic "سيتم تفعيل هذا الإجراء قريباً" — that string means
+// "not built yet", which would be a lie here: the action exists and works, just
+// not for this user.
+const AUTHORITY_BLOCKED_REASON: Partial<Record<MyTaskKindValue, string>> = {
+  [MyTaskKind.REVIEW_PENDING]:
+    "المراجعة الداخلية من صلاحية المراجع الداخلي المعيَّن أو رئيس القسم أو مدير الفرع",
+  [MyTaskKind.CASE_UNASSIGNED]: "الإسناد من صلاحية رئيس القسم أو مدير الفرع",
+  [MyTaskKind.CONSULTATION_UNASSIGNED]: "الإسناد من صلاحية رئيس القسم أو مدير الفرع",
+  [MyTaskKind.CONTRACT_UNASSIGNED]: "الإسناد من صلاحية رئيس القسم أو مدير الفرع",
+};
+
 // The department filter's sentinel for "this record belongs to no department".
 // A literal rather than "" because Radix SelectItem rejects an empty value, and
 // distinct from "all" so the two cannot be confused. Prefixed so it can never
@@ -618,7 +697,7 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   const Icon = meta?.icon ?? ClipboardList;
   const { getTaskById } = useFieldTasks();
   const { departments } = useDepartments();
-  const { users } = useAuth();
+  const { user, users } = useAuth();
   // General (عام) task context lives on the full field task, not the feed item:
   // WHO requested it (originalRequesterId, written once at creation; assignedBy as
   // a fallback) and its free-text details (description). Surface both so the actor
@@ -654,7 +733,14 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   // fresh one. Short-circuited for every non-general kind (no lookup cost).
   const wasReturned = task.kind === MyTaskKind.GENERAL_TASK
     && !!getTaskById(task.entityId)?.reviewNote?.trim();
-  const actionable = actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind)
+  // The server will refuse this row's action for THIS viewer. Computed before
+  // `actionable` and AND-ed into it, so a blocked row is disabled no matter which
+  // arm would otherwise have enabled it. null = not authority-blocked, which is
+  // every row for every viewer who can act (see canActingUserAct).
+  const authorityBlockedReason = AUTHORITY_GATED_KINDS.has(task.kind) && !canActingUserAct(task, user)
+    ? (AUTHORITY_BLOCKED_REASON[task.kind] ?? null)
+    : null;
+  const actionable = !authorityBlockedReason && (actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind)
     || isCaseStageKind(task) || task.kind === MyTaskKind.MEMO_PENDING
     // consultation_work has no modal and no endpoint of its own — its action is
     // to OPEN the consultation, handled by a deep-link in handleAction. Listed
@@ -667,7 +753,7 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
     // the ضبط upload control lives. It has no inline modal — attaching needs a
     // file picker the generic action dialog has no mode for — but "no modal" is
     // not "no action", which is what leaving it disabled had been saying.
-    || task.kind === MyTaskKind.HEARING_MINUTES;
+    || task.kind === MyTaskKind.HEARING_MINUTES);
   return (
     <div
       dir="rtl"
@@ -750,7 +836,11 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
         size="sm"
         variant="outline"
         disabled={!actionable}
-        title={actionable ? undefined : isInfoOnly ? infoOnlyHint : "سيتم تفعيل هذا الإجراء قريباً"}
+        // Authority first: it is the most specific and the most honest of the
+        // three. The generic string stays last and stays unreachable in practice
+        // — it means "not built yet", which would be a lie for a blocked row.
+        title={actionable ? undefined
+          : authorityBlockedReason ?? (isInfoOnly ? infoOnlyHint : "سيتم تفعيل هذا الإجراء قريباً")}
         onClick={() => actionable && onAction(task)}
         data-testid={`task-action-${task.id}`}
       >
@@ -1367,7 +1457,20 @@ export default function MyTasksPage() {
   // WHAT IS GENUINELY LOST, stated plainly rather than approximated: the
   // department-level COLLAPSE and the department-level AGGREGATE COUNT. There is
   // no member card to hang either on.
-  const rosterMembers: { id: string; name: string; deptLabel: string }[] = isBranchManager
+  // 🔴 admin_support TAKES THE BRANCH_MANAGER ROSTER, and this branch is REQUIRED
+  // rather than cosmetic. The server now tags admin_support's feed with
+  // ownerScope:"team", so the team region renders for them — but this derivation
+  // only had branches for branch_manager and department_head, and admin_support
+  // is neither. They would have fallen through to `[]`, i.e. an EMPTY roster
+  // while team tasks exist, and every one of those tasks would then have been
+  // swept into leftoverMembers — the أعضاء آخرون fallback — appearing as a flat
+  // list of unlabelled member cards with no department names and no zero-task
+  // members. The tasks would still be reachable, so nothing would break loudly;
+  // the roster would simply be silently wrong for the one role that just gained
+  // it. Sharing the firm-wide branch keeps the client scoped exactly as the
+  // server is, which is the property the whole roster is built on.
+  const isFirmWideViewer = isBranchManager || isAdminSupport;
+  const rosterMembers: { id: string; name: string; deptLabel: string }[] = isFirmWideViewer
     ? [
         ...departments.flatMap((d) =>
           rosterCandidates
