@@ -7142,6 +7142,26 @@ export type MyTaskKindValue = typeof MyTaskKind[keyof typeof MyTaskKind];
 // one-time notice, so the two can never disagree about when a pause is "long".
 export const PausedTaskMinDays = 3;
 
+// ⏳ THE AGE ARM of the overdue rule (owner ruling). Roughly half the مهامي feed
+// carries dueDate:null, so an overdue signal keyed on dates alone is blind to it.
+// A task with NO dueDate is overdue once it has sat this long WITHOUT MOVEMENT.
+//
+// 🔴 THIS IS AN ELAPSED DURATION IN DAYS, NOT A COUNT OF CALENDAR DAYS, and the
+// distinction is load-bearing rather than pedantic. This codebase has a
+// documented date-boundary bug class — a UTC "today" once blocked hearing
+// recording every morning between 00:00 and 03:00 Riyadh — so anything
+// day-SHAPED must resolve through Asia/Riyadh. Instant arithmetic has no
+// timezone at all and therefore no boundary to get wrong, which is why the
+// threshold is consumed as `days × 86400000` against two instants and never
+// compared to a date string. Same reasoning as PausedTaskMinDays directly above.
+//
+// The value is the owner's, and it is DELIBERATELY SHORT: at 2 days almost
+// everything in scope flags, which is the intent — the firm wants movement, not
+// a grace period. Every kind it applies to is one whose clock the FIRM controls;
+// kinds waiting on a court or a counterparty are excluded at their emission
+// sites, each with the reason recorded there.
+export const AgeOverdueDays = 2;
+
 // ⏳ How long a record may sit at its data-completion step before the wait
 // ESCALATES from admin_support to the assignee. Deliberately its own constant
 // rather than reusing PausedTaskMinDays: the two thresholds happen to coincide

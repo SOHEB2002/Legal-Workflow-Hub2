@@ -10,7 +10,7 @@ import {
   type SavedFilter, type InsertSavedFilter, type UpdateSavedFilter,
   type AdminSupportTaskAssignment,
   type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, FieldTaskStatus, taskSpecialtyClass,
-  PausedTaskMinDays, caseNotificationRecipientId,
+  PausedTaskMinDays, AgeOverdueDays, caseNotificationRecipientId,
   AssignableAdminSupportTaskKind, resolveAdminSupportAssignee,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
@@ -1415,6 +1415,77 @@ const pausedDaysExpr = (col: AnyPgColumn) =>
 // rather than leaving two orphans behind for the next reader to puzzle over.
 // pausedLongEnough / pausedDaysExpr directly above are NOT orphans: they are
 // still used by getLongPausedRecords, which feeds the scheduler's pause notice.
+
+// ===== THE AGE ARM OF THE OVERDUE RULE — THE ONLY IMPLEMENTATION =====
+// The rule (owner): a task is overdue if it HAS a dueDate that has passed, OR it
+// has NO dueDate and its age exceeds AgeOverdueDays. The dueDate arm is
+// untouched everywhere; this is purely additive.
+//
+// TWO functions rather than five copies at the emission sites: one answers "when
+// did this record enter the state that made it someone's job", the other turns
+// that instant into the boolean. Every in-scope block calls the same pair, so
+// the fail-safe rules below cannot hold at four sites and be forgotten at the
+// fifth.
+//
+// 🔴 EVERY FAILURE PATH RETURNS false — NOT OVERDUE, NEVER A FABRICATED AGE, and
+// this is the whole safety property. Missing history, an empty array, no
+// matching entry, a null timestamp, an unparseable one, a future date: all of
+// them mean "no honest age is available", and the age arm simply does not fire.
+// The task still appears with its ordinary title and action; it just carries no
+// overdue badge. Neither function can throw on any of those inputs — `new
+// Date(garbage).getTime()` is NaN, not an exception, and Number.isFinite catches
+// it. That matters because getMyTasks is polled every 30s: a throw here would
+// empty the caller's entire feed.
+//
+// 🔴 THERE IS NO updated_at FALLBACK, DELIBERATELY, AND ONE MUST NEVER BE ADDED.
+// updated_at moves on ANY write, so it would restart the age clock whenever
+// anyone touched the record and would report a wait that never happened. That
+// exact unreliability is why the بانتظار_رفع_العميل_للتسوية auto-close was
+// CANCELLED rather than built, and why the deleted data-completion escalation
+// carried the same prohibition. Silence is the correct failure; a wrong number
+// is not.
+
+// "When did this case enter the stage it is sitting on?" — the LAST matching
+// stage_history entry, not the first: a case can enter a stage, leave and
+// re-enter (قيد_التدقيق_في_ناجز via أغلق_طلب_الصلح is the documented example),
+// and only the most recent entry starts the current wait. Same rule the D3 najiz
+// reminder and the deleted escalation both used.
+//
+// ⚠ stage_history IS COMPOSED CLIENT-SIDE (cases-context.tsx appends a
+// transition and PATCHes it; storage.updateCase never appends one), so it has
+// two real gaps: cases seeded before 2026-07-28 have NO history at all, and a
+// client working from the LIST payload — which strips stageHistory — can write a
+// truncated one. Truncation drops the OLDEST entries and keeps the newest, which
+// is the one this reads, so it is largely benign here; an empty history is not,
+// and returns null → not overdue. That is the correct outcome: those cases are
+// unageable, and this must never invent a date for them.
+function stageEnteredAtIso(
+  stageHistory: Array<{ stage?: string | null; timestamp?: string | null } | null> | null | undefined,
+  stage: string | null | undefined,
+): string | null {
+  if (!Array.isArray(stageHistory) || !stage) return null;
+  // Copy before reverse — Array.prototype.reverse mutates, and this array is the
+  // row's own jsonb value.
+  const entry = [...stageHistory].reverse().find((h) => h?.stage === stage);
+  return entry?.timestamp ?? null;
+}
+
+// The age arm itself. `nowMs` is passed in rather than read here so every task in
+// one feed read is judged against ONE instant — two tasks in the same response
+// can never disagree about what "now" is, the same property pausedLongEnough and
+// pausedDaysExpr get by sharing a single NOW() inside one statement.
+//
+// >= not >: at exactly AgeOverdueDays × 24h the wait HAS reached the threshold.
+//
+// A future startedAt (a mistyped صك date) yields a negative elapsed value, which
+// fails the comparison — so bad data reads as "not overdue" rather than as an
+// enormous age.
+function isAgedOverdue(startedAtIso: string | null | undefined, nowMs: number): boolean {
+  if (!startedAtIso) return false;
+  const startedMs = new Date(startedAtIso).getTime();
+  if (!Number.isFinite(startedMs)) return false;
+  return nowMs - startedMs >= AgeOverdueDays * 86400000;
+}
 
 /**
  * One long-paused record, flattened across the four entity types so the
@@ -4114,6 +4185,16 @@ export class DatabaseStorage implements IStorage {
     const firmWideScoped = user.role === "branch_manager";
     const teamScoped = deptHeadScoped || firmWideScoped;
     const today = new Date().toISOString().split("T")[0];
+    // ONE instant for the whole feed read, so every age-arm decision in a single
+    // response is judged against the same "now" and two tasks can never disagree.
+    //
+    // ⚠ DELIBERATELY NOT DERIVED FROM `today` ABOVE. That line is UTC
+    // (`toISOString()`), not Asia/Riyadh, which is a latent instance of this
+    // codebase's documented date-boundary bug class — it is pre-existing, it is
+    // NOT fixed here (owner: keep it isolated), and the age arm must not inherit
+    // it. Date.now() is an instant, so the elapsed-duration arithmetic it feeds
+    // has no calendar day and no timezone to get wrong.
+    const nowMs = Date.now();
     // Built without specialtyClass; it's stamped uniformly on return via
     // taskSpecialtyClass so every item (esp. admin_support's) carries its class.
     const tasks: Omit<MyTaskItem, "specialtyClass" | "onBehalfOfUserId">[] = [];
@@ -4325,6 +4406,12 @@ export class DatabaseStorage implements IStorage {
       const rows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber, stage: lawCases.currentStage,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+        // THE AGE ARM's only input. Typed jsonb read naming just the two fields
+        // used — no cast to any, the same idiom the deleted escalation used. It
+        // rides the query this block ALREADY runs: one more column, no join and
+        // no second statement, which is exactly why this block is in scope and
+        // the consultation/contract/memo equivalents are not.
+        stageHistory: sql<Array<{ stage?: string | null; timestamp?: string | null } | null> | null>`${lawCases.stageHistory}`,
       }).from(lawCases).where(where);
       for (const r of rows) {
         const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
@@ -4332,7 +4419,13 @@ export class DatabaseStorage implements IStorage {
           id: `case_work:${r.id}`, kind: MyTaskKind.CASE_WORK,
           title: `العمل على القضية ${r.caseNumber} — ${r.stage}`,
           entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "draft",
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null,
+          // AGE ARM. This is work the FIRM owes: the case sits on a stage whose
+          // next move is the assigned lawyer's, so the clock is ours and running
+          // it is fair. No dueDate exists for these, which is the gap the arm
+          // closes. A case with no usable stage_history is simply not overdue.
+          isOverdue: isAgedOverdue(stageEnteredAtIso(r.stageHistory, r.stage), nowMs),
+          actionHint: "draft",
         });
       }
     }
@@ -4379,6 +4472,7 @@ export class DatabaseStorage implements IStorage {
       const rows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+        stageHistory: sql<Array<{ stage?: string | null; timestamp?: string | null } | null> | null>`${lawCases.stageHistory}`,
       }).from(lawCases).where(where);
       for (const r of rows) {
         const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
@@ -4386,7 +4480,12 @@ export class DatabaseStorage implements IStorage {
           id: `case_work:${r.id}`, kind: MyTaskKind.CASE_WORK,
           title: `توجيه العميل بالتسوية — قضية ${r.caseNumber}`,
           entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          ownerId, ownerScope: scopeOf(ownerId), dueDate: null,
+          // AGE ARM. Contacting the client to direct the settlement is OUR move —
+          // the stage constant is matched directly rather than read from the row
+          // because this block's where-clause pins currentStage to exactly it.
+          isOverdue: isAgedOverdue(stageEnteredAtIso(r.stageHistory, SETTLEMENT_DIRECTION_STAGE), nowMs),
+          actionHint: "follow_up",
         });
       }
     }
@@ -4515,7 +4614,21 @@ export class DatabaseStorage implements IStorage {
             id: `judgment_deed:${r.id}`, kind: MyTaskKind.CASE_WORK,
             title: `تابع استلام صك الحكم — قضية ${r.caseNumber}`,
             entityType: "case", entityId: r.id, caseId: r.id,
-            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null,
+            // 🔴 NO AGE ARM — DELIBERATELY EXCLUDED (owner ruling), and this is
+            // not an oversight to be "completed" later. This task chases a صك the
+            // COURT issues on its own schedule: the firm can ask, but it cannot
+            // make the document arrive, so ageing it would brand the assignee
+            // overdue for someone else's delay. The identical argument is already
+            // recorded in this codebase for hearing_minutes, which is kept out of
+            // PINNED_KINDS because "the ضبط is issued by the court on its own
+            // schedule, so this task can sit open legitimately for a while".
+            // Same clock, same owner, same answer.
+            //
+            // Its sibling 1c-bis (judgment_deed_attach) IS aged, and the line
+            // between them is precisely who holds the document: there, the deed
+            // has already arrived and only our upload is outstanding.
+            isOverdue: false, actionHint: "follow_up",
           });
         }
       }
@@ -4564,6 +4677,12 @@ export class DatabaseStorage implements IStorage {
       const attachRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
+        // THE AGE ARM's input here, and the most defensible age in the whole feed:
+        // it is not a proxy for the event, it IS the event. The deed arrived on
+        // this date; attaching the file became someone's job at that moment.
+        // Already on the row (deedPresent tests it in the where-clause), so this
+        // costs one more column on a query that must run anyway.
+        deedDate: lawCases.judgmentDeedReceivedDate,
       }).from(lawCases).where(attachWhere);
       if (attachRows.length > 0) {
         // ONE query for every case's current ruling + whether it has a file, rather
@@ -4581,7 +4700,20 @@ export class DatabaseStorage implements IStorage {
             id: `judgment_deed_attach:${r.id}`, kind: MyTaskKind.JUDGMENT_DEED_ATTACH,
             title: `إرفاق ملف صك الحكم — قضية ${r.caseNumber}`,
             entityType: "case", entityId: r.id, caseId: r.id,
-            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "record",
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null,
+            // AGE ARM. The document is IN THE FIRM'S HANDS — the receipt date says
+            // so — and uploading it is purely our clerical step, with nothing
+            // external to wait for. That is exactly what distinguishes this from
+            // its sibling 1c above, which chases a deed the COURT has not sent yet
+            // and is excluded for that reason.
+            //
+            // ⚠ judgment_deed_received_date is a DATE-ONLY varchar, so the start
+            // instant resolves to UTC midnight of that day — up to 3 hours adrift
+            // of Riyadh midnight. On a multi-day threshold that can only move the
+            // flip by those 3 hours; it cannot manufacture an age, and it is still
+            // instant arithmetic rather than a calendar-day comparison.
+            isOverdue: isAgedOverdue(r.deedDate, nowMs),
+            actionHint: "record",
           });
         }
       }
@@ -4684,13 +4816,36 @@ export class DatabaseStorage implements IStorage {
         const windowDays = r.windowDays ?? 30;
         const deadlineMs = receiptMs + windowDays * 24 * 60 * 60 * 1000;
         if (todayMs <= deadlineMs) continue; // still inside the window — silent by design
+        // The objection deadline as a feed dueDate. Same instant the guard above
+        // just compared against, formatted once.
+        const objectionDeadlineDate = new Date(deadlineMs).toISOString().slice(0, 10);
         const ownerId = r.primaryLawyerId || r.responsibleLawyerId || "";
         if (!firmWideScoped && !deptHeadScoped && ownerId !== uid) continue;
         tasks.push({
           id: `appeal_window:${r.id}`, kind: MyTaskKind.CASE_WORK,
           title: `انتهت مهلة الاعتراض — سجّل النتيجة — قضية ${r.caseNumber}`,
           entityType: "case", entityId: r.id, caseId: r.id,
-          ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+          ownerId, ownerScope: scopeOf(ownerId),
+          // 🔴 NO AGE ARM — this kind gets a REAL dueDate instead, which it has
+          // always had and simply never reported. deadlineMs (computed above as
+          // receipt + window) IS the objection deadline; the block emits only
+          // AFTER it passes, so the row was overdue-by-construction while
+          // truthfully claiming dueDate:null and isOverdue:false.
+          //
+          // Ageing it was rejected for a reason worth keeping: this task only
+          // comes into existence once its window has lapsed, so any age measured
+          // from stage entry is already large and EVERY instance would be born
+          // overdue for the wrong reason. Exposing the genuine deadline says the
+          // same thing honestly — the date is a fact about the ruling, not a
+          // judgement about the lawyer.
+          //
+          // isOverdue therefore comes from the ORDINARY dueDate arm, spelled the
+          // same way as every other dated block (`dueDate < today`), not from the
+          // age arm. Slicing to YYYY-MM-DD matches the format every other dueDate
+          // in this feed uses, which is what keeps that comparison valid.
+          dueDate: objectionDeadlineDate,
+          isOverdue: objectionDeadlineDate < today,
+          actionHint: "follow_up",
         });
       }
     }
@@ -4740,7 +4895,18 @@ export class DatabaseStorage implements IStorage {
             id: `opponent_response:${r.id}`, kind: MyTaskKind.CASE_WORK,
             title: `متابعة رد الخصم — قضية ${r.caseNumber}`,
             entityType: "case", entityId: r.id, caseId: r.id,
-            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: "follow_up",
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null,
+            // 🔴 NO AGE ARM — DELIBERATELY EXCLUDED (owner ruling). The case is
+            // waiting on the OPPONENT's reply. The firm controls neither whether
+            // it comes nor when, so an age badge here would accuse our own lawyer
+            // of a delay that is the counterparty's. Same reasoning as 1c above
+            // and as hearing_minutes' exclusion from PINNED_KINDS.
+            //
+            // A second, independent reason not to try: the flag carries NO
+            // set-timestamp anywhere, so there is no honest start instant to
+            // measure from — only the newest hearing's date as a proxy, and a
+            // proxy is exactly what rule 4 forbids.
+            isOverdue: false, actionHint: "follow_up",
           });
         }
       }
@@ -5245,11 +5411,24 @@ export class DatabaseStorage implements IStorage {
         : and(eq(lawCases.internalReviewerId, uid), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
             ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`, caseNotPaused);
       const caseRows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber,
-          reviewerId: lawCases.internalReviewerId })
+          reviewerId: lawCases.internalReviewerId,
+          // currentStage is selected FOR THE AGE ARM: this block matches two
+          // stages (مراجعة_داخلية and مراجعة_داخلية_للتظلم), so the row must say
+          // which one it is sitting on before its entry time can be looked up.
+          stage: lawCases.currentStage,
+          stageHistory: sql<Array<{ stage?: string | null; timestamp?: string | null } | null> | null>`${lawCases.stageHistory}`,
+        })
         .from(lawCases).where(caseReviewWhere);
       for (const r of caseRows) tasks.push({ id: `review_pending:case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
         title: `مراجعة داخلية بانتظارك — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
-        ownerId: r.reviewerId || uid, ownerScope: scopeOf(r.reviewerId || uid), dueDate: null, isOverdue: false, actionHint: "review" });
+        ownerId: r.reviewerId || uid, ownerScope: scopeOf(r.reviewerId || uid), dueDate: null,
+        // AGE ARM. An internal review is entirely internal — the named reviewer
+        // is the only thing the case is waiting for — so the clock is the firm's.
+        // ⚠ CASES ONLY. The contract / memo / consultation review twins directly
+        // below are NOT aged: none of those tables has a stage_history column, so
+        // their entry time lives in a separate *_activity_log and would cost an
+        // extra query each on a method polled every 30s. Deferred by owner ruling.
+        isOverdue: isAgedOverdue(stageEnteredAtIso(r.stageHistory, r.stage), nowMs), actionHint: "review" });
 
       const contractReviewWhere = firmWideScoped
         ? and(hasReviewer(contracts.internalReviewerId), eq(contracts.currentStage, "مراجعة_داخلية"), eq(contracts.status, "active"))
@@ -5669,9 +5848,12 @@ export class DatabaseStorage implements IStorage {
     // never throw out of getMyTasks and empty the entire feed.
     if (dataCompletionCaseOwner === uid || firmWideScoped) {
       try {
-        const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
+        const DATA_COMPLETION_CASE_STAGE = "استكمال_البيانات";
+        const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber,
+            stageHistory: sql<Array<{ stage?: string | null; timestamp?: string | null } | null> | null>`${lawCases.stageHistory}`,
+          })
           .from(lawCases).where(and(
-            eq(lawCases.currentStage, "استكمال_البيانات"),
+            eq(lawCases.currentStage, DATA_COMPLETION_CASE_STAGE),
             sql`(${lawCases.dataCompletionLastAckAt} IS NULL OR ${lawCases.dataCompletionLastAckAt} < NOW() - INTERVAL '2 days')`,
             caseNotPaused,
           ));
@@ -5679,7 +5861,23 @@ export class DatabaseStorage implements IStorage {
           const ownerId = dataCompletionCaseOwner;
           tasks.push({ id: `data_completion_case:${r.id}`, kind: MyTaskKind.DATA_COMPLETION_CASE,
             title: `استكمال المرفقات والبيانات — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
-            ownerId, ownerScope: scopeOf(ownerId), dueDate: null, isOverdue: false, actionHint: ownerId ? "complete" : "assign" });
+            ownerId, ownerScope: scopeOf(ownerId), dueDate: null,
+            // AGE ARM, measured from the LAST entry at this stage — the identical
+            // rule the deleted block-21 escalation used for this exact stage, so
+            // restoring that feature later and this arm cannot disagree.
+            //
+            // ⚠ THE AGE IS NOT SUPPRESSED BY THE 2-DAY ACK. The ack hides the row
+            // for two days after each "تم"; the age keeps running underneath from
+            // stage entry, so a case acknowledged four times still reports its
+            // true total wait rather than resetting. The ack is "I chased the
+            // client", not "the client delivered".
+            //
+            // ⚠ A case moved here by a RAW PATCH writes no stage_history entry and
+            // is therefore unageable — it still shows this task, just never the
+            // overdue badge. Documented, deliberate, and NOT to be papered over
+            // with updatedAt.
+            isOverdue: isAgedOverdue(stageEnteredAtIso(r.stageHistory, DATA_COMPLETION_CASE_STAGE), nowMs),
+            actionHint: ownerId ? "complete" : "assign" });
         }
       } catch (e) {
         console.error("[getMyTasks] data_completion_case block failed — skipping:", e);
