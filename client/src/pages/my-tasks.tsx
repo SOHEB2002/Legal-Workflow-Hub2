@@ -197,6 +197,30 @@ const TASK_CARDS = [
 
 type TaskCardKey = typeof TASK_CARDS[number]["key"];
 
+// The card grid. ONE constant so every place cards are laid out stays in step.
+//
+// TWO COLUMNS FROM lg (1024px), one below it. Not md (768px): a half-width card
+// there is ~360px, and a TaskRow has to fit an Arabic title, a type label, the
+// matter identity line, up to three badges and up to three buttons on one row.
+// At lg a column is ~500px, which it does fit.
+//
+// 🔴 RTL — the first card sits on the RIGHT, and that is the grid's own
+// behaviour, not something to add. CSS Grid places items along the INLINE axis,
+// which `direction: rtl` reverses; the page root carries dir="rtl". Verified
+// against the precedent in this same app rather than assumed: the case-details
+// TabsList is `grid grid-cols-4 lg:grid-cols-8` under a dir="rtl" DialogContent,
+// and its first DOM child (المعلومات) is the RIGHTMOST tab on screen — the owner
+// has been reading and requesting edits to that tab strip in that order. No
+// physical-direction utilities (ml-/mr-/left-/right-) are used here, so nothing
+// can override the logical flow.
+//
+// items-start, NOT the default stretch. Cards differ wildly in height (twelve
+// rows beside two), and stretching turns the short one into a tall mostly-empty
+// bordered box, which reads as broken. Sizing each to its content leaves a
+// ragged bottom edge inside a row — the honest trade, and the lesser of the two:
+// a ragged edge looks like a list, an empty box looks like a bug.
+const CARD_GRID = "grid grid-cols-1 lg:grid-cols-2 gap-3 items-start";
+
 // 🔴 KEYED ON entityType, NOT kind, and that is forced by the data rather than
 // chosen: review_pending is ONE kind emitted for FOUR entity types (case, memo,
 // consultation, contract). A kind→card map would have to force all four into one
@@ -861,13 +885,34 @@ export default function MyTasksPage() {
     deptId: "", assigneeId: "",
   });
   const [creating, setCreating] = useState(false);
-  // Collapsed group keys (card:<key> / team-card:<key> / archive-member:<id>,
-  // three prefixes that cannot collide). Empty = all
-  // expanded by default; a key present means that group is collapsed.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const isOpen = (key: string) => !collapsed.has(key);
+  // ONE Set for every collapsible group on the page. It holds the keys whose
+  // state DIFFERS FROM THEIR DEFAULT — not the collapsed ones.
+  //
+  // 🔴 THE INVERSION IS THE WHOLE REASON FOR THE RENAME. Groups no longer share
+  // one default: the six own cards, and the entity cards nested inside a member,
+  // open by default — while a MEMBER card starts COLLAPSED (a branch_manager can
+  // have ten). A Set meaning "collapsed" cannot express both unless it is SEEDED
+  // with every member id, which needs an effect, has to re-run whenever the user
+  // list loads, and would then fight the user's own toggles. Storing the
+  // DEVIATION instead needs no seeding and no effect: absent = whatever that
+  // group's default is. Existing callers pass no default and behave exactly as
+  // before.
+  //
+  // KEYS — distinct literal prefixes, compared by EXACT equality and never
+  // parsed, so a userId containing a colon is harmless:
+  //   card:<cardKey>                  own entity card              (open)
+  //   team-member:<userId>            a team member's card         (COLLAPSED)
+  //   member-card:<userId>:<cardKey>  entity card inside a member  (open)
+  //   team-pool                       the unassigned pool card     (open)
+  //   pool-card:<cardKey>             entity card inside the pool  (open)
+  //   archive-member:<userId>         منجزة archive group          (open)
+  // `team-card:<cardKey>` is RETIRED — the team region is grouped by member now,
+  // so it emits no flat team cards and nothing writes that prefix any more.
+  const [toggledGroups, setToggledGroups] = useState<Set<string>>(new Set());
+  const isOpen = (key: string, defaultOpen = true) =>
+    toggledGroups.has(key) ? !defaultOpen : defaultOpen;
   const toggle = (key: string) =>
-    setCollapsed((prev) => {
+    setToggledGroups((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
       return next;
@@ -1230,20 +1275,103 @@ export default function MyTasksPage() {
   const team = visible.filter((t) => t.ownerScope === "team");
 
   const ownCards = groupIntoCards(own);
-  const teamCards = groupIntoCards(team);
 
-  // ⚠ THE SUPERVISORY ROSTER IS GONE, and it is a real loss rather than a
-  // refactor. It was driven by the USER LIST, not by the tasks: every lawyer in
-  // the department (and, for the branch_manager, every department, plus a
-  // dedicated قسم الدعم الإداري group and an "أعضاء آخرون" fallback) appeared by
-  // NAME with a per-person count, and a member with nothing to do rendered
-  // "لا يوجد". A card layout is grouped by ENTITY, so a person with zero tasks
-  // has nowhere to appear — the structure cannot express them. Their TASKS are
-  // all still on the page, inside the team cards; what is no longer answerable
-  // here is "who on my team has nothing on". See the batch report.
+  // ===== THE TEAM ROSTER — grouped BY MEMBER (owner ruling) =====
+  // This RESTORES the roster 17a786b lost. The team region is no longer six flat
+  // entity cards; it is one card per team member, each holding that member's own
+  // six entity cards.
   //
-  // The unassigned pool ("" owner) is likewise still present — scopeOf tags it
-  // "team", so it lands in the team cards — but no longer under its own heading.
+  // 🔴 DRIVEN BY THE USER LIST, NOT BY THE TASK LIST — that is the entire point.
+  // A member with nothing to do emits no task, so no amount of grouping over the
+  // feed can place them; only a roster can. Source is useAuth().users, which is
+  // already loaded app-wide (no new request), filtered to ACTIVE users.
+  //
+  // SCOPE MIRRORS WHAT THE SERVER ALREADY DECIDED, rather than inventing a
+  // second rule: scopeOf() tags a row "team" for a department_head only within
+  // their OWN department and for a branch_manager firm-wide, so the roster is
+  // built to the same shape — department_head → their own department's lawyers;
+  // branch_manager → every department's lawyers plus every admin_support member.
+  // Any other role gets an EMPTY roster, so a plain employee never sees this.
+  //
+  // 🔴 `!!user?.departmentId &&` is the standing rule, not decoration: without it
+  // a head whose own department is null matches every user with a null
+  // department, i.e. the whole firm.
+  //
+  // ⚠ THE VIEWER IS EXCLUDED FROM THEIR OWN ROSTER, which the old one did NOT do
+  // — the single deliberate departure from it. scopeOf() tags the viewer's own
+  // rows "self", never "team", so their member card can only ever read
+  // "0 — لا يوجد" while their own cards sit directly above holding real work. The
+  // old layout rendered a department_head inside their own department list and
+  // showed exactly that contradiction. It bites the head only; a branch_manager
+  // is in neither role set below and was never in their own roster.
+  const rosterCandidates = users.filter((u) => u.isActive && u.id !== user?.id);
+  const isLawyerRole = (r: string) => r === "employee" || r === "department_head";
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, "ar");
+
+  // The old layout carried قسم الدعم الإداري and أعضاء آخرون as DEPARTMENT-LEVEL
+  // GROUPS wrapping the member rows. They do NOT come back as groups: the ruling
+  // is one card per member, and a department level around them would be a third
+  // nesting level (department → member → entity → row) inside a two-column grid.
+  // What they carried is preserved as INFORMATION instead — the department name
+  // rides in the member's own header, and members stay clustered by department in
+  // the sort order, so the firm still reads department by department.
+  // WHAT IS GENUINELY LOST, stated plainly rather than approximated: the
+  // department-level COLLAPSE and the department-level AGGREGATE COUNT. There is
+  // no member card to hang either on.
+  const rosterMembers: { id: string; name: string; deptLabel: string }[] = isBranchManager
+    ? [
+        ...departments.flatMap((d) =>
+          rosterCandidates
+            .filter((u) => isLawyerRole(u.role) && !!u.departmentId && u.departmentId === d.id)
+            .sort(byName)
+            .map((u) => ({ id: u.id, name: u.name, deptLabel: d.name }))),
+        // admin_support has NO department row, so it is reachable by role only —
+        // this is where the old قسم الدعم الإداري group's members land.
+        ...rosterCandidates
+          .filter((u) => u.role === "admin_support")
+          .sort(byName)
+          .map((u) => ({ id: u.id, name: u.name, deptLabel: "الدعم الإداري" })),
+      ]
+    : isDeptHead
+      ? rosterCandidates
+          .filter((u) => isLawyerRole(u.role) && !!user?.departmentId && u.departmentId === user.departmentId)
+          .sort(byName)
+          .map((u) => ({ id: u.id, name: u.name, deptLabel: "" }))
+      : [];
+
+  const teamByMember = new Map<string, MyTaskItem[]>();
+  for (const t of team) {
+    const arr = teamByMember.get(t.ownerId) ?? [];
+    arr.push(t);
+    teamByMember.set(t.ownerId, arr);
+  }
+
+  // Owners holding a team task who are in no roster above — a deactivated user
+  // still owning work, or a role that is neither lawyer nor admin_support. The
+  // old "أعضاء آخرون" fallback existed so a task could NEVER be hidden, and that
+  // guarantee is kept: they become ordinary member cards, appended last.
+  const rosterIds = new Set(rosterMembers.map((m) => m.id));
+  const leftoverMembers = Array.from(teamByMember.keys())
+    .filter((id) => id !== "" && !rosterIds.has(id))
+    .map((id) => ({ id, name: userName(id), deptLabel: "" }))
+    .sort(byName);
+  const teamMembers = [...rosterMembers, ...leftoverMembers];
+
+  // The unassigned pool ("" owner) belongs to NO member, so it cannot be a
+  // member card. It gets its own card at the TOP of the region — see
+  // renderPoolCard for why it is the one card here that opens by default.
+  const unassignedPool = teamByMember.get("") ?? [];
+
+  // 🔴 WHEN A FILTER IS ACTIVE, A MEMBER WITH NO MATCHES IS HIDDEN, NOT SHOWN
+  // EMPTY — and the reason is that "لا يوجد" would be a different claim in each
+  // case while reading identically. Unfiltered it means "this person has nothing
+  // to do", which is true and is the roster's whole value. Under a filter it
+  // would mean "nothing here matched", on a person who may well be the busiest
+  // on the team — the same words asserting the opposite of the truth. Ten cards
+  // of that also bury the one member who did match. Hiding is also already the
+  // page's rule for entity cards, so this needs no new mechanism.
+  const visibleMembers = teamMembers.filter(
+    (m) => !isFiltering || (teamByMember.get(m.id)?.length ?? 0) > 0);
 
   // ----- "منجزة" archive derivation -----
   // Newest-closed first (completedAt, falling back to updatedAt/createdAt so a
@@ -1262,23 +1390,26 @@ export default function MyTasksPage() {
   }
 
   // ONE card. Renders nothing when it holds nothing — that emptiness IS the
-  // role-specificity, so there is no "لا توجد مهام" state inside a card.
+  // role-specificity, so there is no "لا توجد مهام" state inside a card. The
+  // SAME function serves the own region, a member card and the unassigned pool,
+  // so all three keep the same six cards, the same order, the same empty-card
+  // rule and the same pinAndSort by construction rather than by three copies.
   //
-  // COLLAPSE KEYS are `card:<key>` and `team-card:<key>`. The existing prefixes in
-  // the same `collapsed` Set are `dept:`, `member:`, `pool:` and `archive-member:`
-  // — none of which can collide, and the archive's keep working untouched. An
-  // empty Set means expanded, so all six start open with no extra state.
+  // keyPrefix is the collapse-key namespace (see the key table above);
+  // testIdPrefix defaults to it and exists only so a member's colon-bearing key
+  // does not leak into data-testid.
   const renderTaskCard = (
     card: typeof TASK_CARDS[number],
     byCard: Map<TaskCardKey, MyTaskItem[]>,
-    keyPrefix: "card" | "team-card",
+    keyPrefix: string,
+    testIdPrefix: string = keyPrefix,
   ) => {
     const items = byCard.get(card.key) ?? [];
     if (items.length === 0) return null;
     const key = `${keyPrefix}:${card.key}`;
     const open = isOpen(key);
     return (
-      <div key={key} className="rounded-lg border p-3 space-y-2" data-testid={`task-card-${keyPrefix}-${card.key}`}>
+      <div key={key} className="rounded-lg border p-3 space-y-2" data-testid={`task-card-${testIdPrefix}-${card.key}`}>
         <GroupHeader
           open={open}
           onToggle={() => toggle(key)}
@@ -1286,13 +1417,100 @@ export default function MyTasksPage() {
           count={items.length}
           icon={card.icon}
           titleClass="text-sm font-bold"
-          testId={`task-card-header-${keyPrefix}-${card.key}`}
+          testId={`task-card-header-${testIdPrefix}-${card.key}`}
         />
         {open && (
           <div className="space-y-2">
             {items.map((t) => (
               <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />
             ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ONE team member: a card holding that member's own six entity cards.
+  //
+  // 🔴 THE MEMBER CARD IS FULL-WIDTH AND THE ENTITY CARDS INSIDE IT GO TWO-UP —
+  // deliberately the opposite nesting to the obvious one. What has to stay
+  // readable is the TaskRow, and its width is set by the INNERMOST container, so
+  // the right question is which arrangement gives the row the width 7.3 already
+  // proved fits. Member cards in the two-column grid would put an entity card
+  // inside a ~500px column, leaving the row ~450px after two levels of padding —
+  // narrower than anything on the page today. Full-width member cards give the
+  // nested entity grid the SAME ~500px column as the own region, i.e. the width
+  // that was measured rather than a new one. It also reads better collapsed: ten
+  // full-width name+count rows stack into a scannable roster, where ten
+  // half-width ones make a ragged 5×2 block that has to be read in two
+  // directions — and the roster is the point of this layout.
+  //
+  // CARD_GRID is reused verbatim, which is what that constant exists for: the
+  // breakpoint, the RTL flow and items-start stay in step with the own region.
+  const renderMemberCard = (member: { id: string; name: string; deptLabel: string }) => {
+    const items = teamByMember.get(member.id) ?? [];
+    const key = `team-member:${member.id}`;
+    // COLLAPSED BY DEFAULT (owner ruling) — a branch_manager may have ten.
+    const open = isOpen(key, false);
+    const byCard = groupIntoCards(items);
+    return (
+      <div key={member.id} className="rounded-lg border p-3 space-y-2" data-testid={`team-member-${member.id}`}>
+        <GroupHeader
+          open={open}
+          onToggle={() => toggle(key)}
+          // The department rides in the title rather than in a group wrapping
+          // the card — see the roster note above.
+          title={member.deptLabel ? `${member.name} — ${member.deptLabel}` : member.name}
+          count={items.length}
+          icon={Users}
+          titleClass="text-sm font-bold"
+          testId={`team-member-header-${member.id}`}
+        />
+        {open && (items.length === 0
+          // The roster restoration itself: a member with nothing to do still
+          // occupies a card and says so, instead of vanishing off the page.
+          ? <p className="ps-6 text-xs text-muted-foreground">لا يوجد</p>
+          : (
+            <div className={CARD_GRID}>
+              {TASK_CARDS.map((card) =>
+                renderTaskCard(card, byCard, `member-card:${member.id}`, `member-${member.id}`))}
+            </div>
+          ))}
+      </div>
+    );
+  };
+
+  // The unassigned pool — tasks with ownerId "" — has no member to sit under, so
+  // it gets a card of its own at the TOP of the team region, above the roster.
+  //
+  // 🔴 IT OPENS BY DEFAULT, the one card here that does, and that is a judgment
+  // call rather than an oversight. The collapse-by-default ruling is a VOLUME
+  // argument ("a branch_manager may have ten") and the pool is always exactly
+  // one card, so the argument does not reach it. Against that, this is the only
+  // group on the page that is a call to action — it is how work gets assigned —
+  // and it is also the one group whose contents nobody owns, so a collapsed pool
+  // is work that no one is looking for. UserPlus is the icon the feed already
+  // uses for every *_unassigned kind, so the card reads as "needs assigning"
+  // before its title is read.
+  const renderPoolCard = () => {
+    if (unassignedPool.length === 0) return null;
+    const key = "team-pool";
+    const open = isOpen(key);
+    const byCard = groupIntoCards(unassignedPool);
+    return (
+      <div className="rounded-lg border border-dashed p-3 space-y-2" data-testid="team-pool">
+        <GroupHeader
+          open={open}
+          onToggle={() => toggle(key)}
+          title="مهام غير مُسندة"
+          count={unassignedPool.length}
+          icon={UserPlus}
+          titleClass="text-sm font-bold"
+          testId="team-pool-header"
+        />
+        {open && (
+          <div className={CARD_GRID}>
+            {TASK_CARDS.map((card) => renderTaskCard(card, byCard, "pool-card"))}
           </div>
         )}
       </div>
@@ -1403,7 +1621,7 @@ export default function MyTasksPage() {
           {/* No urgent section: PINNED_KINDS float to the top INSIDE each card
               via pinAndSort, so a hearing still leads جلسات without a band of its
               own above everything. */}
-          <section className="space-y-3" data-testid="section-own-cards">
+          <section data-testid="section-own-cards">
             {own.length === 0 && team.length === 0 ? (
               // Distinguishes "you have nothing to do" from "your filters
               // matched nothing" — the same blank page otherwise, and the second
@@ -1412,28 +1630,37 @@ export default function MyTasksPage() {
                 {isFiltering ? "لا توجد نتائج مطابقة." : "لا توجد مهام."}
               </p>
             ) : (
-              TASK_CARDS.map((card) => renderTaskCard(card, ownCards, "card"))
+              // renderTaskCard returns null for an empty card, and a null child
+              // occupies no grid cell — so hidden cards leave no gap and the
+              // remaining ones close up.
+              <div className={CARD_GRID}>
+                {TASK_CARDS.map((card) => renderTaskCard(card, ownCards, "card"))}
+              </div>
             )}
           </section>
 
-          {/* ===== THE TEAM REGION — the same six cards, ownerScope "team" =====
-              Rendered only when there is something in it, which by construction
-              means only for a supervisor: scopeOf() tags a row "team" only for a
-              department_head looking at their department or a branch_manager
-              looking firm-wide. A plain employee never reaches this. */}
-          {team.length > 0 && (
+          {/* ===== THE TEAM REGION — GROUPED BY MEMBER (owner ruling) =====
+              The unassigned pool first (it is the actionable one), then one
+              full-width card per team member, each holding that member's own six
+              entity cards. Reached only by a supervisor: the roster is empty for
+              every other role and scopeOf() tags no row "team" for them either,
+              so both terms of the condition are false and the region never
+              renders for a plain employee.
+
+              Members are STACKED, not gridded — the nesting rationale is on
+              renderMemberCard. The section also renders when there are zero team
+              TASKS but a non-empty roster: that is the case the roster exists
+              for. */}
+          {(visibleMembers.length > 0 || unassignedPool.length > 0) && (
             <section className="space-y-3 border-t pt-5" data-testid="section-team-cards">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" /> مهام الفريق
               </h2>
-              {TASK_CARDS.map((card) => renderTaskCard(card, teamCards, "team-card"))}
+              {renderPoolCard()}
+              <div className="space-y-3">{visibleMembers.map(renderMemberCard)}</div>
             </section>
           )}
 
-          {/* branch_manager — firm-wide: department→member tree (collapsible at
-              both levels, item 6), a dedicated admin_support section (item 8,
-              also where turki/item 3 lands), every member shown even at zero
-              tasks (item 5), and the unassigned pool to assign from (item 2). */}
           {/* ===== "منجزة" archive — collapsed by default, at the bottom.
               Closed general tasks move here out of the active feed. Lazy-loaded
               on expand; grouped by worker for supervisors, flat for a user. ===== */}
