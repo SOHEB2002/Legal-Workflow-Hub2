@@ -1,6 +1,6 @@
 import { apiRequest } from "@/lib/queryClient";
 import { NotificationType, NotificationPriority, NotificationStatus } from "@shared/schema";
-import type { NotificationTypeValue, NotificationPriorityValue, User } from "@shared/schema";
+import type { NotificationTypeValue, NotificationPriorityValue } from "@shared/schema";
 
 function getCurrentUser(): { id: string; name: string; role: string } | null {
   const stored = localStorage.getItem("lawfirm_user");
@@ -12,31 +12,14 @@ function getCurrentUser(): { id: string; name: string; role: string } | null {
   }
 }
 
-let cachedUsers: User[] | null = null;
-let cacheTimestamp = 0;
-// 30s was causing ~1,900 /api/users calls/week across all workflow trigger actions.
-// 5 minutes is plenty — the users list changes infrequently.
-const CACHE_TTL = 300000;
-
-async function getUsers(): Promise<User[]> {
-  const now = Date.now();
-  if (cachedUsers && now - cacheTimestamp < CACHE_TTL) {
-    return cachedUsers;
-  }
-  try {
-    const res = await apiRequest("GET", "/api/users");
-    cachedUsers = await res.json();
-    cacheTimestamp = now;
-    return cachedUsers!;
-  } catch (err) {
-    console.error("Failed to fetch users for notifications:", err);
-  }
-  return cachedUsers || [];
-}
-
-function findUsersByRole(users: User[], role: string): User[] {
-  return users.filter(u => u.role === role && u.isActive);
-}
+// 🔴 getUsers, its 5-minute cache (cachedUsers / cacheTimestamp / CACHE_TTL) and
+// findUsersByRole WERE DELETED WITH requestCaseTransfer, their last caller.
+// Every remaining trigger in this file addresses a recipient the CALLER already
+// knows, so nothing here needs the roster any more; the server-side fan-outs
+// that replaced these (resolveNotificationRecipients) read it from the database
+// instead. Restoring a client-side roster fetch here would also restore the
+// ~1,900 /api/users calls a week the cache existed to suppress.
+// See the findDepartmentHead note directly below — same lesson, same file.
 
 // 🔴 findDepartmentHead WAS DELETED WITH ITS TWO CALLERS — do not reinstate it.
 // It resolved the head with `.find`, so a department with two active heads
@@ -246,46 +229,4 @@ export async function sendMemoReminder(
   message: string,
 ) {
   await sendReminder("memo", memoId, reminderType, message);
-}
-
-export async function requestCaseTransfer(
-  caseId: string,
-  caseNumber: string,
-  fromDepartmentName: string,
-  toDepartmentId: string,
-  toDepartmentName: string,
-  reason: string,
-) {
-  const users = await getUsers();
-  const currentUser = getCurrentUser();
-  const recipients = [
-    ...findUsersByRole(users, "branch_manager"),
-    ...findUsersByRole(users, "cases_review_head"),
-  ];
-  for (const recipient of recipients) {
-    try {
-      await apiRequest("POST", "/api/notifications", {
-        type: NotificationType.GENERAL_ALERT,
-        priority: NotificationPriority.HIGH,
-        status: NotificationStatus.SENT,
-        title: `طلب تحويل قضية ${caseNumber} إلى ${toDepartmentName}`,
-        message: `طلب تحويل القضية رقم ${caseNumber} من ${fromDepartmentName} إلى ${toDepartmentName}.\nالسبب: ${reason}\nمقدم الطلب: ${currentUser?.name || "غير معروف"}\n[DEPT_ID:${toDepartmentId}]`,
-        senderId: currentUser?.id || "system",
-        senderName: currentUser?.name || "النظام",
-        recipientId: recipient.id,
-        relatedType: "case",
-        relatedId: caseId,
-        isRead: false,
-        readAt: null,
-        response: null,
-        requiresResponse: true,
-        scheduledAt: null,
-        escalationLevel: 0,
-        escalatedTo: null,
-        autoEscalateAfterHours: 24,
-      });
-    } catch (err) {
-      console.error("Failed to send transfer request:", err);
-    }
-  }
 }
