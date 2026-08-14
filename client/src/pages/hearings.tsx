@@ -506,6 +506,53 @@ export default function HearingsPage() {
     }
   };
 
+  // ===== ATTENDING-LAWYER CANDIDATES, SCOPED TO THE PARENT CASE'S DEPARTMENT =====
+  // Owner ruling: every assign control lists only members of the RECORD's
+  // department. All THREE hearing controls (create / edit / reassign) listed
+  // `users.filter(u => u.canBeAssignedCases && u.isActive)` — the whole firm — so
+  // a Labor case's hearing could be handed to a Commercial lawyer.
+  //
+  // A HEARING HAS NO DEPARTMENT COLUMN. It resolves through hearings.caseId → the
+  // parent case's departmentId, the same hop memos take (959f568) and the same
+  // one the server already makes to gate hearing actions (canActOnHearing loads
+  // the parent case).
+  //
+  // 🔴 THIS DOES NOT BREAK المترافع, which was the thing worth checking before
+  // touching it. litigatorId is the court-appearance override for when the
+  // responsible lawyer cannot plead — but its OWN picker in the cases assign
+  // dialog is already department-filtered, with the comment "Department filter
+  // kept so the picker stays scoped like its siblings". So a المترافع is drawn
+  // from the case's own department too, and cross-department attendance is not a
+  // supported pattern. The default this list must contain —
+  // `litigatorId || primaryLawyerId || responsibleLawyerId` — is therefore always
+  // already a member of that department, so scoping can never strand it.
+  //
+  // 🔴 FAILS CLOSED. No case selected, an unresolvable caseId, or a parent case
+  // with an empty department yields an EMPTY list plus a line saying which —
+  // never the whole firm. Falling open is the defect being fixed.
+  const attendingCandidatesFor = (caseId: string | null | undefined) => {
+    const deptId = caseId ? (getCaseById(caseId)?.departmentId || "") : "";
+    const options = deptId
+      ? users.filter((u) => u.canBeAssignedCases && u.isActive
+          && !!u.departmentId && String(u.departmentId) === String(deptId))
+      : [];
+    return { deptId, options };
+  };
+
+  // The read-only department line shown above each list. 🔴 DELIBERATELY NOT
+  // EDITABLE, which is where this differs from the consultations dialog: there,
+  // changing the department TRANSFERS the record, so the control does something.
+  // A hearing has no department of its own — changing it here would move nothing
+  // and would only widen the candidate list, which is precisely the leak being
+  // closed. It is shown, not offered.
+  const renderAttendingDeptLine = (deptId: string) => (
+    <p className="text-xs text-muted-foreground mt-1">
+      {deptId
+        ? <>القسم: <strong>{getDepartmentName(deptId)}</strong> — تظهر أسماء هذا القسم فقط</>
+        : "تعذّر تحديد قسم القضية — لا يمكن اختيار محامٍ"}
+    </p>
+  );
+
   const openReassignDialog = (hearing: Hearing) => {
     setReassignLawyerId(hearing.attendingLawyerId || "");
     setReassignDialogHearing(hearing);
@@ -905,11 +952,17 @@ export default function HearingsPage() {
                       <SelectValue placeholder="المحامي المكلف بالقضية (تلقائي)" />
                     </SelectTrigger>
                     <SelectContent>
-                      {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                      {attendingCandidatesFor(formData.caseId).options.map((u) => (
                         <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                       ))}
+                      {attendingCandidatesFor(formData.caseId).options.length === 0 && (
+                        <div className="px-2 py-3 text-xs text-muted-foreground text-center">
+                          {formData.caseId ? "لا يوجد محامون في قسم هذه القضية" : "اختر القضية أولاً"}
+                        </div>
+                      )}
                     </SelectContent>
                   </Select>
+                  {renderAttendingDeptLine(attendingCandidatesFor(formData.caseId).deptId)}
                   <p className="text-xs text-muted-foreground mt-1">يتم تعيين المحامي المكلف بالقضية تلقائياً</p>
                 </div>
               )}
@@ -1686,11 +1739,17 @@ export default function HearingsPage() {
                     <SelectValue placeholder="اختر المحامي" />
                   </SelectTrigger>
                   <SelectContent>
-                    {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                    {attendingCandidatesFor(editDialogHearing?.caseId).options.map((u) => (
                       <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                     ))}
+                    {attendingCandidatesFor(editDialogHearing?.caseId).options.length === 0 && (
+                      <div className="px-2 py-3 text-xs text-muted-foreground text-center">
+                        لا يوجد محامون في قسم هذه القضية
+                      </div>
+                    )}
                   </SelectContent>
                 </Select>
+                {renderAttendingDeptLine(attendingCandidatesFor(editDialogHearing?.caseId).deptId)}
               </div>
             )}
             <div>
@@ -1739,11 +1798,17 @@ export default function HearingsPage() {
                   <SelectValue placeholder="اختر المحامي" />
                 </SelectTrigger>
                 <SelectContent>
-                  {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                  {attendingCandidatesFor(reassignDialogHearing?.caseId).options.map((u) => (
                     <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                   ))}
+                  {attendingCandidatesFor(reassignDialogHearing?.caseId).options.length === 0 && (
+                    <div className="px-2 py-3 text-xs text-muted-foreground text-center">
+                      لا يوجد محامون في قسم هذه القضية
+                    </div>
+                  )}
                 </SelectContent>
               </Select>
+              {renderAttendingDeptLine(attendingCandidatesFor(reassignDialogHearing?.caseId).deptId)}
             </div>
           </div>
           <DialogFooter className="flex gap-2">
