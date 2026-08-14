@@ -3387,6 +3387,10 @@ export interface ConsultationDeliveryExtension {
 export const ConsultationActivityType = {
   CREATED:                "created",
   ASSIGNED:               "assigned",
+  // The consultation moved to another department. Mirrors the cases-side
+  // department_transferred actionType and ContractActivityType's own member.
+  // Type-only: activity_type is free text, so no migration.
+  DEPARTMENT_TRANSFERRED: "department_transferred",
   STAGE_ADVANCED:         "stage_advanced",
   STAGE_RETURNED:         "stage_returned",
   INTERNAL_REVIEW:        "internal_review",
@@ -3434,6 +3438,7 @@ export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValu
   reopened:                 "إعادة فتح",
   created:                  "إنشاء",
   assigned:                 "إسناد",
+  department_transferred:   "تحويل لقسم آخر",
   stage_advanced:           "تقدم في المرحلة",
   stage_returned:           "إرجاع للمرحلة السابقة",
   internal_review:          "مراجعة داخلية",
@@ -5528,6 +5533,10 @@ export const updateCaseMohrSchema = z.object({
 // assignedTo mirrors Consultation.assignedTo: string | null.
 export const assignConsultationSchema = z.object({
   assignedTo: z.string().nullable().optional(),
+  // The assign dialog's القسم control now TRANSFERS the consultation instead of
+  // merely filtering the lawyer list. Optional and tolerant: a body without it
+  // assigns exactly as before.
+  departmentId: z.string().optional(),
 }).passthrough();
 
 export const startConsultationFollowUpSchema = z.object({

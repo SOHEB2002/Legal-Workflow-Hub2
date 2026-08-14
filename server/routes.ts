@@ -5724,10 +5724,16 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      const resolvedType = resolveConsultationType(consultation.consultationType);
-      const allowedRoles = resolvedType === ConsultationType.WRITTEN
-        ? ["admin_support", "department_head", "branch_manager"]
-        : ["department_head", "branch_manager"];
+      // 🔴 PART 4 — admin_support now assigns EVERY consultation type, in every
+      // department (owner ruling). The list used to branch on the resolved type,
+      // admitting admin_support for مكتوبة only and 403-ing them on هاتفية and
+      // إجرائية — the single genuine gap in "admin_support assigns everything";
+      // they already pass every other assignment gate in the app (cases, memos,
+      // contracts, field tasks). The type branch is gone, so ONE list serves both
+      // paths. department_head and branch_manager are unchanged and no other role
+      // gains anything: the set is a strict superset of the old one by exactly
+      // admin_support-on-non-written.
+      const allowedRoles = ["admin_support", "department_head", "branch_manager"];
       if (!allowedRoles.includes(reqUser.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
       }
@@ -5750,13 +5756,84 @@ export async function registerRoutes(
       const lawyer = await storage.getUser(assignedTo);
       const lawyerName = lawyer?.name || assignedTo;
 
-      const updated = await storage.updateConsultationAndLog(consultation.id, { assignedTo }, {
+      // 🔴 PART 1 — THE القسم CONTROL NOW TRANSFERS, instead of only filtering the
+      // lawyer list. The dialog has always shown a department picker; it was
+      // never sent, so choosing another department moved nobody and the
+      // consultation stayed put while the assignee changed — landing (say) a
+      // Labor consultation on a Commercial lawyer. That was the reported bug.
+      //
+      // OPTIONAL AND BACKWARD-COMPATIBLE: a body without departmentId assigns
+      // exactly as before, so every other caller of this endpoint is unaffected.
+      const requestedDeptId = typeof req.body?.departmentId === "string" ? req.body.departmentId.trim() : "";
+      const isTransfer = !!requestedDeptId && requestedDeptId !== consultation.departmentId;
+      if (requestedDeptId) {
+        const targetDept = await storage.getDepartmentById(requestedDeptId);
+        if (!targetDept) return res.status(400).json({ error: "القسم المحدد غير موجود" });
+      }
+
+      // 🔴 WHAT MOVES WITH THE DEPARTMENT — deliberately NOT the case path's
+      // full reset, which would destroy work here:
+      //   • currentStage — NOT reset. The case transfer sends a case back to
+      //     استلام so the new department starts fresh, but a case transfer is a
+      //     BARE move; this is a move WITH an assignment, and a consultation
+      //     already at تحرير or لجنة_مراجعة would lose every stage it had earned.
+      //   • assignedTo — obviously NOT cleared: this same request sets it. The
+      //     case path only clears lawyers because isDeptTransfer is defined to
+      //     EXCLUDE a simultaneous assignment (routes.ts, "a body that moved the
+      //     case AND set responsibleLawyerId was previously treated as a bare
+      //     transfer, so the clear-out below wiped the lawyer the same request
+      //     had just assigned").
+      //   • internalReviewerId — CLEARED, and this one DOES carry over from the
+      //     case path, for the reason recorded there: the reviewer was chosen
+      //     from the SOURCE department's roster and is not a valid reviewer for
+      //     the destination. Leaving them would also hand a reviewer from the old
+      //     department live authority over a record that is no longer theirs,
+      //     which is the cross-department leak this whole change exists to close.
+      //     It loses a designation, not work product; the new department's head
+      //     re-picks one.
+      //
+      // ⚠ NO REASON IS RECORDED, unlike the case transfer, because this dialog
+      // has no reason field and adding a mandatory one is a product decision.
+      // The activity row still names both departments and the actor.
+      //
+      // 🔴 THE CASE-SIDE COLLISION HAZARD DOES NOT EXIST HERE, and not by luck:
+      // there is no isDeptTransfer flow on this endpoint and none in the
+      // consultation PATCH either, so nothing rewrites the body behind us. Both
+      // fields go into ONE updateConsultationAndLog call — a single UPDATE — so
+      // there is no second write that could clobber the first.
+      const updateFields: Record<string, unknown> = { assignedTo };
+      if (isTransfer) {
+        updateFields.departmentId = requestedDeptId;
+        updateFields.internalReviewerId = null;
+      }
+
+      const updated = await storage.updateConsultationAndLog(consultation.id, updateFields, {
         activityType: ConsultationActivityType.ASSIGNED,
         description: `تم إسناد الاستشارة لـ ${lawyerName}`,
         metadata: { assignedTo, lawyerName },
         performedBy: reqUser.id,
       });
       if (!updated) return res.status(500).json({ error: "فشل تحديث الاستشارة" });
+
+      // The transfer gets its OWN activity row, in addition to the assignment
+      // one, so the timeline reads as the two distinct facts it is. Written
+      // after the update succeeded, and non-fatal — a logging failure must never
+      // undo an assignment that already landed.
+      if (isTransfer) {
+        try {
+          const fromName = (await storage.getDepartmentById(consultation.departmentId))?.name || consultation.departmentId;
+          const toName = (await storage.getDepartmentById(requestedDeptId))?.name || requestedDeptId;
+          await storage.createConsultationActivity({
+            consultationId: consultation.id,
+            activityType: ConsultationActivityType.DEPARTMENT_TRANSFERRED,
+            description: `تم تحويل الاستشارة من ${fromName} إلى ${toName}`,
+            metadata: { fromDepartmentId: consultation.departmentId, toDepartmentId: requestedDeptId, fromName, toName },
+            performedBy: reqUser.id,
+          });
+        } catch (e) {
+          console.error("[consultations/assign] transfer activity log failed:", e);
+        }
+      }
       res.json(updated);
     } catch (error: any) {
       res.status(500).json({ error: error.message });

@@ -1791,12 +1791,18 @@ export default function ConsultationsPage() {
     if (!assignConsultationId || !assignData.lawyerId) return;
     setActionInProgress(true);
     try {
-      // The /assign endpoint sets assignedTo and, when currentStage is
-      // RECEIVED, advances to STUDY in the same write. departmentId is
-      // already set on the consultation; the dept dropdown above is only
-      // used here to filter the lawyer list.
+      // 🔴 departmentId IS NOW SENT. It never used to be — the القسم control
+      // filtered the lawyer list and nothing else, so picking another department
+      // moved nobody while the assignment still landed, leaving (for example) a
+      // Labor consultation assigned to a Commercial lawyer. The server treats a
+      // departmentId that differs from the current one as a transfer: it writes
+      // the department, clears the source department's internal reviewer, and
+      // logs a تحويل لقسم آخر activity row alongside the إسناد one. Sending the
+      // UNCHANGED department is a no-op there, so the ordinary same-department
+      // assign is unaffected.
       await apiRequest("POST", `/api/consultations/${assignConsultationId}/assign`, {
         assignedTo: assignData.lawyerId,
+        departmentId: assignData.departmentId,
       });
       await refreshConsultations();
       toast({ title: "تم إسناد الاستشارة بنجاح" });
