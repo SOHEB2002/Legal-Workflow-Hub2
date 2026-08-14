@@ -173,11 +173,24 @@ export function HearingRing() {
   const handleCheckIn = async (item: HearingRingItem) => {
     setSubmittingId(item.hearingId);
     try {
-      await checkInHearing(item.hearingId);
-      toast({ title: "تم تحضير الجلسة" });
+      // 🔴 THE FLAG IS READ NOW. It was discarded, so a 2nd and 3rd press each
+      // toasted «تم تحضير الجلسة» exactly like the first — which is what made
+      // the old lag feel like a dead button rather than a slow one: the user
+      // pressed again precisely BECAUSE the ring had not stopped, and was told
+      // "done" again. hearings.tsx has always consumed this flag; the ring did
+      // not, so one context function was reported honestly in one place and not
+      // the other.
+      //
+      // The repeat message is NOT an error and must not read as one: the hearing
+      // IS prepared, which is exactly what the user wanted. It states the
+      // existing fact instead of claiming a fresh success.
+      const { alreadyCheckedIn } = await checkInHearing(item.hearingId);
+      toast({ title: alreadyCheckedIn ? "الجلسة محضّرة مسبقاً" : "تم تحضير الجلسة" });
       // No local "silence it" flag: the check-in makes the row stop matching
-      // ring-state, and the server pushes a stop event. The ring ends because
-      // the DATA changed, which is the same reason it ends for everyone else.
+      // ring-state, and checkInHearing now invalidates that query, so the ring
+      // ends because the DATA changed — the same reason it ends for everyone
+      // else. The server's ring-stop push (now addressed to the actor as well as
+      // the attending lawyer) is the accelerator for this user's OTHER tabs.
     } catch (e: any) {
       toast({ title: "تعذّر تحضير الجلسة", description: extractApiError(e), variant: "destructive" });
     } finally {

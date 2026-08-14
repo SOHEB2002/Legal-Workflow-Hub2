@@ -15019,8 +15019,29 @@ export async function registerRoutes(
       // fire-and-forget in-memory fan-out with no failure mode worth failing a
       // durable check-in over, which is why it sits after the response is
       // already assured and is not awaited into the error path.
-      if (hearing.attendingLawyerId) {
-        sendToUser(hearing.attendingLawyerId, { type: "hearing:ring-stop", payload: { hearingId } });
+      // 🔴 THE ACTOR GETS IT TOO, AND THAT WAS THE BUG. This pushed to the
+      // attending lawyer ALONE, but canCheckInHearing admits the attending
+      // lawyer, the own-department department_head AND branch_manager — so
+      // whenever anyone OTHER than the attending lawyer prepared a session,
+      // the person who just clicked received nothing and kept ringing for up to
+      // 30s while their toast said success. They pressed again, the endpoint
+      // returned alreadyCheckedIn, and it said success again.
+      //
+      // 🔴 PURELY ADDITIVE — the attending lawyer STILL receives it when someone
+      // else checks in for them; nobody's delivery was narrowed. The Set
+      // de-duplicates the ordinary case where the actor IS the attending lawyer,
+      // so that person gets one event rather than two.
+      const ringStopRecipients = new Set<string>();
+      if (hearing.attendingLawyerId) ringStopRecipients.add(hearing.attendingLawyerId);
+      ringStopRecipients.add(reqUser.id);
+      // ⚠ TIERS 2-4 (the case's department, admin_support, branch_manager) are
+      // deliberately NOT pushed to here — they still stop on their next poll,
+      // within 30s. Reaching them is NOT the same push: it needs the department
+      // resolved from the parent case plus a getRingRecipientCandidates read and
+      // a per-user resolveHearingRingTier pass — a query and a fan-out on a path
+      // that currently has neither. See the batch report for the recommendation.
+      for (const uid of Array.from(ringStopRecipients)) {
+        sendToUser(uid, { type: "hearing:ring-stop", payload: { hearingId } });
       }
 
       res.json({ hearing: updated, alreadyCheckedIn: false });

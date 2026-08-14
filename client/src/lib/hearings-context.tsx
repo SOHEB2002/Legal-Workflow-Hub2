@@ -206,6 +206,21 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     const payload = await res.json();
     if (payload?.hearing?.id) upsertLocal(payload.hearing);
     scheduleBackgroundRefetch();
+    // 🔴 THE RING QUERY IS ITS OWN CACHE ENTRY AND MUST BE INVALIDATED HERE.
+    // upsertLocal and scheduleBackgroundRefetch both touch the HEARINGS list;
+    // /api/hearings/ring-state is a separate key that neither reaches, so the
+    // ring kept rendering from a stale array until its 30s poll came round —
+    // even though checked_in_at was already set and the row would no longer
+    // match. handleAcknowledge in hearing-ring.tsx has always invalidated it;
+    // this is the same line, on the path that was missing it.
+    //
+    // Placed in the CONTEXT rather than in the ring component so every caller
+    // gets it: hearings.tsx's per-row تحضير button silences the ring too, which
+    // it did not before.
+    //
+    // Awaited so the caller's `await checkInHearing(...)` resolves AFTER the
+    // re-derive is under way, not before it.
+    await queryClient.invalidateQueries({ queryKey: ["/api/hearings/ring-state"] });
     return { alreadyCheckedIn: !!payload?.alreadyCheckedIn };
   };
 
