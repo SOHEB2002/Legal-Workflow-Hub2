@@ -695,6 +695,33 @@ export default function MemosPage() {
     setReminderMemo(null);
   };
 
+  // ===== PART 3 — the memo assign list is scoped to the RECORD's department =====
+  // Owner ruling 2: every assign control lists only members of the RECORD's
+  // department. This list filtered on NOTHING — `canBeAssignedCases && isActive`
+  // over the whole firm — so a Labor memo could be handed to a Commercial lawyer
+  // in one click. It was the most open assign control in the app.
+  //
+  // A memo carries NO department column, so it resolves through
+  // memos.caseId → the parent case's departmentId. That is the same hop the
+  // SERVER already makes to gate this action (routes.ts, reassignParentCase →
+  // canActAtDepartmentTier), so client and server now scope on one rule instead
+  // of the client being wide open and the server narrow.
+  //
+  // 🔴 IT FAILS CLOSED. A memo with no caseId, a caseId that resolves to no case,
+  // or a parent case with an empty department yields an EMPTY list plus a line
+  // saying why — never the whole firm. Falling open is what created this bug.
+  const reassignMemoParentDeptId = useMemo(() => {
+    if (!reassignMemoDialog?.caseId) return "";
+    return cases.find((c) => c.id === reassignMemoDialog.caseId)?.departmentId || "";
+  }, [reassignMemoDialog, cases]);
+  const memoAssignCandidates = useMemo(() => {
+    if (!reassignMemoParentDeptId) return [];
+    return users.filter(
+      (u) => u.canBeAssignedCases && u.isActive
+        && !!u.departmentId && u.departmentId === reassignMemoParentDeptId,
+    );
+  }, [users, reassignMemoParentDeptId]);
+
   const handleReassignMemo = async () => {
     if (!reassignMemoDialog || !reassignMemoAssignedTo) return;
     setSubmitting(true);
@@ -1830,9 +1857,18 @@ export default function MemosPage() {
                   <SelectValue placeholder="اختر المحامي" />
                 </SelectTrigger>
                 <SelectContent>
-                  {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
+                  {memoAssignCandidates.map((u) => (
                     <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                   ))}
+                  {/* A memo whose department cannot be resolved lists NOBODY and
+                      says why, rather than falling open to the whole firm. */}
+                  {memoAssignCandidates.length === 0 && (
+                    <div className="px-2 py-3 text-xs text-muted-foreground text-center">
+                      {reassignMemoParentDeptId
+                        ? "لا يوجد محامون في قسم هذه المذكرة"
+                        : "تعذّر تحديد قسم المذكرة — لا يمكن الإسناد من هنا"}
+                    </div>
+                  )}
                 </SelectContent>
               </Select>
             </div>
