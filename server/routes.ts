@@ -15034,12 +15034,60 @@ export async function registerRoutes(
       const ringStopRecipients = new Set<string>();
       if (hearing.attendingLawyerId) ringStopRecipients.add(hearing.attendingLawyerId);
       ringStopRecipients.add(reqUser.id);
-      // ⚠ TIERS 2-4 (the case's department, admin_support, branch_manager) are
-      // deliberately NOT pushed to here — they still stop on their next poll,
-      // within 30s. Reaching them is NOT the same push: it needs the department
-      // resolved from the parent case plus a getRingRecipientCandidates read and
-      // a per-user resolveHearingRingTier pass — a query and a fan-out on a path
-      // that currently has neither. See the batch report for the recommendation.
+
+      // 🔔 TIERS 2-4 — the case's department, every admin_support, every
+      // branch_manager. They used to wait out their 30s poll, which is the same
+      // complaint one tier down: a department member ringing for a session that
+      // was prepared twenty seconds ago.
+      //
+      // 🔴 THE SAME TWO FUNCTIONS THE SCHEDULER AND THE ENDPOINT ALREADY USE —
+      // storage.getRingRecipientCandidates for the roster and
+      // resolveHearingRingTier for the membership test. NOT a second fan-out:
+      // if the rule that decides who RINGS could ever diverge from the rule that
+      // decides who STOPS, they eventually would, and someone would be left
+      // ringing for a hearing that is already prepared. One rule, three callers.
+      //
+      // ⚠ NO WINDOW CHECK HERE, and that is deliberate rather than an omission.
+      // The scheduler filters by isRingWindowOpen because it decides when a ring
+      // STARTS; a stop has no such moment. Testing the window would (a) lose a
+      // race against anyone whose tier opens between this query and the push, and
+      // (b) buy nothing — checked_in_at is already set, so a recipient who was
+      // not ringing re-derives an unchanged empty ring. The event is
+      // content-free, so a spurious one costs exactly one invalidation.
+      //
+      // ⚠ THE TIER SCOPES ARE UNTOUCHED. admin_support and branch_manager remain
+      // firm-wide by owner ruling — they are the cross-department safety net and
+      // neither reliably carries a departmentId — so resolveHearingRingTier
+      // admits them here exactly as it does in the ring itself. Nobody is
+      // narrowed and nobody is widened.
+      //
+      // 🔴 TOTALLY FAIL-SAFE. The whole block sits in its own try/catch that only
+      // logs, mirroring the activity-log guarantee directly above: the check-in
+      // is already durable by this point, and a roster read that throws — or a
+      // parent case that will not resolve — must never turn a preparation the
+      // user has made into an error. The 30s poll remains the authoritative
+      // stop, so the worst outcome of a failure here is the behaviour that
+      // shipped before this commit.
+      try {
+        const parentCase = hearing.caseId ? await storage.getCaseById(hearing.caseId) : null;
+        const caseDepartmentId = parentCase?.departmentId ?? null;
+        // Scoped to the ONE department that could tier-match, never getAllUsers;
+        // an empty list still returns admin_support + branch_manager, which is
+        // correct for a case whose department cannot be resolved.
+        const candidates = await storage.getRingRecipientCandidates(
+          caseDepartmentId ? [caseDepartmentId] : [],
+        );
+        for (const u of candidates) {
+          const tier = resolveHearingRingTier(u, {
+            attendingLawyerId: hearing.attendingLawyerId,
+            caseDepartmentId,
+          });
+          if (tier) ringStopRecipients.add(u.id);
+        }
+      } catch (e) {
+        console.error("[hearings/check-in] ring-stop tier fan-out failed — falling back to the poll", e);
+      }
+
       for (const uid of Array.from(ringStopRecipients)) {
         sendToUser(uid, { type: "hearing:ring-stop", payload: { hearingId } });
       }
