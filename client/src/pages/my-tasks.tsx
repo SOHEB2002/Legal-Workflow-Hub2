@@ -263,6 +263,39 @@ const AUTHORITY_GATED_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.CONTRACT_UNASSIGNED,
 ]);
 
+// 🔴 THE SAME RULE, KEYED ON THE SPLIT TYPE KEY INSTEAD OF THE KIND — and that
+// is forced by the data, not a stylistic choice. Both of these ARE
+// MyTaskKind.CASE_WORK, the very same kind as ordinary stage work and as the
+// settlement-direction row, so adding them to the set above would have disabled
+// every case_work row on the page. taskTypeKey already splits CASE_WORK four
+// ways on the server's id prefix (see CASE_WORK_PREFIXES), so it is the only
+// handle fine enough to name these two without catching their siblings.
+//
+// Both are gated canActOnMohrSettlement — branch_manager | own-dept
+// department_head | assigned lawyer — which is exactly the shape
+// canActingUserAct expresses, so the predicate itself needs no change.
+//
+// WHY THEY NEEDED FIXING AT ALL, given they never 403: their button deep-links,
+// cases.tsx re-checks permission on arrival, and DEGRADES TO MERELY OPENING THE
+// CASE. An unauthorised user therefore clicked and got a case dialog with no
+// explanation — worse than a refusal, because silence reads as the feature being
+// broken rather than as a permission boundary.
+//
+// ⚠ opponent_response is the third CASE_WORK split and is DELIBERATELY ABSENT:
+// its endpoint is gated canActOnHearing, a DIFFERENT set (it admits
+// admin_support and keys on the hearing's ATTENDING lawyer, not the case's
+// assigned one), so canActingUserAct would give a wrong answer for it. See the
+// batch report.
+const AUTHORITY_GATED_TYPE_KEYS = new Set<string>([
+  "judgment_deed",
+  "appeal_window",
+]);
+
+const AUTHORITY_BLOCKED_TYPE_REASON: Record<string, string> = {
+  judgment_deed: "متابعة استلام الصك من صلاحية المحامي المسؤول أو رئيس القسم أو مدير الفرع",
+  appeal_window: "تسجيل نتيجة مهلة الاعتراض من صلاحية المحامي المسؤول أو رئيس القسم أو مدير الفرع",
+};
+
 // The honest reason, per kind. Each mirrors the SERVER's own refusal wording so
 // the tooltip and the 403 a determined user could still provoke say the same
 // thing. NEVER the generic "سيتم تفعيل هذا الإجراء قريباً" — that string means
@@ -737,9 +770,18 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   // `actionable` and AND-ed into it, so a blocked row is disabled no matter which
   // arm would otherwise have enabled it. null = not authority-blocked, which is
   // every row for every viewer who can act (see canActingUserAct).
-  const authorityBlockedReason = AUTHORITY_GATED_KINDS.has(task.kind) && !canActingUserAct(task, user)
-    ? (AUTHORITY_BLOCKED_REASON[task.kind] ?? null)
-    : null;
+  //
+  // TWO LOOKUPS, ONE PREDICATE: by KIND for the four from 37ec3de, and by the
+  // SPLIT TYPE KEY for the two CASE_WORK variants that share their kind with
+  // ordinary case work. canActingUserAct is evaluated once and answers both.
+  const authorityTypeKey = taskTypeKey(task);
+  const authorityBlockedReason = canActingUserAct(task, user)
+    ? null
+    : AUTHORITY_GATED_KINDS.has(task.kind)
+      ? (AUTHORITY_BLOCKED_REASON[task.kind] ?? null)
+      : AUTHORITY_GATED_TYPE_KEYS.has(authorityTypeKey)
+        ? (AUTHORITY_BLOCKED_TYPE_REASON[authorityTypeKey] ?? null)
+        : null;
   const actionable = !authorityBlockedReason && (actionModeFor(task) !== null || HEARING_RESULT_KINDS.has(task.kind)
     || isCaseStageKind(task) || task.kind === MyTaskKind.MEMO_PENDING
     // consultation_work has no modal and no endpoint of its own — its action is
