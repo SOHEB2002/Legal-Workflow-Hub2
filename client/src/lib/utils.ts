@@ -18,15 +18,24 @@ export function cn(...inputs: ClassValue[]) {
 /**
  * A notification message as it should be shown to a human.
  *
- * The department-transfer request embeds a machine-readable marker in the
- * message body — `[DEPT_ID:<id>]`, written by requestCaseTransfer /
- * requestConsultationTransfer in lib/notification-triggers.ts — which
- * respondToNotification parses back out to resolve the target department.
- * It is control data, never content, and must not reach the reader.
+ * 🔴 THIS SANITIZER OUTLIVES THE FEATURE THAT CREATED THE MARKER, DELIBERATELY.
  *
- * Extracted here because the strip was previously inlined in respond-dialog
- * only, so the marker WAS visible in the notifications list and the bell,
- * which render the raw message. One implementation, three call sites.
+ * The old department-transfer REQUEST embedded a machine-readable marker in the
+ * message body — `[DEPT_ID:<id>]` — because the notifications table has no field
+ * for it. Both writers (requestCaseTransfer / requestConsultationTransfer) and
+ * the reader that parsed it back out (the "طلب تحويل" arm of
+ * respondToNotification) are now DELETED: the whole flow was dead — its approval
+ * branch tested for a `responseType` value that ResponseType never contained.
+ *
+ * 🔴 DO NOT DELETE THIS FUNCTION WITH THEM. The marker is not gone from the
+ * DATA: ~12 production notifications still carry it in their message text, and
+ * three surfaces render that text raw — the bell, the notifications page and the
+ * respond dialog (8 call sites). Removing the strip would start showing
+ * `[DEPT_ID:abc123]` to real readers on rows that already exist. It is control
+ * data, never content, and must not reach the reader — which stays true for
+ * exactly as long as those rows do.
+ *
+ * Nothing writes the marker any more, so this is now a pure legacy-data reader.
  */
 export function notificationDisplayMessage(message: string | null | undefined): string {
   return String(message ?? "").replace(/\[DEPT_ID:[^\]]*\]/g, "").trim();

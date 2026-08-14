@@ -804,52 +804,16 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         status: NotificationStatus.RESPONDED,
       });
 
-      if (notification && notification.title?.includes("طلب تحويل") && notification.relatedId) {
-        const isCase = notification.title.includes("قضية");
-        const toDeptMatch = notification.title.match(/إلى (.+)$/);
-        const toDeptName = toDeptMatch ? toDeptMatch[1] : "";
-        const deptIdMatch = notification.message?.match(/\[DEPT_ID:(.+?)\]/);
-        const toDeptId = deptIdMatch ? deptIdMatch[1] : "";
-        const entityName = isCase ? "القضية" : "الاستشارة";
-        const relatedType = isCase ? "case" : "consultation";
-        
-        if (responseType === "approve") {
-          if (!toDeptId) {
-            throw new Error("تعذّر تحديد القسم المستهدف للتحويل - يرجى المحاولة مجدداً");
-          }
-          const endpoint = isCase ? `/api/cases/${notification.relatedId}` : `/api/consultations/${notification.relatedId}`;
-          await apiRequest("PATCH", endpoint, { departmentId: toDeptId });
-        }
-
-        const senderId = notification.senderId;
-        if (senderId) {
-          const isApproval = responseType === "approve";
-          try {
-            await apiRequest("POST", "/api/notifications", {
-              type: NotificationType.GENERAL_ALERT,
-              priority: NotificationPriority.MEDIUM,
-              status: NotificationStatus.SENT,
-              title: isApproval ? `تمت الموافقة على طلب التحويل` : `تم رفض طلب التحويل`,
-              message: isApproval
-                ? `تمت الموافقة على طلب تحويل ${entityName} إلى ${toDeptName}. ${message ? "ملاحظة: " + message : ""}`
-                : `تم رفض طلب تحويل ${entityName} إلى ${toDeptName}. ${message ? "السبب: " + message : ""}`,
-              senderId: user?.id || "system",
-              senderName: user?.name || "النظام",
-              recipientId: senderId,
-              relatedType,
-              relatedId: notification.relatedId,
-              isRead: false,
-              readAt: null,
-              response: null,
-              requiresResponse: false,
-              scheduledAt: null,
-              escalationLevel: 0,
-              escalatedTo: null,
-              autoEscalateAfterHours: 0,
-            });
-          } catch {}
-        }
-      } else if (
+      // The «طلب تحويل» arm that used to sit ahead of this one is GONE — it held
+      // an approval branch that could never run (`responseType === "approve"`,
+      // while ResponseType offers only completed / in_progress / need_more_time /
+      // noted) plus an approve/reject notice keyed off it. Both trigger functions
+      // that produced such requests are also gone (38dd468 and this batch), so no
+      // new ones can arrive. The ~12 EXISTING production rows now fall through to
+      // the ordinary reply below — which is the honest outcome: responding to one
+      // records the response and tells the sender someone replied, instead of
+      // announcing a rejection that no decision produced.
+      if (
         notification
         && notification.senderId
         && notification.senderId !== user?.id
