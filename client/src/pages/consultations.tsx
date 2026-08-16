@@ -72,6 +72,7 @@ import type {
 import {
   ConsultationStage,
   ConsultationStageLabels,
+  consultationSkipDataCompletionTarget,
   getConsultationReopenTargetStages,
   ConsultationStagesAll,
   ConsultationStagesOrder,
@@ -133,11 +134,15 @@ const LAWYER_FILTER_EXCLUDED_ROLES = new Set([
 type LinearAdvanceTable = Partial<Record<ConsultationStageValue, { target: ConsultationStageValue; roles: string[] }>>;
 
 const LINEAR_ADVANCE_WRITTEN: LinearAdvanceTable = {
-  // Phase-8 — RECEIVED now advances to RECEIVED_PENDING_COMPLETION (the new
-  // stage), and RECEIVED_PENDING_COMPLETION advances to STUDY. The "تجاوز"
-  // (skip) button on the new stage hits a separate /skip-completion
-  // endpoint that lands on STUDY too but logs completion_skipped — same
-  // target, different audit entry.
+  // Phase-8 — RECEIVED advances to RECEIVED_PENDING_COMPLETION, and
+  // RECEIVED_PENDING_COMPLETION advances to STUDY.
+  //
+  // The "تجاوز استكمال المرفقات والبيانات" button is NOT in this table: it is
+  // a PRE-ENTRY skip offered at RECEIVED that jumps straight to STUDY via
+  // /skip-data-completion, bypassing the middle stage entirely. It is
+  // deliberately absent from the linear-advance table (and from
+  // ALLOWED_CONSULTATION_TRANSITIONS) so the override stays unreachable
+  // through /advance-stage — the same precedent skip-committee sets.
   [ConsultationStage.RECEIVED]:                    { target: ConsultationStage.RECEIVED_PENDING_COMPLETION, roles: ["admin_support", "department_head", "branch_manager"] },
   [ConsultationStage.RECEIVED_PENDING_COMPLETION]: { target: ConsultationStage.STUDY,                       roles: ["admin_support", "department_head", "branch_manager"] },
   [ConsultationStage.STUDY]:    { target: ConsultationStage.DRAFTING,        roles: ["assigned_lawyer", "department_head", "branch_manager"] },
@@ -575,6 +580,27 @@ function canPauseConsultation(
   if (!user) return false;
   if (user.role === "branch_manager" || user.role === "admin_support") return true;
   if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+  return c.assignedTo === user.id;
+}
+
+// Gate for the PRE-ENTRY skip ("تجاوز استكمال المرفقات والبيانات"), mirroring
+// POST /api/consultations/:id/skip-data-completion.
+//
+// ⚠ DELIBERATELY A SEPARATE PREDICATE from canPauseConsultation, even though
+// the two role sets read alike today. Same reasoning as the server keeping
+// canCheckInHearing apart from canActOnHearing: one gate must not be widened
+// by an edit aimed at the other. It also lets this one carry the mandatory
+// !!user.departmentId guard — without it a head whose department is null
+// matches every record whose department is also null — without touching the
+// pause gate, which is shared by several unrelated controls and is not this
+// batch's to change.
+function canSkipConsultationDataCompletion(
+  c: Consultation,
+  user: { id: string; role: string; departmentId: string | null } | null,
+): boolean {
+  if (!user) return false;
+  if (user.role === "branch_manager" || user.role === "admin_support") return true;
+  if (user.role === "department_head" && !!user.departmentId && c.departmentId === user.departmentId) return true;
   return c.assignedTo === user.id;
 }
 
@@ -1178,8 +1204,10 @@ export default function ConsultationsPage() {
   const [showResumeDialog, setShowResumeDialog] = useState(false);
   const [resumeTarget, setResumeTarget] = useState<Consultation | null>(null);
   const [resumeNotes, setResumeNotes] = useState("");
+  // PRE-ENTRY skip dialog state ("تجاوز استكمال المرفقات والبيانات" at استلام).
   const [showSkipDialog, setShowSkipDialog] = useState(false);
   const [skipTarget, setSkipTarget] = useState<Consultation | null>(null);
+  const [skipNotes, setSkipNotes] = useState("");
 
   const openAwaitDialog = (c: Consultation) => {
     setAwaitTarget(c);
@@ -1203,11 +1231,13 @@ export default function ConsultationsPage() {
   };
   const openSkipDialog = (c: Consultation) => {
     setSkipTarget(c);
+    setSkipNotes("");
     setShowSkipDialog(true);
   };
   const closeSkipDialog = () => {
     setShowSkipDialog(false);
     setSkipTarget(null);
+    setSkipNotes("");
   };
 
   const handleAwaitCompletion = async () => {
@@ -1252,9 +1282,10 @@ export default function ConsultationsPage() {
     if (!skipTarget) return;
     setActionInProgress(true);
     try {
-      await apiRequest("POST", `/api/consultations/${skipTarget.id}/skip-completion`, {});
+      const notes = skipNotes.trim();
+      await apiRequest("POST", `/api/consultations/${skipTarget.id}/skip-data-completion`, notes ? { notes } : {});
       await refreshConsultations();
-      toast({ title: "تم تجاوز مرحلة الاستكمال" });
+      toast({ title: "تم تجاوز مرحلة استكمال المرفقات والبيانات" });
       closeSkipDialog();
     } catch (err) {
       toast({ title: "فشل الإجراء", description: extractApiError(err), variant: "destructive" });
@@ -2751,20 +2782,25 @@ export default function ConsultationsPage() {
                               المرحلة التالية
                             </DropdownMenuItem>
                           )}
-                          {/* Phase-8 — "تجاوز" (skip) button shown only when
-                              currently in PENDING_COMPLETION stage AND not in
-                              await mode. Same target as the normal advance to
-                              STUDY but logs completion_skipped distinctly. */}
+                          {/* PRE-ENTRY skip — sits at استلام, right beside the
+                              normal "المرحلة التالية", exactly as the cases
+                              progress bar renders its own skip. Pressing it
+                              jumps PAST the data-completion stage instead of
+                              leaving it. Hidden when the shared helper returns
+                              null, which is how a تعقيبية cycle (no
+                              data-completion stage in its 3-stage list) is
+                              excluded — the same rule the server refuses on. */}
                           {consultation.status === "active"
-                            && consultation.currentStage === ConsultationStage.RECEIVED_PENDING_COMPLETION
+                            && consultation.currentStage === ConsultationStage.RECEIVED
                             && !consultation.awaitingCompletion
-                            && canPauseConsultation(consultation, user) && (
+                            && !!consultationSkipDataCompletionTarget(consultation)
+                            && canSkipConsultationDataCompletion(consultation, user) && (
                             <DropdownMenuItem
-                              data-testid={`button-skip-completion-${consultation.id}`}
+                              data-testid={`button-skip-data-completion-${consultation.id}`}
                               onClick={() => openSkipDialog(consultation)}
                             >
                               <FileSymlink className="w-4 h-4 ml-2" />
-                              تجاوز مرحلة الاستكمال
+                              تجاوز استكمال المرفقات والبيانات
                             </DropdownMenuItem>
                           )}
                           {user && getReturnTargets(consultation, user.role, user.id, user.departmentId).length > 0 && (
@@ -4364,19 +4400,39 @@ export default function ConsultationsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Phase-8 — skip-completion dialog. No body; just confirms intent. */}
+      {/* PRE-ENTRY skip dialog.
+          🔴 The previewed target comes from the SAME shared helper the
+          endpoint calls, so it cannot disagree with what the server writes.
+          The cases dialog derives its preview independently
+          (stagesOrder[currentIndex + 2]) and the old consultations dialog
+          hard-coded "دراسة", which was simply WRONG for a procedural
+          consultation — the server wrote جاري_العمل. That class of bug is
+          unreachable here by construction. */}
       <AlertDialog open={showSkipDialog} onOpenChange={(open) => { if (!open) closeSkipDialog(); }}>
         <AlertDialogContent dir="rtl">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <FileSymlink className="w-5 h-5" />
-              تجاوز مرحلة الاستكمال
+              تجاوز استكمال المرفقات والبيانات
             </AlertDialogTitle>
             <AlertDialogDescription>
-              سيتم تجاوز مرحلة "استكمال المرفقات والبيانات" والانتقال مباشرة إلى مرحلة "دراسة".
-              استخدم هذا الخيار فقط عندما لا تكون هناك بيانات أو مرفقات ناقصة.
+              سيتم تجاوز مرحلة "استكمال المرفقات والبيانات" والانتقال مباشرةً إلى مرحلة{" "}
+              <strong>
+                {(() => {
+                  const t = consultationSkipDataCompletionTarget(skipTarget);
+                  return t ? ConsultationStageLabels[t] : "";
+                })()}
+              </strong>
+              . استخدم هذا الخيار فقط عندما تكون بيانات الاستشارة مكتملة ولا توجد مرفقات ناقصة.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <Textarea
+            placeholder="ملاحظات (اختياري)"
+            value={skipNotes}
+            onChange={(e) => setSkipNotes(e.target.value)}
+            className="mt-2"
+            data-testid="input-skip-data-completion-notes"
+          />
           <AlertDialogFooter className="gap-2">
             <AlertDialogCancel onClick={closeSkipDialog}>إلغاء</AlertDialogCancel>
             <AlertDialogAction

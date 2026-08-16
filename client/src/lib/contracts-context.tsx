@@ -53,7 +53,7 @@ interface ContractsContextType {
   unpauseContract: (id: string, notes?: string) => Promise<void>;
   awaitCompletion: (id: string, reason: string) => Promise<void>;
   resumeFromCompletion: (id: string, notes?: string) => Promise<void>;
-  skipCompletion: (id: string) => Promise<void>;
+  skipDataCompletion: (id: string, notes?: string) => Promise<void>;
   refreshContracts: () => Promise<void>;
 }
 
@@ -218,8 +218,14 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
     apply(updated);
   };
 
-  const skipCompletion = async (id: string): Promise<void> => {
-    const res = await apiRequest("POST", `/api/contracts/${id}/skip-completion`, {});
+  // PRE-ENTRY skip: pressed AT استلام to jump PAST the data-completion stage.
+  const skipDataCompletion = async (id: string, notes?: string): Promise<void> => {
+    const trimmed = (notes ?? "").trim();
+    const res = await apiRequest(
+      "POST",
+      `/api/contracts/${id}/skip-data-completion`,
+      trimmed ? { notes: trimmed } : {},
+    );
     const updated = (await res.json()) as Contract;
     apply(updated);
   };
@@ -246,7 +252,7 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
         unpauseContract,
         awaitCompletion,
         resumeFromCompletion,
-        skipCompletion,
+        skipDataCompletion,
         refreshContracts: fetchContracts,
       }}
     >

@@ -37,6 +37,7 @@ import type {
 } from "@shared/schema";
 import {
   ContractStage, ContractStageLabels, ContractStagesAll, ContractStagesOrder,
+  contractSkipDataCompletionTarget,
   ContractType, ContractTypeLabels,
   ContractPriority, ContractPriorityLabels,
   ContractAttachmentSlot, ContractSlotsByType,
@@ -176,6 +177,22 @@ function canPause(c: Contract, user: { id: string; role: string; departmentId: s
   if (!user) return false;
   if (user.role === "branch_manager" || user.role === "admin_support") return true;
   if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
+  return c.assignedTo === user.id;
+}
+
+// Gate for the PRE-ENTRY skip, mirroring
+// POST /api/contracts/:id/skip-data-completion (allowContractPauseLike).
+// Kept SEPARATE from canPause for the same reason as the consultations twin:
+// so neither gate can be widened by an edit aimed at the other, and so this
+// one can carry the mandatory !!user.departmentId guard without altering the
+// pause gate that several other controls share.
+function canSkipContractDataCompletion(
+  c: Contract,
+  user: { id: string; role: string; departmentId: string | null } | null,
+): boolean {
+  if (!user) return false;
+  if (user.role === "branch_manager" || user.role === "admin_support") return true;
+  if (user.role === "department_head" && !!user.departmentId && c.departmentId === user.departmentId) return true;
   return c.assignedTo === user.id;
 }
 
@@ -349,7 +366,7 @@ export default function ContractsPage() {
     assignContract, advanceStage, returnStage,
     submitInternalReview, submitCommitteeDecision, skipCommittee, skipInternalReview, recordTakeNotesOutcome,
     earlyCloseContract, startContractFollowUp, pauseContract, unpauseContract,
-    awaitCompletion, resumeFromCompletion, skipCompletion,
+    awaitCompletion, resumeFromCompletion, skipDataCompletion,
     refreshContracts,
   } = useContracts();
   const { getClientName } = useClients();
@@ -898,6 +915,10 @@ export default function ContractsPage() {
   const [showAwait, setShowAwait] = useState(false);
   const [awaitTarget, setAwaitTarget] = useState<Contract | null>(null);
   const [awaitReason, setAwaitReason] = useState("");
+  // PRE-ENTRY skip dialog state ("تجاوز استكمال المرفقات والبيانات" at استلام).
+  const [showSkipData, setShowSkipData] = useState(false);
+  const [skipDataTarget, setSkipDataTarget] = useState<Contract | null>(null);
+  const [skipDataNotes, setSkipDataNotes] = useState("");
 
   const [showDelete, setShowDelete] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Contract | null>(null);
@@ -1702,14 +1723,25 @@ export default function ContractsPage() {
                               بانتظار استكمال البيانات
                             </DropdownMenuItem>
                           )}
-                          {canPause(c, user) && c.status === "active"
-                            && c.currentStage === ContractStage.RECEIVED_PENDING_COMPLETION
-                            && !c.awaitingCompletion && (
+                          {/* PRE-ENTRY skip — at استلام, beside the normal
+                              "المرحلة التالية". Hidden when the shared helper
+                              returns null, which excludes a تعقيبية cycle
+                              (ContractCycleStages has no data-completion
+                              stage) — the same rule the server refuses on. */}
+                          {c.status === "active"
+                            && c.currentStage === ContractStage.RECEIVED
+                            && !c.awaitingCompletion
+                            && !!contractSkipDataCompletionTarget(c)
+                            && canSkipContractDataCompletion(c, user) && (
                             <DropdownMenuItem
-                              data-testid={`row-action-skip-${c.id}`}
-                              onClick={() => wrap(() => skipCompletion(c.id), "تم تجاوز مرحلة الاستكمال")}
+                              data-testid={`row-action-skip-data-completion-${c.id}`}
+                              onClick={() => {
+                                setSkipDataTarget(c);
+                                setSkipDataNotes("");
+                                setShowSkipData(true);
+                              }}
                             >
-                              تجاوز الاستكمال
+                              تجاوز استكمال المرفقات والبيانات
                             </DropdownMenuItem>
                           )}
                           {canTransferContract(c) && (
@@ -1914,15 +1946,21 @@ export default function ContractsPage() {
                   </Button>
                 )}
                 {selected.status === "active"
-                  && selected.currentStage === ContractStage.RECEIVED_PENDING_COMPLETION
+                  && selected.currentStage === ContractStage.RECEIVED
                   && !selected.awaitingCompletion
-                  && canPause(selected, user) && (
+                  && !!contractSkipDataCompletionTarget(selected)
+                  && canSkipContractDataCompletion(selected, user) && (
                   <Button
                     size="sm" variant="outline"
-                    onClick={() => wrap(() => skipCompletion(selected.id), "تم تجاوز مرحلة الاستكمال")}
+                    onClick={() => {
+                      setSkipDataTarget(selected);
+                      setSkipDataNotes("");
+                      setShowSkipData(true);
+                    }}
                     disabled={busy}
+                    data-testid="dialog-skip-data-completion"
                   >
-                    تجاوز
+                    تجاوز استكمال المرفقات والبيانات
                   </Button>
                 )}
                 {canDoInternalReview(selected, user) && (
@@ -3178,6 +3216,46 @@ export default function ContractsPage() {
                 setShowAwait(false);
               }}
               disabled={!awaitReason.trim() || busy}
+            >تأكيد</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============ Pre-entry skip dialog ============ */}
+      {/* 🔴 The previewed target comes from the SAME shared helper the endpoint
+          calls, so the dialog cannot promise a stage the server would not
+          write. (The cases dialog derives its preview independently, which is
+          the flaw this deliberately does not copy.) */}
+      <Dialog open={showSkipData} onOpenChange={setShowSkipData}>
+        <DialogContent dir="rtl">
+          <DialogHeader><DialogTitle>تجاوز استكمال المرفقات والبيانات</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              سيتم تجاوز مرحلة "استكمال المرفقات والبيانات" والانتقال مباشرةً إلى مرحلة{" "}
+              <strong>
+                {(() => {
+                  const t = contractSkipDataCompletionTarget(skipDataTarget);
+                  return t ? ContractStageLabels[t] : "";
+                })()}
+              </strong>
+              . استخدم هذا الخيار فقط عندما تكون بيانات العقد مكتملة ولا توجد مرفقات ناقصة.
+            </p>
+            <Label>ملاحظات (اختياري)</Label>
+            <Textarea value={skipDataNotes} onChange={(e) => setSkipDataNotes(e.target.value)} rows={3} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSkipData(false)}>إلغاء</Button>
+            <Button
+              onClick={async () => {
+                if (!skipDataTarget) return;
+                await wrap(
+                  () => skipDataCompletion(skipDataTarget.id, skipDataNotes),
+                  "تم تجاوز مرحلة استكمال المرفقات والبيانات",
+                );
+                setShowSkipData(false);
+              }}
+              disabled={busy}
+              data-testid="button-confirm-skip-data-completion"
             >تأكيد</Button>
           </DialogFooter>
         </DialogContent>
