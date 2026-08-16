@@ -27,8 +27,9 @@ import {
   UniversalCaseStages,
   CaseClassification,
   CaseClassificationLabels,
+  getStagesForClassification,
 } from "@shared/schema";
-import type { PriorityType } from "@shared/schema";
+import type { PriorityType, CaseClassificationValue } from "@shared/schema";
 
 export type AdvancedCasesFilters = {
   priorities: PriorityType[];
@@ -59,53 +60,52 @@ export function countActiveAdvFilters(f: AdvancedCasesFilters): number {
 const RECENT_KEY = "cases.recentFilters.v1";
 const RECENT_MAX = 5;
 
-// RESTORED (recovered verbatim from git at 68bfca7^, which is the ded7a5a
-// state, so dd3d27c's تجاري/عام edit came back with them rather than being
-// retyped). ded7a5a had removed TWO behaviours at once and only one of them was
-// asked for: hiding stages with NO CASES (data-driven — gone for good) and
-// narrowing options to the DEPARTMENT'S OWN PATH (path-driven — wanted, and back
-// here).
+// 🔴 DERIVED FROM THE SCHEMA — no longer a hand-maintained copy.
+// Three consecutive commits had to edit this list AND the schema array it
+// duplicated (dd3d27c pulled تحرير_صحيفة_الدعوى out of عام/تجاري, 0dcb902
+// restored the block verbatim, 04062da pulled the committee out of عمالي). The
+// fourth would have been forgotten. Now there is one source.
 //
-// Dynamic stage options: filter component-local lookups so we don't disturb
-// schema arrays used by the workflow logic. Spec includes جاهزة_للرفع in
-// labor/admin paths and merges in-court paths into a single union list.
-const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = {
-  // 🔴 تحرير_صحيفة_الدعوى removed from تجاري + عام ONLY, mirroring the merge in
-  // UnderStudyCommercialStages / UnderStudyGeneralStages. It stays in عمالي and
-  // إداري below and in IN_COURT_STAGES_UNION — those paths keep the stage.
-  "تجاري": [
-    "استلام", "استكمال_البيانات", "دراسة",
-    "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
-    "قيد_التدقيق_في_تراضي", "مداولة_الصلح", "أغلق_طلب_الصلح",
-    "قيد_التدقيق_في_ناجز", "منظورة",
-  ],
-  "عام": [
-    "استلام", "استكمال_البيانات", "دراسة",
-    "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
-    "قيد_التدقيق_في_ناجز", "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
-  ],
-  // 🔴 COMMITTEE HIDDEN FOR LABOR — إحالة_للجنة_المراجعة and its
-  // الأخذ_بالملاحظات return stage removed, mirroring UnderStudyLaborStages.
-  // ⚠ THIS LIST IS A HAND-MAINTAINED DUPLICATE of that schema array, which is
-  // why it needs the same edit (the drift hazard flagged after 0dcb902 — the
-  // دراسة merge had to edit both too). The other three department lists keep
-  // their committee stages.
-  "عمالي": [
-    "استلام", "استكمال_البيانات", "دراسة",
-    "توجيه_العميل_بالتسوية", "بانتظار_رفع_العميل_للتسوية",
-    "مداولة_الصلح", "أغلق_طلب_الصلح",
-    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية",
-    "جاهزة_للرفع", "قيد_التدقيق_في_ناجز", "منظورة",
-  ],
-  "إداري": [
-    "استلام", "تحديد_تاريخ_التقادم", "استكمال_البيانات", "دراسة",
-    "تحرير_صيغة_التظلم", "مراجعة_داخلية_للتظلم",
-    "تقديم_التظلم", "انتظار_رد_التظلم",
-    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية", "إحالة_للجنة_المراجعة",
-    "الأخذ_بالملاحظات", "جاهزة_للرفع", "قيد_التدقيق_في_معين", "منظورة",
-  ],
-};
+// THE OTHER THREE ARGUMENTS ARE DELIBERATELY OMITTED, and that is safe rather
+// than lucky: getStagesForClassification reads clientRole / memoRequired /
+// isSettlementCase ONLY inside its `منظورة_بالمحكمة` branch. The
+// `قيد_الدراسة` branch is a switch on departmentName ALONE, so those three
+// cannot affect an under-study result. (They matter enormously for the in-court
+// side — which is exactly why IN_COURT_STAGES_UNION below is NOT derived from a
+// single call.)
+//
+// The four keys mirror the switch arms in getStagesForClassification. A
+// department outside them falls to that function's `default:` (General) at
+// lookup time, exactly as before.
+//
+// Spread into a fresh array: getStagesForClassification returns the schema's own
+// exported array by reference, and this map must not alias a shared mutable.
+const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = Object.fromEntries(
+  (["عام", "تجاري", "عمالي", "إداري"] as const).map((deptName) => [
+    deptName,
+    [...getStagesForClassification(CaseClassification.UNDER_STUDY as CaseClassificationValue, deptName)] as string[],
+  ]),
+);
 
+// 🔴 DELIBERATELY NOT DERIVED — do not "finish the job" and convert this to
+// getStagesForClassification calls. It would silently drop a live option.
+//
+// THE FINDING: the schema's four in-court arrays are INCOMPLETE. Their union is
+// 11 stages; this list is 17. Five of the six extras (محكوم_حكم_ابتدائي،
+// منظورة_استئناف، محكوم_حكم_نهائي، مشطوبة، مقفلة) are harmless because
+// UniversalCaseStages adds them back — but أغلق_طلب_الصلح is NOT in the universal
+// set and is NOT in any in-court array, yet it is REACHABLE for an in-court
+// settlement case: InCourtSettlementStages contains مداولة_الصلح, and
+// ALLOWED_CASE_TRANSITIONS carries مداولة_الصلح → أغلق_طلب_الصلح (open to
+// assigned_lawyer / admin_support / department_head / branch_manager) plus four
+// edges back out of it. Deriving would therefore make those cases unfilterable —
+// the same class as the مقفلة bug 0dcb902 fixed, one stage over.
+//
+// The right fix is to add أغلق_طلب_الصلح to InCourtSettlementStages, but that
+// array also drives the stage bar, rollback validation and reopen targets, so it
+// is a WORKFLOW change (in-court settlement cases would gain a visible step) and
+// belongs in its own batch — not folded into a filter refactor. Until then this
+// list stays hand-maintained and is the more correct of the two.
 const IN_COURT_STAGES_UNION: string[] = [
   "استلام", "استكمال_البيانات", "تحرير_مذكرة_جوابية", "تحرير_صحيفة_الدعوى",
   "دراسة", "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات",
