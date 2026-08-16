@@ -43,6 +43,7 @@ import {
   ContractAttachmentSlot, ContractSlotsByType,
   InternalReviewDecision, CommitteeDecision, NoteOutcome,
   ContractActivityType, isContractInFollowUpCycle, getStagesForContractCycle,
+  contractStagesForDepartment,
   getContractReopenTargetStages,
 } from "@shared/schema";
 import { useContracts } from "@/lib/contracts-context";
@@ -131,15 +132,24 @@ function getReturnTargets(
   userRole: string,
   userId: string,
   userDeptId: string | null,
+  // The contract's department NAME, for the committee hide. Threaded from the
+  // call sites (the page has getDepartmentName) rather than resolved here, so
+  // this stays a pure function of its arguments like its consultations twin.
+  departmentName: string | null,
 ): ContractStageValue[] {
   if (c.status !== "active") return [];
   if (c.awaitingCompletion) return [];
   if (userRole === "department_head" && c.departmentId !== userDeptId) return [];
   // Cycle-aware, mirroring getReturnTargets on the consultations page: inside
   // a follow-up cycle the rollback list is the 3-stage cycle, not the full path.
-  const stages: readonly ContractStageValue[] = isContractInFollowUpCycle(c)
-    ? getStagesForContractCycle(c)
-    : c.currentStage === ContractStage.TAKING_NOTES ? ContractStagesAll : ContractStagesOrder;
+  // Committee hide — a labor contract must not be offered a rollback INTO
+  // لجنة_مراجعة, a stage its department cannot work. No-op elsewhere.
+  const stages: readonly ContractStageValue[] = contractStagesForDepartment(
+    departmentName,
+    isContractInFollowUpCycle(c)
+      ? getStagesForContractCycle(c)
+      : c.currentStage === ContractStage.TAKING_NOTES ? ContractStagesAll : ContractStagesOrder,
+  );
   const idx = stages.indexOf(c.currentStage);
   if (idx <= 0) return [];
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
@@ -1920,6 +1930,7 @@ export default function ContractsPage() {
               <ContractStagesBar
                 currentStage={selected.currentStage}
                 followUpCount={selected.followUpCount}
+                departmentName={getDepartmentName(selected.departmentId)}
               />
 
               {/* Action row */}
@@ -1951,7 +1962,7 @@ export default function ContractsPage() {
                     </Button>
                   );
                 })()}
-                {user && getReturnTargets(selected, user.role, user.id, user.departmentId).length > 0 && (
+                {user && getReturnTargets(selected, user.role, user.id, user.departmentId, getDepartmentName(selected.departmentId)).length > 0 && (
                   <Button
                     size="sm" variant="outline"
                     onClick={() => { setReturnTarget(selected); setReturnStageValue(""); setShowReturn(true); }}
@@ -2725,7 +2736,7 @@ export default function ContractsPage() {
               <SelectTrigger><SelectValue placeholder="اختر المرحلة" /></SelectTrigger>
               <SelectContent>
                 {returnTarget && user
-                  && getReturnTargets(returnTarget, user.role, user.id, user.departmentId).map((s) => (
+                  && getReturnTargets(returnTarget, user.role, user.id, user.departmentId, getDepartmentName(returnTarget.departmentId)).map((s) => (
                     <SelectItem key={s} value={s}>{ContractStageLabels[s] || s}</SelectItem>
                   ))}
               </SelectContent>
@@ -3008,7 +3019,10 @@ export default function ContractsPage() {
                   <SelectValue placeholder="اختر المرحلة" />
                 </SelectTrigger>
                 <SelectContent>
-                  {reopenTarget && getContractReopenTargetStages(reopenTarget).map((s) => (
+                  {reopenTarget && contractStagesForDepartment(
+                    getDepartmentName(reopenTarget.departmentId),
+                    getContractReopenTargetStages(reopenTarget),
+                  ).map((s) => (
                     <SelectItem key={s} value={s}>
                       {ContractStageLabels[s] || s}
                     </SelectItem>

@@ -5,6 +5,7 @@ import {
   ContractStagesAll,
   ContractStagesOrder,
   getStagesForContractCycle,
+  contractStagesForDepartment,
   type ContractStageValue,
 } from "@shared/schema";
 
@@ -21,12 +22,19 @@ interface ContractStagesBarProps {
   // purpose, mirroring ConsultationStagesBar: a re-closed cycle still shows
   // the cycle bar with مغلقة highlighted, not the original 8-stage path.
   followUpCount?: number | null;
+  // The contract's department NAME. Departments in DepartmentsWithoutCommittee
+  // render a path with no committee stage. Passed in rather than looked up here
+  // so this component stays pure and free of context — the page already has
+  // getDepartmentName and the full record at the call site.
+  // Omitted → treated as having a committee, i.e. today's behaviour.
+  departmentName?: string | null;
 }
 
 export function ContractStagesBar({
   currentStage,
   hasTakingNotesHistory = false,
   followUpCount,
+  departmentName,
 }: ContractStagesBarProps) {
   const stages: ContractStageValue[] = (() => {
     // Checked FIRST, exactly like ConsultationStagesBar — the cycle list wins
@@ -36,7 +44,9 @@ export function ContractStagesBar({
     }
     const showTakingNotes =
       currentStage === ContractStage.TAKING_NOTES || hasTakingNotesHistory;
-    return showTakingNotes ? [...ContractStagesAll] : [...ContractStagesOrder];
+    const base = showTakingNotes ? ContractStagesAll : ContractStagesOrder;
+    // Committee hide — a no-op for every department that has one.
+    return contractStagesForDepartment(departmentName, base);
   })();
 
   const rawIndex = stages.indexOf(currentStage);
