@@ -1122,6 +1122,22 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "تحرير_صحيفة_الدعوى", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
+  // 🔴 THE GENERAL/COMMERCIAL MERGE. تحرير_صحيفة_الدعوى was removed from
+  // UnderStudyGeneralStages + UnderStudyCommercialStages, so on those two paths
+  // دراسة is now adjacent to مراجعة_داخلية in both directions. These two edges
+  // are ADDED; NOTHING is removed — the three تحرير_صحيفة_الدعوى edges above and
+  // below are still required by Labor, Admin and InCourtPlaintiffMemo, which
+  // keep the stage.
+  //
+  // ⚠ THE TABLE IS FLAT AND PATH-BLIND, so these edges are technically
+  // traversable by Labor/Admin too (skipping their drafting stage via direct
+  // API). Owner-accepted: no UI offers it — every FE target is derived from the
+  // case's OWN resolved path (resolveSendBackStage, the array-driven nextStage)
+  // — and this is the table's existing documented property, not a new one. The
+  // fix for that class is making validateStageTransition path-aware, which is
+  // the DEFERRED guard batch and stays deferred.
+  { from: "دراسة", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
+  { from: "مراجعة_داخلية", to: "دراسة", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
