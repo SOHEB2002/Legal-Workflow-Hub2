@@ -1531,6 +1531,16 @@ const ALLOWED_MEMO_TRANSITIONS: StageTransitionRule[] = [
   // Internal-review outcomes (the dedicated endpoint enforces decision-vs-actor).
   { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.DRAFTING,        allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.COMMITTEE,       allowedRoles: ["internal_reviewer", "branch_manager"] },
+  // 🔴 COMMITTEE-BYPASS EDGE for departments in DepartmentsWithoutCommittee
+  // (today: عمالي) — the last of the four (cases 04062da, contracts 8ab56e3,
+  // consultations 61e2126). ADDED; nothing removed.
+  //
+  // ⚠ Flat, department-blind table, so a NON-labor memo can take this edge by
+  // direct API and skip its committee. Accepted for the fourth time: no UI
+  // offers it (the internal-review dialog posts to /internal-review, which
+  // resolves the target from the memo's PARENT CASE), and making
+  // validateStageTransition department-aware stays the deferred guard batch.
+  { from: MemoStage.INTERNAL_REVIEW, to: MemoStage.READY,           allowedRoles: ["internal_reviewer", "branch_manager"] },
   // Committee decisions (cases_review_head is the committee chair for memos).
   { from: MemoStage.COMMITTEE,       to: MemoStage.READY,           allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
   { from: MemoStage.COMMITTEE,       to: MemoStage.TAKING_NOTES,    allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
@@ -12315,8 +12325,17 @@ export async function registerRoutes(
         });
       }
 
+      // 🔴 DEPARTMENT-CONDITIONAL PASS TARGET. Memos carry no departmentId, so
+      // the department comes from the PARENT CASE — and this handler ALREADY
+      // fetched it as memoReviewParentCase for its own gates, so no second
+      // getCaseById is added. An unresolvable parent yields a null name and
+      // departmentHasCommittee returns true for null: the committee is KEPT.
+      // Rejection untouched: still DRAFTING.
+      const memoDeptName = memoReviewParentCase?.departmentId
+        ? (await storage.getAllDepartments()).find((d) => d.id === memoReviewParentCase.departmentId)?.name ?? null
+        : null;
       const nextStage = decision === InternalReviewDecision.PASSED
-        ? MemoStage.COMMITTEE
+        ? (departmentHasCommittee(memoDeptName) ? MemoStage.COMMITTEE : MemoStage.READY)
         : MemoStage.DRAFTING;
 
       const truncatedNotes = notes ? notes.slice(0, 120) : "";

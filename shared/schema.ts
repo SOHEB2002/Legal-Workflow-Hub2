@@ -3291,6 +3291,32 @@ export const MemoStageLabels: Record<MemoStageValue, string> = {
   "مرفوعة":           "مرفوعة",
 };
 
+// 🔴 THE MEMO COMMITTEE HIDE — fourth and last entity, same shape as the
+// contracts and consultations helpers.
+//
+// ⚠ MEMOS HAVE NO departmentId COLUMN. The department resolves through
+// memos.caseId → the PARENT CASE's departmentId, so every caller must resolve
+// the parent first. That is why this takes a NAME like its siblings rather than
+// a record: the two-hop lookup belongs to the caller, which knows whether it has
+// the parent case in hand.
+//
+// A memo whose parent case does NOT resolve (deleted or missing) yields a null
+// name, and departmentHasCommittee returns TRUE for null — so an unresolvable
+// parent KEEPS the committee. Hiding a stage must never follow from a failed
+// lookup (the 8ab56e3 fix).
+//
+// TAKING_NOTES removed alongside, on the same proven fact as the other three:
+// its ONLY producer is the edge COMMITTEE → TAKING_NOTES.
+export function memoStagesForDepartment(
+  departmentName: string | null | undefined,
+  base: readonly MemoStageValue[],
+): MemoStageValue[] {
+  if (departmentHasCommittee(departmentName)) return [...base];
+  return base.filter(
+    (s) => s !== MemoStage.COMMITTEE && s !== MemoStage.TAKING_NOTES,
+  );
+}
+
 // Linear happy-path order (excludes TAKING_NOTES, which is conditional).
 export const MemoStagesOrder: MemoStageValue[] = [
   MemoStage.RECEIVED,

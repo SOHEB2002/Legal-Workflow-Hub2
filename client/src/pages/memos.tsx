@@ -2282,6 +2282,7 @@ export default function MemosPage() {
                 {detailMemo.currentStage && (
                   <MemoStagesBar
                     currentStage={detailMemo.currentStage as MemoStageValue}
+                    departmentName={getDepartmentName(getMemoCase(detailMemo)?.departmentId || "")}
                   />
                 )}
 

@@ -4,6 +4,7 @@ import {
   MemoStageLabels,
   MemoStagesAll,
   MemoStagesOrder,
+  memoStagesForDepartment,
   type MemoStageValue,
 } from "@shared/schema";
 
@@ -15,17 +16,24 @@ interface MemoStagesBarProps {
   // جاهزة_للرفع / مرفوعة, so callers compute it from server data
   // (committee-decision history) and pass it in.
   hasTakingNotesHistory?: boolean;
+  // The PARENT CASE's department name, for the committee hide. Memos carry no
+  // departmentId, so the caller does the memo → case → department hop; this
+  // component has no data access of its own. Omitted → committee kept, i.e.
+  // today's behaviour.
+  departmentName?: string | null;
 }
 
 export function MemoStagesBar({
   currentStage,
   hasTakingNotesHistory = false,
+  departmentName,
 }: MemoStagesBarProps) {
   const showTakingNotes =
     currentStage === MemoStage.TAKING_NOTES || hasTakingNotesHistory;
-  const stages: MemoStageValue[] = showTakingNotes
+  const baseStages: readonly MemoStageValue[] = showTakingNotes
     ? MemoStagesAll
     : MemoStagesOrder;
+  const stages: MemoStageValue[] = memoStagesForDepartment(departmentName, baseStages);
 
   const rawIndex = stages.indexOf(currentStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
