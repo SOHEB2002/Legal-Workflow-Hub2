@@ -196,6 +196,26 @@ function canSkipContractDataCompletion(
   return c.assignedTo === user.id;
 }
 
+// 🔴 THE SINGLE SOURCE OF TRUTH for whether the "تجاوز استكمال المرفقات
+// والبيانات" control is offered — the FULL visibility gate (record state + the
+// permission predicate above). Twin of the consultations version; see that one
+// for the reasoning. Both surfaces call it: the row's ⋯ menu item and the
+// details-panel button.
+//
+// Captures nothing from any component closure — every term is a module import
+// (ContractStage, contractSkipDataCompletionTarget) or this file's own
+// module-scope predicate, with the record and user passed in.
+function canOfferSkipDataCompletion(
+  c: Contract,
+  user: { id: string; role: string; departmentId: string | null } | null,
+): boolean {
+  return c.status === "active"
+    && c.currentStage === ContractStage.RECEIVED
+    && !c.awaitingCompletion
+    && !!contractSkipDataCompletionTarget(c)
+    && canSkipContractDataCompletion(c, user);
+}
+
 // MISMATCH FIX — this gate showed the button to ANY own-dept department_head,
 // but the server (POST /api/contracts/:id/internal-review) accepted only the
 // designated reviewer or branch_manager, so a dept_head got a guaranteed 403.
@@ -1728,11 +1748,7 @@ export default function ContractsPage() {
                               returns null, which excludes a تعقيبية cycle
                               (ContractCycleStages has no data-completion
                               stage) — the same rule the server refuses on. */}
-                          {c.status === "active"
-                            && c.currentStage === ContractStage.RECEIVED
-                            && !c.awaitingCompletion
-                            && !!contractSkipDataCompletionTarget(c)
-                            && canSkipContractDataCompletion(c, user) && (
+                          {canOfferSkipDataCompletion(c, user) && (
                             <DropdownMenuItem
                               data-testid={`row-action-skip-data-completion-${c.id}`}
                               onClick={() => {
@@ -1945,11 +1961,7 @@ export default function ContractsPage() {
                     إرجاع
                   </Button>
                 )}
-                {selected.status === "active"
-                  && selected.currentStage === ContractStage.RECEIVED
-                  && !selected.awaitingCompletion
-                  && !!contractSkipDataCompletionTarget(selected)
-                  && canSkipContractDataCompletion(selected, user) && (
+                {canOfferSkipDataCompletion(selected, user) && (
                   <Button
                     size="sm" variant="outline"
                     onClick={() => {
