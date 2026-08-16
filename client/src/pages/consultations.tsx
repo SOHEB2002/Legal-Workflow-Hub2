@@ -2782,10 +2782,29 @@ export default function ConsultationsPage() {
                               المرحلة التالية
                             </DropdownMenuItem>
                           )}
-                          {/* PRE-ENTRY skip moved OUT of this dropdown (owner
-                              ruling) — it is now a visible button in the details
-                              panel, in the slot إغلاق مبكر used to occupy.
-                              إغلاق مبكر keeps its entry further down this menu. */}
+                          {/* PRE-ENTRY skip — sits at استلام, right beside the
+                              normal "المرحلة التالية", exactly as the cases
+                              progress bar renders its own skip. Pressing it
+                              jumps PAST the data-completion stage instead of
+                              leaving it. Hidden when the shared helper returns
+                              null, which is how a تعقيبية cycle (no
+                              data-completion stage in its 3-stage list) is
+                              excluded — the same rule the server refuses on.
+                              ⚠ This condition is DUPLICATED on the details-dialog
+                              button — see the note there. */}
+                          {consultation.status === "active"
+                            && consultation.currentStage === ConsultationStage.RECEIVED
+                            && !consultation.awaitingCompletion
+                            && !!consultationSkipDataCompletionTarget(consultation)
+                            && canSkipConsultationDataCompletion(consultation, user) && (
+                            <DropdownMenuItem
+                              data-testid={`button-skip-data-completion-${consultation.id}`}
+                              onClick={() => openSkipDialog(consultation)}
+                            >
+                              <FileSymlink className="w-4 h-4 ml-2" />
+                              تجاوز استكمال المرفقات والبيانات
+                            </DropdownMenuItem>
+                          )}
                           {user && getReturnTargets(consultation, user.role, user.id, user.departmentId).length > 0 && (
                             <DropdownMenuItem
                               data-testid={`button-return-consultation-${consultation.id}`}
@@ -3223,12 +3242,18 @@ export default function ConsultationsPage() {
                       </Button>
                     )}
                     {/* PLACEMENT (owner ruling): the pre-entry skip and إغلاق مبكر
-                        swapped prominence. The skip took this slot — it is the
-                        common action at استلام — and إغلاق مبكر moved to the ⋯
-                        dropdown on the row, where it already had an entry.
-                        Gates, predicates and dialogs are untouched on both; the
-                        visibility terms below are the row version verbatim,
-                        re-pointed at selectedConsultation. */}
+                        are BOTH available on BOTH surfaces — visible buttons here
+                        in the details strip, menu items in the row's ⋯ menu —
+                        which is the arrangement contracts already has. Gates,
+                        predicates and dialogs are unchanged for both.
+
+                        ⚠ THE SKIP'S CONDITION IS DUPLICATED, this copy and the
+                        row's ⋯ item; the two differ only in the record variable
+                        (selectedConsultation vs consultation). They are verbatim
+                        identical today and MUST be edited together — a change to
+                        one alone makes the row and the dialog disagree about when
+                        the button shows. إغلاق مبكر does NOT have this problem:
+                        both of its surfaces call the single canEarlyClose(). */}
                     {selectedConsultation.status === "active"
                       && selectedConsultation.currentStage === ConsultationStage.RECEIVED
                       && !selectedConsultation.awaitingCompletion
@@ -3242,6 +3267,18 @@ export default function ConsultationsPage() {
                       >
                         <FileSymlink className="w-4 h-4 ml-1" />
                         تجاوز استكمال المرفقات والبيانات
+                      </Button>
+                    )}
+                    {canEarlyClose(selectedConsultation, user.role, user.id, user.departmentId) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        data-testid={`dialog-button-early-close-${selectedConsultation.id}`}
+                        onClick={() => openEarlyCloseDialog(selectedConsultation)}
+                      >
+                        <XCircle className="w-4 h-4 ml-1" />
+                        إغلاق مبكر
                       </Button>
                     )}
                     {/* REOPEN sits beside استشارة تعقيبية because both act on a
