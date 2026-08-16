@@ -24,6 +24,7 @@ import {
   Priority,
   CaseStageLabels,
   CaseStageFilterDomain,
+  UniversalCaseStages,
   CaseClassification,
   CaseClassificationLabels,
 } from "@shared/schema";
@@ -58,12 +59,103 @@ export function countActiveAdvFilters(f: AdvancedCasesFilters): number {
 const RECENT_KEY = "cases.recentFilters.v1";
 const RECENT_MAX = 5;
 
-// getFilterStages + UNDER_STUDY_STAGES_BY_DEPT_NAME + IN_COURT_STAGES_UNION were
-// DELETED here. They built this panel's stage options from PATH arrays while the
-// predicate compares getCaseDisplayStage — the mismatch that made closed and
-// archived cases unfilterable, since مقفلة is in no path array. ded7a5a replaced
-// them with the shared CaseStageFilterDomain and left this dead; --noUnusedLocals
-// could not flag it because getFilterStages was exported.
+// RESTORED (recovered verbatim from git at 68bfca7^, which is the ded7a5a
+// state, so dd3d27c's تجاري/عام edit came back with them rather than being
+// retyped). ded7a5a had removed TWO behaviours at once and only one of them was
+// asked for: hiding stages with NO CASES (data-driven — gone for good) and
+// narrowing options to the DEPARTMENT'S OWN PATH (path-driven — wanted, and back
+// here).
+//
+// Dynamic stage options: filter component-local lookups so we don't disturb
+// schema arrays used by the workflow logic. Spec includes جاهزة_للرفع in
+// labor/admin paths and merges in-court paths into a single union list.
+const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = {
+  // 🔴 تحرير_صحيفة_الدعوى removed from تجاري + عام ONLY, mirroring the merge in
+  // UnderStudyCommercialStages / UnderStudyGeneralStages. It stays in عمالي and
+  // إداري below and in IN_COURT_STAGES_UNION — those paths keep the stage.
+  "تجاري": [
+    "استلام", "استكمال_البيانات", "دراسة",
+    "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
+    "قيد_التدقيق_في_تراضي", "مداولة_الصلح", "أغلق_طلب_الصلح",
+    "قيد_التدقيق_في_ناجز", "منظورة",
+  ],
+  "عام": [
+    "استلام", "استكمال_البيانات", "دراسة",
+    "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
+    "قيد_التدقيق_في_ناجز", "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
+  ],
+  "عمالي": [
+    "استلام", "استكمال_البيانات", "دراسة",
+    "توجيه_العميل_بالتسوية", "بانتظار_رفع_العميل_للتسوية",
+    "مداولة_الصلح", "أغلق_طلب_الصلح",
+    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية", "إحالة_للجنة_المراجعة",
+    "الأخذ_بالملاحظات", "جاهزة_للرفع", "قيد_التدقيق_في_ناجز", "منظورة",
+  ],
+  "إداري": [
+    "استلام", "تحديد_تاريخ_التقادم", "استكمال_البيانات", "دراسة",
+    "تحرير_صيغة_التظلم", "مراجعة_داخلية_للتظلم",
+    "تقديم_التظلم", "انتظار_رد_التظلم",
+    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية", "إحالة_للجنة_المراجعة",
+    "الأخذ_بالملاحظات", "جاهزة_للرفع", "قيد_التدقيق_في_معين", "منظورة",
+  ],
+};
+
+const IN_COURT_STAGES_UNION: string[] = [
+  "استلام", "استكمال_البيانات", "تحرير_مذكرة_جوابية", "تحرير_صحيفة_الدعوى",
+  "دراسة", "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات",
+  "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
+  "محكوم_حكم_ابتدائي", "منظورة_استئناف", "محكوم_حكم_نهائي",
+  "مشطوبة", "تحصيل", "مقفلة",
+];
+
+// Returns the stage values to show in the multi-select. Preserves
+// CaseStagesOrder ordering. Rule:
+//   classifications=[] AND deptNames=[]  → all stages (no signal)
+//   if IN_COURT in classifications (or none chosen) → add IN_COURT_STAGES_UNION
+//   if UNDER_STUDY in classifications (or none chosen):
+//     deptNames=[]  → add union of all dept paths
+//     deptNames=[…] → add per-dept lists (by dept NAME)
+//
+// 🔴 UniversalCaseStages IS ALWAYS UNIONED IN — the one change to the recovered
+// logic, and the thing whose absence made the original path-only list wrong.
+// مقفلة / مؤرشفة / the judgment stages sit in NO path array, yet
+// getCaseDisplayStage returns مقفلة for every closed or archived case; without
+// this union, picking a department made closed cases unfilterable. It also
+// carries استكمال_البيانات (the PAUSED fold, which InCourtSettlementStages
+// omits) and تحصيل (reachable from all four under-study departments although it
+// lives in only one path array). See its definition in shared/schema.ts.
+//
+// The result stays a SUBSET of CaseStageFilterDomain, which is what the
+// persisted validator accepts — so no option can be dropped on reload.
+export function getFilterStages(
+  classifications: string[],
+  deptNames: string[],
+): string[] {
+  if (classifications.length === 0 && deptNames.length === 0) {
+    return CaseStageFilterDomain as unknown as string[];
+  }
+  const collected = new Set<string>(UniversalCaseStages as unknown as string[]);
+  const noClassification = classifications.length === 0;
+  const hasInCourt = noClassification || classifications.includes(CaseClassification.IN_COURT);
+  const hasUnderStudy = noClassification || classifications.includes(CaseClassification.UNDER_STUDY);
+
+  if (hasInCourt) {
+    for (const s of IN_COURT_STAGES_UNION) collected.add(s);
+  }
+  if (hasUnderStudy) {
+    if (deptNames.length === 0) {
+      for (const list of Object.values(UNDER_STUDY_STAGES_BY_DEPT_NAME)) {
+        for (const s of list) collected.add(s);
+      }
+    } else {
+      for (const d of deptNames) {
+        const list = UNDER_STUDY_STAGES_BY_DEPT_NAME[d];
+        if (list) for (const s of list) collected.add(s);
+      }
+    }
+  }
+  return (CaseStageFilterDomain as unknown as string[]).filter((s) => collected.has(s));
+}
 
 type SavedFilterRow = {
   id: string;
@@ -242,27 +334,27 @@ export function CasesAdvancedFilters({ filters, onChange, departments, lawyers }
     () => Object.values(Priority).map((p) => ({ value: p, label: p })),
     [],
   );
-  // (selectedDeptNames removed — it existed ONLY to feed getFilterStages, which
-  // this panel no longer calls. --noUnusedLocals caught it.)
-  // 🔴 EVERY STAGE, ALWAYS — same owner ruling and same domain as the main
-  // المرحلة dropdown on the page.
+  const selectedDeptNames = useMemo(
+    () =>
+      draft.depts
+        .map((id) => departments.find((d) => String(d.id) === id)?.name)
+        .filter((n): n is string => !!n),
+    [draft.depts, departments],
+  );
+  // 🔴 DEPARTMENT/CLASSIFICATION-SCOPED, and NOT data-driven. Every stage on the
+  // selected path is offered whether or not a case currently sits on it — a
+  // stage with zero matches stays selectable and yields the empty state from
+  // 68bfca7. Only the PATH narrows the list; the data never does.
   //
-  // THIS PANEL CARRIED THE BUG THE MAIN DROPDOWN HAD ALREADY FIXED: its options
-  // came from getFilterStages (PATH arrays) while the predicate in cases.tsx
-  // compares getCaseDisplayStage. مقفلة and مؤرشفة are in NO path array, yet
-  // every closed or archived case displays as مقفلة — so closed cases were
-  // simply unfilterable here, and the prune below then deleted a مقفلة selection
-  // restored from a saved filter. Both are fixed by using the display-stage
-  // domain, which is what the predicate can actually produce.
-  //
-  // No longer scoped to classification/department, so the list is stable and a
-  // stage with no matches stays selectable and returns an empty result.
+  // The path lists alone would make closed and archived cases unfilterable the
+  // moment a department is picked (مقفلة is in no path array); getFilterStages
+  // unions UniversalCaseStages in for exactly that reason — see its comment.
   const stageOptions = useMemo(
-    () => (CaseStageFilterDomain as unknown as string[]).map((s) => ({
+    () => getFilterStages(draft.classifications, selectedDeptNames).map((s) => ({
       value: s,
       label: CaseStageLabels[s as keyof typeof CaseStageLabels] || s,
     })),
-    [],
+    [draft.classifications, selectedDeptNames],
   );
 
   // THE PRUNE EFFECT IS GONE, for the same reason as the main dropdown's: it

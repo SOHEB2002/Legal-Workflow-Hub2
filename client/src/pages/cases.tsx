@@ -137,6 +137,7 @@ import {
   CasesAdvancedFilters,
   EMPTY_ADV_FILTERS,
   countActiveAdvFilters,
+  getFilterStages,
   type AdvancedCasesFilters,
 } from "@/components/cases-advanced-filters";
 
@@ -1175,26 +1176,36 @@ export default function CasesPage() {
     });
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap]);
 
-  // 🔴 EVERY STAGE, ALWAYS — owner ruling. The dropdown no longer derives its
-  // options from the loaded cases, so a stage with zero matches is SELECTABLE and
-  // produces an honest empty list ("لا توجد نتائج مطابقة.") instead of silently
-  // disappearing from the control.
+  // 🔴 SCOPED BY PATH, NEVER BY DATA. Two behaviours were conflated once and
+  // must not be again:
+  //   (a) hiding stages that currently have NO CASES — data-driven. GONE, and it
+  //       stays gone: a stage on the path is offered whether or not any case sits
+  //       on it, and selecting an empty one yields "لا توجد نتائج مطابقة."
+  //   (b) narrowing options to the department's OWN PATH — path-driven. WANTED,
+  //       and restored here: a General list must not offer التسوية or التظلم
+  //       stages.
   //
-  // ⚠ IT IS STILL NOT THE RAW PATH LIST, and that distinction is the whole point.
-  // The predicate compares getCaseDisplayStage, which FOLDS lifecycle state
-  // (paused → استكمال_البيانات, closed/archived → مقفلة). Offering path arrays
-  // here is what made closed cases unfilterable, because مقفلة is in no path
-  // array. CaseStageFilterDomain is the display-stage domain — every value
-  // getCaseDisplayStage can return — so no option can be unmatchable in
-  // principle and no reachable stage can be missing.
+  // getFilterStages does (b) and unions in UniversalCaseStages, without which the
+  // path lists alone would make closed cases unfilterable the moment a department
+  // is picked — مقفلة is in no path array yet every closed or archived case
+  // displays as exactly that. That union is what keeps (b) from re-opening the
+  // bug the old data-derived list was papering over.
   //
-  // The previous derivation was introduced to fix exactly those two bugs
-  // (مؤرشفة dead, مقفلة vanishing on department narrowing). Using the display
-  // domain keeps both fixed WITHOUT hiding empty stages: the earlier fix and this
-  // ruling are compatible, they just disagreed about what to do with an empty
-  // stage. Nothing here is scoped to classification/department any more, so the
-  // option list is now stable regardless of the other filters.
-  const basicAllowedStages = CaseStageFilterDomain as unknown as string[];
+  // CLASSIFICATION SCOPES IT TOO, as it always did: in-court and under-study
+  // genuinely reach different stages (the in-court memo paths have no دراسة; the
+  // platform-review stages are under-study only). CONCLUDED_FILTER_VALUE is NOT a
+  // CaseClassification, so it passes NO classification signal rather than
+  // matching nothing — the same workaround the original carried.
+  const basicAllowedStages = useMemo(() => {
+    const classifications =
+      classificationFilter === "all" || classificationFilter === CONCLUDED_FILTER_VALUE
+        ? []
+        : [classificationFilter];
+    const deptName = deptFilter === "all"
+      ? null
+      : departments.find((d) => String(d.id) === deptFilter)?.name ?? null;
+    return getFilterStages(classifications, deptName ? [deptName] : []);
+  }, [classificationFilter, deptFilter, departments]);
 
   const departmentFilteredLawyers = useMemo(() => {
     if (deptFilter === "all") return filterLawyers;
