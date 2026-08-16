@@ -2572,6 +2572,42 @@ export function getConsultationReopenTargetStages(
   return getStagesForConsultationCycle(c).filter((s) => s !== ConsultationStage.CLOSED_FINAL);
 }
 
+// ============ Pre-entry skip of the data-completion stage ============
+// The stage a "تجاوز استكمال المرفقات والبيانات" lands on, or NULL when the
+// record has no data-completion stage to skip.
+//
+// 🔴 THIS IS A PRE-ENTRY SKIP, pressed AT استلام to jump PAST the
+// data-completion stage — the direct mirror of the cases-side
+// POST /api/cases/:id/skip-data-completion. It is NOT the removed
+// /skip-completion, which fired from INSIDE the stage and wrote the same
+// target as the ordinary advance (a relabelled advance, not a skip).
+//
+// 🔴 DERIVED FROM getStagesForConsultationCycle, NOT from the type list —
+// the same reason getConsultationReopenTargetStages is. That resolver is
+// STATUS-AGNOSTIC: once followUpCount > 0 a record resolves against the
+// 3-stage cycle list forever, and ConsultationCycleStages* contain NO
+// RECEIVED_PENDING_COMPLETION. A follow-up cycle therefore has nothing to
+// skip and returns null, instead of landing currentStage off its own
+// resolved path — the data-shaped bar collapse fixed in 3fcd4e3.
+//
+// The per-type target falls OUT of the resolved list rather than being
+// re-derived: the resolver already calls resolveConsultationType, so there
+// is exactly ONE type derivation in the system and the target can never
+// disagree with the rendered stage bar. Written/phone → دراسة, procedural
+// → جاري_العمل, purely because that is what sits after the stage in each
+// type's own list.
+//
+// Client AND server both call this, so the confirmation dialog can never
+// preview a stage the endpoint would not write.
+export function consultationSkipDataCompletionTarget(
+  c: { followUpCount?: number | null; consultationType?: string | null } | null | undefined,
+): ConsultationStageValue | null {
+  const stages = getStagesForConsultationCycle(c);
+  const idx = stages.indexOf(ConsultationStage.RECEIVED_PENDING_COMPLETION);
+  if (idx < 0) return null;
+  return stages[idx + 1] ?? null;
+}
+
 // Remap currentStage when the consultation's workflow type changes. If
 // the existing stage is already valid in the new type's stages list,
 // keep it. Otherwise apply a small heuristic for stages that semantically
@@ -3636,6 +3672,28 @@ export function getContractReopenTargetStages(
   c: { followUpCount?: number | null } | null | undefined,
 ): ContractStageValue[] {
   return getStagesForContractCycle(c).filter((s) => s !== ContractStage.CLOSED);
+}
+
+// The stage a "تجاوز استكمال المرفقات والبيانات" lands on, or NULL when the
+// contract has no data-completion stage to skip. Direct twin of
+// consultationSkipDataCompletionTarget — see its comment for the full
+// reasoning; only the two entity-specific facts differ:
+//
+//   1. Contracts have a SINGLE type-agnostic flow, so there is exactly ONE
+//      target (تحرير / DRAFTING) and no per-type branching to resolve.
+//   2. Contracts DO have a follow-up cycle, and it matters here just as much
+//      as it does for consultations: ContractCycleStages is
+//      [RECEIVED, READY, CLOSED] — RECEIVED_PENDING_COMPLETION is ABSENT — so
+//      a contract inside a follow-up has nothing to skip and returns null.
+//      getStagesForContractCycle is status-agnostic, so this holds for a
+//      re-closed cycle too.
+export function contractSkipDataCompletionTarget(
+  c: { followUpCount?: number | null } | null | undefined,
+): ContractStageValue | null {
+  const stages = getStagesForContractCycle(c);
+  const idx = stages.indexOf(ContractStage.RECEIVED_PENDING_COMPLETION);
+  if (idx < 0) return null;
+  return stages[idx + 1] ?? null;
 }
 
 export const ContractStatus = {
