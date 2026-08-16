@@ -2725,6 +2725,35 @@ export function getStagesForConsultationCycle(
 // Same reasoning as getContractReopenTargetStages — see its comment for why
 // this derives from the CYCLE-aware resolver rather than the raw type list, and
 // why no forced escape-hatch stage is offered. CLOSED_FINAL is excluded.
+// 🔴 THE CONSULTATION COMMITTEE HIDE — twin of contractStagesForDepartment.
+// A per-record FILTER over whatever list the caller already resolved, so the
+// type-resolved and cycle-aware callers filter identically without duplicating
+// either resolver.
+//
+// NO-OP FOR MOST CONSULTATIONS, by construction rather than by guard:
+//   • PHONE and PROCEDURAL paths contain no committee at all (the committee is
+//     WRITTEN-only), so a labor phone/procedural consultation is untouched.
+//   • ConsultationCycleStages{Written,Phone,Procedural} are 3-stage lists with
+//     no committee either, so a follow-up cycle is untouched — the filter cannot
+//     disturb the cycle records that stranded before.
+// Only the WRITTEN path for a committee-less department actually changes.
+//
+// ⚠ TAKING_NOTES REMOVED ALONGSIDE, third entity running on the same proven
+// fact: its ONLY producer is the edge COMMITTEE → TAKING_NOTES, so with no
+// committee it is unreachable.
+//
+// Nothing is deleted — both stages stay in ConsultationStage, in the transition
+// tables and in every list for departments that HAVE a committee.
+export function consultationStagesForDepartment(
+  departmentName: string | null | undefined,
+  base: readonly ConsultationStageValue[],
+): ConsultationStageValue[] {
+  if (departmentHasCommittee(departmentName)) return [...base];
+  return base.filter(
+    (s) => s !== ConsultationStage.COMMITTEE && s !== ConsultationStage.TAKING_NOTES,
+  );
+}
+
 export function getConsultationReopenTargetStages(
   c: { followUpCount?: number | null; consultationType?: string | null } | null | undefined,
 ): ConsultationStageValue[] {
@@ -2783,8 +2812,24 @@ export function consultationSkipDataCompletionTarget(
 export function remapConsultationStageForType(
   fromStage: ConsultationStageValue,
   toType: ConsultationTypeValue,
+  // The consultation's department NAME. Optional and defaulting to today's
+  // behaviour (a committee-having department), so existing callers are
+  // unaffected.
+  //
+  // 🔴 WHY IT MATTERS. Every exit of this function is membership-guarded against
+  // targetStages, so an UNFILTERED list can return COMMITTEE via the
+  // `return fromStage` arm — landing a committee-less department's consultation
+  // on a stage its own path no longer has. That is reachable, not theoretical:
+  // the flat transition table still permits INTERNAL_REVIEW → COMMITTEE by
+  // direct API for any department. Filtering the target list here means the
+  // membership guards do the work and such a row is remapped ONTO its path
+  // (semanticMap sends COMMITTEE to targetStages[2]) instead of being stranded.
+  departmentName?: string | null,
 ): ConsultationStageValue {
-  const targetStages = getConsultationStagesForType(toType);
+  const targetStages = consultationStagesForDepartment(
+    departmentName,
+    getConsultationStagesForType(toType),
+  );
   if (targetStages.includes(fromStage)) return fromStage;
 
   const targetTerminal = targetStages[targetStages.length - 1] as ConsultationStageValue;
