@@ -2244,7 +2244,13 @@ export default function MyTasksPage() {
                   contained/scrollable via the component's own min-w-0 overflow-x-auto
                   (the earlier layout fix). Hidden for legacy null-stage memos. */}
               {advanceMemo.currentStage && (
-                <MemoStagesBar currentStage={advanceMemo.currentStage as MemoStageValue} />
+                <MemoStagesBar
+                  currentStage={advanceMemo.currentStage as MemoStageValue}
+                  /* Memo → parent case → department, the two-hop this entity
+                     needs because memos carry no departmentId. An unresolvable
+                     parent yields null, which KEEPS the committee. */
+                  departmentName={departments.find((d) => d.id === getCaseById(advanceMemo.caseId)?.departmentId)?.name ?? null}
+                />
               )}
               {advanceMemo.awaitingCompletion && (
                 <div className="text-sm text-amber-600" data-testid="memo-awaiting-completion">
