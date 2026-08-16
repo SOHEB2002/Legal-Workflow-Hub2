@@ -145,8 +145,10 @@ const LINEAR_ADVANCE_WRITTEN: LinearAdvanceTable = {
   // through /advance-stage — the same precedent skip-committee sets.
   [ConsultationStage.RECEIVED]:                    { target: ConsultationStage.RECEIVED_PENDING_COMPLETION, roles: ["admin_support", "department_head", "branch_manager"] },
   [ConsultationStage.RECEIVED_PENDING_COMPLETION]: { target: ConsultationStage.STUDY,                       roles: ["admin_support", "department_head", "branch_manager"] },
-  [ConsultationStage.STUDY]:    { target: ConsultationStage.DRAFTING,        roles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  [ConsultationStage.DRAFTING]: { target: ConsultationStage.INTERNAL_REVIEW, roles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // 🔴 THE MERGE — دراسة and تحرير are one stage «الدراسة والتحرير» (stored as
+  // دراسة). The old STUDY→DRAFTING and DRAFTING→INTERNAL_REVIEW pair collapses
+  // into this single edge. Mirrors ALLOWED_CONSULTATION_TRANSITIONS exactly.
+  [ConsultationStage.STUDY]:    { target: ConsultationStage.INTERNAL_REVIEW, roles: ["assigned_lawyer", "department_head", "branch_manager"] },
   // WRITTEN closes READY → CLOSED_FINAL directly (COMPLETED removed from
   // the WRITTEN flow). Mirrors ALLOWED_CONSULTATION_TRANSITIONS on the
   // server; admin-gated like the PHONE/PROCEDURAL final-closure step.
@@ -493,13 +495,15 @@ const STAGE_FILTER_LABEL: Partial<Record<ConsultationStageValue, string>> = {
 // Canonical ordering for the derived stage options. The workflow order, with the
 // two terminal buckets last — the raw ConsultationStagesAll could not be reused
 // because it places مغلقة (CLOSED_FINAL) mid-array, which put a terminal state
-// between تحرير and جاري العمل in the dropdown.
+// mid-list in the dropdown.
 const STAGE_FILTER_ORDER: ConsultationStageValue[] = [
   ConsultationStage.RECEIVED,
   ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  // STUDY renders as «الدراسة والتحرير» — the merged stage. تحرير is NOT an
+  // option any more: no consultation can sit on it, so the filter would always
+  // return an empty list.
   ConsultationStage.STUDY,
   ConsultationStage.IN_PROGRESS,
-  ConsultationStage.DRAFTING,
   ConsultationStage.INTERNAL_REVIEW,
   ConsultationStage.COMMITTEE,
   ConsultationStage.TAKING_NOTES,
@@ -527,8 +531,10 @@ function getConsultationDisplayBadge(c: Consultation): { label: string; classNam
 const ACTION_REQUIRED_CONSULTATION_STAGES_WRITTEN = new Set<ConsultationStageValue>([
   ConsultationStage.RECEIVED,
   ConsultationStage.RECEIVED_PENDING_COMPLETION,
+  // DRAFTING dropped with the merge. Behaviour is unchanged because STUDY —
+  // the surviving value — was already in this set, so every consultation that
+  // counted as "action required from us" still does.
   ConsultationStage.STUDY,
-  ConsultationStage.DRAFTING,
   ConsultationStage.INTERNAL_REVIEW,
   ConsultationStage.COMMITTEE,
   ConsultationStage.TAKING_NOTES,

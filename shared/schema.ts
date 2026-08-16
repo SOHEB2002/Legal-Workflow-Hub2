@@ -2403,7 +2403,18 @@ export type ConsultationStageValue = typeof ConsultationStage[keyof typeof Consu
 export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
   "استلام": "استلام",
   "استكمال_المرفقات_والبيانات": "استكمال المرفقات والبيانات",
-  "دراسة": "دراسة",
+  // 🔴 THE MERGED STAGE. دراسة and تحرير were two consecutive stages on the
+  // WRITTEN path and are now ONE, labelled «الدراسة والتحرير». دراسة is the
+  // value that SURVIVES — the merge is a relabel plus the removal of تحرير
+  // from the path arrays, so no consultation had to change stage except the
+  // two migrated rows. Stage values are free text (varchar 50), so this
+  // needed no migration of its own.
+  "دراسة": "الدراسة والتحرير",
+  // تحرير is GONE from the WRITTEN path but its LABEL stays, deliberately:
+  // consultation_activity_log rows and metadata.toStage/fromStage still carry
+  // the value, and this map is what renders them. Deleting the entry would
+  // break the type (Record over every ConsultationStageValue) and would make
+  // historical timeline rows render a raw token.
   "تحرير": "تحرير",
   "مراجعة_داخلية": "مراجعة داخلية",
   "لجنة_مراجعة": "لجنة مراجعة",
@@ -2423,11 +2434,17 @@ export const ConsultationStageLabels: Record<ConsultationStageValue, string> = {
 // ("منجزة" → relabeled "جاهزة للإغلاق") stage was removed from the
 // WRITTEN flow — written consultations now go READY → CLOSED_FINAL
 // directly. COMPLETED remains a real stage only for PHONE/PROCEDURAL.
+// 🔴 DRAFTING (تحرير) REMOVED — merged into STUDY, which is now rendered
+// «الدراسة والتحرير». WRITTEN ONLY: the PHONE and PROCEDURAL arrays below never
+// contained DRAFTING and are untouched. The STUDY→DRAFTING and
+// DRAFTING→INTERNAL_REVIEW edges collapse into one STUDY→INTERNAL_REVIEW edge,
+// and the internal-review REJECT loop now returns to STUDY.
+// ⚠ STUDY stays at INDEX 2, which remapConsultationStageForType depends on
+// (it reads targetStages[2] as "the target type's working stage").
 export const ConsultationStagesOrder: ConsultationStageValue[] = [
   ConsultationStage.RECEIVED,
   ConsultationStage.RECEIVED_PENDING_COMPLETION,
   ConsultationStage.STUDY,
-  ConsultationStage.DRAFTING,
   ConsultationStage.INTERNAL_REVIEW,
   ConsultationStage.COMMITTEE,
   ConsultationStage.READY,
@@ -2440,11 +2457,14 @@ export const ConsultationStagesOrder: ConsultationStageValue[] = [
 // excludes TAKING_NOTES. TAKING_NOTES branches off ONLY from COMMITTEE
 // and always returns to READY after the outcome — it's not in the
 // linear path on purpose.
+// DRAFTING removed here too — see the note on ConsultationStagesOrder. This is
+// the list getConsultationStagesForType returns for WRITTEN, so it is what
+// rollback validation, the stage bar and remapConsultationStageForType resolve
+// against. STUDY remains at index 2.
 export const ConsultationStagesAll: ConsultationStageValue[] = [
   ConsultationStage.RECEIVED,
   ConsultationStage.RECEIVED_PENDING_COMPLETION,
   ConsultationStage.STUDY,
-  ConsultationStage.DRAFTING,
   ConsultationStage.INTERNAL_REVIEW,
   ConsultationStage.COMMITTEE,
   ConsultationStage.TAKING_NOTES,
@@ -2642,6 +2662,12 @@ export function remapConsultationStageForType(
     // for PHONE / IN_PROGRESS for PROCEDURAL). Pick whichever stage
     // 3 the target uses by reading targetStages directly.
     [ConsultationStage.STUDY]:                       targetStages[2] as ConsultationStageValue,
+    // 🔴 KEPT DELIBERATELY even though تحرير no longer exists on the WRITTEN
+    // path. It is the landing rule for a RESIDUAL تحرير row — one that predates
+    // the merge, or whose migration was missed — if its type is ever changed.
+    // Without it such a row would fall through to the استلام fallback and lose
+    // its position; with it, it lands on the target type's working stage.
+    // Harmless when no such row exists, load-bearing the day one does.
     [ConsultationStage.DRAFTING]:                    targetStages[2] as ConsultationStageValue,
     [ConsultationStage.INTERNAL_REVIEW]:             targetStages[2] as ConsultationStageValue,
     [ConsultationStage.COMMITTEE]:                   targetStages[2] as ConsultationStageValue,

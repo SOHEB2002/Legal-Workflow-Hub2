@@ -1282,11 +1282,18 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   // override stays unreachable through /advance-stage.
   { from: ConsultationStage.RECEIVED,                    to: ConsultationStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: ConsultationStage.RECEIVED_PENDING_COMPLETION, to: ConsultationStage.STUDY,                       allowedRoles: ["admin_support", "department_head", "branch_manager"] },
-  { from: ConsultationStage.STUDY,           to: ConsultationStage.DRAFTING,          allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: ConsultationStage.DRAFTING,        to: ConsultationStage.INTERNAL_REVIEW,   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // 🔴 THE MERGE (WRITTEN only). دراسة and تحرير are one stage now, rendered
+  // «الدراسة والتحرير», with دراسة as the stored value. The two edges
+  // STUDY→DRAFTING and DRAFTING→INTERNAL_REVIEW collapse into this single one.
+  // No DRAFTING edge remains, so the stage is unreachable via /advance-stage.
+  { from: ConsultationStage.STUDY,           to: ConsultationStage.INTERNAL_REVIEW,   allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   // Internal-review outcomes (enforced finely by the internal-review endpoint;
   // table stays permissive for assigned_lawyer + dept_head + branch_manager).
-  { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.DRAFTING,          allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // ⚠ THE REJECT LOOP now returns to STUDY, the merged stage — it used to point
+  // at DRAFTING. Its twin is the handler that actually writes the stage
+  // (POST /:id/internal-review); BOTH had to move or rejection would write a
+  // value this table no longer permits.
+  { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.STUDY,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.COMMITTEE,         allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   // Committee decisions
   { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.READY,             allowedRoles: ["consultations_review_head", "branch_manager"] },
@@ -6066,9 +6073,12 @@ export async function registerRoutes(
         return res.status(403).json({ error: "فقط المراجع الداخلي المعيَّن أو رئيس القسم أو مدير الفرع يمكنه اعتماد المراجعة الداخلية لهذه الاستشارة" });
       }
 
+      // Rejection returns the consultation to the merged «الدراسة والتحرير»
+      // stage (stored value: دراسة). Twin of the INTERNAL_REVIEW→STUDY edge in
+      // ALLOWED_CONSULTATION_TRANSITIONS — keep the two in step.
       const nextStage = decision === InternalReviewDecision.PASSED
         ? ConsultationStage.COMMITTEE
-        : ConsultationStage.DRAFTING;
+        : ConsultationStage.STUDY;
 
       const truncatedNotes = notes ? notes.slice(0, 120) : "";
       const description = truncatedNotes
