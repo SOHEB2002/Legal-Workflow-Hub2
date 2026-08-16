@@ -1931,6 +1931,56 @@ export const InCourtSettlementStages: CaseStageValue[] = [
 // LIVE, and the cases table sorts it as "waiting on external" (group 4). It is
 // nonetheless off-path, so the progress bar extends this set by that one stage
 // for DISPLAY purposes only; see TERMINAL_BAR_STAGES in case-progress-bar.tsx.
+// ==================== UNIVERSAL (department-independent) CASE STAGES ====================
+// Stages a case can display in NO MATTER which department or path it is on.
+// Any department-scoped stage-filter option list must include these, or the
+// scoping silently hides live rows.
+//
+// 🔴 THIS IS THE TRAP THE OLD DATA-DERIVED DROPDOWN EXISTED TO PAPER OVER.
+// مقفلة is in no path array, yet getCaseDisplayStage returns it for EVERY closed
+// or archived case — so a purely path-based option list makes closed cases
+// unfilterable the moment a department is picked. Same for مؤرشفة, مشطوبة and
+// the judgment stages. Scoping by path is right; scoping by path ALONE is not.
+//
+// MEMBERSHIP IS DERIVED, NOT HAND-LISTED, in three parts:
+//   1. Every stage in NO path array — the terminal/judgment/platform-submission
+//      stages that every path can fall out to (مقفلة، مؤرشفة، مشطوبة،
+//      محكوم_حكم_ابتدائي، محكوم_حكم_نهائي، منظورة_استئناف، and the three
+//      رفع_* stages, which are in CaseStagesOrder but no path).
+//   2. The two values getCaseDisplayStage FOLDS TO regardless of path —
+//      DATA_COMPLETION (paused) and CLOSED (closed/archived). CLOSED already
+//      falls out of (1); DATA_COMPLETION does NOT, because
+//      InCourtSettlementStages omits it — so a PAUSED in-court settlement case
+//      would have been unfilterable. Caught by the coverage proof, not by eye.
+//   3. تحصيل. It IS in a path array (InCourtSettlementStages) so (1) misses it,
+//      but ALLOWED_CASE_TRANSITIONS reaches it from مداولة_الصلح (General,
+//      Commercial, Labor) AND from انتظار_رد_التظلم (Admin) — i.e. from all four
+//      under-study departments. Being in ONE path does not make it that path's.
+export const UniversalCaseStages: CaseStageValue[] = (() => {
+  const inSomePath = new Set<CaseStageValue>([
+    ...UnderStudyGeneralStages,
+    ...UnderStudyCommercialStages,
+    ...UnderStudyLaborStages,
+    ...UnderStudyAdminStages,
+    ...InCourtDefendantMemoStages,
+    ...InCourtPlaintiffMemoStages,
+    ...InCourtNoMemoStages,
+    ...InCourtSettlementStages,
+  ]);
+  const extras: CaseStageValue[] = [
+    CaseStage.DATA_COMPLETION,
+    CaseStage.CLOSED,
+    CaseStage.COLLECTION,
+  ];
+  const members = new Set<CaseStageValue>(
+    CaseStageFilterDomain.filter((s) => !inSomePath.has(s)),
+  );
+  for (const s of extras) members.add(s);
+  // Ordered by the canonical domain so any list built from this still reads as
+  // the workflow does.
+  return CaseStageFilterDomain.filter((s) => members.has(s));
+})();
+
 export const TerminalCaseStages: ReadonlySet<CaseStageValue> = new Set<CaseStageValue>([
   "محكوم_حكم_نهائي",
   "محكوم_حكم_ابتدائي",
