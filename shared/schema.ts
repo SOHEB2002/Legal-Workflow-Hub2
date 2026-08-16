@@ -2220,7 +2220,17 @@ export function currentStartingStage(lawCase: { isSettlementCase?: boolean | nul
 export const DepartmentsWithoutCommittee: readonly string[] = ["عمالي"];
 
 export function departmentHasCommittee(departmentName?: string | null): boolean {
-  return !!departmentName && !DepartmentsWithoutCommittee.includes(departmentName);
+  // 🔴 FAIL DIRECTION IS DELIBERATE: an unknown, empty or UNRESOLVABLE department
+  // KEEPS its committee. Only a name explicitly listed above loses it.
+  //
+  // The obvious `!!departmentName && !list.includes(name)` is WRONG here and was
+  // the first draft: it returns false for null, so a contract whose department id
+  // does not resolve to a name would have had its committee silently hidden —
+  // stages removed from its path and internal review re-routed — on the strength
+  // of a failed lookup. Hiding a stage must require a positive match, never the
+  // absence of information.
+  if (!departmentName) return true;
+  return !DepartmentsWithoutCommittee.includes(departmentName);
 }
 
 export function getStagesForClassification(
@@ -3823,6 +3833,34 @@ export function getStagesForContractCycle(
 // stage is absent from InCourtSettlementStages yet re-opening into court is the
 // entire promise the defendant close makes. Contracts have no analogue: every
 // stage a contract can meaningfully resume at is already on its resolved list.
+// 🔴 THE CONTRACT COMMITTEE HIDE. Contracts have a SINGLE type-agnostic path
+// shared by every department (unlike cases, which have a labor-specific array),
+// so the hide cannot be an array edit — it is a per-record FILTER applied to
+// whatever list the caller already resolved.
+//
+// Takes the base list rather than re-deriving it, so the cycle-aware callers
+// (getStagesForContractCycle) and the plain ones both filter the SAME way and
+// the cycle logic is not duplicated. A cycle list contains no committee stage
+// anyway, so filtering it is a harmless no-op.
+//
+// ⚠ TAKING_NOTES IS REMOVED ALONGSIDE COMMITTEE, exactly as on cases and for the
+// same proven reason: its ONLY producer in ALLOWED_CONTRACT_TRANSITIONS is the
+// edge COMMITTEE → TAKING_NOTES. With no committee it is unreachable, and
+// leaving it in a path list would offer a stage nothing can enter.
+//
+// Nothing is deleted: both stages remain in ContractStage, in
+// ALLOWED_CONTRACT_TRANSITIONS and in every list for departments that DO have a
+// committee. Restoring = empty DepartmentsWithoutCommittee.
+export function contractStagesForDepartment(
+  departmentName: string | null | undefined,
+  base: readonly ContractStageValue[],
+): ContractStageValue[] {
+  if (departmentHasCommittee(departmentName)) return [...base];
+  return base.filter(
+    (s) => s !== ContractStage.COMMITTEE && s !== ContractStage.TAKING_NOTES,
+  );
+}
+
 export function getContractReopenTargetStages(
   c: { followUpCount?: number | null } | null | undefined,
 ): ContractStageValue[] {

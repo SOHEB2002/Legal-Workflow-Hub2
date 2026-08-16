@@ -49,6 +49,8 @@ import {
   isContractInFollowUpCycle,
   getStagesForContractCycle,
   getContractReopenTargetStages,
+  contractStagesForDepartment,
+  departmentHasCommittee,
   getConsultationReopenTargetStages,
   consultationSkipDataCompletionTarget,
   contractSkipDataCompletionTarget,
@@ -1415,6 +1417,18 @@ const ALLOWED_CONTRACT_TRANSITIONS: StageTransitionRule[] = [
   // fixed.
   { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.DRAFTING,                    allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.COMMITTEE,                   allowedRoles: ["internal_reviewer", "branch_manager"] },
+  // 🔴 COMMITTEE-BYPASS EDGE for departments in DepartmentsWithoutCommittee
+  // (today: عمالي) — the contracts twin of the cases edge added in 04062da.
+  // ADDED, nothing removed: the committee edge directly above stays, because
+  // every other department still routes through the committee.
+  //
+  // ⚠ The table is FLAT and department-blind, so a NON-labor contract can take
+  // this edge by direct API and skip its committee. Owner-accepted, same trade
+  // as the cases hide and the دراسة merge: no UI offers it (the internal-review
+  // dialog posts to /internal-review, which resolves the target from the
+  // contract's own department), and making validateStageTransition
+  // department-aware is the deferred guard batch.
+  { from: ContractStage.INTERNAL_REVIEW,             to: ContractStage.READY,                       allowedRoles: ["internal_reviewer", "branch_manager"] },
   // Committee decisions — chair = consultations_review_head.
   // department_head is INTENTIONALLY NOT in this set: heads don't
   // override committee decisions. Their override channel is the
@@ -9849,8 +9863,22 @@ export async function registerRoutes(
       if (!isReviewer && !isOwnDeptHeadReviewer && reqUser.role !== "branch_manager") {
         return res.status(403).json({ error: "فقط المراجع الداخلي المعين أو رئيس القسم أو مدير الفرع يمكنهم التصرف في مرحلة المراجعة الداخلية" });
       }
+      // 🔴 DEPARTMENT-CONDITIONAL PASS TARGET. Contracts share ONE path across
+      // every department, so unlike cases (where the labor array edit did the
+      // work) the committee hide has to be decided per record — and this is the
+      // one place that decides where a passing contract goes.
+      //
+      // A department in DepartmentsWithoutCommittee (today: عمالي) goes straight
+      // to READY; EVERY OTHER DEPARTMENT STILL GOES TO THE COMMITTEE, unchanged.
+      // contracts.departmentId holds an id and departmentHasCommittee takes a
+      // NAME, so the name is resolved through the department list — the same
+      // idiom the labor chair-routing gates in this file already use.
+      // Rejection is untouched: still DRAFTING.
+      const contractDeptName = contract.departmentId
+        ? (await storage.getAllDepartments()).find((d) => d.id === contract.departmentId)?.name ?? null
+        : null;
       const nextStage = decision === InternalReviewDecision.PASSED
-        ? ContractStage.COMMITTEE
+        ? (departmentHasCommittee(contractDeptName) ? ContractStage.COMMITTEE : ContractStage.READY)
         : ContractStage.DRAFTING;
       const truncatedNotes = notes ? notes.slice(0, 120) : "";
       const description = truncatedNotes
@@ -10416,7 +10444,16 @@ export async function registerRoutes(
       if (!targetStage) {
         return res.status(400).json({ error: "يجب اختيار المرحلة التي سيُفتح عندها العقد" });
       }
-      const allowedTargets = getContractReopenTargetStages(contract) as string[];
+      // Committee stages are not offered as reopen targets for a department that
+      // has no committee — reopening INTO a stage the department cannot work is
+      // the same off-path shape the cycle-aware derivation exists to prevent.
+      const reopenDeptName = contract.departmentId
+        ? (await storage.getAllDepartments()).find((d) => d.id === contract.departmentId)?.name ?? null
+        : null;
+      const allowedTargets = contractStagesForDepartment(
+        reopenDeptName,
+        getContractReopenTargetStages(contract),
+      ) as string[];
       if (!allowedTargets.includes(targetStage)) {
         return res.status(400).json({ error: "المرحلة المختارة ليست ضمن مسار هذا العقد" });
       }
