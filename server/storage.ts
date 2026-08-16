@@ -5142,8 +5142,11 @@ export class DatabaseStorage implements IStorage {
       const consultAssigned = sql`(${consultations.assignedTo} IS NOT NULL AND ${consultations.assignedTo} <> '')`;
       const CONSULTATION_WORK_STAGES = [
         ConsultationStage.RECEIVED,
+        // STUDY is the merged «الدراسة والتحرير» stage. DRAFTING was dropped
+        // from this set with the merge; behaviour is provably unchanged
+        // because STUDY was ALREADY here, so every row that emitted a task
+        // before still does. Nothing can sit on DRAFTING going forward.
         ConsultationStage.STUDY,
-        ConsultationStage.DRAFTING,
         ConsultationStage.TAKING_NOTES,
         ConsultationStage.IN_PROGRESS,
       ];
