@@ -162,8 +162,14 @@ export default function HearingsPage() {
   const [reportDialogHearing, setReportDialogHearing] = useState<Hearing | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [basicSearch, setBasicSearch] = useState<string>("");
+  // 🔴 "today" IS PART OF THE DOMAIN. The dropdown offers اليوم and the predicate
+  // implements it (a DATE test, not a status test), but the validator accepted
+  // only HearingStatus values — so picking اليوم worked, and then silently reset
+  // to الكل on the next load. Same class as the consultations persisted-validator
+  // bug: a control offering a value its own validator rejects.
   const [filterStatus, setFilterStatus] = usePersistedFilter<string>(
-    "hearings", "status", "all", oneOf(Object.values(HearingStatus) as readonly string[], "all"),
+    "hearings", "status", "all",
+    oneOf([...Object.values(HearingStatus), "today"] as readonly string[], "all"),
   );
   // DEFAULT = the user's OWN department when they have one; "all" otherwise.
   // A default, not a restriction — the dropdown still offers every department,

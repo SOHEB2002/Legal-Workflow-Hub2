@@ -24,6 +24,7 @@ import {
   Priority,
   CaseStageLabels,
   CaseStagesOrder,
+  CaseStageFilterDomain,
   CaseClassification,
   CaseClassificationLabels,
 } from "@shared/schema";
@@ -315,32 +316,33 @@ export function CasesAdvancedFilters({ filters, onChange, departments, lawyers }
     () => Object.values(Priority).map((p) => ({ value: p, label: p })),
     [],
   );
-  const selectedDeptNames = useMemo(
-    () =>
-      draft.depts
-        .map((id) => departments.find((d) => String(d.id) === id)?.name)
-        .filter((n): n is string => !!n),
-    [draft.depts, departments],
-  );
-  const stageOptions = useMemo(() => {
-    const allowed = getFilterStages(draft.classifications, selectedDeptNames);
-    return allowed.map((s) => ({
+  // (selectedDeptNames removed — it existed ONLY to feed getFilterStages, which
+  // this panel no longer calls. --noUnusedLocals caught it.)
+  // 🔴 EVERY STAGE, ALWAYS — same owner ruling and same domain as the main
+  // المرحلة dropdown on the page.
+  //
+  // THIS PANEL CARRIED THE BUG THE MAIN DROPDOWN HAD ALREADY FIXED: its options
+  // came from getFilterStages (PATH arrays) while the predicate in cases.tsx
+  // compares getCaseDisplayStage. مقفلة and مؤرشفة are in NO path array, yet
+  // every closed or archived case displays as مقفلة — so closed cases were
+  // simply unfilterable here, and the prune below then deleted a مقفلة selection
+  // restored from a saved filter. Both are fixed by using the display-stage
+  // domain, which is what the predicate can actually produce.
+  //
+  // No longer scoped to classification/department, so the list is stable and a
+  // stage with no matches stays selectable and returns an empty result.
+  const stageOptions = useMemo(
+    () => (CaseStageFilterDomain as unknown as string[]).map((s) => ({
       value: s,
       label: CaseStageLabels[s as keyof typeof CaseStageLabels] || s,
-    }));
-  }, [draft.classifications, selectedDeptNames]);
+    })),
+    [],
+  );
 
-  // When the allowed stages list narrows, prune stale stage selections so the
-  // user doesn't end up with hidden filters that still constrain results.
-  useEffect(() => {
-    const allowed = new Set(stageOptions.map((o) => o.value));
-    if (draft.stages.some((s) => !allowed.has(s))) {
-      setDraft((prev) => ({
-        ...prev,
-        stages: prev.stages.filter((s) => allowed.has(s)),
-      }));
-    }
-  }, [stageOptions, draft.stages]);
+  // THE PRUNE EFFECT IS GONE, for the same reason as the main dropdown's: it
+  // silently deleted the user's stage selections whenever the option list
+  // narrowed. With a constant domain the condition can no longer arise, and a
+  // combination that matches nothing must show an empty list, not edit itself.
 
   const deptOptions = useMemo(
     () => departments.map((d) => ({ value: String(d.id), label: d.name })),

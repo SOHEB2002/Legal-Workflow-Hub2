@@ -87,6 +87,7 @@ import { useAuth } from "@/lib/auth-context";
 import { 
   CaseStageLabels,
   CaseStagesOrder,
+  CaseStageFilterDomain,
   CaseStage,
   CaseStatus,
   Priority,
@@ -571,8 +572,12 @@ export default function CasesPage() {
   // are sanitized against their STATIC option lists; dept/lawyer accept any
   // string here because departments and users load async — their existence is
   // re-checked by the "reset if not in the loaded list" effects below.
+  // Validated against the SAME domain the dropdown offers, so a saved stage can
+  // never be rejected on reload. (CaseStagesOrder happens to be identical today —
+  // verified, 32 values, all four off-path stages present — but the domain is the
+  // honest source and stays correct if the two ever diverge.)
   const [statusFilter, setStatusFilter] = usePersistedFilter<string>(
-    "cases", "status", "all", oneOf(CaseStagesOrder as readonly string[], "all"),
+    "cases", "status", "all", oneOf(CaseStageFilterDomain as readonly string[], "all"),
   );
   // DEFAULT = the user's OWN department when they have one (department_head /
   // employee); "all" for users with none (branch_manager / admin_support).
@@ -1169,67 +1174,44 @@ export default function CasesPage() {
     });
   }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap]);
 
-  const basicAllowedStages = useMemo(() => {
-    // ⚠ getFilterStages IS NO LONGER CALLED HERE, and with it goes the "منتهية is
-    // not a CaseClassification" workaround it needed — that guard existed only to
-    // stop the path lookup returning an empty list and emptying the dropdown.
-    // Deriving from the rows themselves has no such failure mode: منتهية narrows
-    // the scoped set like any other value and the stages present in it are what
-    // gets offered.
-    // 🔴 DERIVED FROM THE LOADED CASES' DISPLAY STAGE — the same value the filter
-    // COMPARES (matchesStatus / matchesAdvStage both test getCaseDisplayStage) —
-    // intersected with the path-based list rather than taking it wholesale.
-    //
-    // WHY: the path list and the compared value disagreed, exactly as they did on
-    // the consultations page (fixed in 4e39695), and it broke both ways:
-    //   • مؤرشفة was a NEAR-DEAD option. getCaseDisplayStage returns مقفلة for an
-    //     archived case, so no row can display as مؤرشفة; picking it returned an
-    //     empty list.
-    //   • WORSE, and the mirror of the consultations type+stage trap: getFilterStages
-    //     returns PATH arrays once a classification or department is chosen, and
-    //     مقفلة is in NO path array. So narrowing by department made مقفلة vanish
-    //     from the list — and the prune effect below then CLEARED a live مقفلة
-    //     selection — even though every closed case in that department displays
-    //     as exactly that. Closed cases became unfilterable the moment you picked
-    //     a department.
-    // Intersecting with what is actually on the page fixes both at once: an
-    // option cannot fail to match, and a stage that IS present cannot be missing.
-    //
-    // SAFE TO DERIVE: GET /api/cases returns every row the user may see
-    // (getAllCases is a bare db.select with no LIMIT/OFFSET) and this page's
-    // paging is a client-side .slice(). Checked before writing.
-    //
-    // SCOPED TO CLASSIFICATION + DEPARTMENT ONLY — the same two facets that
-    // already scoped this list, and the two that genuinely determine which stages
-    // a case can reach. Deliberately NOT scoped to the lawyer or search filters:
-    // those would let an unrelated change strand a live stage selection, which is
-    // the reasoning applied to the consultations type filter.
-    const scoped = cases.filter((c) => {
-      if (deptFilter !== "all" && c.departmentId !== deptFilter) return false;
-      if (classificationFilter === "all") return true;
-      const concluded = isCaseConcluded(c);
-      return classificationFilter === CONCLUDED_FILTER_VALUE
-        ? concluded
-        : c.caseClassification === classificationFilter && !concluded;
-    });
-    const present = new Set<string>(scoped.map((c) => getCaseDisplayStage(c) as string));
-    // Ordered by CaseStagesOrder, the canonical enum order, so the dropdown still
-    // reads as the workflow does. The path list is no longer consulted at all:
-    // intersecting with it would have re-introduced the مقفلة hole, since مقفلة
-    // is in no path array yet is a legitimate display stage for every closed case.
-    return (CaseStagesOrder as unknown as string[]).filter((s) => present.has(s));
-  }, [cases, classificationFilter, deptFilter, departments]);
+  // 🔴 EVERY STAGE, ALWAYS — owner ruling. The dropdown no longer derives its
+  // options from the loaded cases, so a stage with zero matches is SELECTABLE and
+  // produces an honest empty list ("لا توجد قضايا مطابقة للبحث") instead of
+  // silently disappearing from the control.
+  //
+  // ⚠ IT IS STILL NOT THE RAW PATH LIST, and that distinction is the whole point.
+  // The predicate compares getCaseDisplayStage, which FOLDS lifecycle state
+  // (paused → استكمال_البيانات, closed/archived → مقفلة). Offering path arrays
+  // here is what made closed cases unfilterable, because مقفلة is in no path
+  // array. CaseStageFilterDomain is the display-stage domain — every value
+  // getCaseDisplayStage can return — so no option can be unmatchable in
+  // principle and no reachable stage can be missing.
+  //
+  // The previous derivation was introduced to fix exactly those two bugs
+  // (مؤرشفة dead, مقفلة vanishing on department narrowing). Using the display
+  // domain keeps both fixed WITHOUT hiding empty stages: the earlier fix and this
+  // ruling are compatible, they just disagreed about what to do with an empty
+  // stage. Nothing here is scoped to classification/department any more, so the
+  // option list is now stable regardless of the other filters.
+  const basicAllowedStages = CaseStageFilterDomain as unknown as string[];
 
   const departmentFilteredLawyers = useMemo(() => {
     if (deptFilter === "all") return filterLawyers;
     return filterLawyers.filter(u => String(u.departmentId) === deptFilter);
   }, [filterLawyers, deptFilter]);
 
-  useEffect(() => {
-    if (statusFilter !== "all" && !basicAllowedStages.includes(statusFilter)) {
-      setStatusFilter("all");
-    }
-  }, [basicAllowedStages, statusFilter]);
+  // 🔴 THE STALE-STAGE PRUNE IS GONE — owner ruling. It used to reset المرحلة to
+  // "all" whenever the chosen stage left basicAllowedStages, so narrowing to a
+  // department with no cases at that stage silently discarded the user's choice.
+  // The choice now stands and the list simply shows zero rows.
+  //
+  // Nothing else depended on it: basicAllowedStages is CaseStageFilterDomain, a
+  // CONSTANT, so the condition it tested can no longer become true anyway —
+  // statusFilter is validated against the same domain on load (see
+  // usePersistedFilter below), and every value the dropdown offers is in it.
+  // A selection that becomes meaningless in combination — say مقفلة plus a
+  // classification no closed case has — now yields an empty list, which is the
+  // honest answer, rather than a filter that quietly resets itself.
 
   // STALE-VALUE GUARD for the async list. `departmentFilteredLawyers.length > 0`
   // is load-bearing now that lawyerFilter can be RESTORED from storage: without
