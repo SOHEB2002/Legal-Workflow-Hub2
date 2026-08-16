@@ -1752,11 +1752,21 @@ export const CaseStagesOrder: CaseStageValue[] = [
 
 // ==================== مراحل القضية حسب التصنيف والقسم ====================
 
+// 🔴 تحرير_صحيفة_الدعوى REMOVED — merged into دراسة, which is now the single
+// study-and-drafting stage on this path. GENERAL + COMMERCIAL ONLY.
+//
+// NO RELABEL: دراسة keeps its stored value AND its displayed label «دراسة»,
+// deliberately. دراسة is ONE stored value shared by five paths, so relabelling
+// it here would rename it in Labor, Admin and InCourtNoMemo too.
+//
+// ⚠ تحرير_صحيفة_الدعوى IS NOT DELETED as a stage value — it survives in
+// UnderStudyLaborStages, UnderStudyAdminStages and InCourtPlaintiffMemoStages,
+// and every consumer keyed on it still works for those paths. This removes one
+// stage from two arrays; it is not a stage deletion.
 export const UnderStudyGeneralStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
-  "تحرير_صحيفة_الدعوى",
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
@@ -1767,11 +1777,12 @@ export const UnderStudyGeneralStages: CaseStageValue[] = [
   "منظورة",
 ];
 
+// تحرير_صحيفة_الدعوى removed — see the note on UnderStudyGeneralStages. Same
+// merge, same reasoning; these are the only two arrays affected.
 export const UnderStudyCommercialStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "دراسة",
-  "تحرير_صحيفة_الدعوى",
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",

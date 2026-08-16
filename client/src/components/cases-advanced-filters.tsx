@@ -62,14 +62,17 @@ const RECENT_MAX = 5;
 // schema arrays used by the workflow logic. Spec includes جاهزة_للرفع in
 // labor/admin paths and merges in-court paths into a single union list.
 const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = {
+  // 🔴 تحرير_صحيفة_الدعوى removed from تجاري + عام ONLY, mirroring the merge in
+  // UnderStudyCommercialStages / UnderStudyGeneralStages. It stays in عمالي and
+  // إداري below and in IN_COURT_STAGES_UNION — those paths keep the stage.
   "تجاري": [
-    "استلام", "استكمال_البيانات", "دراسة", "تحرير_صحيفة_الدعوى",
+    "استلام", "استكمال_البيانات", "دراسة",
     "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
     "قيد_التدقيق_في_تراضي", "مداولة_الصلح", "أغلق_طلب_الصلح",
     "قيد_التدقيق_في_ناجز", "منظورة",
   ],
   "عام": [
-    "استلام", "استكمال_البيانات", "دراسة", "تحرير_صحيفة_الدعوى",
+    "استلام", "استكمال_البيانات", "دراسة",
     "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
     "قيد_التدقيق_في_ناجز", "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
   ],
