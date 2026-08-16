@@ -8,6 +8,7 @@ import {
   ConsultationStagesOrderProcedural,
   ConsultationType,
   getStagesForConsultationCycle,
+  consultationStagesForDepartment,
   resolveConsultationType,
   type ConsultationStageValue,
 } from "@shared/schema";
@@ -30,6 +31,10 @@ interface ConsultationStagesBarProps {
   // Status-agnostic on purpose: a closed cycle still shows the cycle bar
   // with CLOSED_FINAL highlighted, not the original 8-stage path.
   followUpCount?: number | null;
+  // The consultation's department NAME, for the committee hide. Passed in so the
+  // component stays pure — the page has getDepartmentName and the full record.
+  // Omitted → treated as having a committee, i.e. today's behaviour.
+  departmentName?: string | null;
 }
 
 export function ConsultationStagesBar({
@@ -37,6 +42,7 @@ export function ConsultationStagesBar({
   consultationType,
   hasTakingNotesHistory = false,
   followUpCount,
+  departmentName,
 }: ConsultationStagesBarProps) {
   const resolved = resolveConsultationType(consultationType);
   const stages: ConsultationStageValue[] = (() => {
@@ -47,7 +53,13 @@ export function ConsultationStagesBar({
     if (resolved === ConsultationType.PROCEDURAL) return [...ConsultationStagesOrderProcedural];
     const showTakingNotes =
       currentStage === ConsultationStage.TAKING_NOTES || hasTakingNotesHistory;
-    return showTakingNotes ? [...ConsultationStagesAll] : [...ConsultationStagesOrder];
+    // Committee hide — reached only on the WRITTEN path, which is the only one
+    // with a committee. The two early returns above (cycle, phone, procedural)
+    // are untouched precisely because none of those lists has one.
+    return consultationStagesForDepartment(
+      departmentName,
+      showTakingNotes ? ConsultationStagesAll : ConsultationStagesOrder,
+    );
   })();
 
   const rawIndex = stages.indexOf(currentStage);

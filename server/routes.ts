@@ -52,6 +52,7 @@ import {
   contractStagesForDepartment,
   departmentHasCommittee,
   getConsultationReopenTargetStages,
+  consultationStagesForDepartment,
   consultationSkipDataCompletionTarget,
   contractSkipDataCompletionTarget,
   reopenEntitySchema,
@@ -1326,6 +1327,18 @@ const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   // value this table no longer permits.
   { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.STUDY,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.COMMITTEE,         allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  // 🔴 COMMITTEE-BYPASS EDGE for departments in DepartmentsWithoutCommittee
+  // (today: عمالي) — the consultations twin of the cases edge (04062da) and the
+  // contracts edge (8ab56e3). ADDED; nothing removed, since every other
+  // department still routes through the committee.
+  //
+  // ⚠ The table is FLAT and department-blind, so a NON-labor written
+  // consultation can take this edge by direct API and skip its committee.
+  // Owner-accepted for the third time: no UI offers it (the internal-review
+  // dialog posts to /internal-review, which resolves the target from the
+  // consultation's own department), and making validateStageTransition
+  // department-aware remains the deferred guard batch.
+  { from: ConsultationStage.INTERNAL_REVIEW, to: ConsultationStage.READY,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   // Committee decisions
   { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.READY,             allowedRoles: ["consultations_review_head", "branch_manager"] },
   { from: ConsultationStage.COMMITTEE,       to: ConsultationStage.TAKING_NOTES,      allowedRoles: ["consultations_review_head", "branch_manager"] },
@@ -5649,9 +5662,13 @@ export async function registerRoutes(
         } else if (!validTypes.includes(newType)) {
           return res.status(400).json({ error: "نوع الاستشارة غير صحيح" });
         } else {
+          const remapDeptName = existing.departmentId
+            ? (await storage.getAllDepartments()).find((d) => d.id === existing.departmentId)?.name ?? null
+            : null;
           const remapped = remapConsultationStageForType(
             existing.currentStage,
             newType as ConsultationTypeValue,
+            remapDeptName,
           );
           typeChange = {
             from: existing.consultationType,
@@ -6119,8 +6136,17 @@ export async function registerRoutes(
       // Rejection returns the consultation to the merged «الدراسة والتحرير»
       // stage (stored value: دراسة). Twin of the INTERNAL_REVIEW→STUDY edge in
       // ALLOWED_CONSULTATION_TRANSITIONS — keep the two in step.
+      // 🔴 DEPARTMENT-CONDITIONAL PASS TARGET, mirroring the contracts handler.
+      // A department in DepartmentsWithoutCommittee (today: عمالي) goes straight
+      // to READY; every other department STILL GOES TO THE COMMITTEE. The id is
+      // resolved to a NAME because departmentHasCommittee takes a name — and an
+      // UNRESOLVED name keeps its committee (the 8ab56e3 null-safety fix).
+      // Rejection is untouched: still the merged دراسة stage.
+      const consultDeptName = consultation.departmentId
+        ? (await storage.getAllDepartments()).find((d) => d.id === consultation.departmentId)?.name ?? null
+        : null;
       const nextStage = decision === InternalReviewDecision.PASSED
-        ? ConsultationStage.COMMITTEE
+        ? (departmentHasCommittee(consultDeptName) ? ConsultationStage.COMMITTEE : ConsultationStage.READY)
         : ConsultationStage.STUDY;
 
       const truncatedNotes = notes ? notes.slice(0, 120) : "";
@@ -6755,7 +6781,16 @@ export async function registerRoutes(
       if (!targetStage) {
         return res.status(400).json({ error: "يجب اختيار المرحلة التي ستُفتح عندها الاستشارة" });
       }
-      const allowedTargets = getConsultationReopenTargetStages(consultation) as string[];
+      // Committee stages are not offered as reopen targets for a department that
+      // has no committee — reopening INTO a stage the department cannot work is
+      // the off-path shape the cycle-aware resolver exists to prevent.
+      const reopenDeptName = consultation.departmentId
+        ? (await storage.getAllDepartments()).find((d) => d.id === consultation.departmentId)?.name ?? null
+        : null;
+      const allowedTargets = consultationStagesForDepartment(
+        reopenDeptName,
+        getConsultationReopenTargetStages(consultation),
+      ) as string[];
       if (!allowedTargets.includes(targetStage)) {
         return res.status(400).json({ error: "المرحلة المختارة ليست ضمن مسار هذه الاستشارة" });
       }

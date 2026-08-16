@@ -86,6 +86,7 @@ import {
   getConsultationStagesForType,
   isInFollowUpCycle,
   getStagesForConsultationCycle,
+  consultationStagesForDepartment,
   InternalReviewDecision,
   CommitteeDecision,
   NoteOutcome,
@@ -250,6 +251,10 @@ function getReturnTargets(
   userRole: string,
   userId: string,
   userDeptId: string | null,
+  // The consultation's department NAME, for the committee hide — threaded from
+  // the call sites (the page has getDepartmentName) so this stays a pure
+  // function of its arguments, like its contracts twin.
+  departmentName: string | null,
 ): ConsultationStageValue[] {
   if (consultation.status !== "active") return [];
   // Phase-8 — awaiting-completion rows are parked: hide return like advance.
@@ -267,6 +272,10 @@ function getReturnTargets(
   } else {
     stages = getConsultationStagesForType(resolvedType);
   }
+  // Committee hide — a labor consultation must not be offered a rollback INTO
+  // لجنة_مراجعة. A no-op on the cycle and phone/procedural branches above,
+  // which have no committee stage to remove.
+  stages = consultationStagesForDepartment(departmentName, stages);
   const currentIdx = stages.indexOf(consultation.currentStage);
   if (currentIdx <= 0) return [];
   const isHeadOrManager = userRole === "department_head" || userRole === "branch_manager";
@@ -1891,7 +1900,7 @@ export default function ConsultationsPage() {
   const openReturnDialog = (c: Consultation) => {
     setReturnConsultation(c);
     const targets = user
-      ? getReturnTargets(c, user.role, user.id, user.departmentId)
+      ? getReturnTargets(c, user.role, user.id, user.departmentId, getDepartmentName(c.departmentId))
       : [];
     // Default to the immediately prior stage when available — that's the
     // only choice an assigned_lawyer will see, and a sensible default for
@@ -2834,7 +2843,7 @@ export default function ConsultationsPage() {
                               تجاوز استكمال المرفقات والبيانات
                             </DropdownMenuItem>
                           )}
-                          {user && getReturnTargets(consultation, user.role, user.id, user.departmentId).length > 0 && (
+                          {user && getReturnTargets(consultation, user.role, user.id, user.departmentId, getDepartmentName(consultation.departmentId)).length > 0 && (
                             <DropdownMenuItem
                               data-testid={`button-return-consultation-${consultation.id}`}
                               onClick={() => openReturnDialog(consultation)}
@@ -3165,6 +3174,7 @@ export default function ConsultationsPage() {
                   currentStage={selectedConsultation.currentStage}
                   consultationType={selectedConsultation.consultationType}
                   followUpCount={selectedConsultation.followUpCount}
+                  departmentName={getDepartmentName(selectedConsultation.departmentId)}
                 />
                 {/* Phase-4 dev-feedback: surface the same workflow actions
                     that live in the row's ⋯ dropdown right under the stages
@@ -3196,7 +3206,7 @@ export default function ConsultationsPage() {
                         المرحلة التالية
                       </Button>
                     )}
-                    {getReturnTargets(selectedConsultation, user.role, user.id, user.departmentId).length > 0 && (
+                    {getReturnTargets(selectedConsultation, user.role, user.id, user.departmentId, getDepartmentName(selectedConsultation.departmentId)).length > 0 && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3921,7 +3931,7 @@ export default function ConsultationsPage() {
             <AlertDialogTitle>إرجاع الاستشارة لمرحلة سابقة</AlertDialogTitle>
             <AlertDialogDescription>
               {returnConsultation && user ? (() => {
-                const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId);
+                const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId, getDepartmentName(returnConsultation.departmentId));
                 if (targets.length === 1) {
                   const lbl = ConsultationStageLabels[targets[0]] || targets[0];
                   return (
@@ -3935,7 +3945,7 @@ export default function ConsultationsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {returnConsultation && user && (() => {
-            const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId);
+            const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId, getDepartmentName(returnConsultation.departmentId));
             if (targets.length <= 1) return null;
             return (
               <div className="mt-3 space-y-1" dir="rtl">
@@ -4572,7 +4582,10 @@ export default function ConsultationsPage() {
                   <SelectValue placeholder="اختر المرحلة" />
                 </SelectTrigger>
                 <SelectContent>
-                  {reopenTarget && getConsultationReopenTargetStages(reopenTarget).map((s) => (
+                  {reopenTarget && consultationStagesForDepartment(
+                    getDepartmentName(reopenTarget.departmentId),
+                    getConsultationReopenTargetStages(reopenTarget),
+                  ).map((s) => (
                     <SelectItem key={s} value={s}>
                       {ConsultationStageLabels[s] || s}
                     </SelectItem>
