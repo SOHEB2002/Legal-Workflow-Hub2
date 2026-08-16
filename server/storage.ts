@@ -20,7 +20,6 @@ import {
   type CaseAttachment, type HearingAttachment,
   type CaseJudgment, type JudgmentAttachment,
   CaseStatus, CaseStage, CaseClassification, ClosureReason, ConsultationStage, ConsultationStatus,
-  ConsultationType, resolveConsultationType,
   ConsultationCategory, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType, ContractStageLabels, type ContractStageValue,
@@ -335,7 +334,12 @@ export interface IStorage {
   // Phase-8 — await-completion / resume / skip across the 3 entities.
   awaitConsultationCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Consultation | undefined>;
   resumeConsultationFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
-  skipConsultationCompletion(id: string, input: { performedBy: string }): Promise<Consultation | undefined>;
+  // PRE-ENTRY skip from استلام past the data-completion stage. targetStage is
+  // resolved by the caller via the shared consultationSkipDataCompletionTarget.
+  skipConsultationDataCompletion(
+    id: string,
+    input: { targetStage: ConsultationStageValue; notes?: string; performedBy: string; performerName: string },
+  ): Promise<Consultation | undefined>;
   awaitCaseCompletion(id: string, input: { reason: string; performedBy: string; performerName: string }): Promise<LawCase | undefined>;
   resumeCaseFromCompletion(id: string, input: { notes?: string; performedBy: string; performerName: string; isValidStage: (stage: string) => boolean }): Promise<{ ok: true; lawCase: LawCase } | { ok: false; reason: "INVALID_SAVED_STAGE" | "NOT_FOUND" }>;
   // The THIRD exit from استكمال_البيانات (the other two being resume and the
@@ -520,7 +524,12 @@ export interface IStorage {
   unpauseContract(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
   awaitContractCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined>;
   resumeContractFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
-  skipContractCompletion(id: string, input: { performedBy: string }): Promise<Contract | undefined>;
+  // PRE-ENTRY skip from استلام past the data-completion stage. targetStage is
+  // resolved by the caller via the shared contractSkipDataCompletionTarget.
+  skipContractDataCompletion(
+    id: string,
+    input: { targetStage: ContractStageValue; notes?: string; performedBy: string; performerName: string },
+  ): Promise<Contract | undefined>;
   recordContractInternalReview(input: {
     contractId: string;
     reviewerId: string;
@@ -2087,7 +2096,8 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  // Phase-8 — await-completion / resume-from-completion / skip-completion.
+  // Phase-8 — await-completion / resume-from-completion, plus the PRE-ENTRY
+  // skip-data-completion that replaced the original skip-completion.
   // Awaiting-completion is an orthogonal "park here, missing data" detour:
   // saves the current stage, switches to RECEIVED_PENDING_COMPLETION, and
   // sets awaiting_completion=true. Resume restores the saved stage. Skip
@@ -2160,31 +2170,52 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async skipConsultationCompletion(
+  // PRE-ENTRY skip: jump from استلام PAST the data-completion stage. The
+  // caller resolves targetStage with the shared
+  // consultationSkipDataCompletionTarget helper and refuses a null (a
+  // follow-up cycle has no such stage), so this method never has to guess a
+  // stage — there is ONE derivation and both the route and the client use it.
+  //
+  // ⚠ CONSULTATIONS HAVE NO stage_history COLUMN — that jsonb lives only on
+  // law_cases. The cases skip keeps the skipped stage auditable by appending a
+  // synthetic استكمال_البيانات history row; the equivalent here is the
+  // activity log, so the skipped stage is named explicitly in BOTH the Arabic
+  // description and metadata.skippedStage rather than being implied by the
+  // jump. performerName carries the acting display name (may read
+  // "نيابةً عن …") — consultation_activity_log has no column for it, same as
+  // skipContractCommittee.
+  async skipConsultationDataCompletion(
     id: string,
-    input: { performedBy: string },
+    input: {
+      targetStage: ConsultationStageValue;
+      notes?: string;
+      performedBy: string;
+      performerName: string;
+    },
   ): Promise<Consultation | undefined> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
       if (!existing) return undefined;
       const now = new Date();
-      // Procedural workflow lands on IN_PROGRESS instead of STUDY — its
-      // stage-3 token. WRITTEN and PHONE both use STUDY (دراسة).
-      const resolvedType = resolveConsultationType(existing.consultationType);
-      const targetStage = resolvedType === ConsultationType.PROCEDURAL
-        ? ConsultationStage.IN_PROGRESS
-        : ConsultationStage.STUDY;
+      const fromStage = existing.currentStage;
       await tx.update(consultations).set({
-        currentStage: targetStage,
+        currentStage: input.targetStage,
         updatedAt: now,
       }).where(eq(consultations.id, id));
-      const targetLabel = targetStage === ConsultationStage.IN_PROGRESS ? "جاري العمل" : "دراسة";
+      const targetLabel = ConsultationStageLabels[input.targetStage] ?? input.targetStage;
+      const notes = (input.notes ?? "").trim();
+      const base = `تجاوز مرحلة استكمال المرفقات والبيانات والانتقال مباشرةً إلى ${targetLabel} بواسطة ${input.performerName}`;
       await tx.insert(consultationActivityLog).values({
         id: randomUUID(),
         consultationId: id,
         activityType: ConsultationActivityType.COMPLETION_SKIPPED,
-        description: `تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى ${targetLabel}`,
-        metadata: { targetStage },
+        description: notes ? `${base} — ${notes}` : base,
+        metadata: {
+          fromStage,
+          skippedStage: ConsultationStage.RECEIVED_PENDING_COMPLETION,
+          targetStage: input.targetStage,
+          notes: notes || undefined,
+        },
         performedBy: input.performedBy,
         performedAt: now,
       });
@@ -8006,23 +8037,44 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async skipContractCompletion(id: string, input: { performedBy: string }): Promise<Contract | undefined> {
+  // PRE-ENTRY skip — twin of skipConsultationDataCompletion; see that method
+  // for why targetStage is resolved by the caller and why the skipped stage is
+  // named in the activity log (contracts have no stage_history column either).
+  // Contracts have ONE flow, so the target is always تحرير, but it is still
+  // passed in rather than hard-coded here: the shared helper is what refuses a
+  // follow-up cycle, and hard-coding would quietly re-introduce the guess.
+  async skipContractDataCompletion(
+    id: string,
+    input: {
+      targetStage: ContractStageValue;
+      notes?: string;
+      performedBy: string;
+      performerName: string;
+    },
+  ): Promise<Contract | undefined> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
       if (!existing) return undefined;
       const now = new Date();
-      // Single 8-stage flow regardless of contract type — skip lands
-      // on DRAFTING, same as the consultation WRITTEN flow's STUDY.
+      const fromStage = existing.currentStage;
       await tx.update(contracts).set({
-        currentStage: ContractStage.DRAFTING,
+        currentStage: input.targetStage,
         updatedAt: now,
       }).where(eq(contracts.id, id));
+      const targetLabel = ContractStageLabels[input.targetStage] ?? input.targetStage;
+      const notes = (input.notes ?? "").trim();
+      const base = `تجاوز مرحلة استكمال المرفقات والبيانات والانتقال مباشرةً إلى ${targetLabel} بواسطة ${input.performerName}`;
       await tx.insert(contractActivityLog).values({
         id: randomUUID(),
         contractId: id,
         activityType: ContractActivityType.COMPLETION_SKIPPED,
-        description: "تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى التحرير",
-        metadata: { targetStage: ContractStage.DRAFTING },
+        description: notes ? `${base} — ${notes}` : base,
+        metadata: {
+          fromStage,
+          skippedStage: ContractStage.RECEIVED_PENDING_COMPLETION,
+          targetStage: input.targetStage,
+          notes: notes || undefined,
+        },
         performedBy: input.performedBy,
         performedAt: now,
       });
