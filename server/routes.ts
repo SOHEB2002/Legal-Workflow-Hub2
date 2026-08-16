@@ -1274,10 +1274,12 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
 const ALLOWED_CONSULTATION_TRANSITIONS: StageTransitionRule[] = [
   // Linear happy-path. Phase-8 — RECEIVED_PENDING_COMPLETION inserted at
   // position 2 of the linear path. Direct RECEIVED → STUDY is removed;
-  // the canonical flow is RECEIVED → PENDING_COMPLETION → STUDY. The
-  // skip button on PENDING_COMPLETION is a separate /skip-completion
-  // endpoint (logs completion_skipped instead of stage_advanced) but
-  // still lands on STUDY — same target, different log entry.
+  // the canonical flow is RECEIVED → PENDING_COMPLETION → STUDY.
+  //
+  // The "تجاوز استكمال المرفقات والبيانات" button is deliberately NOT an edge
+  // here: it is a PRE-ENTRY skip served by /skip-data-completion, which
+  // bypasses this table entirely (the skip-committee precedent), so the
+  // override stays unreachable through /advance-stage.
   { from: ConsultationStage.RECEIVED,                    to: ConsultationStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: ConsultationStage.RECEIVED_PENDING_COMPLETION, to: ConsultationStage.STUDY,                       allowedRoles: ["admin_support", "department_head", "branch_manager"] },
   { from: ConsultationStage.STUDY,           to: ConsultationStage.DRAFTING,          allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
@@ -1363,8 +1365,9 @@ const ALLOWED_CONTRACT_TRANSITIONS: StageTransitionRule[] = [
   // earlier revisions, blocking employees from advancing files
   // routed to them — fixed.
   { from: ContractStage.RECEIVED,                    to: ContractStage.RECEIVED_PENDING_COMPLETION, allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
-  // Data-completion → drafting (also reachable via /skip-completion
-  // which uses the same allowed-roles set).
+  // Data-completion → drafting. (تحرير is also where the PRE-ENTRY
+  // /skip-data-completion lands, but that endpoint bypasses this table —
+  // it starts from استلام, not from here.)
   { from: ContractStage.RECEIVED_PENDING_COMPLETION, to: ContractStage.DRAFTING,                    allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   // Drafting → internal review.
   { from: ContractStage.DRAFTING,                    to: ContractStage.INTERNAL_REVIEW,             allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
@@ -9110,47 +9113,6 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/consultations/:id/skip-completion
-  // The "تجاوز" button on the RECEIVED_PENDING_COMPLETION stage. Same
-  // target as the normal advance to STUDY but logged as
-  // completion_skipped. Available only when NOT in await-completion
-  // mode — awaiting=true rows must use /resume-from-completion instead.
-  app.post("/api/consultations/:id/skip-completion", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const reqUser = req.user!;
-      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-
-      const consultation = await storage.getConsultationById(String(req.params.id));
-      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
-
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
-        consultation.assignedTo === reqUser.id;
-      if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز هذه المرحلة" });
-
-      if (consultation.status !== "active") {
-        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
-      }
-      if (consultation.currentStage !== ConsultationStage.RECEIVED_PENDING_COMPLETION) {
-        return res.status(400).json({ error: "تجاوز الاستكمال متاح فقط من مرحلة الاستكمال" });
-      }
-      if (consultation.awaitingCompletion) {
-        return res.status(400).json({ error: "استخدم العودة من الاستكمال بدلاً من التجاوز" });
-      }
-
-      const updated = await storage.skipConsultationCompletion(consultation.id, {
-        performedBy: reqUser.id,
-      });
-      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
-      res.json(updated);
-    } catch (error: any) {
-      console.error("[consultations/skip-completion] error:", error);
-      res.status(500).json({ error: error.message || "حدث خطأ" });
-    }
-  });
-
   // ==================== Contracts module (العقود والمشاريع) ====================
   // Mirrors the WRITTEN consultation surface: list / get / create / patch /
   // delete + advance / return / internal-review / committee-decision /
@@ -10620,8 +10582,8 @@ export async function registerRoutes(
     }
   });
 
-  // Pause / unpause / await-completion / resume / skip-completion —
-  // same gate across all four (branch_manager / admin_support /
+  // Pause / unpause / await-completion / resume / skip-data-completion —
+  // same gate across all five (branch_manager / admin_support /
   // department_head own dept / assigned lawyer) and same payload shape
   // as the consultation handlers.
   const allowContractPauseLike = (reqUser: any, contract: any): boolean =>
@@ -10796,43 +10758,6 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[contracts/skip-data-completion] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
-    }
-  });
-
-  app.post("/api/contracts/:id/skip-completion", requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const reqUser = req.user!;
-      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-      const contract = await storage.getContractById(String(req.params.id));
-      if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!allowContractPauseLike(reqUser, contract)) {
-        return res.status(403).json({ error: "ليس لديك صلاحية" });
-      }
-      if (contract.status !== "active") return res.status(400).json({ error: "العقد ليس نشطاً" });
-      if (contract.currentStage !== ContractStage.RECEIVED_PENDING_COMPLETION) {
-        return res.status(400).json({ error: "تجاوز الاستكمال متاح فقط من مرحلة الاستكمال" });
-      }
-      if (contract.awaitingCompletion) {
-        return res.status(400).json({ error: "استخدم العودة من الاستكمال بدلاً من التجاوز" });
-      }
-      // Skip respects the same slot rules as a normal advance from
-      // ⚠ CURRENTLY A NO-OP by owner policy — every requiredBeforeLeavingStage
-      // in ContractSlotsByType is null, so no attachment blocks a contract
-      // transition. (This call was already the weaker of the two: it passes the
-      // from-stage RECEIVED_PENDING_COMPLETION, which never carried a rule of its
-      // own, so it only ever fired on rules inherited from the RECEIVED edge.)
-      // Kept wired for symmetry with /advance-stage so re-arming a slot is a
-      // one-line data change in schema.ts. See the note above ContractSlotsByType.
-      const slotCheckErr = await checkRequiredSlotsForTransition(
-        contract,
-        contract.currentStage,
-      );
-      if (slotCheckErr) return res.status(400).json({ error: slotCheckErr });
-      const updated = await storage.skipContractCompletion(contract.id, { performedBy: reqUser.id });
-      if (!updated) return res.status(500).json({ error: "فشل الإجراء" });
-      res.json(updated);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
     }
   });
 

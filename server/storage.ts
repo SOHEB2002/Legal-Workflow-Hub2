@@ -20,7 +20,6 @@ import {
   type CaseAttachment, type HearingAttachment,
   type CaseJudgment, type JudgmentAttachment,
   CaseStatus, CaseStage, CaseClassification, ClosureReason, ConsultationStage, ConsultationStatus,
-  ConsultationType, resolveConsultationType,
   ConsultationCategory, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType, ContractStageLabels, type ContractStageValue,
@@ -335,7 +334,6 @@ export interface IStorage {
   // Phase-8 — await-completion / resume / skip across the 3 entities.
   awaitConsultationCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Consultation | undefined>;
   resumeConsultationFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Consultation | undefined>;
-  skipConsultationCompletion(id: string, input: { performedBy: string }): Promise<Consultation | undefined>;
   // PRE-ENTRY skip from استلام past the data-completion stage. targetStage is
   // resolved by the caller via the shared consultationSkipDataCompletionTarget.
   skipConsultationDataCompletion(
@@ -526,7 +524,6 @@ export interface IStorage {
   unpauseContract(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
   awaitContractCompletion(id: string, input: { reason: string; performedBy: string }): Promise<Contract | undefined>;
   resumeContractFromCompletion(id: string, input: { notes?: string; performedBy: string }): Promise<Contract | undefined>;
-  skipContractCompletion(id: string, input: { performedBy: string }): Promise<Contract | undefined>;
   // PRE-ENTRY skip from استلام past the data-completion stage. targetStage is
   // resolved by the caller via the shared contractSkipDataCompletionTarget.
   skipContractDataCompletion(
@@ -2099,7 +2096,8 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  // Phase-8 — await-completion / resume-from-completion / skip-completion.
+  // Phase-8 — await-completion / resume-from-completion, plus the PRE-ENTRY
+  // skip-data-completion that replaced the original skip-completion.
   // Awaiting-completion is an orthogonal "park here, missing data" detour:
   // saves the current stage, switches to RECEIVED_PENDING_COMPLETION, and
   // sets awaiting_completion=true. Resume restores the saved stage. Skip
@@ -2218,39 +2216,6 @@ export class DatabaseStorage implements IStorage {
           targetStage: input.targetStage,
           notes: notes || undefined,
         },
-        performedBy: input.performedBy,
-        performedAt: now,
-      });
-      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
-      return updated ? mapDbConsultation(updated) : undefined;
-    });
-  }
-
-  async skipConsultationCompletion(
-    id: string,
-    input: { performedBy: string },
-  ): Promise<Consultation | undefined> {
-    return await db.transaction(async (tx) => {
-      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
-      if (!existing) return undefined;
-      const now = new Date();
-      // Procedural workflow lands on IN_PROGRESS instead of STUDY — its
-      // stage-3 token. WRITTEN and PHONE both use STUDY (دراسة).
-      const resolvedType = resolveConsultationType(existing.consultationType);
-      const targetStage = resolvedType === ConsultationType.PROCEDURAL
-        ? ConsultationStage.IN_PROGRESS
-        : ConsultationStage.STUDY;
-      await tx.update(consultations).set({
-        currentStage: targetStage,
-        updatedAt: now,
-      }).where(eq(consultations.id, id));
-      const targetLabel = targetStage === ConsultationStage.IN_PROGRESS ? "جاري العمل" : "دراسة";
-      await tx.insert(consultationActivityLog).values({
-        id: randomUUID(),
-        consultationId: id,
-        activityType: ConsultationActivityType.COMPLETION_SKIPPED,
-        description: `تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى ${targetLabel}`,
-        metadata: { targetStage },
         performedBy: input.performedBy,
         performedAt: now,
       });
@@ -8064,31 +8029,6 @@ export class DatabaseStorage implements IStorage {
           ? `العودة من الاستكمال إلى ${targetStage} — ${notes}`
           : `العودة من الاستكمال إلى ${targetStage}`,
         metadata: { notes: notes || undefined, returnedToStage: targetStage },
-        performedBy: input.performedBy,
-        performedAt: now,
-      });
-      const [updated] = await tx.select().from(contracts).where(eq(contracts.id, id));
-      return updated ? mapDbContract(updated) : undefined;
-    });
-  }
-
-  async skipContractCompletion(id: string, input: { performedBy: string }): Promise<Contract | undefined> {
-    return await db.transaction(async (tx) => {
-      const [existing] = await tx.select().from(contracts).where(eq(contracts.id, id));
-      if (!existing) return undefined;
-      const now = new Date();
-      // Single 8-stage flow regardless of contract type — skip lands
-      // on DRAFTING, same as the consultation WRITTEN flow's STUDY.
-      await tx.update(contracts).set({
-        currentStage: ContractStage.DRAFTING,
-        updatedAt: now,
-      }).where(eq(contracts.id, id));
-      await tx.insert(contractActivityLog).values({
-        id: randomUUID(),
-        contractId: id,
-        activityType: ContractActivityType.COMPLETION_SKIPPED,
-        description: "تم تجاوز مرحلة الاستكمال والانتقال مباشرة إلى التحرير",
-        metadata: { targetStage: ContractStage.DRAFTING },
         performedBy: input.performedBy,
         performedAt: now,
       });
