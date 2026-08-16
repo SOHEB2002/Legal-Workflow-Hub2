@@ -136,6 +136,7 @@ import { ReviewChecklist } from "@/components/review-checklist";
 import {
   CasesAdvancedFilters,
   EMPTY_ADV_FILTERS,
+  countActiveAdvFilters,
   type AdvancedCasesFilters,
 } from "@/components/cases-advanced-filters";
 
@@ -1176,8 +1177,8 @@ export default function CasesPage() {
 
   // 🔴 EVERY STAGE, ALWAYS — owner ruling. The dropdown no longer derives its
   // options from the loaded cases, so a stage with zero matches is SELECTABLE and
-  // produces an honest empty list ("لا توجد قضايا مطابقة للبحث") instead of
-  // silently disappearing from the control.
+  // produces an honest empty list ("لا توجد نتائج مطابقة.") instead of silently
+  // disappearing from the control.
   //
   // ⚠ IT IS STILL NOT THE RAW PATH LIST, and that distinction is the whole point.
   // The predicate compares getCaseDisplayStage, which FOLDS lifecycle state
@@ -1238,6 +1239,23 @@ export default function CasesPage() {
   const [PAGE_SIZE, setPageSize] = usePageSize("cases");
   const [casePage, setCasePage] = useState(1);
   useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters]);
+  // Which empty state to show. HONEST BY CONSTRUCTION: it lists every control
+  // that can narrow the table, so "no cases at all" is claimed ONLY when nothing
+  // is narrowing it. Matches the my-tasks isFiltering shape (search text OR any
+  // filter off its any-sentinel).
+  //
+  // ⚠ deptFilter DEFAULTS to the user's own department, so for a department_head
+  // or employee this reads as "filtering" from the very first render — which is
+  // correct: their list IS narrowed, and claiming "no cases exist" would be a
+  // lie about the firm. Only a user with no department (branch_manager /
+  // admin_support, sentinel "all") can ever see the unfiltered message.
+  const isFilteringCases =
+    !!searchQuery.trim()
+    || statusFilter !== "all"
+    || classificationFilter !== "all"
+    || deptFilter !== "all"
+    || lawyerFilter !== "all"
+    || countActiveAdvFilters(advFilters) > 0;
   const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
   const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
   // Changing the size resets to page 1 — the old page number is meaningless
@@ -1586,7 +1604,14 @@ export default function CasesPage() {
               ) : pagedCases.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
-                    لا توجد قضايا مطابقة للبحث
+                    {/* Two states, wording reused verbatim from my-tasks
+                        (isFiltering ? "لا توجد نتائج مطابقة." : "لا توجد مهام.")
+                        rather than inventing a third phrasing. The old single
+                        message blamed the SEARCH for what is usually a filter —
+                        and since ded7a5a an empty result is a normal, deliberate
+                        outcome, because a stage with zero cases is selectable by
+                        design. */}
+                    {isFilteringCases ? "لا توجد نتائج مطابقة." : "لا توجد قضايا."}
                   </TableCell>
                 </TableRow>
               ) : pagedCases.map((c, idx) => {

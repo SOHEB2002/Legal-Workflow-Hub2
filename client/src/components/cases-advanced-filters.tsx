@@ -23,7 +23,6 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Priority,
   CaseStageLabels,
-  CaseStagesOrder,
   CaseStageFilterDomain,
   CaseClassification,
   CaseClassificationLabels,
@@ -59,85 +58,12 @@ export function countActiveAdvFilters(f: AdvancedCasesFilters): number {
 const RECENT_KEY = "cases.recentFilters.v1";
 const RECENT_MAX = 5;
 
-// Dynamic stage options: filter component-local lookups so we don't disturb
-// schema arrays used by the workflow logic. Spec includes جاهزة_للرفع in
-// labor/admin paths and merges in-court paths into a single union list.
-const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = {
-  // 🔴 تحرير_صحيفة_الدعوى removed from تجاري + عام ONLY, mirroring the merge in
-  // UnderStudyCommercialStages / UnderStudyGeneralStages. It stays in عمالي and
-  // إداري below and in IN_COURT_STAGES_UNION — those paths keep the stage.
-  "تجاري": [
-    "استلام", "استكمال_البيانات", "دراسة",
-    "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
-    "قيد_التدقيق_في_تراضي", "مداولة_الصلح", "أغلق_طلب_الصلح",
-    "قيد_التدقيق_في_ناجز", "منظورة",
-  ],
-  "عام": [
-    "استلام", "استكمال_البيانات", "دراسة",
-    "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
-    "قيد_التدقيق_في_ناجز", "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
-  ],
-  "عمالي": [
-    "استلام", "استكمال_البيانات", "دراسة",
-    "توجيه_العميل_بالتسوية", "بانتظار_رفع_العميل_للتسوية",
-    "مداولة_الصلح", "أغلق_طلب_الصلح",
-    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية", "إحالة_للجنة_المراجعة",
-    "الأخذ_بالملاحظات", "جاهزة_للرفع", "قيد_التدقيق_في_ناجز", "منظورة",
-  ],
-  "إداري": [
-    "استلام", "تحديد_تاريخ_التقادم", "استكمال_البيانات", "دراسة",
-    "تحرير_صيغة_التظلم", "مراجعة_داخلية_للتظلم",
-    "تقديم_التظلم", "انتظار_رد_التظلم",
-    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية", "إحالة_للجنة_المراجعة",
-    "الأخذ_بالملاحظات", "جاهزة_للرفع", "قيد_التدقيق_في_معين", "منظورة",
-  ],
-};
-
-const IN_COURT_STAGES_UNION: string[] = [
-  "استلام", "استكمال_البيانات", "تحرير_مذكرة_جوابية", "تحرير_صحيفة_الدعوى",
-  "دراسة", "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات",
-  "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
-  "محكوم_حكم_ابتدائي", "منظورة_استئناف", "محكوم_حكم_نهائي",
-  "مشطوبة", "تحصيل", "مقفلة",
-];
-
-// Returns the stage values to show in the multi-select. Preserves
-// CaseStagesOrder ordering. Rule:
-//   classifications=[] AND deptNames=[]  → all stages (no signal)
-//   if IN_COURT in classifications (or none chosen) → add IN_COURT_STAGES_UNION
-//   if UNDER_STUDY in classifications (or none chosen):
-//     deptNames=[]  → add union of all dept paths
-//     deptNames=[…] → add per-dept lists (by dept NAME)
-export function getFilterStages(
-  classifications: string[],
-  deptNames: string[],
-): string[] {
-  if (classifications.length === 0 && deptNames.length === 0) {
-    return CaseStagesOrder as unknown as string[];
-  }
-  const collected = new Set<string>();
-  const noClassification = classifications.length === 0;
-  const hasInCourt = noClassification || classifications.includes(CaseClassification.IN_COURT);
-  const hasUnderStudy = noClassification || classifications.includes(CaseClassification.UNDER_STUDY);
-
-  if (hasInCourt) {
-    for (const s of IN_COURT_STAGES_UNION) collected.add(s);
-  }
-  if (hasUnderStudy) {
-    if (deptNames.length === 0) {
-      for (const list of Object.values(UNDER_STUDY_STAGES_BY_DEPT_NAME)) {
-        for (const s of list) collected.add(s);
-      }
-    } else {
-      for (const d of deptNames) {
-        const list = UNDER_STUDY_STAGES_BY_DEPT_NAME[d];
-        if (list) for (const s of list) collected.add(s);
-      }
-    }
-  }
-  if (collected.size === 0) return CaseStagesOrder as unknown as string[];
-  return (CaseStagesOrder as unknown as string[]).filter((s) => collected.has(s));
-}
+// getFilterStages + UNDER_STUDY_STAGES_BY_DEPT_NAME + IN_COURT_STAGES_UNION were
+// DELETED here. They built this panel's stage options from PATH arrays while the
+// predicate compares getCaseDisplayStage — the mismatch that made closed and
+// archived cases unfilterable, since مقفلة is in no path array. ded7a5a replaced
+// them with the shared CaseStageFilterDomain and left this dead; --noUnusedLocals
+// could not flag it because getFilterStages was exported.
 
 type SavedFilterRow = {
   id: string;
