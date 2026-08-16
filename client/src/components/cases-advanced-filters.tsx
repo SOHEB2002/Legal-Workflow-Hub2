@@ -84,12 +84,18 @@ const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = {
     "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات", "جاهزة_للرفع",
     "قيد_التدقيق_في_ناجز", "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
   ],
+  // 🔴 COMMITTEE HIDDEN FOR LABOR — إحالة_للجنة_المراجعة and its
+  // الأخذ_بالملاحظات return stage removed, mirroring UnderStudyLaborStages.
+  // ⚠ THIS LIST IS A HAND-MAINTAINED DUPLICATE of that schema array, which is
+  // why it needs the same edit (the drift hazard flagged after 0dcb902 — the
+  // دراسة merge had to edit both too). The other three department lists keep
+  // their committee stages.
   "عمالي": [
     "استلام", "استكمال_البيانات", "دراسة",
     "توجيه_العميل_بالتسوية", "بانتظار_رفع_العميل_للتسوية",
     "مداولة_الصلح", "أغلق_طلب_الصلح",
-    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية", "إحالة_للجنة_المراجعة",
-    "الأخذ_بالملاحظات", "جاهزة_للرفع", "قيد_التدقيق_في_ناجز", "منظورة",
+    "تحرير_صحيفة_الدعوى", "مراجعة_داخلية",
+    "جاهزة_للرفع", "قيد_التدقيق_في_ناجز", "منظورة",
   ],
   "إداري": [
     "استلام", "تحديد_تاريخ_التقادم", "استكمال_البيانات", "دراسة",

@@ -1832,8 +1832,20 @@ export const UnderStudyLaborStages: CaseStageValue[] = [
   "أغلق_طلب_الصلح",
   "تحرير_صحيفة_الدعوى",
   "مراجعة_داخلية",
-  "إحالة_للجنة_المراجعة",
-  "الأخذ_بالملاحظات",
+  // 🔴 COMMITTEE HIDDEN FOR LABOR — see DepartmentsWithoutCommittee above.
+  // Internal review now passes straight to جاهزة_للرفع on this path.
+  //
+  // ⚠ BOTH إحالة_للجنة_المراجعة AND الأخذ_بالملاحظات were removed, and the second
+  // is NOT scope creep — it is required for the first to mean anything.
+  // الأخذ_بالملاحظات has exactly ONE producer in ALLOWED_CASE_TRANSITIONS: the
+  // edge إحالة_للجنة_المراجعة → الأخذ_بالملاحظات. It is the committee's
+  // returned-with-notes output and nothing else can reach it. Left in this
+  // array it would have become stagesOrder[indexOf(مراجعة_داخلية) + 1] — internal
+  // review would have advanced into the committee's OWN return stage, which is
+  // unreachable for labor and the opposite of the ruling.
+  //
+  // NEITHER value is deleted from CaseStage, from ALLOWED_CASE_TRANSITIONS, or
+  // from any other department's path. Restoring = re-add these two lines.
   // جاهزة_للرفع was MISSING here (General/Commercial both carry it in this exact
   // slot). Its absence broke labor three ways: (1) the FE derives next-stage from
   // this array, so الأخذ_بالملاحظات aimed at قيد_التدقيق_في_ناجز — a transition the
@@ -2181,6 +2193,34 @@ export function startingStageCorrectionBlockedReason(
 /** The current starting-stage value implied by a case's stored state. */
 export function currentStartingStage(lawCase: { isSettlementCase?: boolean | null }): StartingStageOptionValue {
   return lawCase.isSettlementCase ? StartingStageOption.SETTLEMENT : StartingStageOption.COURT;
+}
+
+// ==================== DEPARTMENTS WITHOUT A REVIEW COMMITTEE ====================
+// Departments whose workflow SKIPS the review-committee stage entirely: internal
+// review is sufficient and passes straight to the ready-to-file stage.
+//
+// 🔴 THIS IS A HIDE, NOT A DELETION, and restoring is ONE LINE — empty the array.
+// Nothing is removed from any stage enum, any transition table, any endpoint, or
+// any role. إحالة_للجنة_المراجعة / لجنة_مراجعة, the committee-decision routes,
+// the الأخذ_بالملاحظات return path and labor_review_head all remain fully intact
+// and fully functional for every department NOT listed here.
+//
+// Keyed on the department NAME, matching the six existing labor gates
+// (`getAllDepartments().find(d => d.name === "عمالي")`) and getStagesForClassification's
+// own switch. A NAME LIST rather than a boolean flag so a second department costs
+// a value, not a code branch.
+//
+// ⚠ ONLY CASES CONSUME THIS TODAY. Consultations, contracts and memos are
+// deferred to their own batches — it is declared here now so those batches
+// consume this predicate instead of inventing a second mechanism. Their paths are
+// department-BLIND (contracts and memos have a single flow; consultations branch
+// on TYPE), and memos carry no departmentId at all, so each will need a
+// per-record conditional resolving the department first — this predicate is the
+// shared half of that, not the whole of it.
+export const DepartmentsWithoutCommittee: readonly string[] = ["عمالي"];
+
+export function departmentHasCommittee(departmentName?: string | null): boolean {
+  return !!departmentName && !DepartmentsWithoutCommittee.includes(departmentName);
 }
 
 export function getStagesForClassification(
