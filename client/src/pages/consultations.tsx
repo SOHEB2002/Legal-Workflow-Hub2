@@ -604,6 +604,33 @@ function canSkipConsultationDataCompletion(
   return c.assignedTo === user.id;
 }
 
+// 🔴 THE SINGLE SOURCE OF TRUTH for whether the "تجاوز استكمال المرفقات
+// والبيانات" control is offered — the FULL visibility gate (record state +
+// the permission predicate above), not just the permission half.
+//
+// Both surfaces call this: the row's ⋯ menu item and the details-dialog
+// button. It was previously written out twice, which is a standing invitation
+// for the two to disagree about when the control shows.
+//
+// Placed directly beneath canSkipConsultationDataCompletion because it wraps
+// it — the permission tier and the state tier of one decision stay adjacent
+// and are read together.
+//
+// Captures nothing from any component closure: every term resolves to a
+// module import (ConsultationStage, consultationSkipDataCompletionTarget) or
+// to this file's own module-scope predicate, with the record and user passed
+// in. That is what makes hoisting it out of JSX a pure relocation.
+function canOfferSkipDataCompletion(
+  c: Consultation,
+  user: { id: string; role: string; departmentId: string | null } | null,
+): boolean {
+  return c.status === "active"
+    && c.currentStage === ConsultationStage.RECEIVED
+    && !c.awaitingCompletion
+    && !!consultationSkipDataCompletionTarget(c)
+    && canSkipConsultationDataCompletion(c, user);
+}
+
 // Render a timestamp as a short, locale-agnostic ISO date (YYYY-MM-DD).
 //
 // ⚠ The NAME is historical — it was written for the expectedDeliveryDate row,
@@ -2790,13 +2817,9 @@ export default function ConsultationsPage() {
                               null, which is how a تعقيبية cycle (no
                               data-completion stage in its 3-stage list) is
                               excluded — the same rule the server refuses on.
-                              ⚠ This condition is DUPLICATED on the details-dialog
-                              button — see the note there. */}
-                          {consultation.status === "active"
-                            && consultation.currentStage === ConsultationStage.RECEIVED
-                            && !consultation.awaitingCompletion
-                            && !!consultationSkipDataCompletionTarget(consultation)
-                            && canSkipConsultationDataCompletion(consultation, user) && (
+                              Gate: canOfferSkipDataCompletion, shared with the
+                              details-dialog button. */}
+                          {canOfferSkipDataCompletion(consultation, user) && (
                             <DropdownMenuItem
                               data-testid={`button-skip-data-completion-${consultation.id}`}
                               onClick={() => openSkipDialog(consultation)}
@@ -3247,18 +3270,11 @@ export default function ConsultationsPage() {
                         which is the arrangement contracts already has. Gates,
                         predicates and dialogs are unchanged for both.
 
-                        ⚠ THE SKIP'S CONDITION IS DUPLICATED, this copy and the
-                        row's ⋯ item; the two differ only in the record variable
-                        (selectedConsultation vs consultation). They are verbatim
-                        identical today and MUST be edited together — a change to
-                        one alone makes the row and the dialog disagree about when
-                        the button shows. إغلاق مبكر does NOT have this problem:
-                        both of its surfaces call the single canEarlyClose(). */}
-                    {selectedConsultation.status === "active"
-                      && selectedConsultation.currentStage === ConsultationStage.RECEIVED
-                      && !selectedConsultation.awaitingCompletion
-                      && !!consultationSkipDataCompletionTarget(selectedConsultation)
-                      && canSkipConsultationDataCompletion(selectedConsultation, user) && (
+                        Both controls' two surfaces share ONE gate expression, so
+                        the row and the dialog cannot drift: the skip goes through
+                        canOfferSkipDataCompletion, إغلاق مبكر through
+                        canEarlyClose. */}
+                    {canOfferSkipDataCompletion(selectedConsultation, user) && (
                       <Button
                         size="sm"
                         variant="outline"
