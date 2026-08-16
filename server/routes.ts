@@ -1139,6 +1139,19 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "دراسة", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية", to: "دراسة", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "مراجعة_داخلية", to: "إحالة_للجنة_المراجعة", allowedRoles: ["internal_reviewer", "branch_manager"] },
+  // 🔴 THE COMMITTEE-BYPASS EDGE, for departments in DepartmentsWithoutCommittee
+  // (today: عمالي). Those paths drop إحالة_للجنة_المراجعة, so internal review
+  // advances straight here. ADDED — nothing was removed: the committee edge
+  // directly above and every other committee edge stay, because every other
+  // department still routes through the committee.
+  //
+  // ⚠ THE TABLE IS FLAT AND PATH-BLIND, so a NON-labor case can also take this
+  // edge by direct API, skipping its committee. Owner-accepted, and the same
+  // trade taken on the دراسة merge: no UI offers it — every FE target is derived
+  // from the case's own resolved path (stagesOrder[currentIndex + 1] and
+  // resolveSendBackStage) — and making validateStageTransition path-aware is the
+  // DEFERRED guard batch.
+  { from: "مراجعة_داخلية", to: "جاهزة_للرفع", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "جاهزة_للرفع", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
   { from: "إحالة_للجنة_المراجعة", to: "الأخذ_بالملاحظات", allowedRoles: ["cases_review_head", "labor_review_head", "branch_manager"] },
   { from: "الأخذ_بالملاحظات", to: "جاهزة_للرفع", allowedRoles: ["assigned_lawyer", "department_head"] },
