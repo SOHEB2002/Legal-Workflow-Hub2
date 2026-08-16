@@ -1750,6 +1750,34 @@ export const CaseStagesOrder: CaseStageValue[] = [
   "مقفلة",
 ];
 
+// ==================== THE CASE STAGE-FILTER DOMAIN ====================
+// The COMPLETE set of values a cases-page stage filter may offer, in workflow
+// order. Both cases filters (the main المرحلة dropdown and the advanced panel)
+// build their options from this and nothing else.
+//
+// 🔴 WHY THIS EXISTS RATHER THAN A PATH ARRAY OR A CURATED LIST. Both filters
+// COMPARE getCaseDisplayStage(c), which folds lifecycle state into a stage:
+//     pausedAt              → استكمال_البيانات
+//     status closed / archived → مقفلة
+//     otherwise             → currentStage  (ANY CaseStage value)
+// so the domain the predicate can produce is exactly "every CaseStage value" —
+// the two folded values are themselves CaseStage members. Building options from
+// path arrays instead is what made مقفلة and مؤرشفة unfilterable: neither is in
+// ANY path array, yet every closed case displays as مقفلة.
+//
+// TOTAL BY CONSTRUCTION, not by review: it starts from CaseStagesOrder (which
+// today already IS the full enum, verified) and then APPENDS any enum member
+// that array happens to omit. Add a stage to CaseStage and forget CaseStagesOrder
+// and this still covers it, so the "dropdown offers a value the predicate or the
+// persisted validator does not accept" bug cannot come back through drift.
+export const CaseStageFilterDomain: CaseStageValue[] = (() => {
+  const ordered = [...CaseStagesOrder];
+  for (const stage of Object.values(CaseStage) as CaseStageValue[]) {
+    if (!ordered.includes(stage)) ordered.push(stage);
+  }
+  return ordered;
+})();
+
 // ==================== مراحل القضية حسب التصنيف والقسم ====================
 
 // 🔴 تحرير_صحيفة_الدعوى REMOVED — merged into دراسة, which is now the single
