@@ -5943,10 +5943,10 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
-      const { assignedTo } = req.body || {};
-      if (!assignedTo || typeof assignedTo !== "string") {
-        return res.status(400).json({ error: "assignedTo مطلوب" });
-      }
+      const rawAssignedTo = req.body?.assignedTo;
+      const assignedTo = typeof rawAssignedTo === "string" && rawAssignedTo.trim()
+        ? rawAssignedTo.trim()
+        : null;
 
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
@@ -5991,11 +5991,15 @@ export async function registerRoutes(
         return res.status(400).json({ error: "الاستشارة ليست نشطة" });
       }
 
-      const { valid } = await validateAssignedUsersActive([assignedTo]);
-      if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
-
-      const lawyer = await storage.getUser(assignedTo);
-      const lawyerName = lawyer?.name || assignedTo;
+      // Only validate a lawyer when one was actually supplied. A bare transfer
+      // sends none — see the assignedTo-optional block below.
+      let lawyerName = "";
+      if (assignedTo) {
+        const { valid } = await validateAssignedUsersActive([assignedTo]);
+        if (!valid) return res.status(400).json({ error: "المستخدم المسند إليه غير نشط أو غير موجود" });
+        const lawyer = await storage.getUser(assignedTo);
+        lawyerName = lawyer?.name || assignedTo;
+      }
 
       // 🔴 PART 1 — THE القسم CONTROL NOW TRANSFERS, instead of only filtering the
       // lawyer list. The dialog has always shown a department picker; it was
@@ -6042,15 +6046,48 @@ export async function registerRoutes(
       // consultation PATCH either, so nothing rewrites the body behind us. Both
       // fields go into ONE updateConsultationAndLog call — a single UPDATE — so
       // there is no second write that could clobber the first.
+      // 🔴 assignedTo IS OPTIONAL WHEN THE DEPARTMENT CHANGES (owner ruling).
+      // A department transfer HANDS THE RECORD OVER: the destination head is the
+      // one who picks its lawyer, so a bare transfer must move the consultation
+      // AND CLEAR the assignee, exactly as the case transfer does
+      // (routes.ts nulls primaryLawyerId / responsibleLawyerId / assignedLawyers
+      // in the same write). Requiring an assignee here forced the SOURCE head to
+      // name a lawyer in a department that is no longer theirs, which is the
+      // reported bug.
+      //
+      // The isTransfer / assignedTo matrix, mirroring the case path's
+      // isDeptTransfer rule ("a body that moved the case AND set a lawyer is a
+      // transfer WITH an assignment, not a bare transfer"):
+      //   • transfer, no assignee   → move + CLEAR (assignedTo = null)
+      //   • transfer, with assignee → move + assign, unchanged from 959f568
+      //   • no transfer, assignee   → plain assign, byte-identical to before
+      //   • no transfer, no assignee→ 400 below; there is nothing to do, and
+      //                               silently clearing an assignee from a
+      //                               dialog whose purpose is assignment would
+      //                               be a destructive no-signal write.
+      if (!assignedTo && !isTransfer) {
+        return res.status(400).json({ error: "assignedTo مطلوب" });
+      }
+
+      // ⚠ STILL DOES NOT TOUCH currentStage — verified unchanged. A transferred
+      // consultation keeps the stage it earned; only the case path resets to
+      // استلام, and that difference is deliberate (see the block above).
       const updateFields: Record<string, unknown> = { assignedTo };
       if (isTransfer) {
         updateFields.departmentId = requestedDeptId;
+        // Unchanged from 959f568 and load-bearing for the same reason: the
+        // reviewer was chosen from the SOURCE department's roster and would
+        // otherwise keep live authority over a record that is no longer theirs.
         updateFields.internalReviewerId = null;
       }
 
       const updated = await storage.updateConsultationAndLog(consultation.id, updateFields, {
-        activityType: ConsultationActivityType.ASSIGNED,
-        description: `تم إسناد الاستشارة لـ ${lawyerName}`,
+        activityType: assignedTo
+          ? ConsultationActivityType.ASSIGNED
+          : ConsultationActivityType.DEPARTMENT_TRANSFERRED,
+        description: assignedTo
+          ? `تم إسناد الاستشارة لـ ${lawyerName}`
+          : "تم إلغاء الإسناد بعد تحويل الاستشارة لقسم آخر",
         metadata: { assignedTo, lawyerName },
         performedBy: reqUser.id,
       });

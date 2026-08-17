@@ -1915,8 +1915,25 @@ export default function ConsultationsPage() {
     setShowAssignDialog(true);
   };
 
+  // 🔴 IS THIS SUBMIT A DEPARTMENT TRANSFER? Compared against the CONSULTATION's
+  // own department, never the dialog's initial value — openAssignDialog seeds the
+  // picker with the ACTOR's department for a department_head, so the seed is not
+  // a reliable baseline. Mirrors the server's `isTransfer`.
+  const assignTargetConsultation = assignConsultationId
+    ? consultations.find((c) => c.id === assignConsultationId)
+    : undefined;
+  const isAssignDepartmentTransfer =
+    !!assignData.departmentId
+    && !!assignTargetConsultation
+    && assignData.departmentId !== assignTargetConsultation.departmentId;
+
   const handleAssignConsultation = async () => {
-    if (!assignConsultationId || !assignData.lawyerId) return;
+    // A lawyer is required ONLY when this is not a transfer. A transfer hands the
+    // record to the destination department and CLEARS the assignee, so its head
+    // can pick one — the source head must not be forced to name a lawyer in a
+    // department that is no longer theirs.
+    if (!assignConsultationId) return;
+    if (!assignData.lawyerId && !isAssignDepartmentTransfer) return;
     setActionInProgress(true);
     try {
       // 🔴 departmentId IS NOW SENT. It never used to be — the القسم control
@@ -1929,11 +1946,17 @@ export default function ConsultationsPage() {
       // UNCHANGED department is a no-op there, so the ordinary same-department
       // assign is unaffected.
       await apiRequest("POST", `/api/consultations/${assignConsultationId}/assign`, {
-        assignedTo: assignData.lawyerId,
+        // null on a bare transfer — the server reads that as "clear the
+        // assignee", so the destination head sees «استشارة بحاجة لإسناد».
+        assignedTo: assignData.lawyerId || null,
         departmentId: assignData.departmentId,
       });
       await refreshConsultations();
-      toast({ title: "تم إسناد الاستشارة بنجاح" });
+      toast({
+        title: assignData.lawyerId
+          ? "تم إسناد الاستشارة بنجاح"
+          : "تم تحويل الاستشارة للقسم الجديد — بانتظار الإسناد",
+      });
       setShowAssignDialog(false);
       setAssignConsultationId(null);
       setAssignData({ lawyerId: "", departmentId: "" });
@@ -3927,11 +3950,14 @@ export default function ConsultationsPage() {
             </Button>
             <Button
               onClick={handleAssignConsultation}
-              disabled={!assignData.lawyerId || actionInProgress}
+              // A lawyer is required only when the department is NOT changing.
+              // On a transfer the button enables with the lawyer field empty —
+              // that submit moves the consultation and clears its assignee.
+              disabled={(!assignData.lawyerId && !isAssignDepartmentTransfer) || actionInProgress}
               data-testid="button-confirm-assign"
             >
               <UserPlus className="w-4 h-4 ml-2" />
-              إسناد
+              {isAssignDepartmentTransfer && !assignData.lawyerId ? "تحويل للقسم" : "إسناد"}
             </Button>
           </DialogFooter>
         </DialogContent>
