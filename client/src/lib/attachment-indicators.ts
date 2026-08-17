@@ -1,4 +1,5 @@
 import { hearingProducesNoMinutes } from "@shared/schema";
+import { anyIdentity, type ActingIdentity } from "@/lib/acting-identities";
 
 // DERIVED attachment indicators. Same house pattern as isAwaitingJudgmentDeed
 // (cases.tsx) and caseHasReturnedFromReview (case-stage-utils.ts): computed
@@ -279,18 +280,27 @@ export function canViewHearingMinutes(
 // simply does not apply, which is the safe direction.
 // The !!user.departmentId guard is mandatory — without it a head with a null
 // department would match every case with a null department.
+// DELEGATION: `identities` is the acting set (self + all_cases delegators) from
+// useAuth. The SERVER's canActOnHearing is delegation-aware — it expands
+// req.actingContext and resolves the department_head scope through the parent
+// case — so this mirror must be too, or a delegate is refused a button the
+// endpoint would accept. Evaluated once per identity, exactly like the server's
+// identities.some(...) shape; with no delegation it is [self] and this is
+// byte-identical to the original.
 export function isHearingActor(
-  user: { id: string; role: string; departmentId?: string | null } | null | undefined,
+  identities: ActingIdentity[],
   hearing: { attendingLawyerId?: string | null } | null | undefined,
   parentCase?: { departmentId?: string | null } | null,
 ): boolean {
-  if (!user || !hearing) return false;
-  if (user.role === "branch_manager" || user.role === "admin_support") return true;
-  if (!!hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
-  return user.role === "department_head"
-    && !!user.departmentId
-    && !!parentCase?.departmentId
-    && user.departmentId === parentCase.departmentId;
+  if (!hearing) return false;
+  return anyIdentity(identities, (role, userId, departmentId) => {
+    if (role === "branch_manager" || role === "admin_support") return true;
+    if (!!hearing.attendingLawyerId && hearing.attendingLawyerId === userId) return true;
+    return role === "department_head"
+      && !!departmentId
+      && !!parentCase?.departmentId
+      && departmentId === parentCase.departmentId;
+  });
 }
 
 // ✅ THE CLIENT MIRROR of the server's canCheckInHearing — "تحضير الجلسة".
@@ -307,17 +317,19 @@ export function isHearingActor(
 // predicate can be widened by accident while "fixing" the other — the server
 // keeps them as two helpers for exactly that reason.
 export function canCheckInHearing(
-  user: { id: string; role: string; departmentId?: string | null } | null | undefined,
+  identities: ActingIdentity[],
   hearing: { attendingLawyerId?: string | null } | null | undefined,
   parentCase?: { departmentId?: string | null } | null,
 ): boolean {
-  if (!user || !hearing) return false;
-  if (user.role === "branch_manager") return true;
-  if (!!hearing.attendingLawyerId && hearing.attendingLawyerId === user.id) return true;
-  return user.role === "department_head"
-    && !!user.departmentId
-    && !!parentCase?.departmentId
-    && user.departmentId === parentCase.departmentId;
+  if (!hearing) return false;
+  return anyIdentity(identities, (role, userId, departmentId) => {
+    if (role === "branch_manager") return true;
+    if (!!hearing.attendingLawyerId && hearing.attendingLawyerId === userId) return true;
+    return role === "department_head"
+      && !!departmentId
+      && !!parentCase?.departmentId
+      && departmentId === parentCase.departmentId;
+  });
 }
 
 // Structural accessor for the ضبط presence flag — the hearing-side twin of

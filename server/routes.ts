@@ -17849,12 +17849,28 @@ export async function registerRoutes(
       if (!ctx || ctx.delegators.length === 0) {
         return res.json({ delegators: [] });
       }
-      const delegators = await Promise.all(
-        ctx.delegators.map(async (d) => {
-          const u = await storage.getUser(d.userId);
-          return { userId: d.userId, name: u?.name ?? d.userId };
-        }),
-      );
+      // Every field here is ALREADY on ActingDelegator (acting-context.ts),
+      // resolved once per request by getActingContext — so this is a pure
+      // synchronous map with no DB round-trip. It used to re-read each
+      // delegator with storage.getUser purely to recover `name`, which the
+      // resolver already selects and coalesces (`r.name || r.fromUserId`), so
+      // the old `?? d.userId` fallback is preserved by construction.
+      //
+      // 🔴 role / departmentId / scope ARE THE AUTHORITY TERMS the client
+      // permission layer derives from (see client/src/lib/acting-identities.ts).
+      // They are served from ctx — the SAME resolved context every server gate
+      // consults — so the client cannot widen on a delegation the server would
+      // not honour: the five conditions (نشط + approved + in-window + delegator
+      // still active + keyed on toUserId) were already applied upstream.
+      // departmentId is the DELEGATOR's own department, which is what the
+      // record-level department comparison must resolve against.
+      const delegators = ctx.delegators.map((d) => ({
+        userId: d.userId,
+        name: d.name,
+        role: d.role,
+        departmentId: d.departmentId,
+        scope: d.scope,
+      }));
       res.json({ delegators });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في جلب التفويضات النشطة" });

@@ -57,6 +57,7 @@ import { useFavorites } from "@/lib/favorites-context";
 import { useClients } from "@/lib/clients-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { useAuth } from "@/lib/auth-context";
+import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useDepartments } from "@/lib/departments-context";
 import type {
   Consultation,
@@ -290,12 +291,20 @@ function getReturnTargets(
 // lawyer-class roles. Department head is additionally scoped to their
 // own department here, which the endpoint also enforces via
 // validateStageTransition.
+// 🔴 HUMAN-ONLY — DELIBERATELY NOT DELEGATION-AWARE, AND ITS SIGNATURE IS
+// DIFFERENT FROM ITS SIBLINGS ON PURPOSE. Every other predicate on this page now
+// takes an ActingIdentity[] and is evaluated once per identity; this one keeps
+// taking the REAL signed-in user so no sweep over the flat-triple call pattern
+// can convert it by accident. The four-eyes lock below must compare the actual
+// human, exactly as the server does (routes.ts keeps isInternalReviewerHuman
+// un-expanded "so a delegation can never manufacture a second pair of eyes").
 function canDoInternalReview(
   consultation: Consultation,
-  userRole: string,
-  userId: string,
-  userDeptId: string | null,
+  actor: { id: string; role: string; departmentId: string | null },
 ): boolean {
+  const userRole = actor.role;
+  const userId = actor.id;
+  const userDeptId = actor.departmentId;
   if (consultation.status !== "active") return false;
   if (consultation.currentStage !== ConsultationStage.INTERNAL_REVIEW) return false;
   if (userRole === "department_head" && consultation.departmentId !== userDeptId) return false;
@@ -910,7 +919,7 @@ export default function ConsultationsPage() {
   } = useConsultations();
   const { getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, permissions, users } = useAuth();
+  const { user, permissions, users, actingIdentities } = useAuth();
   const { addRecentVisit } = useFavorites();
   const { toast } = useToast();
 
@@ -1759,10 +1768,15 @@ export default function ConsultationsPage() {
   // FREE WIN (widened model) — the assigned lawyer was excluded here even though
   // the SERVER's canModifyConsultation has always allowed them (and the creator) to
   // PATCH these exact fields. Now mirrors the server.
+  // Delegation-aware: PATCH /api/consultations/:id is gated by
+  // canModifyConsultation, which expands req.actingContext, so the mirror does
+  // too. consultationActorTier itself is UNCHANGED and simply evaluated once per
+  // acting identity — the same identities.some(predicate) shape the server helper
+  // uses over canModifyConsultationIdentity.
   const canEditConsultation = (c: Consultation) => {
     if (!user) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    return consultationActorTier(c, user.role, user.id, user.departmentId);
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    return anyIdentity(actingIdentities, (role, id, dept) => consultationActorTier(c, role, id, dept));
   };
 
   const [editConsultation, setEditConsultation] = useState<Consultation | null>(null);
@@ -1819,6 +1833,13 @@ export default function ConsultationsPage() {
     }
   };
 
+  // 🔴 NOT DELEGATION-AWARE ON PURPOSE — and it is the one place on this page a
+  // reader will expect it to be. POST /api/consultations/:id/assign gates on
+  // reqUser.role directly (`allowedRoles.includes(reqUser.role)` then a raw
+  // dept_head scope check) and never consults req.actingContext, so a delegate
+  // is refused there. Its CASE twin (cases.tsx canAssign) IS delegation-aware
+  // because PATCH /api/cases/:id routes assignment through canActAtDepartmentTier.
+  // Convert this the moment the consultations assign endpoint joins that set.
   const canAssignConsultation = (c: Consultation) => {
     if (c.status !== "active" || c.currentStage !== ConsultationStage.RECEIVED) return false;
     if (user?.role === "branch_manager" || user?.role === "admin_support") return true;
@@ -2852,7 +2873,7 @@ export default function ConsultationsPage() {
                               المرحلة السابقة
                             </DropdownMenuItem>
                           )}
-                          {user && canDoInternalReview(consultation, user.role, user.id, user.departmentId) && (
+                          {user && canDoInternalReview(consultation, user) && (
                             <DropdownMenuItem
                               data-testid={`button-internal-review-${consultation.id}`}
                               onClick={() => openInternalReviewDialog(consultation)}
@@ -3217,7 +3238,7 @@ export default function ConsultationsPage() {
                         المرحلة السابقة
                       </Button>
                     )}
-                    {canDoInternalReview(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {canDoInternalReview(selectedConsultation, user) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3462,9 +3483,8 @@ export default function ConsultationsPage() {
                       <Label className="text-muted-foreground text-xs">المراجع</Label>
                       {user
                         && (
-                          user.role === "branch_manager"
-                          || user.role === "admin_support"
-                          || (user.role === "department_head" && selectedConsultation.departmentId === user.departmentId)
+                          hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")
+                          || isDeptHeadFor(actingIdentities, selectedConsultation.departmentId)
                         ) ? (
                         <Select
                           value={selectedConsultation.internalReviewerId || "none"}

@@ -43,7 +43,7 @@ const TIER_HEADLINE: Record<string, string> = {
 const RING_POLL_MS = 30_000;
 
 export function HearingRing() {
-  const { user } = useAuth();
+  const { user, actingIdentities } = useAuth();
   const { checkInHearing } = useHearings();
   const { toast } = useToast();
 
@@ -261,7 +261,7 @@ export function HearingRing() {
             // without it they would face a non-dismissable modal with no action
             // they are permitted to take.
             const mayPrepare = canCheckInHearing(
-              user,
+              actingIdentities,
               { attendingLawyerId: item.attendingLawyerId },
               { departmentId: item.caseDepartmentId },
             );

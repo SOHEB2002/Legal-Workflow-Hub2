@@ -84,6 +84,7 @@ import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
+import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { 
   CaseStageLabels,
   CaseStagesOrder,
@@ -357,7 +358,7 @@ export default function CasesPage() {
   } = useCases();
   const { getClientName, isLoading: clientsLoading } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, permissions, users } = useAuth();
+  const { user, permissions, users, actingIdentities } = useAuth();
   const { getHearingsByCase } = useHearings();
   const { memos } = useMemos();
   const { addRecentVisit } = useFavorites();
@@ -386,6 +387,13 @@ export default function CasesPage() {
   // /api/cases/:id/pause and /unpause: branch_manager / admin_support /
   // dept_head (own dept) / assigned lawyer (primary | responsible | in
   // assignedLawyers array).
+  // 🔴 DELIBERATELY NOT DELEGATION-AWARE — the SERVER gate is not either.
+  // POST /api/cases/:id/pause, /unpause, /await-completion and
+  // /resume-from-completion all read reqUser.role directly and never consult
+  // req.actingContext, so a delegate is refused there today. Widening this
+  // would render a button that 403s — the visibility≠authorization failure this
+  // whole change exists to remove, just pointing the other way. Convert this
+  // the moment those routes join the delegation-aware set.
   const canPauseCase = (c: LawCase): boolean => {
     if (!user) return false;
     if (user.role === "branch_manager" || user.role === "admin_support") return true;
@@ -425,13 +433,8 @@ export default function CasesPage() {
     // paying for. reachedJudgmentStage is KEPT as the scope term, byte-identical
     // to the server's own pairing, so a case that never held a ruling is untouched.
     if (caseReachedJudgment(c) && !caseCurrentJudgmentHasDeed(c)) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (
-      user.role === "department_head" &&
-      !!user.departmentId &&
-      !!c.departmentId &&
-      c.departmentId === user.departmentId
-    ) {
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    if (isDeptHeadFor(actingIdentities, c.departmentId)) {
       return true;
     }
     if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
@@ -476,13 +479,8 @@ export default function CasesPage() {
   const canReopenCase = (c: LawCase): boolean => {
     if (!user) return false;
     if (c.currentStage !== "مقفلة") return false;
-    if (user.role === "branch_manager") return true;
-    if (
-      user.role === "department_head" &&
-      !!user.departmentId &&
-      !!c.departmentId &&
-      c.departmentId === user.departmentId
-    ) {
+    if (hasEffectiveRole(actingIdentities, "branch_manager")) return true;
+    if (isDeptHeadFor(actingIdentities, c.departmentId)) {
       return true;
     }
     if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
@@ -501,13 +499,8 @@ export default function CasesPage() {
   // consistently with those endpoints. Each caller adds its own state gate.
   const canActOnCaseWorkflow = (c: LawCase): boolean => {
     if (!user) return false;
-    if (user.role === "branch_manager") return true;
-    if (
-      user.role === "department_head" &&
-      !!user.departmentId &&
-      !!c.departmentId &&
-      c.departmentId === user.departmentId
-    ) {
+    if (hasEffectiveRole(actingIdentities, "branch_manager")) return true;
+    if (isDeptHeadFor(actingIdentities, c.departmentId)) {
       return true;
     }
     if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
@@ -1419,10 +1412,15 @@ export default function CasesPage() {
     setReminderCaseId(null);
   };
 
+  // 🔴 BOTH TERMS ARE DELEGATION-AWARE, AND BOTH HAD TO BE. Making the ROLE
+  // half effective (permissions.canAssignInDepartment) while leaving the
+  // department half reading `user.departmentId` would still show nothing to a
+  // delegate outside the delegator's department — the server compares the case
+  // against the DELEGATOR's department, which is what isDeptHeadFor resolves.
+  // Mirrors canActAtDepartmentTier → entityActorTier on PATCH /api/cases/:id.
   const canAssign = (c: LawCase) =>
-    (user?.role === "branch_manager" ||
-     user?.role === "admin_support" ||
-     (permissions.canAssignInDepartment && c.departmentId === user?.departmentId));
+    hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")
+    || (permissions.canAssignInDepartment && isDeptHeadFor(actingIdentities, c.departmentId));
 
   const canReview = (c: LawCase) =>
     permissions.canReviewCases && 
@@ -1434,7 +1432,7 @@ export default function CasesPage() {
   // department/assignee tiers).
   const canEditCaseRecord = (c: LawCase): boolean => {
     if (!user) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
     return canActOnCaseWorkflow(c);
   };
 
@@ -1934,7 +1932,15 @@ export default function CasesPage() {
                         allowed to perform. */}
                     {(() => {
                       const canEdit = canEditCaseRecord(c);
-                      const canReassign = user?.role === "department_head" && c.currentStage !== "مقفلة" && !c.isArchived;
+                      // ⚠ EFFECTIVE-ROLE ONLY, DELIBERATELY NO DEPARTMENT TERM.
+                      // This gate has never carried one, so a department_head
+                      // already sees إعادة إسناد on other departments' rows and
+                      // is refused by the server. Adding the scope here would
+                      // NARROW what a real head sees today — a behaviour change
+                      // nobody asked for in a delegation batch. Widened to the
+                      // acting identities so a delegate matches the head they
+                      // stand for, and left otherwise exactly as it was.
+                      const canReassign = hasEffectiveRole(actingIdentities, "department_head") && c.currentStage !== "مقفلة" && !c.isArchived;
                       const canResumeAwait = !isCasePaused(c) && c.awaitingCompletion && canPauseCase(c);
                       const canMarkAwait = !isCasePaused(c)
                         && !c.awaitingCompletion
@@ -2640,7 +2646,7 @@ export default function CasesPage() {
           // enough).
           canRecordOpponentResponse:
             getHearingsByCase(selectedCase.id)
-              .some(h => h.opponentResponseRequired && isHearingActor(user, h, selectedCase)),
+              .some(h => h.opponentResponseRequired && isHearingActor(actingIdentities, h, selectedCase)),
           onOpponentResponseReceived: () => {
             setOpponentResponseCase(selectedCase);
           },
@@ -2696,8 +2702,8 @@ export default function CasesPage() {
           // department_head (own dept) + branch_manager. Stage no longer matters —
           // the server lifted that restriction.
           canTransfer: !!user && (
-            user.role === "branch_manager" || user.role === "admin_support"
-            || (user.role === "department_head" && selectedCase.departmentId === user.departmentId)
+            hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")
+            || isDeptHeadFor(actingIdentities, selectedCase.departmentId)
             || selectedCase.primaryLawyerId === user.id
             || selectedCase.responsibleLawyerId === user.id
             || (Array.isArray(selectedCase.assignedLawyers) && selectedCase.assignedLawyers.includes(user.id))
