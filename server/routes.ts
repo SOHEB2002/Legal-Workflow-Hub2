@@ -641,6 +641,67 @@ function canModifyConsultation(user: CaseActorIdentity, consultation: any, ctx?:
   return identities.some((u) => canModifyConsultationIdentity(u, consultation));
 }
 
+// The consultations twin of caseActorIdentities. Consultations carry NO case id,
+// so the scope argument is always null and only self + all_cases delegators
+// apply — specific_cases is case-only, by actingIdentitiesFor's own rule.
+// (canModifyConsultation above inlines the identical expansion; it is left as it
+// is rather than refactored, being working code outside this batch's scope.)
+function consultationActorIdentities(user: CaseActorIdentity, ctx?: ActingContext): CaseActorIdentity[] {
+  if (!ctx) return [user];
+  return actingIdentitiesFor(ctx, null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }));
+}
+
+// CONSULTATION WORKFLOW-STATE gate — pause / unpause / await-completion /
+// resume-from-completion / skip-data-completion / return-to-committee.
+// Set: branch_manager | admin_support | department_head of the consultation's
+// OWN department | the assignee. The consultations twin of
+// canActOnCaseWorkflowState, and for the same reason: six endpoints each held an
+// inline copy reading reqUser.role directly, so they ignored req.actingContext
+// while their siblings honoured it. No comment anywhere gave a reason.
+//
+// ⚠ NO DELEGATE-ONLY OVERLAY — checked per gate. Every one of the six already
+// admits the assignee (the author) by design, so there is no second-pair-of-eyes
+// property to protect. return-to-committee looks review-shaped but its original
+// gate lists the assigned lawyer explicitly: bouncing your own draft back to the
+// committee is a normal action for its author.
+//
+// SCOPE: u.departmentId is the DELEGATOR's department on a delegated identity,
+// so a delegate acts only inside the department the delegator heads.
+// No ctx → [self] → byte-identical to the six inline originals. The assignee
+// term goes through isAssignedLawyer, which on a consultation reduces exactly to
+// `assignedTo === id`: the interface and the table carry no primaryLawyerId /
+// responsibleLawyerId / assignedLawyers, so those arms are undefined === id.
+function canActOnConsultationWorkflowState(user: CaseActorIdentity, consultation: any, ctx?: ActingContext): boolean {
+  return consultationActorIdentities(user, ctx).some((u) =>
+    u.role === "branch_manager"
+    || u.role === "admin_support"
+    // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+    || (u.role === "department_head" && !!u.departmentId && u.departmentId === consultation.departmentId)
+    || isAssignedLawyer({ id: u.id }, consultation));
+}
+
+// CONSULTATION CLOSE-TIER gate — early-close / close-no-response / reopen.
+// 🔴 CARRIES A TYPE SPLIT that must be preserved exactly: on a WRITTEN
+// consultation the tier is branch_manager | admin_support | own-dept
+// department_head | assignee, but on PHONE / PROCEDURAL it narrows to
+// branch_manager | admin_support ONLY, because on those types closing is itself
+// an admin step. The three endpoints stated this identically (two of them
+// literally commented "copied from /early-close verbatim"); it is stated once
+// here. The type is resolved from the consultation, never from the actor, so
+// delegation cannot move a record across the split.
+function canCloseConsultationTier(user: CaseActorIdentity, consultation: any, ctx?: ActingContext): boolean {
+  const resolvedType = resolveConsultationType(consultation.consultationType);
+  return consultationActorIdentities(user, ctx).some((u) => {
+    if (["admin_support", "branch_manager"].includes(u.role)) return true;
+    if (resolvedType !== ConsultationType.WRITTEN) return false;
+    return (u.role === "department_head"
+        && !!u.departmentId
+        && !!consultation.departmentId
+        && consultation.departmentId === u.departmentId)
+      || isAssignedLawyer({ id: u.id }, consultation);
+  });
+}
+
 // 4c-5 (memos) — per-identity act-as for the memo workflow state endpoints
 // (pause / unpause / await-completion / resume-from-completion /
 // return-to-committee / cancel), which all share the same inline access gate:
@@ -5851,15 +5912,29 @@ export async function registerRoutes(
       // gains anything: the set is a strict superset of the old one by exactly
       // admin_support-on-non-written.
       const allowedRoles = ["admin_support", "department_head", "branch_manager"];
-      if (!allowedRoles.includes(reqUser.role)) {
+      // Delegation-aware (was two raw-role steps). BOTH steps and BOTH distinct
+      // error messages are preserved: first "do you hold any assigning role at
+      // all", then "if the only assigning role you hold is department_head, does
+      // it cover THIS consultation's department". Splitting it this way keeps the
+      // 403 bodies byte-identical to the originals instead of collapsing them
+      // into one generic refusal.
+      const assignIdentities = consultationActorIdentities(
+        { id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId ?? null },
+        req.actingContext,
+      );
+      const assignRoleHolders = assignIdentities.filter((u) => allowedRoles.includes(u.role));
+      if (assignRoleHolders.length === 0) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإسناد الاستشارات" });
       }
       // Phase 8 F4 — dept-head scope, mirroring contracts /assign: a
       // dept_head may only assign consultations in their OWN department.
-      if (
-        reqUser.role === "department_head"
-        && consultation.departmentId !== reqUser.departmentId
-      ) {
+      // On a delegated identity u.departmentId is the DELEGATOR's department, so
+      // a delegate can only assign inside the department the delegator heads.
+      const assignScoped = assignRoleHolders.some((u) =>
+        u.role === "admin_support"
+        || u.role === "branch_manager"
+        || (u.role === "department_head" && !!u.departmentId && u.departmentId === consultation.departmentId));
+      if (!assignScoped) {
         return res.status(403).json({ error: "رئيس القسم يمكنه إسناد استشارات قسمه فقط" });
       }
 
@@ -6550,16 +6625,9 @@ export async function registerRoutes(
 
       // Phase 8 F9 — dept-head scoped to own dept (mirrors cases
       // /return-to-committee, which likewise allows admin_support).
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!reqUser.departmentId
-        && consultation.departmentId === reqUser.departmentId;
-      const allowed =
-        reqUser.role === "branch_manager"
-        || reqUser.role === "admin_support"
-        || isOwnDeptHead
-        || isLawyer;
+      // Delegation-aware (was inline, raw-role); scope resolves against the
+      // DELEGATOR's department.
+      const allowed = canActOnConsultationWorkflowState(reqUser, consultation, req.actingContext);
       if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإعادة الاستشارة للجنة" });
       }
@@ -6593,23 +6661,12 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      const resolvedType = resolveConsultationType(consultation.consultationType);
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      let permitted: boolean;
-      if (resolvedType === ConsultationType.WRITTEN) {
-        // Phase 8 F6 — dept-head scoped to own dept (mirrors contracts
-        // /early-close), with the both-sides non-null guard so a null-dept
-        // head can't match a null-dept consultation.
-        permitted =
-          ["admin_support", "branch_manager"].includes(reqUser.role) ||
-          (reqUser.role === "department_head"
-            && !!reqUser.departmentId
-            && !!consultation.departmentId
-            && consultation.departmentId === reqUser.departmentId) ||
-          isLawyer;
-      } else {
-        permitted = ["admin_support", "branch_manager"].includes(reqUser.role);
-      }
+      // Phase 8 F6 — dept-head scoped to own dept (mirrors contracts
+      // /early-close), with the both-sides non-null guard so a null-dept
+      // head can't match a null-dept consultation. Delegation-aware (was
+      // inline, raw-role); the WRITTEN-vs-PHONE/PROCEDURAL split is preserved
+      // inside the helper and is resolved from the CONSULTATION, never the actor.
+      const permitted = canCloseConsultationTier(reqUser, consultation, req.actingContext);
       if (!permitted) {
         return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
       }
@@ -6688,17 +6745,9 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      // Early-close gate, copied from /early-close verbatim.
-      const resolvedType = resolveConsultationType(consultation.consultationType);
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const permitted = resolvedType === ConsultationType.WRITTEN
-        ? (["admin_support", "branch_manager"].includes(reqUser.role) ||
-           (reqUser.role === "department_head"
-             && !!reqUser.departmentId
-             && !!consultation.departmentId
-             && consultation.departmentId === reqUser.departmentId) ||
-           isLawyer)
-        : ["admin_support", "branch_manager"].includes(reqUser.role);
+      // Early-close gate — now the SHARED canCloseConsultationTier rather than a
+      // third verbatim copy. Delegation-aware; type split preserved.
+      const permitted = canCloseConsultationTier(reqUser, consultation, req.actingContext);
       if (!permitted) return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق" });
 
       if (consultation.status !== "active") {
@@ -6808,18 +6857,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يمكن إعادة الفتح فقط لاستشارة مغلقة" });
       }
 
-      // Close tier, evaluated on the closed row. canEarlyClose itself requires
-      // status "active", so the role half is restated here rather than reused.
-      const resolvedType = resolveConsultationType(consultation.consultationType);
-      const isLawyer = isAssignedLawyer(reqUser, consultation);
-      const permitted = resolvedType === ConsultationType.WRITTEN
-        ? (["admin_support", "branch_manager"].includes(reqUser.role) ||
-           (reqUser.role === "department_head"
-             && !!reqUser.departmentId
-             && !!consultation.departmentId
-             && consultation.departmentId === reqUser.departmentId) ||
-           isLawyer)
-        : ["admin_support", "branch_manager"].includes(reqUser.role);
+      // Close tier, evaluated on the closed row — the ROLE half only, which is
+      // exactly what canCloseConsultationTier is; the status check that gate's
+      // endpoint pairs it with lives above (status must be "closed" here).
+      // Delegation-aware; type split preserved.
+      const permitted = canCloseConsultationTier(reqUser, consultation, req.actingContext);
       if (!permitted) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح الاستشارة" });
 
       const targetStage = String(req.body?.targetStage ?? "").trim();
@@ -7015,7 +7057,31 @@ export async function registerRoutes(
       // OWN department; branch_manager / admin_support stay global. The FE only
       // surfaces own-dept consultations to a dept_head (canModifyConsultation
       // scopes them), so legitimate use is unaffected.
-      if (reqUser.role === "department_head" && consultation.departmentId !== reqUser.departmentId) {
+      //
+      // 🔴 THIS NARROWING USED TO MISS DELEGATES ENTIRELY, and converting it is a
+      // TIGHTENING rather than a widening. The outer gate above is already
+      // ctx-aware (canActOnEntityTiered with req.actingContext), so a delegate of
+      // a department_head could always reach this point — but the check below
+      // read reqUser.role, which for a delegate is `employee`, so it never fired.
+      // The delegate therefore had MORE latitude than the head they stand in for.
+      // Now the scope is evaluated per acting identity against the DELEGATOR's
+      // department, which is what the file comment above always claimed happened.
+      //
+      // The global-role term is load-bearing: without it, an admin_support user
+      // who ALSO holds a delegated department_head role would be newly refused on
+      // another department's consultation, losing access their own role grants.
+      const convertIdentities = consultationActorIdentities(
+        { id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId ?? null },
+        req.actingContext,
+      );
+      const convertHasGlobalRole = convertIdentities.some(
+        (u) => u.role === "admin_support" || u.role === "branch_manager");
+      const convertHeads = convertIdentities.filter((u) => u.role === "department_head");
+      if (
+        !convertHasGlobalRole
+        && convertHeads.length > 0
+        && !convertHeads.some((u) => !!u.departmentId && u.departmentId === consultation.departmentId)
+      ) {
         return res.status(403).json({ error: "لا يمكنك تحويل استشارة من قسم آخر" });
       }
       // COMPLETED is PHONE/PROCEDURAL-only now (WRITTEN no longer passes
@@ -7146,12 +7212,8 @@ export async function registerRoutes(
 
       // Permission gate (narrower than canModifyConsultation — no
       // cases_review_head / consultations_review_head per spec).
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
-        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
-        consultation.assignedTo === reqUser.id;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnConsultationWorkflowState(reqUser, consultation, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه الاستشارة" });
 
       if (consultation.status !== "active") {
@@ -7195,11 +7257,8 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
-        consultation.assignedTo === reqUser.id;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnConsultationWorkflowState(reqUser, consultation, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه الاستشارة" });
 
       if (consultation.status !== "paused") {
@@ -9064,11 +9123,8 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
-        consultation.assignedTo === reqUser.id;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnConsultationWorkflowState(reqUser, consultation, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
 
       if (consultation.status !== "active") {
@@ -9114,11 +9170,8 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
-        consultation.assignedTo === reqUser.id;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnConsultationWorkflowState(reqUser, consultation, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة الاستشارة" });
 
       if (!consultation.awaitingCompletion) {
@@ -9166,11 +9219,8 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && consultation.departmentId === reqUser.departmentId) ||
-        consultation.assignedTo === reqUser.id;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnConsultationWorkflowState(reqUser, consultation, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال المرفقات والبيانات" });
 
       if (consultation.status !== "active") {
