@@ -47,7 +47,19 @@ export function ClientsProvider({ children }: { children: React.ReactNode }) {
   }, [user, fetchClients]);
 
   const addClient = async (data: Partial<Client>, createdBy: string): Promise<Client> => {
+    // SPREAD FIRST, NORMALISATIONS AFTER. The spread makes this structurally
+    // immune to the defect that hit consultations (a create form gained a field,
+    // the pick was never updated, and the value was dropped one line before the
+    // fetch — see 62e0fb9). A key added to the client form now reaches the server
+    // automatically; the schema decides whether to keep it.
+    //
+    // ⚠ EVERY NORMALISATION BELOW IS LOAD-BEARING AND MUST STAY AFTER THE SPREAD.
+    // They are not decoration: client-autocomplete.tsx calls this with a FOUR-key
+    // partial and deliberately passes `undefined` for the name field that does
+    // not apply to the chosen clientType. The `|| null` / `|| ""` arms are what
+    // turn those absent keys into the values the column expects.
     const clientData = {
+      ...data,
       clientType: data.clientType || "فرد",
       individualName: data.individualName || null,
       nationalId: data.nationalId || null,
