@@ -16436,13 +16436,39 @@ export async function registerRoutes(
       const validated = updateMemoSchema.parse(req.body);
       const updateData: any = { ...validated };
 
-      // Check if user can change memo status
-      const isAssignedToMemo = memo.assignedTo === user.id;
+      // Check if user can change memo status — delegation-aware.
+      //
+      // The parent case is loaded ONCE here and reused: memos carry no
+      // departmentId of their own, so the department_head arm scopes through
+      // memos.caseId → parent case, the memo module's standard rule (the same hop
+      // the internal-review handler makes with memoReviewParentCase).
+      //
+      // ⚠ ALL FIVE TERMS are evaluated per acting identity, not just the
+      // department one. The two role helpers are called with the identity's role,
+      // and the two assignment terms with the identity's id — the same shape the
+      // server uses everywhere else (effectiveIdsFor / isAssignedLawyer). A
+      // delegate standing in for the case's responsible lawyer is an assignee
+      // here exactly as they are in validateStageTransition.
+      //
+      // SCOPE: u.departmentId is the DELEGATOR's department on a delegated
+      // identity, so a delegate can only act on memos whose parent case sits in
+      // the department the delegator heads. actingIdentitiesFor is passed the
+      // PARENT CASE id, so specific_cases delegations reach a memo through its
+      // case — matching canActOnMemo.
+      //
+      // No ctx → [self] → byte-identical to the original five-term expression.
       const relatedCase = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
-      const isAssignedToCase = relatedCase && (relatedCase.primaryLawyerId === user.id || relatedCase.responsibleLawyerId === user.id);
-      // !!user.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
-      const isDeptHeadForCase = user.role === "department_head" && !!user.departmentId && relatedCase && relatedCase.departmentId === user.departmentId;
-      const canChangeStatus = canReviewMemos(user.role) || canChangeMemoStatus(user.role) || isAssignedToMemo || isAssignedToCase || isDeptHeadForCase;
+      const memoStatusIdentities: CaseActorIdentity[] = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, memo.caseId ?? null)
+            .map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }))
+        : [{ id: user.id, role: user.role, departmentId: user.departmentId ?? null }];
+      const canChangeStatus = memoStatusIdentities.some((u) =>
+        canReviewMemos(u.role as UserRoleType)
+        || canChangeMemoStatus(u.role as UserRoleType)
+        || memo.assignedTo === u.id
+        || (!!relatedCase && (relatedCase.primaryLawyerId === u.id || relatedCase.responsibleLawyerId === u.id))
+        // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+        || (u.role === "department_head" && !!u.departmentId && !!relatedCase && relatedCase.departmentId === u.departmentId));
 
       if (updateData.status && !canChangeStatus) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة المذكرة" });
@@ -16521,6 +16547,17 @@ export async function registerRoutes(
       }
 
       // Validate memo status transitions
+      //
+      // 🔴 THIS SECOND GATE STAYS RAW-ROLE, DELIBERATELY, AND IT IS WHAT MAKES
+      // THE WIDENING ABOVE SAFE. canChangeStatus was made delegation-aware on the
+      // owner's ruling precisely BECAUSE the two sensitive statuses — APPROVED
+      // and REVISION_REQUIRED — are re-gated here by the real actor's own role.
+      // Expanding this one over the acting identities would let a delegate of a
+      // cases_review_head APPROVE a memo, which is the four-eyes-adjacent path
+      // the ruling relied on this gate to close. Note also that canReviewMemos is
+      // branch_manager | cases_review_head | labor_review_head — department_head
+      // is not in it, so a department_head delegation gains nothing here either
+      // way. Do not "finish the sweep" by converting this.
       if (updateData.status === MemoStatus.APPROVED || updateData.status === MemoStatus.REVISION_REQUIRED) {
         if (!canReviewMemos(user.role)) {
           return res.status(403).json({ error: "ليس لديك صلاحية لمراجعة المذكرات" });
