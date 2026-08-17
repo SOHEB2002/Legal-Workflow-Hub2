@@ -50,6 +50,7 @@ import { useContracts } from "@/lib/contracts-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
+import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest } from "@/lib/queryClient";
@@ -401,7 +402,7 @@ export default function ContractsPage() {
   } = useContracts();
   const { getClientName } = useClients();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, users, isViewer, permissions } = useAuth();
+  const { user, users, isViewer, permissions, actingIdentities } = useAuth();
   const { toast } = useToast();
 
   const lawyers = users.filter((u) => u.canBeAssignedConsultations);
@@ -961,11 +962,15 @@ export default function ContractsPage() {
   // Same gate as the cases-side transfer: branch_manager / admin_support /
   // department_head (own dept). Anyone with admin-level access can move
   // a contract to a different department; assigned lawyers cannot.
+  // Delegation-aware: a department transfer is a PATCH /api/contracts/:id, gated
+  // by canModifyContract, which expands req.actingContext.
+  // ⚠ Its neighbours on this page are NOT converted, deliberately — early-close,
+  // close-no-response, reopen, start-follow-up, the pause family and attachment
+  // DELETE all sit behind raw-role server gates that ignore delegation.
   const canTransferContract = (c: Contract): boolean => {
     if (!user) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
-    return false;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    return isDeptHeadFor(actingIdentities, c.departmentId);
   };
 
   const canDeleteContract = (): boolean => !!user && user.role === "branch_manager";
@@ -2415,9 +2420,8 @@ export default function ContractsPage() {
                     <div>
                       <Label className="text-muted-foreground text-xs">المراجع</Label>
                       {user && (
-                        user.role === "branch_manager"
-                        || user.role === "admin_support"
-                        || (user.role === "department_head" && selected.departmentId === user.departmentId)
+                        hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")
+                        || isDeptHeadFor(actingIdentities, selected.departmentId)
                       ) ? (
                         <Select
                           value={selected.internalReviewerId || "none"}

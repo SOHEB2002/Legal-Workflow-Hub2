@@ -1,5 +1,13 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { User } from "@shared/schema";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { User, UserRoleType } from "@shared/schema";
+import {
+  ACTING_AS_QUERY_KEY,
+  buildActingIdentities,
+  effectiveRolesOf,
+  type ActingAsResponse,
+  type ActingIdentity,
+} from "@/lib/acting-identities";
 import {
   canManageAllCases, 
   canManageAllConsultations, 
@@ -41,6 +49,14 @@ interface AuthContextType {
     canSendNotifications: boolean;
     canSendReminders: boolean;
   };
+  // The identity set this user currently acts as: THEMSELF, plus every
+  // all_cases delegator they stand in for. Always non-empty for a signed-in
+  // user and always self-first, so a non-delegated session is exactly [self]
+  // and every consumer collapses to its pre-delegation behaviour. Consumers
+  // pass this to the helpers in lib/acting-identities (isDeptHeadFor,
+  // hasEffectiveRole) instead of testing user.role / user.departmentId
+  // directly. See that module's header for what must NOT be routed through it.
+  actingIdentities: ActingIdentity[];
   users: User[];
   refetchUsers: () => Promise<void>;
   addUser: (userData: Omit<User, "id" | "createdAt" | "updatedAt">) => Promise<{ success: boolean; error?: string }>;
@@ -313,25 +329,75 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // The server-resolved set of delegations where THIS user is the delegate —
+  // already filtered to نشط + approved + in-window + delegator-still-active by
+  // getActingContext, so nothing here re-derives that. Same query key as the
+  // amber banner, so the two share ONE cache entry and one request.
+  const { data: actingAs } = useQuery<ActingAsResponse>({
+    queryKey: [ACTING_AS_QUERY_KEY],
+    enabled: !!user,
+  });
+
+  const actingIdentities = useMemo(
+    () => buildActingIdentities(user, actingAs?.delegators),
+    [user, actingAs],
+  );
+
+  // 🔴 DELEGATION-WIDENED PERMISSIONS — AN EXPLICIT ALLOWLIST, NEVER A DENYLIST.
+  //
+  // Only the two booleans below are derived from the EFFECTIVE roles; the other
+  // ten keep reading the user's OWN role. That asymmetry is deliberate and is
+  // the whole safety property of this change: a denylist would fail OPEN — any
+  // permission helper added to this object later would silently become
+  // delegation-widened without anyone checking whether its server gate honours
+  // delegation at all. Each entry below was traced to its endpoint first.
+  //
+  // ✅ canAssignInDepartment — server PATCH /api/cases/:id and PATCH
+  //    /api/memos/:id gate assignment on canActAtDepartmentTier →
+  //    entityActorTier, which expands req.actingContext and returns
+  //    "department" for a delegate of a department_head. Already granted
+  //    server-side; this is the button that was missing.
+  // ✅ canSendReminders — POST /api/reminders gates on
+  //    `canSendNotifications(role) || canReferenceRelatedEntity(user, …, ctx)`,
+  //    and the second arm IS delegation-aware. Every client reminder control is
+  //    per-record, so it always takes that arm.
+  //
+  // 🔴 canManageUsers — NOT widened. POST /api/users, DELETE /api/users/:id and
+  //    POST /api/users/:id/reset-password are all requireRealRole, which never
+  //    accepts an inherited role; PATCH /api/users/:id does not admit
+  //    department_head at all. Widening it would render the users page and its
+  //    create/delete/reset controls for a delegate who is refused by all four.
+  // 🔴 canSendNotifications — NOT widened. The compose dialog defaults
+  //    relatedType to "none" (free composition), whose server arm reads the RAW
+  //    role, so the "إرسال إشعار" button would 403. It belongs to the pending
+  //    raw-role server-gate batch, not here.
+  //
+  // The remaining eight do not list department_head, so they cannot change for
+  // this delegation shape; they are left on the own-role path rather than
+  // widened speculatively for delegation shapes nobody has verified.
+  const effectiveRoles = effectiveRolesOf(actingIdentities);
+  const anyEffectiveRole = (allows: (role: UserRoleType) => boolean): boolean =>
+    Array.from(effectiveRoles).some((r) => allows(r as UserRoleType));
+
   const permissions = {
     canManageAllCases: user ? canManageAllCases(user.role) : false,
     canManageAllConsultations: user ? canManageAllConsultations(user.role) : false,
     canManageDepartment: user ? canManageDepartment(user.role) : false,
     canAddCasesAndConsultations: user ? canAddCasesAndConsultations(user.role) : false,
-    canAssignInDepartment: user ? canAssignInDepartment(user.role) : false,
+    canAssignInDepartment: anyEffectiveRole(canAssignInDepartment),
     canReviewCases: user ? canReviewCases(user.role) : false,
     canReviewConsultations: user ? canReviewConsultations(user.role) : false,
     canManageUsers: user ? canManageUsers(user.role) : false,
     canAccessHR: user ? canAccessHR(user.role) : false,
     canCloseCases: user ? canCloseCases(user.role) : false,
     canSendNotifications: user ? canSendNotifications(user.role) : false,
-    canSendReminders: user ? canSendReminders(user.role) : false,
+    canSendReminders: anyEffectiveRole(canSendReminders),
   };
 
   const isViewer = user?.role === "viewer";
 
   return (
-    <AuthContext.Provider value={{ user, isViewer, login, logout, changePassword, permissions, users, refetchUsers, addUser, updateUser, resetPassword, toggleUserStatus }}>
+    <AuthContext.Provider value={{ user, isViewer, login, logout, changePassword, permissions, actingIdentities, users, refetchUsers, addUser, updateUser, resetPassword, toggleUserStatus }}>
       {children}
     </AuthContext.Provider>
   );

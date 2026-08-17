@@ -61,6 +61,7 @@ import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
+import { hasEffectiveRole, isDeptHeadFor, type ActingIdentity } from "@/lib/acting-identities";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
 import { getClientRoleLabel } from "@/lib/client-role";
@@ -214,13 +215,18 @@ export interface CaseDetailsActions {
 // moves the case across the settlement stages (routes.ts ALLOWED_CASE_TRANSITIONS)
 // and needs to see where the settlement stands even though it can no longer record
 // the status itself. See the divergence note on the server helper.
+// DELEGATION: `identities` is the acting set from useAuth (self + every
+// all_cases delegator), mirroring the server helper's caseActorIdentities →
+// actingIdentitiesFor expansion. With no delegation it is exactly [self], so
+// the two role tests below collapse to the original user.role checks.
 function canActOnMohrSettlement(
   lawCase: LawCase,
   user: { id: string; role: string; departmentId?: string | null } | null,
+  identities: ActingIdentity[],
 ): boolean {
   if (!user) return false;
-  if (user.role === "branch_manager") return true;
-  if (user.role === "department_head") return !!user.departmentId && lawCase.departmentId === user.departmentId;
+  if (hasEffectiveRole(identities, "branch_manager")) return true;
+  if (isDeptHeadFor(identities, lawCase.departmentId)) return true;
   return lawCase.primaryLawyerId === user.id
     || lawCase.responsibleLawyerId === user.id
     || (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(user.id));
@@ -257,7 +263,7 @@ export function CaseDetailsDialog({
   const { updateCase, moveToNextStage, refreshCases } = useCases();
   const { getClientName } = useClients();
   const { getDepartmentName } = useDepartments();
-  const { user, users } = useAuth();
+  const { user, users, actingIdentities } = useAuth();
   const { getHearingsByCase } = useHearings();
   const { getMemosByCase } = useMemos();
   const { toast } = useToast();
@@ -1076,7 +1082,7 @@ export function CaseDetailsDialog({
                           </Badge>
                           {selectedCase.mohrNumber && <span className="text-sm text-muted-foreground">رقم: {selectedCase.mohrNumber}</span>}
                         </div>
-                        {canActOnMohrSettlement(selectedCase, user) && !selectedCase.mohrStatus && (
+                        {canActOnMohrSettlement(selectedCase, user, actingIdentities) && !selectedCase.mohrStatus && (
                           registrationDialogType === "mohr" ? (
                             <div className="flex items-center gap-2 mt-1">
                               <Input value={registrationNumberInput} onChange={e => setRegistrationNumberInput(e.target.value)} placeholder="رقم الطلب في الموارد البشرية (اختياري)" className="h-8 text-sm" data-testid="input-mohr-registration" autoFocus />
@@ -1105,7 +1111,7 @@ export function CaseDetailsDialog({
                           </Button>
                           )
                         )}
-                        {canActOnMohrSettlement(selectedCase, user) && selectedCase.mohrStatus === "مقيدة_في_الموارد" && (
+                        {canActOnMohrSettlement(selectedCase, user, actingIdentities) && selectedCase.mohrStatus === "مقيدة_في_الموارد" && (
                           <Button
                             size="sm"
                             data-testid="button-direct-settlement"
@@ -1123,7 +1129,7 @@ export function CaseDetailsDialog({
                             توجيه العميل لرفعها في التسوية الودية
                           </Button>
                         )}
-                        {canActOnMohrSettlement(selectedCase, user) && selectedCase.mohrStatus === "توجيه_تسوية_ودية" && (
+                        {canActOnMohrSettlement(selectedCase, user, actingIdentities) && selectedCase.mohrStatus === "توجيه_تسوية_ودية" && (
                           <Button
                             size="sm"
                             variant="destructive"
@@ -1427,7 +1433,7 @@ export function CaseDetailsDialog({
                                           empty upload box or a dead button. canEdit
                                           then hides upload/replace/delete inside. */}
                                       {!hearingProducesNoMinutes(hearing)
-                                        && (isHearingActor(user, hearing, selectedCase)
+                                        && (isHearingActor(actingIdentities, hearing, selectedCase)
                                             || (canViewHearingMinutes(user) && hearingHasMinutes(hearing))) && (
                                         <Popover>
                                           <PopoverTrigger asChild>
@@ -1449,7 +1455,7 @@ export function CaseDetailsDialog({
                                               endpoint={`/api/hearings/${hearing.id}/minutes-attachment`}
                                               label="ملف ضبط الجلسة"
                                               emptyHint="لم يُرفق الضبط بعد"
-                                              canEdit={isHearingActor(user, hearing, selectedCase)}
+                                              canEdit={isHearingActor(actingIdentities, hearing, selectedCase)}
                                               // THE SYNC GUARANTEE. Byte-identical to
                                               // the hearing dialog's own onChanged
                                               // (the ffadb50 fix): uploadAttachmentRaw

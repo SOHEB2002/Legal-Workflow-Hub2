@@ -88,6 +88,7 @@ import { useCases } from "@/lib/cases-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
+import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useUsers } from "@/lib/users-context";
 import { useClients } from "@/lib/clients-context";
 import {
@@ -352,7 +353,7 @@ export default function MemosPage() {
   const { cases, updateCase } = useCases();
   const { getHearingsByCase, getHearingById } = useHearings();
   const { departments, getDepartmentName } = useDepartments();
-  const { user, permissions } = useAuth();
+  const { user, permissions, actingIdentities } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
   const { clients } = useClients();
   const { toast } = useToast();
@@ -758,15 +759,15 @@ export default function MemosPage() {
   // them use — the reported القسم العام bug), and it included the case lawyers
   // (so it showed a button that 403s). Memos carry no departmentId, so the
   // dept_head check resolves it through the parent case, exactly like canPauseMemo.
+  // Delegation-aware: the memo workflow endpoints (cancel / pause / unpause /
+  // await-completion / resume / return-to-committee) all gate on canActOnMemo,
+  // which expands req.actingContext and resolves the dept_head scope through the
+  // PARENT CASE — the same hop this mirror makes.
   const canCancelMemo = (memo: Memo): boolean => {
     if (!user) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support" || user.role === "cases_review_head") return true;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support", "cases_review_head")) return true;
     if (!!memo.assignedTo && memo.assignedTo === user.id) return true;
-    if (user.role === "department_head") {
-      const parent = cases.find(c => c.id === memo.caseId);
-      return !!parent && parent.departmentId === user.departmentId;
-    }
-    return false;
+    return isDeptHeadFor(actingIdentities, cases.find(c => c.id === memo.caseId)?.departmentId);
   };
 
   // Phase-8 — pause permission gate. Mirrors the server check on
@@ -808,24 +809,26 @@ export default function MemosPage() {
   // department tier (branch_manager | own-dept head, resolved through the parent
   // case) plus the admin roles. The memo ASSIGNEE is deliberately excluded — that
   // is the self-reassignment loop the carve-out exists to close.
+  // Delegation-aware — the memo twin of cases.tsx canAssign. PATCH
+  // /api/memos/:id routes an assignedTo change through canActAtDepartmentTier
+  // scoped to the PARENT CASE's department, and that helper expands
+  // req.actingContext, so a delegate of the case's department head may already
+  // reassign server-side.
   const canReassignMemo = (memo: Memo): boolean => {
     if (!user) return false;
-    if (user.role === "branch_manager") return true;
-    if (["admin_support", "cases_review_head", "labor_review_head"].includes(user.role)) return true;
-    if (user.role === "department_head") {
-      const parent = cases.find((c) => c.id === memo.caseId);
-      return !!parent && !!user.departmentId && parent.departmentId === user.departmentId;
-    }
-    return false;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support", "cases_review_head", "labor_review_head")) return true;
+    return isDeptHeadFor(actingIdentities, cases.find((c) => c.id === memo.caseId)?.departmentId);
   };
 
+  // ⚠ Delegation-aware, UNLIKE its case / consultation / contract siblings —
+  // and that asymmetry is verified, not an oversight. The memo pause endpoints
+  // gate on canActOnMemo (ctx-aware); /api/cases/:id/pause,
+  // /api/consultations/:id/pause and allowContractPauseLike all read the raw
+  // role, so their client mirrors are deliberately left un-widened.
   const canPauseMemo = (memo: Memo): boolean => {
     if (!user) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (user.role === "department_head") {
-      const parent = cases.find(c => c.id === memo.caseId);
-      return !!parent && parent.departmentId === user.departmentId;
-    }
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    if (isDeptHeadFor(actingIdentities, cases.find(c => c.id === memo.caseId)?.departmentId)) return true;
     return memo.assignedTo === user.id;
   };
 

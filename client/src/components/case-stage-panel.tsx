@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { useCases } from "@/lib/cases-context";
 import { useAuth } from "@/lib/auth-context";
+import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useDepartments } from "@/lib/departments-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useToast } from "@/hooks/use-toast";
@@ -42,7 +43,7 @@ export function CaseStagePanel({
   onChanged?: () => void;
 }) {
   const { moveToNextStage, moveToPreviousStage, skipDataCompletion, updateCase, approveCase, rejectCase, refreshCases } = useCases();
-  const { user, users } = useAuth();
+  const { user, users, actingIdentities } = useAuth();
   const { getDepartmentName } = useDepartments();
   const { getHearingsByCase } = useHearings();
   const { toast } = useToast();
@@ -356,8 +357,8 @@ export function CaseStagePanel({
         user
         && caseItem.caseClassification === CaseClassification.UNDER_STUDY
         && (
-          user.role === "branch_manager" ||
-          (user.role === "department_head" && caseItem.departmentId === user.departmentId) ||
+          hasEffectiveRole(actingIdentities, "branch_manager") ||
+          isDeptHeadFor(actingIdentities, caseItem.departmentId) ||
           caseItem.primaryLawyerId === user.id ||
           caseItem.responsibleLawyerId === user.id ||
           (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(user.id))
@@ -381,6 +382,11 @@ export function CaseStagePanel({
         } : undefined
       }
       onSkipDataCompletion={
+        // 🔴 NOT delegation-aware, because POST /api/cases/:id/skip-data-completion
+        // is not: its gate reads user.role directly and never consults
+        // req.actingContext. Widening here would render a button that 403s for a
+        // delegate. Its sibling above (onSkipCommittee) IS converted, because
+        // POST /api/cases/:id/skip-committee DOES expand actingIdentitiesFor.
         user && (
           user.role === "branch_manager" ||
           user.role === "admin_support" ||

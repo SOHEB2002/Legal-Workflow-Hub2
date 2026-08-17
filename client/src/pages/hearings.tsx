@@ -85,6 +85,7 @@ import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLat
 import type { CaseStageValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
+import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing } from "@shared/schema";
 import { HearingStatus, HearingResult, HearingType, type HearingTypeValue } from "@shared/schema";
@@ -146,7 +147,7 @@ export default function HearingsPage() {
   const { cases, getCaseById } = useCases();
   const { getMemosByHearing } = useMemos();
   const { getClientName } = useClients();
-  const { user, users, isViewer } = useAuth();
+  const { user, users, isViewer, actingIdentities } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
   const { toast } = useToast();
 
@@ -1180,7 +1181,7 @@ export default function HearingsPage() {
                       // dialog cannot drift from each other or from the server.
                       // The !!departmentId guard lives inside that helper.
                       const canActOnHearing = isHearingActor(
-                        user,
+                        actingIdentities,
                         hearing,
                         hearing.caseId ? getCaseById(hearing.caseId) : null,
                       );
@@ -1190,7 +1191,7 @@ export default function HearingsPage() {
                       // prepared). Separate shared helper so page, dialog and
                       // server cannot drift.
                       const canPrepare = canCheckInHearing(
-                        user,
+                        actingIdentities,
                         hearing,
                         hearing.caseId ? getCaseById(hearing.caseId) : null,
                       );
@@ -1212,14 +1213,13 @@ export default function HearingsPage() {
                           (Array.isArray(parentCaseForHearing.assignedLawyers)
                             && parentCaseForHearing.assignedLawyers.includes(user.id))
                         );
+                      // Delegation-aware: PATCH /api/hearings/:id is gated by
+                      // canModifyCase on the PARENT CASE, which expands
+                      // req.actingContext, so the mirror must expand it too.
                       const isOwnDeptHeadForHearing =
-                        user?.role === "department_head" &&
-                        !!user.departmentId &&
-                        !!parentCaseForHearing?.departmentId &&
-                        parentCaseForHearing.departmentId === user.departmentId;
+                        isDeptHeadFor(actingIdentities, parentCaseForHearing?.departmentId);
                       const canEditHearing =
-                        user?.role === "branch_manager" ||
-                        user?.role === "admin_support" ||
+                        hasEffectiveRole(actingIdentities, "branch_manager", "admin_support") ||
                         isOwnDeptHeadForHearing ||
                         isCaseLawyerForHearing;
                       const canDeleteHearing =

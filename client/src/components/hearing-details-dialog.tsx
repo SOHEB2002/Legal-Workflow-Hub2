@@ -94,7 +94,7 @@ export function HearingDetailsDialog({
 }) {
   const { hearings } = useHearings();
   const { getCaseById } = useCases();
-  const { user, users } = useAuth();
+  const { user, users, actingIdentities } = useAuth();
   const { getMemosByCase } = useMemos();
   // Same resolution the hearings page uses for its filters: the explicitly
   // assigned attending lawyer, else the parent case's primary/responsible.
@@ -151,7 +151,7 @@ export function HearingDetailsDialog({
   // 🔴 STILL WRITE-ONLY. Reading the ضبط is wider again (canViewHearingMinutes —
   // any authenticated user), so this predicate answers "may this user CHANGE the
   // file", not "may they see it". Passing it to canEdit keeps the halves apart.
-  const canAttachHearingMinutes = isHearingActor(user, detailHearing, detailParentCase);
+  const canAttachHearingMinutes = isHearingActor(actingIdentities, detailHearing, detailParentCase);
 
   // Drives the "إرفاق ضبط الجلسة" workflow step's done-state. Fed by the attach
   // control's own fetch (onAttachedChange) so the dialog issues no second read.
@@ -694,7 +694,7 @@ export function HearingDetailsDialog({
                       // before. Only its emptiness-check changed: a postponed hearing
                       // with nothing outstanding now renders the block with just the
                       // toggle, instead of rendering nothing.
-                      const canToggleOpponentResponse = isHearingActor(user, detailHearing, detailParentCase);
+                      const canToggleOpponentResponse = isHearingActor(actingIdentities, detailHearing, detailParentCase);
                       const hearingTs = new Date(detailHearing.hearingDate).getTime();
                       const caseMemos = getMemosByCase(detailHearing.caseId);
                       const directMatches = caseMemos.filter((m) => m.hearingId === detailHearing.id);
