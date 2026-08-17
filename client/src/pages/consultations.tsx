@@ -903,7 +903,25 @@ function ConsultationActivityTimeline({
                   <div className="text-xs text-muted-foreground mt-0.5">
                     بواسطة <BidiText>{getUserName(a.performedBy)}</BidiText>
                     {" • "}
-                    <LtrInline>{formatActivityTime(a.performedAt)}</LtrInline>
+                    {/* 🔴 NO LtrInline HERE — IT IS WHAT BROKE THIS LINE.
+                        formatActivityTime ends in toLocaleDateString("ar"), and the
+                        Arabic locale pattern embeds U+200F RIGHT-TO-LEFT MARK after
+                        the day and after the month: "17[RLM]/8[RLM]/2026". Those are
+                        STRONG RTL characters, so they split the date into three
+                        independent runs (17 · 8 · 2026). Wrapping that in LtrInline
+                        (dir="ltr" + unicode-bidi:embed) opened an LTR embedding
+                        around RTL marks, the runs were laid out against the
+                        surrounding level, and the "/" separators bound to the wrong
+                        digit groups — the string rendered year-first with the day
+                        stranded as a lone digit, while every digit was still present
+                        and the value in memory was correct.
+                        Rendered BARE it is correct: the RLMs agree with the RTL page
+                        direction, which is exactly what the locale emits them for —
+                        the same way every other toLocale*("ar") call in this app
+                        already renders (case-details-dialog, hearing-details-dialog,
+                        memos). LtrInline stays right for case numbers, phones and
+                        national IDs; it is wrong for Intl output. Do not re-add it. */}
+                    {formatActivityTime(a.performedAt)}
                   </div>
                 </div>
               </li>
@@ -3213,7 +3231,10 @@ export default function ConsultationsPage() {
                     {selectedConsultation.pausedAt && (
                       <>
                         {selectedConsultation.pausedBy ? " — " : ""}
-                        في <LtrInline>{formatExpectedDate(selectedConsultation.pausedAt)}</LtrInline>
+                        {/* Bare, not LtrInline — formatExpectedDate is the same
+                            toLocaleDateString("ar") call and carries the same
+                            U+200F marks. See the activity-timeline note above. */}
+                        في {formatExpectedDate(selectedConsultation.pausedAt)}
                       </>
                     )}
                   </div>
@@ -3610,7 +3631,9 @@ export default function ConsultationsPage() {
                     <div>
                       <Label className="text-muted-foreground text-xs">تاريخ دخول الاستشارة للقسم</Label>
                       <p data-testid="committee-form-intake-date">
-                        <LtrInline>{formatExpectedDate(selectedConsultation.createdAt)}</LtrInline>
+                        {/* Bare, not LtrInline — same Intl output, same U+200F
+                            marks. See the activity-timeline note above. */}
+                        {formatExpectedDate(selectedConsultation.createdAt)}
                       </p>
                     </div>
                     <div className="col-span-2">

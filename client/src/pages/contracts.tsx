@@ -2568,7 +2568,23 @@ export default function ContractsPage() {
                       <div className="text-xs text-muted-foreground mt-0.5">
                         بواسطة <BidiText>{getLawyerName(a.performedBy)}</BidiText>
                         {" • "}
-                        <LtrInline>{formatActivityTime(a.performedAt)}</LtrInline>
+                        {/* 🔴 NO LtrInline HERE — the consultations twin of this
+                            exact line rendered its dates scrambled because of it.
+                            formatActivityTime ends in toLocaleDateString("ar"),
+                            whose Arabic pattern embeds U+200F RIGHT-TO-LEFT MARK
+                            after the day and the month ("17[RLM]/8[RLM]/2026").
+                            Those strong RTL marks split the date into three runs;
+                            LtrInline's dir="ltr" + unicode-bidi:embed then laid
+                            them out against the surrounding level and bound the "/"
+                            separators to the wrong digits — every digit present,
+                            all in the wrong place. Bare, the marks agree with the
+                            RTL page and it renders correctly, like every other
+                            toLocale*("ar") call in this app. Do not re-add it.
+                            This page was fixed at the same time as the
+                            consultations one, per the "fix both or neither" note on
+                            formatActivityTime above — even though only the
+                            consultations timeline was reported. */}
+                        {formatActivityTime(a.performedAt)}
                       </div>
                     </li>
                   ))}
