@@ -367,10 +367,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   //    accepts an inherited role; PATCH /api/users/:id does not admit
   //    department_head at all. Widening it would render the users page and its
   //    create/delete/reset controls for a delegate who is refused by all four.
-  // 🔴 canSendNotifications — NOT widened. The compose dialog defaults
-  //    relatedType to "none" (free composition), whose server arm reads the RAW
-  //    role, so the "إرسال إشعار" button would 403. It belongs to the pending
-  //    raw-role server-gate batch, not here.
+  // 🔴 canSendNotifications — NOT widened, and NOT pending. The compose dialog
+  //    defaults relatedType to "none" (free composition), whose server arm reads
+  //    the RAW role via canSendNotifications(user.role), so the "إرسال إشعار"
+  //    button would 403. That arm was NOT part of the 26 gates the server batch
+  //    converted — it is a permission-helper CALL, a form neither raw-role
+  //    inventory covered — and the owner has ruled this boolean excluded. Do not
+  //    widen it without a separate ruling on the notification send gate itself.
   //
   // The remaining eight do not list department_head, so they cannot change for
   // this delegation shape; they are left on the own-role path rather than

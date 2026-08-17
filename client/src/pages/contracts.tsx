@@ -816,6 +816,15 @@ export default function ContractsPage() {
     // contract_under_review is the immutable source document — only
     // branch_manager + admin_support can delete it (mis-upload recovery).
     // Server enforces the same rule; this just hides the button.
+    //
+    // 🔴 PERMANENTLY EXCLUDED FROM DELEGATION BY OWNER RULING, NOT PENDING.
+    // Every other contract gate on this page is delegation-aware. This one is
+    // not, because its server route (DELETE /api/contracts/:id/attachments/:id)
+    // was classified alongside the rest and deliberately left raw-role: the
+    // action is irreversible and CLAUDE.md places DELETE at the branch_manager
+    // tier. A delegate standing in for a department_head can do everything else
+    // to a contract and cannot delete its attachments. Do not convert this in a
+    // later sweep; revisit only as an explicit owner decision.
     if (a.slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW) {
       return user.role === "branch_manager" || user.role === "admin_support";
     }
@@ -980,6 +989,16 @@ export default function ContractsPage() {
   // Same delegate-only four-eyes overlay as the consultations twin: the server
   // refuses a DELEGATION-DERIVED committee decision on work the real human
   // authored, while an own-role decision is unrestricted.
+  // Added by the follow-the-comments pass: allowContractPauseLike (pause /
+  // unpause / await-completion / resume-from-completion / skip-data-completion)
+  // joined the delegation-aware set in the server batch, so the two mirrors held
+  // un-widened for it are converted. Predicate bodies unchanged, one synthetic
+  // actor per acting identity.
+  const canPauseFor = (c: Contract) =>
+    anyIdentity(actingIdentities, (role, id, departmentId) => canPause(c, { id, role, departmentId }));
+  const canOfferSkipDataCompletionFor = (c: Contract) =>
+    anyIdentity(actingIdentities, (role, id, departmentId) =>
+      canOfferSkipDataCompletion(c, { id, role, departmentId }));
   const canDoCommitteeDecisionFor = (c: Contract, isLaborEntity: boolean) => {
     if (!user) return false;
     if (canDoCommitteeDecision(c, user.role, isLaborEntity)) return true;
@@ -990,9 +1009,10 @@ export default function ContractsPage() {
 
   // Delegation-aware: a department transfer is a PATCH /api/contracts/:id, gated
   // by canModifyContract, which expands req.actingContext.
-  // ⚠ Its neighbours on this page are NOT converted, deliberately — early-close,
-  // close-no-response, reopen, start-follow-up, the pause family and attachment
-  // DELETE all sit behind raw-role server gates that ignore delegation.
+  // ⚠ Its neighbours WERE converted in the follow-the-comments pass once their
+  // server routes joined the delegation-aware set — early-close,
+  // close-no-response, reopen, start-follow-up and the pause family. Attachment
+  // DELETE is the one permanent exception (see its own note above).
   const canTransferContract = (c: Contract): boolean => {
     if (!user) return false;
     if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
@@ -1141,16 +1161,14 @@ export default function ContractsPage() {
     }
   };
 
+  // Delegation-aware: POST /api/contracts/:id/early-close now runs through the
+  // shared canCloseContractTier(…, req.actingContext) on the server.
   const canEarlyClose = (c: Contract): boolean => {
     if (!user) return false;
     if (c.status !== "active") return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (user.role === "department_head"
-      && !!user.departmentId
-      && !!c.departmentId
-      && user.departmentId === c.departmentId) return true;
-    if (!!c.assignedTo && c.assignedTo === user.id) return true;
-    return false;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    if (isDeptHeadFor(actingIdentities, c.departmentId)) return true;
+    return !!c.assignedTo && anyIdentity(actingIdentities, (_r, id) => c.assignedTo === id);
   };
 
   // FE permission gate mirroring POST /api/contracts/:id/start-follow-up.
@@ -1160,16 +1178,14 @@ export default function ContractsPage() {
   // contracts an own-dept head / the assigned lawyer can close, so they must
   // be able to re-open. Only difference from canEarlyClose is the status
   // check — closed instead of active.
+  // Delegation-aware: /start-follow-up and /reopen (which delegates to this)
+  // both run through canCloseContractTier(…, req.actingContext) server-side.
   const canStartFollowUp = (c: Contract): boolean => {
     if (!user) return false;
     if (c.status !== "closed") return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (user.role === "department_head"
-      && !!user.departmentId
-      && !!c.departmentId
-      && user.departmentId === c.departmentId) return true;
-    if (!!c.assignedTo && c.assignedTo === user.id) return true;
-    return false;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    if (isDeptHeadFor(actingIdentities, c.departmentId)) return true;
+    return !!c.assignedTo && anyIdentity(actingIdentities, (_r, id) => c.assignedTo === id);
   };
 
   // Reopen — resume the ORIGINAL work at a chosen stage. Same actor set as
@@ -1764,7 +1780,7 @@ export default function ContractsPage() {
                           {/* Await / resume — same gate as pause, complementary
                               actions. Only one of the two is shown depending
                               on awaitingCompletion. */}
-                          {canPause(c, user) && c.status === "active" && c.awaitingCompletion && (
+                          {canPauseFor(c) && c.status === "active" && c.awaitingCompletion && (
                             <DropdownMenuItem
                               data-testid={`row-action-resume-${c.id}`}
                               className="text-green-600 focus:text-green-700"
@@ -1774,7 +1790,7 @@ export default function ContractsPage() {
                               تم الاستكمال
                             </DropdownMenuItem>
                           )}
-                          {canPause(c, user) && c.status === "active" && !c.awaitingCompletion && (
+                          {canPauseFor(c) && c.status === "active" && !c.awaitingCompletion && (
                             <DropdownMenuItem
                               data-testid={`row-action-await-${c.id}`}
                               className="text-amber-600 focus:text-amber-700"
@@ -1789,7 +1805,7 @@ export default function ContractsPage() {
                               returns null, which excludes a تعقيبية cycle
                               (ContractCycleStages has no data-completion
                               stage) — the same rule the server refuses on. */}
-                          {canOfferSkipDataCompletion(c, user) && (
+                          {canOfferSkipDataCompletionFor(c) && (
                             <DropdownMenuItem
                               data-testid={`row-action-skip-data-completion-${c.id}`}
                               onClick={() => {
@@ -1815,8 +1831,8 @@ export default function ContractsPage() {
                               تحويل لقسم آخر
                             </DropdownMenuItem>
                           )}
-                          {(canPause(c, user)) && <DropdownMenuSeparator />}
-                          {canPause(c, user) && c.status === "active" && (
+                          {(canPauseFor(c)) && <DropdownMenuSeparator />}
+                          {canPauseFor(c) && c.status === "active" && (
                             <DropdownMenuItem
                               data-testid={`row-action-pause-${c.id}`}
                               className="text-amber-600 focus:text-amber-700"
@@ -1826,7 +1842,7 @@ export default function ContractsPage() {
                               تعليق
                             </DropdownMenuItem>
                           )}
-                          {canPause(c, user) && c.status === "paused" && (
+                          {canPauseFor(c) && c.status === "paused" && (
                             <DropdownMenuItem
                               data-testid={`row-action-unpause-${c.id}`}
                               onClick={() => wrap(() => unpauseContract(c.id), "تم إلغاء التعليق")}
@@ -2003,7 +2019,7 @@ export default function ContractsPage() {
                     إرجاع
                   </Button>
                 )}
-                {canOfferSkipDataCompletion(selected, user) && (
+                {canOfferSkipDataCompletionFor(selected) && (
                   <Button
                     size="sm" variant="outline"
                     onClick={() => {
@@ -2118,13 +2134,13 @@ export default function ContractsPage() {
                     استشارة تعقيبية
                   </Button>
                 )}
-                {selected.status === "active" && !selected.awaitingCompletion && canPause(selected, user) && (
+                {selected.status === "active" && !selected.awaitingCompletion && canPauseFor(selected) && (
                   <Button size="sm" variant="outline"
                     onClick={() => { setAwaitTarget(selected); setAwaitReason(""); setShowAwait(true); }}>
                     بانتظار استكمال
                   </Button>
                 )}
-                {selected.awaitingCompletion && canPause(selected, user) && (
+                {selected.awaitingCompletion && canPauseFor(selected) && (
                   <Button size="sm" variant="outline"
                     onClick={() => wrap(() => resumeFromCompletion(selected.id), "تم العودة من الاستكمال")}>
                     تم الاستكمال

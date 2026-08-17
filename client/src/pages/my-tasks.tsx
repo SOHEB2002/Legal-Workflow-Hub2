@@ -17,6 +17,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { hasEffectiveRole, isDeptHeadFor, type ActingIdentity } from "@/lib/acting-identities";
 import { useDepartments } from "@/lib/departments-context";
 import { useFieldTasks } from "@/lib/field-tasks-context";
 import { useCases } from "@/lib/cases-context";
@@ -218,29 +219,30 @@ type TaskCardKey = typeof TASK_CARDS[number]["key"];
 // computed by scopeOf) and departmentId (the RECORD's department, added in
 // d661b9a). No new field, no extra request, and no re-derivation of who the
 // designated reviewer or assignee is.
-// ⚠ NOT DELEGATION-EXPANDED, and it does not need to be. A row surfaced to a
-// delegate was computed by computeTasksForIdentity running AS THE DELEGATOR, so
-// scopeOf stamps ownerScope "self" and the first line below already returns true
-// for it. Expanding the role arms would only affect rows the viewer does NOT
-// own, and two of the three kinds this gates (CONSULTATION_UNASSIGNED,
-// CONTRACT_UNASSIGNED) post to /api/consultations/:id/assign and
-// /api/contracts/:id/assign — both raw-role server gates that refuse a delegate
-// — so widening here would manufacture the 403 buttons this predicate exists to
-// prevent. Revisit when those two endpoints become ctx-aware.
+// DELEGATION-EXPANDED as of the follow-the-comments pass. The note that used to
+// sit here said to revisit "when those two endpoints become ctx-aware" — both
+// /api/consultations/:id/assign and /api/contracts/:id/assign did, in the server
+// batch, so the 403-button hazard that held this back is gone and the three
+// UNASSIGNED kinds are now honestly actionable for a delegate.
+//
+// A row surfaced to a delegate is usually already covered by the ownerScope
+// "self" line (computeTasksForIdentity runs AS THE DELEGATOR, so scopeOf stamps
+// it), but the role arms matter for rows the viewer does not own — which is
+// exactly what a delegated department head is looking at.
+//
+// 🔴 The department comparison resolves against the DELEGATOR's department via
+// isDeptHeadFor, not the viewer's own, and keeps the mandatory !!departmentId
+// guard inside that helper. With no delegation the identity set is [self] and
+// both arms collapse to the original user.role tests.
 function canActingUserAct(
   task: MyTaskItem,
-  user: { role?: string; departmentId?: string | null } | null,
+  identities: ActingIdentity[],
 ): boolean {
   // The viewer is the row's own actor — the designated reviewer, the department
   // head the unassigned record was filed under, the case's lawyer. Always able.
   if (task.ownerScope === "self") return true;
-  if (user?.role === "branch_manager") return true;
-  // 🔴 !!user.departmentId — the standing rule. Without it a head with a null
-  // department matches every record with a null department.
-  if (user?.role === "department_head") {
-    return !!user.departmentId && user.departmentId === task.departmentId;
-  }
-  return false;
+  if (hasEffectiveRole(identities, "branch_manager")) return true;
+  return isDeptHeadFor(identities, task.departmentId);
 }
 
 // The kinds whose server gate has EXACTLY the shape canActingUserAct models, so
@@ -739,7 +741,9 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   const Icon = meta?.icon ?? ClipboardList;
   const { getTaskById } = useFieldTasks();
   const { departments } = useDepartments();
-  const { user, users } = useAuth();
+  // `user` is no longer destructured here: canActingUserAct was the only reader
+  // and it now takes the acting identity set instead of the signed-in user.
+  const { users, actingIdentities } = useAuth();
   // General (عام) task context lives on the full field task, not the feed item:
   // WHO requested it (originalRequesterId, written once at creation; assignedBy as
   // a fallback) and its free-text details (description). Surface both so the actor
@@ -784,7 +788,7 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   // SPLIT TYPE KEY for the two CASE_WORK variants that share their kind with
   // ordinary case work. canActingUserAct is evaluated once and answers both.
   const authorityTypeKey = taskTypeKey(task);
-  const authorityBlockedReason = canActingUserAct(task, user)
+  const authorityBlockedReason = canActingUserAct(task, actingIdentities)
     ? null
     : AUTHORITY_GATED_KINDS.has(task.kind)
       ? (AUTHORITY_BLOCKED_REASON[task.kind] ?? null)
