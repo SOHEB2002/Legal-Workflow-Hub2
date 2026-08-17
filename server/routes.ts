@@ -582,6 +582,46 @@ function canAttachCaseJudgmentDeed(user: CaseActorIdentity, caseData: any, ctx?:
     || isAssignedLawyer({ id: u.id }, caseData));
 }
 
+// CASE WORKFLOW-STATE gate — pause / unpause / await-completion /
+// resume-from-completion / skip-data-completion / close-no-response /
+// return-to-committee. Set: branch_manager | admin_support | department_head of
+// the case's OWN department | assigned lawyer.
+//
+// WHY IT EXISTS. Those seven endpoints each carried their own INLINE copy of
+// this predicate, and every copy read `reqUser.role` directly — so they were the
+// only case actions that ignored req.actingContext while ~150 sibling call sites
+// honoured it. A delegate standing in for a department_head could advance a case
+// but not pause it. Nothing in any of the seven gave a reason for the raw role;
+// they simply predate the delegation work.
+//
+// ⚠ A NEW SIBLING, NOT A REUSE OF canAttachCaseJudgmentDeed — which today has a
+// byte-identical predicate. Same reasoning that helper's own header gives for
+// not reusing canActOnMohrSettlement: these are DIFFERENT authorities that
+// happen to coincide right now, and folding them together means a future
+// narrowing of one silently narrows seven unrelated routes. Three case helpers,
+// three named authorities, one shared identity expansion.
+//
+// ⚠ NO DELEGATE-ONLY FOUR-EYES OVERLAY, and that is a finding rather than an
+// omission. The overlays at routes.ts (committee-decision) exist because a
+// delegate must not APPROVE work the real human authored. Every gate below
+// ALREADY admits the assigned lawyer — the author — by design, so there is no
+// second-pair-of-eyes property here to protect. Checked per gate, not assumed.
+//
+// SCOPE IS PRESERVED: `u.departmentId` is the DELEGATOR's department on a
+// delegated identity (it travels with the inherited role, exactly as
+// entityActorTier resolves it), so a delegate can only act inside the department
+// the delegator actually heads — never their own. caseActorIdentities passes the
+// case id, so specific_cases delegations are honoured per case.
+// No ctx → [self] → byte-identical to the seven inline originals.
+function canActOnCaseWorkflowState(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) =>
+    u.role === "branch_manager"
+    || u.role === "admin_support"
+    // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+    || (u.role === "department_head" && !!u.departmentId && u.departmentId === caseData.departmentId)
+    || isAssignedLawyer({ id: u.id }, caseData));
+}
+
 // 4c-3 (consultations) — per-identity original logic (mirror of cases). No
 // caseId on consultations, so only self + all_cases delegators apply
 // (specific_cases is case-only). No ctx → [self] → byte-identical.
@@ -4156,15 +4196,10 @@ export async function registerRoutes(
       // assignedLawyers — see isAssignedLawyer). Mirrors the client
       // gate on the "تجاوز" button in case-progress-bar.tsx so the
       // button visibility and the server check never drift.
-      const isOwnDeptHead =
-        user.role === "department_head"
-        && !!user.departmentId
-        && caseItem.departmentId === user.departmentId;
-      const authorized =
-        user.role === "branch_manager"
-        || user.role === "admin_support"
-        || isOwnDeptHead
-        || isAssignedLawyer(user, caseItem);
+      // Delegation-aware via canActOnCaseWorkflowState (was an inline copy
+      // reading user.role directly); the dept scope now resolves against the
+      // DELEGATOR's department, which is what makes the widening safe.
+      const authorized = canActOnCaseWorkflowState(user, caseItem, req.actingContext);
       if (!authorized) {
         return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال المرفقات والبيانات" });
       }
@@ -7465,16 +7500,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: "القضية في حالة لا تسمح بإعادتها للجنة" });
       }
 
-      const isLawyer = isAssignedLawyer(reqUser, lawCase);
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!reqUser.departmentId
-        && lawCase.departmentId === reqUser.departmentId;
-      const allowed =
-        reqUser.role === "branch_manager"
-        || reqUser.role === "admin_support"
-        || isOwnDeptHead
-        || isLawyer;
+      // Delegation-aware (was inline, raw-role). The assigned lawyer — the
+      // author of the work being bounced back — is admitted here BY DESIGN, so
+      // there is no four-eyes property for a delegate overlay to protect.
+      const allowed = canActOnCaseWorkflowState(reqUser, lawCase, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة القضية للجنة" });
 
       const performer = await storage.getUser(reqUser.id);
@@ -8666,16 +8695,9 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      const isAssigned =
-        lawCase.primaryLawyerId === reqUser.id ||
-        lawCase.responsibleLawyerId === reqUser.id ||
-        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
-        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
-        isAssigned;
+      // Delegation-aware (was inline, raw-role). Same set, same scope term —
+      // now resolved per acting identity against the DELEGATOR's department.
+      const allowed = canActOnCaseWorkflowState(reqUser, lawCase, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإغلاق هذه القضية" });
 
       if (lawCase.currentStage !== CaseStage.DATA_COMPLETION) {
@@ -8819,17 +8841,10 @@ export async function registerRoutes(
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
       // Cases "assigned lawyer" = primary OR responsible OR member of
-      // assignedLawyers array.
-      const isAssignedLawyer =
-        lawCase.primaryLawyerId === reqUser.id ||
-        lawCase.responsibleLawyerId === reqUser.id ||
-        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        // !!reqUser.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
-        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
-        isAssignedLawyer;
+      // assignedLawyers array — now resolved per acting identity inside the
+      // shared helper (the local const shadowed the module-level
+      // isAssignedLawyer function, which is why it is gone rather than reused).
+      const allowed = canActOnCaseWorkflowState(reqUser, lawCase, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتعليق هذه القضية" });
 
       if (lawCase.pausedAt) {
@@ -8877,15 +8892,8 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      const isAssignedLawyer =
-        lawCase.primaryLawyerId === reqUser.id ||
-        lawCase.responsibleLawyerId === reqUser.id ||
-        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
-        isAssignedLawyer;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnCaseWorkflowState(reqUser, lawCase, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء تعليق هذه القضية" });
 
       if (!lawCase.pausedAt) {
@@ -11868,15 +11876,8 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      const isAssigned =
-        lawCase.primaryLawyerId === reqUser.id ||
-        lawCase.responsibleLawyerId === reqUser.id ||
-        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
-        isAssigned;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnCaseWorkflowState(reqUser, lawCase, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
 
       if (lawCase.pausedAt) {
@@ -11930,15 +11931,8 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      const isAssigned =
-        lawCase.primaryLawyerId === reqUser.id ||
-        lawCase.responsibleLawyerId === reqUser.id ||
-        (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(reqUser.id));
-      const allowed =
-        reqUser.role === "branch_manager" ||
-        reqUser.role === "admin_support" ||
-        (reqUser.role === "department_head" && !!reqUser.departmentId && lawCase.departmentId === reqUser.departmentId) ||
-        isAssigned;
+      // Delegation-aware (was inline, raw-role).
+      const allowed = canActOnCaseWorkflowState(reqUser, lawCase, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لتغيير حالة القضية" });
 
       if (!lawCase.awaitingCompletion) {
