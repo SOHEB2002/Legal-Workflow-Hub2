@@ -84,7 +84,7 @@ import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
-import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
+import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { 
   CaseStageLabels,
   CaseStagesOrder,
@@ -387,19 +387,20 @@ export default function CasesPage() {
   // /api/cases/:id/pause and /unpause: branch_manager / admin_support /
   // dept_head (own dept) / assigned lawyer (primary | responsible | in
   // assignedLawyers array).
-  // 🔴 DELIBERATELY NOT DELEGATION-AWARE — the SERVER gate is not either.
-  // POST /api/cases/:id/pause, /unpause, /await-completion and
-  // /resume-from-completion all read reqUser.role directly and never consult
-  // req.actingContext, so a delegate is refused there today. Widening this
-  // would render a button that 403s — the visibility≠authorization failure this
-  // whole change exists to remove, just pointing the other way. Convert this
-  // the moment those routes join the delegation-aware set.
+  // Delegation-aware. POST /api/cases/:id/pause, /unpause, /await-completion and
+  // /resume-from-completion all joined the delegation-aware set in the server
+  // batch — they now share canActOnCaseWorkflowState(…, req.actingContext) — so
+  // this mirror, which was held un-widened precisely until that happened, is
+  // converted to match. Same set, same scope term, resolved against the
+  // DELEGATOR's department on a delegated identity.
   const canPauseCase = (c: LawCase): boolean => {
     if (!user) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
-    if (user.role === "department_head" && c.departmentId === user.departmentId) return true;
-    if (c.primaryLawyerId === user.id || c.responsibleLawyerId === user.id) return true;
-    return Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(user.id);
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    if (isDeptHeadFor(actingIdentities, c.departmentId)) return true;
+    return anyIdentity(actingIdentities, (_r, id) =>
+      c.primaryLawyerId === id
+      || c.responsibleLawyerId === id
+      || (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(id)));
   };
 
   // Early-close permission gate. Mirrors the cases-side equivalent of the

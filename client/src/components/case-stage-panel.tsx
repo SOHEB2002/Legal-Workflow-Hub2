@@ -395,18 +395,17 @@ export function CaseStagePanel({
         } : undefined
       }
       onSkipDataCompletion={
-        // 🔴 NOT delegation-aware, because POST /api/cases/:id/skip-data-completion
-        // is not: its gate reads user.role directly and never consults
-        // req.actingContext. Widening here would render a button that 403s for a
-        // delegate. Its sibling above (onSkipCommittee) IS converted, because
-        // POST /api/cases/:id/skip-committee DOES expand actingIdentitiesFor.
+        // Delegation-aware as of the server batch: POST /api/cases/:id/skip-data-completion
+        // now resolves through canActOnCaseWorkflowState(…, req.actingContext),
+        // so this mirror is converted to match. Same set, same scope term — the
+        // department is compared against the DELEGATOR's on a delegated identity.
         user && (
-          user.role === "branch_manager" ||
-          user.role === "admin_support" ||
-          (user.role === "department_head" && caseItem.departmentId === user.departmentId) ||
-          caseItem.primaryLawyerId === user.id ||
-          caseItem.responsibleLawyerId === user.id ||
-          (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(user.id))
+          hasEffectiveRole(actingIdentities, "branch_manager", "admin_support") ||
+          isDeptHeadFor(actingIdentities, caseItem.departmentId) ||
+          anyIdentity(actingIdentities, (_r, id) =>
+            caseItem.primaryLawyerId === id ||
+            caseItem.responsibleLawyerId === id ||
+            (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(id)))
         ) ? async (notes) => {
           if (!user) return;
           setStageTransitioning(true);

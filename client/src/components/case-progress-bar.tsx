@@ -479,12 +479,14 @@ export function CaseProgressBar({
   const canActOnSettlement =
     isAtSettlement && (isAssignedLawyer || isHeadOrManagerRole || hasEffectiveRole(actingIdentities, "admin_support"));
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
-  // 🔴 HUMAN-ONLY — the ONE gate in this file that must keep reading userRole
-  // and currentUserId rather than actingIdentities. This is the four-eyes
-  // internal-review lock, which routes.ts keeps un-expanded on purpose
-  // (isInternalReviewerHuman) "so a delegation can never manufacture a second
-  // pair of eyes". Every OTHER authority gate here is delegation-aware; this one
-  // is deliberately not, and converting it would defeat the control.
+  // 🔴 HUMAN-ONLY — PERMANENTLY EXCLUDED BY OWNER RULING, NOT PENDING.
+  // The ONE gate in this file that must keep reading userRole and currentUserId
+  // rather than actingIdentities. This is the four-eyes internal-review lock,
+  // which routes.ts keeps un-expanded on purpose (isInternalReviewerHuman) "so a
+  // delegation can never manufacture a second pair of eyes". Its server
+  // counterpart was classified DELIBERATE in the raw-role audit and the owner
+  // ruled it stays raw-role permanently. Every OTHER authority gate in this file
+  // is delegation-aware. Do not convert this in a later sweep.
   const canActOnInternalReview = isReviewerActor || userRole === "branch_manager";
 
   // Permission-aware enable state for the generic "المرحلة التالية" button —

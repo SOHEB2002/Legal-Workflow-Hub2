@@ -88,7 +88,8 @@ import { useCases } from "@/lib/cases-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
-import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
+import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
+import type { UserRoleType } from "@shared/schema";
 import { useUsers } from "@/lib/users-context";
 import { useClients } from "@/lib/clients-context";
 import {
@@ -737,13 +738,21 @@ export default function MemosPage() {
     }
   };
 
+  // 🔴 FOUND BY THE HELPER-CALL SWEEP, not by a comment. Its role term is
+  // canChangeMemoStatus(user.role) — a shared permission-helper CALL, the third
+  // form the same authority decision is written in here, and the one neither the
+  // `role === "x"` nor the `[...].includes(role)` inventory could see.
+  // Its server counterpart is the canChangeStatus gate on PATCH /api/memos/:id,
+  // made delegation-aware in the memos server commit, so this mirror is
+  // converted to match: the helper is called with the IDENTITY's role and the two
+  // assignment terms with the IDENTITY's id. No ctx → [self] → byte-identical.
   const canUserChangeStatus = (memo: Memo): boolean => {
     if (!user) return false;
-    if (canChangeMemoStatus(user.role)) return true;
     const relatedCase = cases.find(c => c.id === memo.caseId);
-    if (relatedCase && (relatedCase.primaryLawyerId === user.id || relatedCase.responsibleLawyerId === user.id)) return true;
-    if (memo.assignedTo === user.id) return true;
-    return false;
+    return anyIdentity(actingIdentities, (role, id) =>
+      canChangeMemoStatus(role as UserRoleType)
+      || (!!relatedCase && (relatedCase.primaryLawyerId === id || relatedCase.responsibleLawyerId === id))
+      || memo.assignedTo === id);
   };
 
   // Cancel ("لا يحتاج مذكرة") permission gate. Mirrors the SERVER's canActOnMemo
@@ -820,11 +829,12 @@ export default function MemosPage() {
     return isDeptHeadFor(actingIdentities, cases.find((c) => c.id === memo.caseId)?.departmentId);
   };
 
-  // ⚠ Delegation-aware, UNLIKE its case / consultation / contract siblings —
-  // and that asymmetry is verified, not an oversight. The memo pause endpoints
-  // gate on canActOnMemo (ctx-aware); /api/cases/:id/pause,
-  // /api/consultations/:id/pause and allowContractPauseLike all read the raw
-  // role, so their client mirrors are deliberately left un-widened.
+  // Delegation-aware. ⚠ THE ASYMMETRY THIS NOTE USED TO DESCRIBE IS GONE: memos
+  // were ctx-aware first because canActOnMemo already expanded the context,
+  // while /api/cases/:id/pause, /api/consultations/:id/pause and
+  // allowContractPauseLike still read the raw role. All three joined the
+  // delegation-aware set in the server batch, and their client mirrors were
+  // converted in the follow-the-comments pass — so all four entities now agree.
   const canPauseMemo = (memo: Memo): boolean => {
     if (!user) return false;
     if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;

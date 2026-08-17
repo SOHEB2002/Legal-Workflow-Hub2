@@ -292,8 +292,13 @@ function getReturnTargets(
 // lawyer-class roles. Department head is additionally scoped to their
 // own department here, which the endpoint also enforces via
 // validateStageTransition.
-// 🔴 HUMAN-ONLY — DELIBERATELY NOT DELEGATION-AWARE, AND ITS SIGNATURE IS
-// DIFFERENT FROM ITS SIBLINGS ON PURPOSE. Every other predicate on this page now
+// 🔴 HUMAN-ONLY — PERMANENTLY EXCLUDED BY OWNER RULING, NOT PENDING. Its server
+// counterpart (POST /api/consultations/:id/internal-review) was classified
+// DELIBERATE in the raw-role audit — "HUMAN role only — not delegation-expanded,
+// so a delegation can never manufacture the second pair of eyes" — and the owner
+// ruled it stays raw-role permanently. Do not convert this in a later sweep.
+//
+// ITS SIGNATURE IS DIFFERENT FROM ITS SIBLINGS ON PURPOSE. Every other predicate on this page now
 // takes an ActingIdentity[] and is evaluated once per identity; this one keeps
 // taking the REAL signed-in user so no sweep over the flat-triple call pattern
 // can convert it by accident. The four-eyes lock below must compare the actual
@@ -1785,6 +1790,29 @@ export default function ConsultationsPage() {
       getReturnTargets(c, role, id, dept, getDepartmentName(c.departmentId)));
   const canSkipCommitteeFor = (c: Consultation) =>
     anyIdentity(actingIdentities, (role, id, dept) => canSkipCommittee(c, role, id, dept));
+  // Added by the follow-the-comments pass: these five endpoints joined the
+  // delegation-aware set in the server batch (canActOnConsultationWorkflowState
+  // / canCloseConsultationTier / the convert-to-case scope check), so the
+  // mirrors held un-widened for them are converted here. Predicate bodies
+  // unchanged; each is evaluated once per acting identity.
+  const canEarlyCloseFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canEarlyClose(c, role, id, dept));
+  const canCloseForNoResponseFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canCloseForNoResponse(c, role, id, dept));
+  const canReopenConsultationFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canReopenConsultation(c, role, id, dept));
+  const canStartFollowUpFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canStartFollowUp(c, role, id, dept));
+  const canConvertToCaseFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canConvertToCase(c, role, id, dept));
+  // The pause family takes a user OBJECT rather than the flat triple, so the
+  // adapter shapes one synthetic actor per identity instead of spreading args.
+  const canPauseConsultationFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, departmentId) =>
+      canPauseConsultation(c, { id, role, departmentId }));
+  const canOfferSkipDataCompletionFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, departmentId) =>
+      canOfferSkipDataCompletion(c, { id, role, departmentId }));
   const canDoTakeNotesOutcomeFor = (c: Consultation) =>
     anyIdentity(actingIdentities, (role, id, dept) => canDoTakeNotesOutcome(c, role, id, dept));
   // 🔴 COMMITTEE DECISION CARRIES A DELEGATE-ONLY FOUR-EYES OVERLAY, mirrored
@@ -1867,18 +1895,18 @@ export default function ConsultationsPage() {
     }
   };
 
-  // 🔴 NOT DELEGATION-AWARE ON PURPOSE — and it is the one place on this page a
-  // reader will expect it to be. POST /api/consultations/:id/assign gates on
-  // reqUser.role directly (`allowedRoles.includes(reqUser.role)` then a raw
-  // dept_head scope check) and never consults req.actingContext, so a delegate
-  // is refused there. Its CASE twin (cases.tsx canAssign) IS delegation-aware
-  // because PATCH /api/cases/:id routes assignment through canActAtDepartmentTier.
-  // Convert this the moment the consultations assign endpoint joins that set.
+  // Delegation-aware. POST /api/consultations/:id/assign joined the
+  // delegation-aware set in the server batch — BOTH of its steps (the role list
+  // and the dept-scope check) now resolve over req.actingContext — so this
+  // mirror, held un-widened until exactly that happened, is converted.
+  //
+  // ⚠ The scope term now carries the mandatory !!departmentId guard, matching
+  // the server: a null-department head no longer matches a null-department
+  // consultation. That is the same one-edge narrowing the server commit reported.
   const canAssignConsultation = (c: Consultation) => {
     if (c.status !== "active" || c.currentStage !== ConsultationStage.RECEIVED) return false;
-    if (user?.role === "branch_manager" || user?.role === "admin_support") return true;
-    if (user?.role === "department_head" && c.departmentId === user?.departmentId) return true;
-    return false;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    return isDeptHeadFor(actingIdentities, c.departmentId);
   };
 
   const openAssignDialog = (c: Consultation) => {
@@ -2840,7 +2868,7 @@ export default function ConsultationsPage() {
                               gate as pause. */}
                           {consultation.status === "paused" ? (
                             <>
-                              {canPauseConsultation(consultation, user) && (
+                              {canPauseConsultationFor(consultation) && (
                                 <DropdownMenuItem
                                   data-testid={`button-unpause-consultation-${consultation.id}`}
                                   onClick={() => openUnpauseDialog(consultation)}
@@ -2852,7 +2880,7 @@ export default function ConsultationsPage() {
                             </>
                           ) : consultation.awaitingCompletion ? (
                             <>
-                              {canPauseConsultation(consultation, user) && (
+                              {canPauseConsultationFor(consultation) && (
                                 <DropdownMenuItem
                                   data-testid={`button-resume-completion-${consultation.id}`}
                                   onClick={() => openResumeDialog(consultation)}
@@ -2889,7 +2917,7 @@ export default function ConsultationsPage() {
                               excluded — the same rule the server refuses on.
                               Gate: canOfferSkipDataCompletion, shared with the
                               details-dialog button. */}
-                          {canOfferSkipDataCompletion(consultation, user) && (
+                          {canOfferSkipDataCompletionFor(consultation) && (
                             <DropdownMenuItem
                               data-testid={`button-skip-data-completion-${consultation.id}`}
                               onClick={() => openSkipDialog(consultation)}
@@ -2934,7 +2962,7 @@ export default function ConsultationsPage() {
                               تسجيل نتيجة الأخذ بالملاحظات
                             </DropdownMenuItem>
                           )}
-                          {user && canConvertToCase(consultation, user.role, user.id, user.departmentId) && (
+                          {user && canConvertToCaseFor(consultation) && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
@@ -2951,7 +2979,7 @@ export default function ConsultationsPage() {
                               data-completion consultation. Both can render
                               together — إغلاق مبكر stays available for a
                               genuinely different reason. */}
-                          {user && canCloseForNoResponse(consultation, user.role, user.id, user.departmentId) && (
+                          {user && canCloseForNoResponseFor(consultation) && (
                             <DropdownMenuItem
                               data-testid={`button-close-no-response-${consultation.id}`}
                               className="text-destructive focus:text-destructive"
@@ -2961,7 +2989,7 @@ export default function ConsultationsPage() {
                               إغلاق لعدم استكمال البيانات
                             </DropdownMenuItem>
                           )}
-                          {user && canEarlyClose(consultation, user.role, user.id, user.departmentId) && (
+                          {user && canEarlyCloseFor(consultation) && (
                             <DropdownMenuItem
                               data-testid={`button-early-close-${consultation.id}`}
                               className="text-destructive focus:text-destructive"
@@ -2996,7 +3024,7 @@ export default function ConsultationsPage() {
                               tautology guard the server also enforces). */}
                           {consultation.status === "active" && !consultation.awaitingCompletion
                             && consultation.currentStage !== ConsultationStage.RECEIVED_PENDING_COMPLETION
-                            && canPauseConsultation(consultation, user) && (
+                            && canPauseConsultationFor(consultation) && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
@@ -3009,7 +3037,7 @@ export default function ConsultationsPage() {
                               </DropdownMenuItem>
                             </>
                           )}
-                          {consultation.status === "active" && canPauseConsultation(consultation, user) && (
+                          {consultation.status === "active" && canPauseConsultationFor(consultation) && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
@@ -3098,7 +3126,7 @@ export default function ConsultationsPage() {
                   )}
                   {/* The client never responded → close. Lives INSIDE the banner
                       so the escape hatch sits with the state it escapes from. */}
-                  {user && canCloseForNoResponse(selectedConsultation, user.role, user.id, user.departmentId) && (
+                  {user && canCloseForNoResponseFor(selectedConsultation) && (
                     <div className="mt-2 pt-2 border-t border-amber-500/30">
                       <Button
                         size="sm"
@@ -3118,7 +3146,7 @@ export default function ConsultationsPage() {
                   banner above does not render. Rendered only when that banner is
                   absent, so exactly one box shows either way. */}
               {user && !selectedConsultation.awaitingCompletion
-                && canCloseForNoResponse(selectedConsultation, user.role, user.id, user.departmentId) && (
+                && canCloseForNoResponseFor(selectedConsultation) && (
                 <div
                   className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 flex items-center justify-between gap-3 flex-wrap"
                   data-testid="banner-consultation-data-completion"
@@ -3324,7 +3352,7 @@ export default function ConsultationsPage() {
                         نتيجة الأخذ بالملاحظات
                       </Button>
                     )}
-                    {canConvertToCase(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {canConvertToCaseFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3345,7 +3373,7 @@ export default function ConsultationsPage() {
                         the row and the dialog cannot drift: the skip goes through
                         canOfferSkipDataCompletion, إغلاق مبكر through
                         canEarlyClose. */}
-                    {canOfferSkipDataCompletion(selectedConsultation, user) && (
+                    {canOfferSkipDataCompletionFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3356,7 +3384,7 @@ export default function ConsultationsPage() {
                         تجاوز استكمال المرفقات والبيانات
                       </Button>
                     )}
-                    {canEarlyClose(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {canEarlyCloseFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3373,7 +3401,7 @@ export default function ConsultationsPage() {
                         labels say so: تعقيبية = a NEW question on a finished
                         matter (3-stage cycle); إعادة فتح = the closure was wrong,
                         resume the ORIGINAL work at a chosen stage. */}
-                    {canReopenConsultation(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {canReopenConsultationFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3389,7 +3417,7 @@ export default function ConsultationsPage() {
                         إعادة فتح
                       </Button>
                     )}
-                    {canStartFollowUp(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {canStartFollowUpFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
