@@ -182,6 +182,38 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   const addCase = async (data: Partial<LawCase>, createdBy: string, createdByName: string): Promise<LawCase> => {
     const now = new Date().toISOString();
     const initialStage: CaseStageValue = CaseStage.RECEPTION;
+    // 🔴 DELIBERATELY AN EXPLICIT PICK, NOT A SPREAD — the ONE create path that
+    // was not converted. Its three siblings (clients, contracts, consultations)
+    // are `{ ...data, <overrides> }` so a new form field can never be silently
+    // dropped; this one stays explicit because a spread here is not mechanical.
+    //
+    // ⚠ IF YOU ADD A FIELD TO THE CASE CREATE FORM, YOU MUST ADD IT HERE TOO.
+    // There is no compiler error and no runtime error if you forget — the value
+    // is simply dropped before the fetch. That is exactly how consultations lost
+    // its title for the entire life of the feature (a7e03f9 → fixed in 62e0fb9).
+    //
+    // WHY THIS ONE IS NOT SPREAD-SAFE — three keys below are COMPUTED, not
+    // constant, and exist only inside this function:
+    //   • currentStage  — derived from data.startingStage via initialStage
+    //   • stageHistory  — a composed opening entry embedding initialStage, `now`,
+    //                     createdBy and createdByName. Nothing downstream can
+    //                     rebuild it: the terminal progress bar, the derived
+    //                     case-number accessor (deriveCurrentCaseNumber) and the
+    //                     "reached settlement" test all read stage_history, and a
+    //                     case created without its opening entry is wrong in all
+    //                     three at once, silently.
+    //   • status        — pinned to RECEIVED regardless of caller input.
+    // A spread whose overrides landed BEFORE `...data`, or that dropped this
+    // block while "simplifying", would take those out. If this is ever converted,
+    // the overrides must stay AFTER the spread and stay intact.
+    //
+    // 🔴 AND "insertCaseSchema WILL STRIP IT" IS NOT PROOF A KEY IS INERT.
+    // POST /api/cases reads FIVE keys straight off req.body, bypassing the parsed
+    // object entirely: clientRole, createdBy, departmentId, nextHearingDate and
+    // startingStage. startingStage is the documented transient-API-field pattern —
+    // the schema does NOT declare it, yet the handler honours it from raw
+    // req.body. So when judging whether a new key is safe to send, check that
+    // raw-read list as well as insertCaseSchema; the schema alone will mislead you.
     const caseData = {
       clientId: data.clientId || "",
       plaintiffName: data.plaintiffName || "",

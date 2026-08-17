@@ -87,7 +87,22 @@ export function ContractsProvider({ children }: { children: React.ReactNode }) {
   };
 
   const addContract = async (data: Partial<Contract>): Promise<Contract> => {
+    // SPREAD FIRST, NORMALISATIONS AFTER — same shape and same reason as the
+    // clients and consultations twins: a field added to the contract create form
+    // now reaches the server automatically instead of needing a second, silent
+    // edit here (the defect that cost consultations its title column, 62e0fb9).
+    //
+    // ⚠ RAW req.body CONTRACT — "insertContractSchema will strip it" is NOT proof
+    // a key is inert. POST /api/contracts reads `req.body.assignedTo` and
+    // `req.body.departmentId` DIRECTLY, outside the parsed object, so those two
+    // are honoured whether or not the schema declares them. Check that list, not
+    // just the schema, before assuming a newly-spread key does nothing.
+    //
+    // Nothing transient can ride along: the create form's File (intakeFile), the
+    // `creating` flag and the pendingAdditional[] rows all live in their OWN
+    // useState hooks, not in formData.
     const body = {
+      ...data,
       title: data.title || "",
       clientId: data.clientId || "",
       contractType: data.contractType || "مراجعة_عقد",

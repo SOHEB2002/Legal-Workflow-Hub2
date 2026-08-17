@@ -88,7 +88,24 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     // implied the client owned numbering and hid the retry mechanism. The two
     // generators did not even agree on a format (client "S-2026-0042" vs server
     // "CON-2026-A1B2C3"), so the discarded value was never a real number.
+    // 🔴 SPREAD FIRST, OVERRIDES AFTER — and this entity is why the pattern
+    // exists. `title` was added to the create form, the schema, the route and
+    // storage by a7e03f9, which never touched this file; the explicit pick had no
+    // `title` key, so the value was dropped one line before the fetch and create
+    // NEVER ONCE saved a title (fixed in 62e0fb9). The spread makes that class of
+    // failure impossible here: a field added to the form now reaches the server
+    // automatically, and the schema decides whether to keep it.
+    //
+    // ⚠ RAW req.body CONTRACT — "insertConsultationSchema will strip it" is NOT
+    // proof a key is inert. POST /api/consultations reads `req.body.createdBy`
+    // and `req.body.departmentId` DIRECTLY, outside the parsed object. Check that
+    // list too before assuming a newly-spread key does nothing.
+    //
+    // The five nulls/empties below are overrides on purpose: they pin columns the
+    // create form does not own (assignment, response, review state) to their
+    // initial values regardless of what any caller sends.
     const consultationData = {
+      ...data,
       clientId: data.clientId || "",
       // 🔴 عنوان الاستشارة — THE FIX. This key was absent, so `data.title`
       // arrived from the create form and was dropped one line before the fetch:
