@@ -84,6 +84,23 @@ export function ConsultationsProvider({ children }: { children: React.ReactNode 
     const consultationData = {
       consultationNumber: generateConsultationNumber(),
       clientId: data.clientId || "",
+      // 🔴 عنوان الاستشارة — THE FIX. This key was absent, so `data.title`
+      // arrived from the create form and was dropped one line before the fetch:
+      // the input was bound, insertConsultationSchema declared the field, the
+      // route forwarded it and storage wrote it — but nothing ever put it in the
+      // body. a7e03f9 added the column, the schema, the storage write, the form
+      // input and the edit dialog, and never touched this file, so create had
+      // never once saved a title. Forwarded exactly as the contracts twin does
+      // (contracts-context.tsx `title: data.title || ""`).
+      //
+      // ⚠ SEND "" FOR A BLANK TITLE, NEVER null. insertConsultationSchema types
+      // this `z.string().optional()` — NOT .nullable() — so an explicit null is
+      // a ZodError and would 400 the whole create. The empty string validates,
+      // and storage normalises it: `data.title?.trim() ? data.title.trim() : null`
+      // stores NULL for "" and for a whitespace-only title, so the nullable
+      // column still never holds "". Trimming is the server's job, not ours.
+      title: data.title || "",
+
       consultationType: data.consultationType || "مكتوبة",
       departmentId: data.departmentId || "",
       assignedTo: null,
