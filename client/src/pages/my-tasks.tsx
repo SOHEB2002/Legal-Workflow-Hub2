@@ -218,6 +218,15 @@ type TaskCardKey = typeof TASK_CARDS[number]["key"];
 // computed by scopeOf) and departmentId (the RECORD's department, added in
 // d661b9a). No new field, no extra request, and no re-derivation of who the
 // designated reviewer or assignee is.
+// ⚠ NOT DELEGATION-EXPANDED, and it does not need to be. A row surfaced to a
+// delegate was computed by computeTasksForIdentity running AS THE DELEGATOR, so
+// scopeOf stamps ownerScope "self" and the first line below already returns true
+// for it. Expanding the role arms would only affect rows the viewer does NOT
+// own, and two of the three kinds this gates (CONSULTATION_UNASSIGNED,
+// CONTRACT_UNASSIGNED) post to /api/consultations/:id/assign and
+// /api/contracts/:id/assign — both raw-role server gates that refuse a delegate
+// — so widening here would manufacture the 403 buttons this predicate exists to
+// prevent. Revisit when those two endpoints become ctx-aware.
 function canActingUserAct(
   task: MyTaskItem,
   user: { role?: string; departmentId?: string | null } | null,

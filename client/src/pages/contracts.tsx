@@ -50,7 +50,7 @@ import { useContracts } from "@/lib/contracts-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
-import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
+import { anyIdentity, firstForIdentity, hasEffectiveRole, isDeptHeadFor, unionForIdentity } from "@/lib/acting-identities";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { ContractStagesBar } from "@/components/contract-stages-bar";
 import { apiRequest } from "@/lib/queryClient";
@@ -962,6 +962,32 @@ export default function ContractsPage() {
   // Same gate as the cases-side transfer: branch_manager / admin_support /
   // department_head (own dept). Anyone with admin-level access can move
   // a contract to a different department; assigned lawyers cannot.
+  // ==================== DELEGATION ADAPTERS ====================
+  // Mirrors the consultations page. The module predicates above are UNCHANGED;
+  // each is evaluated over the acting set. Endpoints verified ctx-aware:
+  //   /api/contracts/:id/advance-stage · /return-to-stage · /skip-committee ·
+  //   /skip-internal-review · /committee-decision — all pass req.actingContext
+  //   into validateStageTransition. No delegation ⇒ [self] ⇒ identical result.
+  const advanceTargetFor = (c: Contract) =>
+    firstForIdentity(actingIdentities, (role, id, dept) => getAdvanceTarget(c, role, id, dept));
+  const returnTargetsFor = (c: Contract) =>
+    unionForIdentity(actingIdentities, (role, id, dept) =>
+      getReturnTargets(c, role, id, dept, getDepartmentName(c.departmentId)));
+  const canSkipInternalReviewFor = (c: Contract) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canSkipInternalReview(c, role, id, dept));
+  const canSkipCommitteeFor = (c: Contract) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canSkipCommittee(c, role, id, dept));
+  // Same delegate-only four-eyes overlay as the consultations twin: the server
+  // refuses a DELEGATION-DERIVED committee decision on work the real human
+  // authored, while an own-role decision is unrestricted.
+  const canDoCommitteeDecisionFor = (c: Contract, isLaborEntity: boolean) => {
+    if (!user) return false;
+    if (canDoCommitteeDecision(c, user.role, isLaborEntity)) return true;
+    const viaDelegation = anyIdentity(actingIdentities, (role) =>
+      canDoCommitteeDecision(c, role, isLaborEntity));
+    return viaDelegation && !(!!c.assignedTo && c.assignedTo === user.id);
+  };
+
   // Delegation-aware: a department transfer is a PATCH /api/contracts/:id, gated
   // by canModifyContract, which expands req.actingContext.
   // ⚠ Its neighbours on this page are NOT converted, deliberately — early-close,
@@ -1941,7 +1967,7 @@ export default function ContractsPage() {
               {/* Action row */}
               <div className="flex flex-wrap gap-2 justify-end">
                 {(() => {
-                  const target = user ? getAdvanceTarget(selected, user.role, user.id, user.departmentId) : null;
+                  const target = user ? advanceTargetFor(selected) : null;
                   if (!target) return null;
                   // Stages that need extra context open a dialog;
                   // everything else advances directly.
@@ -1967,7 +1993,7 @@ export default function ContractsPage() {
                     </Button>
                   );
                 })()}
-                {user && getReturnTargets(selected, user.role, user.id, user.departmentId, getDepartmentName(selected.departmentId)).length > 0 && (
+                {user && returnTargetsFor(selected).length > 0 && (
                   <Button
                     size="sm" variant="outline"
                     onClick={() => { setReturnTarget(selected); setReturnStageValue(""); setShowReturn(true); }}
@@ -1998,7 +2024,7 @@ export default function ContractsPage() {
                     مراجعة داخلية
                   </Button>
                 )}
-                {user && canDoCommitteeDecision(selected, user.role, getDepartmentName(selected.departmentId) === "عمالي") && (
+                {user && canDoCommitteeDecisionFor(selected, getDepartmentName(selected.departmentId) === "عمالي") && (
                   <Button size="sm" variant="outline"
                     onClick={() => { setCommitteeTarget(selected); setCommitteeNotes(""); setShowCommittee(true); }}>
                     <CheckCircle className="w-4 h-4 ml-1" />
@@ -2016,7 +2042,7 @@ export default function ContractsPage() {
                     skip below (branch_manager / own-dept head / assigned lawyer);
                     only the stage differs. The mandatory reason + the activity
                     row are the control. */}
-                {user && canSkipInternalReview(selected, user.role, user.id, user.departmentId) && (
+                {user && canSkipInternalReviewFor(selected) && (
                   <Button size="sm" variant="outline"
                     data-testid={`dialog-button-skip-internal-review-${selected.id}`}
                     onClick={() => { setSkipInternalReviewTarget(selected); setSkipInternalReviewReason(""); setShowSkipInternalReview(true); }}
@@ -2025,7 +2051,7 @@ export default function ContractsPage() {
                     تجاوز المراجعة الداخلية
                   </Button>
                 )}
-                {user && canSkipCommittee(selected, user.role, user.id, user.departmentId) && (
+                {user && canSkipCommitteeFor(selected) && (
                   <Button size="sm" variant="outline"
                     data-testid={`dialog-button-skip-committee-${selected.id}`}
                     onClick={() => { setSkipCommitteeTarget(selected); setSkipCommitteeReason(""); setShowSkipCommittee(true); }}
@@ -2740,7 +2766,7 @@ export default function ContractsPage() {
               <SelectTrigger><SelectValue placeholder="اختر المرحلة" /></SelectTrigger>
               <SelectContent>
                 {returnTarget && user
-                  && getReturnTargets(returnTarget, user.role, user.id, user.departmentId, getDepartmentName(returnTarget.departmentId)).map((s) => (
+                  && returnTargetsFor(returnTarget).map((s) => (
                     <SelectItem key={s} value={s}>{ContractStageLabels[s] || s}</SelectItem>
                   ))}
               </SelectContent>

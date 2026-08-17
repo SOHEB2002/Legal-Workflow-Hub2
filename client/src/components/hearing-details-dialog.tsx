@@ -15,6 +15,7 @@ import { useHearings } from "@/lib/hearings-context";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
 import { useAuth } from "@/lib/auth-context";
+import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useCaseFieldTasks } from "@/hooks/use-case-field-tasks";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -116,20 +117,18 @@ export function HearingDetailsDialog({
   // The SERVER decides; this only decides whether the affordance renders, so no
   // button can 403. isFirmToday compares calendar days in the FIRM's timezone —
   // never parse the stored "YYYY-MM-DD" (see FirmTimeZone in shared/schema.ts).
+  // Delegation-aware: the server twin (canEditHearingRecord, routes.ts) takes
+  // req.actingContext, so all three tiers below resolve over the acting set.
   const canEditHearingRecord = (() => {
     if (!user || !detailHearing) return false;
-    if (user.role === "branch_manager" || user.role === "admin_support") return true;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
     const parent = detailHearing.caseId ? getCaseById(detailHearing.caseId) : null;
     if (!parent) return false;
-    const isOwnDeptHead =
-      user.role === "department_head"
-      && !!user.departmentId
-      && !!parent.departmentId
-      && parent.departmentId === user.departmentId;
-    const isCaseLawyer =
-      parent.primaryLawyerId === user.id
-      || parent.responsibleLawyerId === user.id
-      || (Array.isArray(parent.assignedLawyers) && parent.assignedLawyers.includes(user.id));
+    const isOwnDeptHead = isDeptHeadFor(actingIdentities, parent.departmentId);
+    const isCaseLawyer = anyIdentity(actingIdentities, (_role, id) =>
+      parent.primaryLawyerId === id
+      || parent.responsibleLawyerId === id
+      || (Array.isArray(parent.assignedLawyers) && parent.assignedLawyers.includes(id)));
     if (!isOwnDeptHead && !isCaseLawyer) return false;
     return isFirmToday(detailHearing.hearingDate);
   })();

@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { hasEffectiveRole, type ActingIdentity } from "@/lib/acting-identities";
 import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -86,6 +87,16 @@ interface CaseProgressBarProps {
   onPlatformReviewResubmit?: () => void;
   hasPlatformNotes?: boolean;
   userRole: UserRoleType;
+  // 🔴 THE ACTING SET — self plus every all_cases delegator, from useAuth.
+  // userRole above is the signed-in user's OWN role and STAYS that: it still
+  // feeds the shared canReviewCases / canMoveToPreviousStage helpers and the
+  // four-eyes internal-review gate, none of which may be delegation-expanded.
+  // Every AUTHORITY gate in this file reads this array instead, because the
+  // endpoints they front (PATCH /api/cases/:id → validateStageTransition) all
+  // expand req.actingContext server-side. This component previously had NO
+  // delegation awareness at all, which is what disabled «المرحلة التالية» for a
+  // delegate whose own role is `employee`.
+  actingIdentities: ActingIdentity[];
   disabled?: boolean;
   caseClassification?: CaseClassificationValue;
   // Resolved canonical department name ("عام" / "تجاري" / "عمالي" / "إداري")
@@ -144,6 +155,7 @@ export function CaseProgressBar({
   onPlatformReviewResubmit,
   hasPlatformNotes = false,
   userRole: userRoleRaw,
+  actingIdentities,
   disabled = false,
   caseClassification,
   departmentName,
@@ -336,9 +348,14 @@ export function CaseProgressBar({
   // only surfaces own-department cases to a head (canViewCase) — which is the same
   // convention isHeadOrManagerRole already uses below for committee-notes,
   // platform-review and settlement actions.
+  // Delegation-aware: a rollback is a PATCH /api/cases/:id, whose
+  // validateStageTransition rollback block resolves grantRoles /
+  // grantDeptHeadDept / grantAssignedLawyer over req.actingContext.
+  // canMoveToPreviousStage(userRole) is KEPT on the own role and OR-ed, so this
+  // is purely additive and no current actor loses the button.
   const canRollBackStage =
     canMoveToPreviousStage(userRole)
-    || userRole === "department_head"
+    || hasEffectiveRole(actingIdentities, "department_head")
     || isCaseAssignee;
   const canGoPrev = currentIndex > 0 && canRollBackStage && !disabled;
 
@@ -409,7 +426,9 @@ export function CaseProgressBar({
   const isAtInternalReview =
     normalizedStage === "مراجعة_داخلية" || normalizedStage === "مراجعة_داخلية_للتظلم";
   const isAtCommitteeNotes = normalizedStage === "الأخذ_بالملاحظات";
-  const isHeadOrManagerRole = userRole === "department_head" || userRole === "branch_manager";
+  // Delegation-aware — feeds committee-notes, platform-review and settlement,
+  // all three of which act through PATCH /api/cases/:id (ctx-aware).
+  const isHeadOrManagerRole = hasEffectiveRole(actingIdentities, "department_head", "branch_manager");
   const canActOnCommitteeNotes = isAtCommitteeNotes && (isAssignedLawyer || isHeadOrManagerRole);
 
   // Committee-review stage (إحالة_للجنة_المراجعة). Mirror the inside-detail
@@ -418,6 +437,12 @@ export function CaseProgressBar({
   // shared helper the actions tab resolves through, so the bar shows the
   // decision buttons to exactly the roles the server lets review (and the
   // PATCH it issues is the same one the inside buttons issue).
+  // ⚠ LEFT ON THE OWN ROLE, deliberately. A committee decision is a separate
+  // authority from the department tier (see the carve-outs in routes.ts), and
+  // the roles named here — cases_review_head / labor_review_head — are ones a
+  // department_head delegation does not confer anyway, so expanding this would
+  // change nothing for the case that motivated the batch while quietly widening
+  // a chair's seat. Revisit only as a deliberate committee-delegation decision.
   const isAtReviewCommittee = normalizedStage === "إحالة_للجنة_المراجعة";
   const showReviewCommitteeActions =
     isAtReviewCommittee && canReviewCases(userRole) && !!onReviewCommitteeApprove &&
@@ -448,12 +473,18 @@ export function CaseProgressBar({
       : null;
   const isAtPlatformReview = !!platformReviewInfo;
   const canActOnPlatformReview =
-    isAtPlatformReview && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
+    isAtPlatformReview && (isAssignedLawyer || isHeadOrManagerRole || hasEffectiveRole(actingIdentities, "admin_support"));
 
   const isAtSettlement = normalizedStage === "مداولة_الصلح";
   const canActOnSettlement =
-    isAtSettlement && (isAssignedLawyer || isHeadOrManagerRole || userRole === "admin_support");
+    isAtSettlement && (isAssignedLawyer || isHeadOrManagerRole || hasEffectiveRole(actingIdentities, "admin_support"));
   const isReviewerActor = !!currentUserId && !!caseInternalReviewerId && currentUserId === caseInternalReviewerId;
+  // 🔴 HUMAN-ONLY — the ONE gate in this file that must keep reading userRole
+  // and currentUserId rather than actingIdentities. This is the four-eyes
+  // internal-review lock, which routes.ts keeps un-expanded on purpose
+  // (isInternalReviewerHuman) "so a delegation can never manufacture a second
+  // pair of eyes". Every OTHER authority gate here is delegation-aware; this one
+  // is deliberately not, and converting it would defeat the control.
   const canActOnInternalReview = isReviewerActor || userRole === "branch_manager";
 
   // Permission-aware enable state for the generic "المرحلة التالية" button —
@@ -474,11 +505,24 @@ export function CaseProgressBar({
   // them when neither holds is always correct and never blocks a real actor.
   // Every management role (branch_manager, department_head, admin_support,
   // cases_review_head, consultations_review_head) is enabled by construction.
-  const isNonActorRole =
-    userRole === "employee" ||
-    userRole === "hr" ||
-    userRole === "technical_support" ||
-    userRole === "viewer";
+  //
+  // 🔴 EVALUATED OVER THE ACTING SET, NOT THE OWN ROLE. This denylist is why a
+  // delegate of a department_head saw «المرحلة التالية» DISABLED: their own role
+  // is `employee`, so isNonActorRole was true, while the server had already
+  // granted them the transition twice over (validateStageTransition resolves
+  // effectiveRoles = ["employee","department_head"] and additionally pushes
+  // "assigned_lawyer" when a delegator is the case's responsible lawyer).
+  // The denylist logic itself is UNCHANGED — a user is a non-actor only when
+  // EVERY identity they hold is a non-actor role, which for a non-delegated
+  // user is exactly the original single-role test.
+  const NON_ACTOR_ROLES = ["employee", "hr", "technical_support", "viewer"];
+  // The empty-array arm is not dead code: buildActingIdentities returns [] when
+  // there is no signed-in user, and the original expression still had a role to
+  // test (the caller defaults the prop to "employee"). Falling back to userRole
+  // there keeps the signed-out path byte-identical too.
+  const isNonActorRole = actingIdentities.length > 0
+    ? actingIdentities.every((i) => NON_ACTOR_ROLES.includes(i.role))
+    : NON_ACTOR_ROLES.includes(userRole);
   const nextStageActionAllowed = !isNonActorRole || isCaseAssignee || isReviewerActor;
 
   const handleMoveNext = () => {

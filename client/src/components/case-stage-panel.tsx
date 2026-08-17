@@ -2,7 +2,7 @@ import { useState } from "react";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { useCases } from "@/lib/cases-context";
 import { useAuth } from "@/lib/auth-context";
-import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
+import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useDepartments } from "@/lib/departments-context";
 import { useHearings } from "@/lib/hearings-context";
 import { useToast } from "@/hooks/use-toast";
@@ -54,6 +54,10 @@ export function CaseStagePanel({
     <CaseProgressBar
       currentStage={caseItem.currentStage}
       userRole={user?.role || "employee"}
+      // The bar's authority gates read this; userRole above stays the OWN role
+      // for the shared canReviewCases / canMoveToPreviousStage helpers and the
+      // four-eyes internal-review gate, which must never be delegation-expanded.
+      actingIdentities={actingIdentities}
       caseClassification={caseItem.caseClassification as CaseClassificationValue}
       clientRole={caseItem.clientRole || undefined}
       memoRequired={!!caseItem.memoRequired}
@@ -102,11 +106,20 @@ export function CaseStagePanel({
           (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(user.id))
         )
       }
+      // 🔴 "IS ANY EFFECTIVE IDENTITY AN ASSIGNED LAWYER OF THIS CASE" — the
+      // exact mirror of the server's grantAssignedLawyer, which tests
+      // effectiveIdsFor(ctx, caseId) against isAssignedLawyer rather than the
+      // caller's own id. Comparing user.id alone was the SECOND delegation-blind
+      // term behind the disabled «المرحلة التالية»: a delegate standing in for
+      // the case's responsible lawyer is an assignee server-side and was not one
+      // here. The three OR-ed fields are unchanged and in the same order; only
+      // the id being compared is now per-identity, so a non-delegated user (whose
+      // identity set is exactly [self]) gets the identical boolean.
       isCaseAssignee={
-        !!user && (
-          caseItem.primaryLawyerId === user.id ||
-          caseItem.responsibleLawyerId === user.id ||
-          (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(user.id))
+        anyIdentity(actingIdentities, (_role, identityId) =>
+          caseItem.primaryLawyerId === identityId ||
+          caseItem.responsibleLawyerId === identityId ||
+          (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(identityId))
         )
       }
       hasReturnedFromReview={caseHasReturnedFromReview(caseItem)}
