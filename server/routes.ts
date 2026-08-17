@@ -1614,6 +1614,55 @@ function canModifyContract(
   return identities.some((u) => canModifyContractIdentity(u, contract));
 }
 
+// The contracts twin of caseActorIdentities / consultationActorIdentities.
+// Contracts carry no case id, so scope is null: self + all_cases delegators only.
+function contractActorIdentities(user: CaseActorIdentity, ctx?: ActingContext): CaseActorIdentity[] {
+  if (!ctx) return [user];
+  return actingIdentitiesFor(ctx, null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }));
+}
+
+// CONTRACT CLOSE-TIER gate — early-close / close-no-response / reopen /
+// start-follow-up. Set: branch_manager | admin_support | department_head of the
+// contract's OWN department | the assignee. Four endpoints each held a verbatim
+// copy reading reqUser.role directly (two of them commented "copied from
+// /early-close verbatim"); stated once here and made delegation-aware.
+//
+// ⚠ NO TYPE SPLIT, unlike the consultations twin. Contracts have a single stage
+// flow and closing is NOT admin-only on any contract type, which is why
+// /start-follow-up shares this tier rather than the narrower consultations one —
+// see that endpoint's own comment: importing the consultations gate "would mean
+// an own-dept head or the assigned lawyer could CLOSE a contract but not re-open
+// the one they just closed".
+//
+// SCOPE: u.departmentId is the DELEGATOR's department on a delegated identity.
+// No ctx → [self] → byte-identical. isAssignedLawyer on a contract reduces
+// exactly to assignedTo === id (no primaryLawyerId / responsibleLawyerId /
+// assignedLawyers on Contract), matching the inline originals.
+function canCloseContractTier(user: CaseActorIdentity, contract: any, ctx?: ActingContext): boolean {
+  return contractActorIdentities(user, ctx).some((u) =>
+    u.role === "admin_support"
+    || u.role === "branch_manager"
+    // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+    || (u.role === "department_head" && !!u.departmentId && !!contract.departmentId && contract.departmentId === u.departmentId)
+    || isAssignedLawyer({ id: u.id }, contract));
+}
+
+// CONTRACT RETURN-TO-COMMITTEE gate — a DIFFERENT SET, and kept separate for
+// that reason rather than folded into the tier above.
+//
+// 🔴 admin_support IS DELIBERATELY ABSENT. The endpoint's own comment: "Per spec:
+// assigned + dept_head (own dept) + branch_manager. admin_support is
+// intentionally NOT in this set — bouncing a file back to committee is a
+// workflow action, not an admin one." Reusing canCloseContractTier here would
+// silently hand admin_support an authority the spec withholds — exactly the
+// class of accident these separate helpers exist to prevent.
+function canReturnContractToCommittee(user: CaseActorIdentity, contract: any, ctx?: ActingContext): boolean {
+  return contractActorIdentities(user, ctx).some((u) =>
+    u.role === "branch_manager"
+    || (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId)
+    || isAssignedLawyer({ id: u.id }, contract));
+}
+
 // Memos canonical 6+1 stage workflow (Phase-9). Mirrors consultations
 // but with memo-specific terminal labels (جاهزة_للرفع / مرفوعة) and no
 // STUDY / RECEIVED_PENDING_COMPLETION stages — memos go straight from
@@ -9673,7 +9722,19 @@ export async function registerRoutes(
     try {
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
-      if (!["admin_support", "department_head", "branch_manager"].includes(reqUser.role)) {
+      // Delegation-aware role step. ⚠ This one is a `.includes(reqUser.role)`
+      // list, not a `role === "department_head"` comparison, so it was invisible
+      // to the raw-role enumeration that scoped this batch — found by reading the
+      // handler rather than by the grep. Without it a delegate is refused here
+      // and never reaches the dept-scope step below.
+      // Identities are resolved ONCE and reused by that step; the contract is not
+      // needed to build them (contracts carry no case id, so scope is null).
+      const assignIdentities = contractActorIdentities(
+        { id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId ?? null },
+        req.actingContext,
+      );
+      const assignAllowedRoles = ["admin_support", "department_head", "branch_manager"];
+      if (!assignIdentities.some((u) => assignAllowedRoles.includes(u.role))) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإسناد العقود" });
       }
       // 2D'-V2b Pattern-A gate: type check only; handler checks below stay.
@@ -9690,9 +9751,20 @@ export async function registerRoutes(
       // Department-head scope check: a dept_head may only assign on
       // contracts in their OWN department. branch_manager and
       // admin_support are global.
+      // Delegation-aware (was raw-role), same two-step shape as the consultations
+      // /assign twin so both 403 messages survive. On a delegated identity
+      // u.departmentId is the DELEGATOR's department.
+      //
+      // The global-role term is load-bearing: without it an admin_support user who
+      // ALSO holds a delegated department_head role would be newly refused on
+      // another department's contract, losing access their own role grants.
+      const assignHasGlobalRole = assignIdentities.some(
+        (u) => u.role === "admin_support" || u.role === "branch_manager");
+      const assignHeads = assignIdentities.filter((u) => u.role === "department_head");
       if (
-        reqUser.role === "department_head"
-        && contract.departmentId !== reqUser.departmentId
+        !assignHasGlobalRole
+        && assignHeads.length > 0
+        && !assignHeads.some((u) => !!u.departmentId && u.departmentId === contract.departmentId)
       ) {
         return res.status(403).json({ error: "رئيس القسم يمكنه إسناد عقود قسمه فقط" });
       }
@@ -10335,13 +10407,10 @@ export async function registerRoutes(
       // Per spec: assigned + dept_head (own dept) + branch_manager.
       // admin_support is intentionally NOT in this set — bouncing a
       // file back to committee is a workflow action, not an admin one.
-      const isLawyer = isAssignedLawyer(reqUser, contract);
-      const isOwnDeptHead =
-        reqUser.role === "department_head"
-        && !!reqUser.departmentId
-        && contract.departmentId === reqUser.departmentId;
-      const isBranchManager = reqUser.role === "branch_manager";
-      if (!isLawyer && !isOwnDeptHead && !isBranchManager) {
+      // Delegation-aware via its OWN helper — NOT canCloseContractTier, which
+      // admits admin_support and would silently grant them the authority this
+      // spec withholds.
+      if (!canReturnContractToCommittee(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإعادة العقد للجنة" });
       }
       const updated = await storage.returnContractToCommittee(contract.id, { notes, performedBy: reqUser.id });
@@ -10365,14 +10434,8 @@ export async function registerRoutes(
       // and canEarlyCloseCase on the FE. The dept-scope check requires both
       // sides to carry a non-empty departmentId so a dept_head with a null
       // department can't match a legacy/"أخرى" contract that is also null.
-      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
-      const allowed =
-        ["admin_support", "branch_manager"].includes(reqUser.role) ||
-        (reqUser.role === "department_head"
-          && !!reqUser.departmentId
-          && !!contract.departmentId
-          && contract.departmentId === reqUser.departmentId) ||
-        isAssigned;
+      // Delegation-aware via the shared tier helper (was inline, raw-role).
+      const allowed = canCloseContractTier(reqUser, contract, req.actingContext);
       if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
       }
@@ -10439,15 +10502,9 @@ export async function registerRoutes(
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
 
-      // Early-close gate, copied from /early-close verbatim.
-      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
-      const allowed =
-        ["admin_support", "branch_manager"].includes(reqUser.role) ||
-        (reqUser.role === "department_head"
-          && !!reqUser.departmentId
-          && !!contract.departmentId
-          && contract.departmentId === reqUser.departmentId) ||
-        isAssigned;
+      // Early-close gate — now the SHARED canCloseContractTier rather than a
+      // verbatim copy. Delegation-aware.
+      const allowed = canCloseContractTier(reqUser, contract, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق" });
 
       if (contract.status !== "active") {
@@ -10533,14 +10590,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "يمكن إعادة الفتح فقط لعقد مغلق" });
       }
 
-      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
-      const allowed =
-        ["admin_support", "branch_manager"].includes(reqUser.role) ||
-        (reqUser.role === "department_head"
-          && !!reqUser.departmentId
-          && !!contract.departmentId
-          && contract.departmentId === reqUser.departmentId) ||
-        isAssigned;
+      // Close tier on the closed row — delegation-aware (was inline, raw-role).
+      const allowed = canCloseContractTier(reqUser, contract, req.actingContext);
       if (!allowed) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح العقد" });
 
       const targetStage = String(req.body?.targetStage ?? "").trim();
@@ -10639,14 +10690,9 @@ export async function registerRoutes(
       // not re-open the one they just closed. Gate restated verbatim from
       // /early-close above, including its non-empty-departmentId guard so a
       // null-dept head can't match a null-dept contract.
-      const isAssigned = !!contract.assignedTo && contract.assignedTo === reqUser.id;
-      const allowed =
-        ["admin_support", "branch_manager"].includes(reqUser.role) ||
-        (reqUser.role === "department_head"
-          && !!reqUser.departmentId
-          && !!contract.departmentId
-          && contract.departmentId === reqUser.departmentId) ||
-        isAssigned;
+      // Gate restated from /early-close — now the SHARED tier helper, which is
+      // exactly what the comment above argues for. Delegation-aware.
+      const allowed = canCloseContractTier(reqUser, contract, req.actingContext);
       if (!allowed) {
         return res.status(403).json({ error: "ليس لديك صلاحية لبدء استشارة تعقيبية" });
       }
@@ -10765,11 +10811,20 @@ export async function registerRoutes(
   // same gate across all five (branch_manager / admin_support /
   // department_head own dept / assigned lawyer) and same payload shape
   // as the consultation handlers.
-  const allowContractPauseLike = (reqUser: any, contract: any): boolean =>
-    reqUser.role === "branch_manager"
-    || reqUser.role === "admin_support"
-    || (reqUser.role === "department_head" && !!reqUser.departmentId && contract.departmentId === reqUser.departmentId)
-    || contract.assignedTo === reqUser.id;
+  //
+  // Delegation-aware (was raw-role). All FIVE call sites were confirmed to be the
+  // SAME authority question before converting them on one edit — pause, unpause,
+  // await-completion, resume-from-completion and skip-data-completion are all
+  // "may you change this contract's workflow state?", differing only in their
+  // 403 wording. None of the five is a different decision wearing this predicate.
+  // (mark-sent sits directly above this definition but is NOT a call site; its
+  // own gate already runs canActOnEntityTiered with req.actingContext.)
+  const allowContractPauseLike = (reqUser: CaseActorIdentity, contract: any, ctx?: ActingContext): boolean =>
+    contractActorIdentities(reqUser, ctx).some((u) =>
+      u.role === "branch_manager"
+      || u.role === "admin_support"
+      || (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId)
+      || contract.assignedTo === u.id);
 
   app.post("/api/contracts/:id/pause", requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -10777,7 +10832,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!allowContractPauseLike(reqUser, contract)) {
+      if (!allowContractPauseLike(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لتعليق العقد" });
       }
       if (contract.status !== "active") {
@@ -10808,7 +10863,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!allowContractPauseLike(reqUser, contract)) {
+      if (!allowContractPauseLike(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإلغاء التعليق" });
       }
       if (contract.status !== "paused") {
@@ -10834,7 +10889,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!allowContractPauseLike(reqUser, contract)) {
+      if (!allowContractPauseLike(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية" });
       }
       if (contract.status !== "active") return res.status(400).json({ error: "العقد ليس نشطاً" });
@@ -10865,7 +10920,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!allowContractPauseLike(reqUser, contract)) {
+      if (!allowContractPauseLike(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "ليس لديك صلاحية" });
       }
       if (!contract.awaitingCompletion) {
@@ -10898,7 +10953,7 @@ export async function registerRoutes(
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
       const contract = await storage.getContractById(String(req.params.id));
       if (!contract) return res.status(404).json({ error: "العقد غير موجود" });
-      if (!allowContractPauseLike(reqUser, contract)) {
+      if (!allowContractPauseLike(reqUser, contract, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية تجاوز مرحلة استكمال المرفقات والبيانات" });
       }
       if (contract.status !== "active") return res.status(400).json({ error: "العقد ليس نشطاً" });
@@ -11317,6 +11372,19 @@ export async function registerRoutes(
       // document — only branch_manager + admin_support can delete it
       // (for mis-upload recovery). Assigned lawyers and dept_heads can
       // delete every OTHER attachment, but not this slot.
+      //
+      // 🔴 DELIBERATELY NOT DELEGATION-AWARE — CONSIDERED AND EXCLUDED BY THE
+      // OWNER, not overlooked. Every other raw-role gate on contracts was
+      // converted to resolve over req.actingContext in this batch; this one was
+      // classified alongside them and deliberately left reading reqUser.role.
+      // Reason: the action is IRREVERSIBLE (the object-storage blob goes with the
+      // row) and CLAUDE.md places DELETE at the branch_manager tier — the tier
+      // helper's carve-out list says "DELETE — branch_manager only; never calls
+      // this". Nothing in the spec says a delegate is excluded, but nothing says
+      // they are included either, and file deletion is not an authority to grant
+      // on an inference. A delegate standing in for a department_head can do
+      // everything else to a contract and cannot delete its attachments.
+      // Revisit only as an explicit owner decision, never as part of a sweep.
       const isContractUnderReview = att.slotKey === ContractAttachmentSlot.CONTRACT_UNDER_REVIEW;
       const allowed = isContractUnderReview
         ? (reqUser.role === "branch_manager" || reqUser.role === "admin_support")
