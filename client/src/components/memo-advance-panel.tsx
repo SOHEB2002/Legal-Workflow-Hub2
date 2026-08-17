@@ -4,6 +4,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Clock, AlertTriangle, CheckCircle, ClipboardCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useCases } from "@/lib/cases-context";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,7 +34,7 @@ export function MemoAdvancePanel({
   onBusyChange?: (b: boolean) => void;
   onChanged?: () => void;
 }) {
-  const { user, users } = useAuth();
+  const { user, users, actingIdentities } = useAuth();
   const { cases } = useCases();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -89,14 +90,22 @@ export function MemoAdvancePanel({
     if (!user) return false;
     if (m.awaitingCompletion || m.pausedAt) return false;
     const memoCase = getMemoCase(m);
+    // Delegation-aware: POST /api/memos/:id/advance-stage hands
+    // req.actingContext to validateStageTransition, so a delegate already holds
+    // the delegator's role there. The dept-scope guard now asks whether ANY
+    // effective department_head identity matches the PARENT CASE's department —
+    // the same hop the server's memo gates make — instead of comparing the
+    // delegate's own department. Guard shape kept: still a negative pre-check
+    // that only bites when a department_head identity is the one being relied on.
     if (
-      user.role === "department_head" &&
+      hasEffectiveRole(actingIdentities, "department_head") &&
+      !hasEffectiveRole(actingIdentities, "branch_manager", "admin_support") &&
       memoCase &&
-      memoCase.departmentId !== user.departmentId
+      !isDeptHeadFor(actingIdentities, memoCase.departmentId)
     ) return false;
-    const isLawyer = !!m.assignedTo && m.assignedTo === user.id;
-    const isHeadOrManager = user.role === "department_head" || user.role === "branch_manager";
-    const isAdminSupport = user.role === "admin_support";
+    const isLawyer = !!m.assignedTo && anyIdentity(actingIdentities, (_r, id) => m.assignedTo === id);
+    const isHeadOrManager = hasEffectiveRole(actingIdentities, "department_head", "branch_manager");
+    const isAdminSupport = hasEffectiveRole(actingIdentities, "admin_support");
     if (m.currentStage === MemoStage.RECEIVED && targetStage === MemoStage.DRAFTING) {
       return isLawyer || isHeadOrManager || isAdminSupport;
     }

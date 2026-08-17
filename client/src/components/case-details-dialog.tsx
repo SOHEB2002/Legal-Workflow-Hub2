@@ -61,7 +61,7 @@ import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
-import { hasEffectiveRole, isDeptHeadFor, type ActingIdentity } from "@/lib/acting-identities";
+import { anyIdentity, hasEffectiveRole, isDeptHeadFor, type ActingIdentity } from "@/lib/acting-identities";
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
 import { getClientRoleLabel } from "@/lib/client-role";
@@ -1785,13 +1785,17 @@ export function CaseDetailsDialog({
                         </div>
                       ));
                     })()}
+                    {/* Delegation-aware: these buttons call moveToNextStage →
+                        PATCH /api/cases/:id, whose validateStageTransition
+                        expands req.actingContext. The role set and the two
+                        lawyer fields are unchanged; only the identity they are
+                        evaluated against is now the acting set. */}
                     {selectedCase.currentStage === "مداولة_الصلح" &&
                       user &&
-                      (user.role === "admin_support" ||
-                        user.role === "department_head" ||
-                        user.role === "branch_manager" ||
-                        selectedCase.primaryLawyerId === user.id ||
-                        selectedCase.responsibleLawyerId === user.id) && (
+                      (hasEffectiveRole(actingIdentities, "admin_support", "department_head", "branch_manager") ||
+                        anyIdentity(actingIdentities, (_r, id) =>
+                          selectedCase.primaryLawyerId === id ||
+                          selectedCase.responsibleLawyerId === id)) && (
                         <div className="p-3 rounded-lg border bg-card space-y-3">
                           <div>
                             <p className="font-medium text-sm">نتيجة مداولة الصلح</p>

@@ -57,7 +57,7 @@ import { useFavorites } from "@/lib/favorites-context";
 import { useClients } from "@/lib/clients-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
 import { useAuth } from "@/lib/auth-context";
-import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
+import { anyIdentity, firstForIdentity, hasEffectiveRole, isDeptHeadFor, unionForIdentity } from "@/lib/acting-identities";
 import { useDepartments } from "@/lib/departments-context";
 import type {
   Consultation,
@@ -69,6 +69,7 @@ import type {
   ConsultationCategoryValue,
   ConsultationPriorityValue,
   ConsultationActivity,
+  UserRoleType,
 } from "@shared/schema";
 import {
   ConsultationStage,
@@ -1768,6 +1769,39 @@ export default function ConsultationsPage() {
   // FREE WIN (widened model) — the assigned lawyer was excluded here even though
   // the SERVER's canModifyConsultation has always allowed them (and the creator) to
   // PATCH these exact fields. Now mirrors the server.
+  // ==================== DELEGATION ADAPTERS ====================
+  // The module predicates above are UNCHANGED; these evaluate each one over the
+  // acting set (self + all_cases delegators), the same identities.some / first
+  // -match shape the server uses. Every endpoint behind them was checked and
+  // hands req.actingContext to validateStageTransition:
+  //   /api/consultations/:id/advance-stage · /return-to-stage ·
+  //   /skip-committee · /take-notes-outcome · /committee-decision
+  // With no delegation the identity set is [self], so each adapter makes ONE
+  // call with the user's own role/id/department — byte-identical to before.
+  const advanceTargetFor = (c: Consultation) =>
+    firstForIdentity(actingIdentities, (role, id, dept) => getAdvanceTarget(c, role, id, dept));
+  const returnTargetsFor = (c: Consultation) =>
+    unionForIdentity(actingIdentities, (role, id, dept) =>
+      getReturnTargets(c, role, id, dept, getDepartmentName(c.departmentId)));
+  const canSkipCommitteeFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canSkipCommittee(c, role, id, dept));
+  const canDoTakeNotesOutcomeFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canDoTakeNotesOutcome(c, role, id, dept));
+  // 🔴 COMMITTEE DECISION CARRIES A DELEGATE-ONLY FOUR-EYES OVERLAY, mirrored
+  // here so the button cannot render and then 403. The server allows the
+  // decision on the OWN role with no author exclusion, but when the authority is
+  // DELEGATION-DERIVED it additionally refuses if the REAL human is the assigned
+  // (authoring) lawyer: "لا يمكنك اعتماد قرار اللجنة على عمل أنت محرّره".
+  // So: own role decides → unchanged; inherited role decides → only when the
+  // real user is not the assignee.
+  const canDoCommitteeDecisionFor = (c: Consultation, isLaborEntity: boolean) => {
+    if (!user) return false;
+    if (canDoCommitteeDecision(c, user.role, isLaborEntity)) return true;
+    const viaDelegation = anyIdentity(actingIdentities, (role) =>
+      canDoCommitteeDecision(c, role as UserRoleType, isLaborEntity));
+    return viaDelegation && !(!!c.assignedTo && c.assignedTo === user.id);
+  };
+
   // Delegation-aware: PATCH /api/consultations/:id is gated by
   // canModifyConsultation, which expands req.actingContext, so the mirror does
   // too. consultationActorTier itself is UNCHANGED and simply evaluated once per
@@ -1890,7 +1924,7 @@ export default function ConsultationsPage() {
 
   const handleAdvanceStage = async () => {
     if (!advanceConsultation || !user) return;
-    const target = getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId);
+    const target = advanceTargetFor(advanceConsultation);
     if (!target) {
       toast({ title: "لا يمكن نقل الاستشارة", description: "ليس لديك صلاحية لهذا الانتقال", variant: "destructive" });
       return;
@@ -1921,7 +1955,7 @@ export default function ConsultationsPage() {
   const openReturnDialog = (c: Consultation) => {
     setReturnConsultation(c);
     const targets = user
-      ? getReturnTargets(c, user.role, user.id, user.departmentId, getDepartmentName(c.departmentId))
+      ? returnTargetsFor(c)
       : [];
     // Default to the immediately prior stage when available — that's the
     // only choice an assigned_lawyer will see, and a sensible default for
@@ -2836,7 +2870,7 @@ export default function ConsultationsPage() {
                               إسناد الاستشارة
                             </DropdownMenuItem>
                           )}
-                          {user && getAdvanceTarget(consultation, user.role, user.id, user.departmentId) && (
+                          {user && advanceTargetFor(consultation) && (
                             <DropdownMenuItem
                               data-testid={`button-advance-consultation-${consultation.id}`}
                               onClick={() => openAdvanceDialog(consultation)}
@@ -2864,7 +2898,7 @@ export default function ConsultationsPage() {
                               تجاوز استكمال المرفقات والبيانات
                             </DropdownMenuItem>
                           )}
-                          {user && getReturnTargets(consultation, user.role, user.id, user.departmentId, getDepartmentName(consultation.departmentId)).length > 0 && (
+                          {user && returnTargetsFor(consultation).length > 0 && (
                             <DropdownMenuItem
                               data-testid={`button-return-consultation-${consultation.id}`}
                               onClick={() => openReturnDialog(consultation)}
@@ -2882,7 +2916,7 @@ export default function ConsultationsPage() {
                               المراجعة الداخلية
                             </DropdownMenuItem>
                           )}
-                          {user && canDoCommitteeDecision(consultation, user.role, getDepartmentName(consultation.departmentId) === "عمالي") && (
+                          {user && canDoCommitteeDecisionFor(consultation, getDepartmentName(consultation.departmentId) === "عمالي") && (
                             <DropdownMenuItem
                               data-testid={`button-committee-decision-${consultation.id}`}
                               onClick={() => openCommitteeDialog(consultation)}
@@ -2891,7 +2925,7 @@ export default function ConsultationsPage() {
                               قرار اللجنة
                             </DropdownMenuItem>
                           )}
-                          {user && canDoTakeNotesOutcome(consultation, user.role, user.id, user.departmentId) && (
+                          {user && canDoTakeNotesOutcomeFor(consultation) && (
                             <DropdownMenuItem
                               data-testid={`button-take-notes-outcome-${consultation.id}`}
                               onClick={() => openTakeNotesDialog(consultation)}
@@ -3216,7 +3250,7 @@ export default function ConsultationsPage() {
                         إسناد الاستشارة
                       </Button>
                     )}
-                    {getAdvanceTarget(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {advanceTargetFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3227,7 +3261,7 @@ export default function ConsultationsPage() {
                         المرحلة التالية
                       </Button>
                     )}
-                    {getReturnTargets(selectedConsultation, user.role, user.id, user.departmentId, getDepartmentName(selectedConsultation.departmentId)).length > 0 && (
+                    {returnTargetsFor(selectedConsultation).length > 0 && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3249,7 +3283,7 @@ export default function ConsultationsPage() {
                         المراجعة الداخلية
                       </Button>
                     )}
-                    {canDoCommitteeDecision(selectedConsultation, user.role, getDepartmentName(selectedConsultation.departmentId) === "عمالي") && (
+                    {canDoCommitteeDecisionFor(selectedConsultation, getDepartmentName(selectedConsultation.departmentId) === "عمالي") && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3267,7 +3301,7 @@ export default function ConsultationsPage() {
                         lawyer), it is WRITTEN-only, and it skips the committee
                         rather than recording its decision. The gate restates the
                         server's rule verbatim → visibility == authorization. */}
-                    {canSkipCommittee(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {canSkipCommitteeFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3279,7 +3313,7 @@ export default function ConsultationsPage() {
                         تجاوز لجنة المراجعة
                       </Button>
                     )}
-                    {canDoTakeNotesOutcome(selectedConsultation, user.role, user.id, user.departmentId) && (
+                    {canDoTakeNotesOutcomeFor(selectedConsultation) && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -3882,7 +3916,7 @@ export default function ConsultationsPage() {
             <AlertDialogDescription>
               {advanceConsultation && user ? (
                 (() => {
-                  const target = getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId);
+                  const target = advanceTargetFor(advanceConsultation);
                   const fromLabel = ConsultationStageLabels[advanceConsultation.currentStage] || advanceConsultation.currentStage;
                   const toLabel = target ? (ConsultationStageLabels[target] || target) : "";
                   return (
@@ -3895,7 +3929,7 @@ export default function ConsultationsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {advanceConsultation && user
-            && getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId) === ConsultationStage.INTERNAL_REVIEW && (
+            && advanceTargetFor(advanceConsultation) === ConsultationStage.INTERNAL_REVIEW && (
             <div className="space-y-1" dir="rtl">
               <Label className="text-sm font-semibold">
                 المراجع الداخلي <span className="text-red-500">*</span>
@@ -3934,7 +3968,7 @@ export default function ConsultationsPage() {
               disabled={
                 actionInProgress
                 || (!!advanceConsultation && !!user
-                  && getAdvanceTarget(advanceConsultation, user.role, user.id, user.departmentId) === ConsultationStage.INTERNAL_REVIEW
+                  && advanceTargetFor(advanceConsultation) === ConsultationStage.INTERNAL_REVIEW
                   && !advanceReviewerId)
               }
               data-testid="button-confirm-advance"
@@ -3951,7 +3985,7 @@ export default function ConsultationsPage() {
             <AlertDialogTitle>إرجاع الاستشارة لمرحلة سابقة</AlertDialogTitle>
             <AlertDialogDescription>
               {returnConsultation && user ? (() => {
-                const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId, getDepartmentName(returnConsultation.departmentId));
+                const targets = returnTargetsFor(returnConsultation);
                 if (targets.length === 1) {
                   const lbl = ConsultationStageLabels[targets[0]] || targets[0];
                   return (
@@ -3965,7 +3999,7 @@ export default function ConsultationsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {returnConsultation && user && (() => {
-            const targets = getReturnTargets(returnConsultation, user.role, user.id, user.departmentId, getDepartmentName(returnConsultation.departmentId));
+            const targets = returnTargetsFor(returnConsultation);
             if (targets.length <= 1) return null;
             return (
               <div className="mt-3 space-y-1" dir="rtl">
