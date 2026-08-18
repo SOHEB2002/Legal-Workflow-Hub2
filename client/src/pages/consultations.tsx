@@ -697,6 +697,20 @@ function getCategoryBadgeClassName(category: ConsultationCategoryValue): string 
 // Mirrors the role gate on POST /api/consultations/:id/early-close.
 // Per spec §3.2.4: assigned_lawyer (synthetic), admin_support,
 // department_head, branch_manager. Dept_head dept-scoped.
+//
+// 🔴 TYPE-BLIND, AND NOW CORRECTLY SO. This predicate never carried the
+// WRITTEN-vs-PHONE/PROCEDURAL split the server's /early-close used to enforce,
+// so until 2026-08-18 it rendered an إغلاق مبكر button that 403'd for the
+// assignee on a هاتفية / إجرائية consultation. The owner's ruling lifted that
+// split server-side (canEarlyCloseConsultation in routes.ts), which resolves
+// the mismatch in the widening direction — the button now works. No change was
+// needed here; do NOT "restore" a type check.
+//
+// ⚠ KNOWN, DELIBERATELY NOT FIXED IN THAT COMMIT (out of its scope): the
+// department_head line below is a bare inequality with no !!userDeptId guard, so
+// a null-department head still matches a null-department consultation and sees a
+// button the server refuses (routes.ts guards both sides). Narrowing it here
+// would also narrow canCloseForNoResponse, which calls this — a separate commit.
 function canEarlyClose(
   consultation: Consultation,
   userRole: string,
@@ -712,8 +726,15 @@ function canEarlyClose(
 
 // "إغلاق لعدم استكمال البيانات" gate — restates POST
 // /api/consultations/:id/close-no-response so visibility === authorization.
-// ROLE tier is canEarlyClose verbatim (this IS a close, and the endpoint copies
-// the early-close gate), plus the endpoint's own state conditions.
+// ROLE tier is canEarlyClose verbatim, plus the endpoint's own state conditions.
+//
+// ⚠ THE SERVER GATES DIVERGED ON 2026-08-18 and this mirror was left as it is.
+// /close-no-response still runs canCloseConsultationTier, which narrows PHONE /
+// PROCEDURAL to admin_support | branch_manager; /early-close no longer does.
+// So on a هاتفية / إجرائية row this shows the button to the assignee and an
+// own-dept head, and the server refuses — the same pre-existing mismatch
+// /early-close carried until the ruling. Tightening it is a behaviour change to
+// close-no-response, which that commit was explicitly scoped out of.
 //
 // Keyed on the STAGE, not on awaitingCompletion: a consultation reaches
 // RECEIVED_PENDING_COMPLETION both by the ordinary advance (latch false) and via
@@ -748,10 +769,14 @@ function canStartFollowUp(
 
 // Restates POST /api/consultations/:id/reopen so visibility == authorization.
 // The CLOSE tier with the status check inverted — including its TYPE SPLIT,
-// which canStartFollowUp above does NOT have: /early-close narrows PHONE and
-// PROCEDURAL to admin_support | branch_manager, and reopen copies that gate, so
-// mirroring canStartFollowUp here would show the button to actors the server
-// rejects.
+// which canStartFollowUp above does NOT have: canCloseConsultationTier narrows
+// PHONE and PROCEDURAL to admin_support | branch_manager and /reopen still runs
+// it, so mirroring canStartFollowUp here would show the button to actors the
+// server rejects.
+// ⚠ The split is stated against the TIER HELPER, not against /early-close: that
+// endpoint dropped the split on 2026-08-18 (owner ruling) and /reopen kept it.
+// Reopen's justification no longer flows from early-close — do not re-derive it
+// from there.
 function canReopenConsultation(
   consultation: Consultation,
   userRole: string,
