@@ -1694,7 +1694,23 @@ export class DatabaseStorage implements IStorage {
       courtName: data.courtName || "",
       courtCaseNumber: data.courtCaseNumber || "",
       judgeName: data.judgeName || "",
-      circuitNumber: data.circuitNumber || "",
+      // circuitNumber REMOVED — it was a DEAD READ, not a live field.
+      // insertCaseSchema does not declare it, so `data.circuitNumber` was always
+      // undefined here and the expression always evaluated to "". Omitting the
+      // key is behaviour-identical: circuit_number is varchar(100) DEFAULT '',
+      // so the INSERT now takes that default and the column still holds "".
+      // mapDbCase (which runs on this same object) coalesces `|| ""`, so the
+      // returned LawCase is byte-identical too.
+      //
+      // NOT a removed feature: circuitNumber remains fully editable afterwards
+      // via PATCH (it is in caseDataFields in routes.ts) and is still written by
+      // the consultation→case conversion, which has its own separate insert
+      // object and its own input. Only this misleading no-op read is gone.
+      //
+      // ⚠ THE TRAP THIS LEAVES: if a circuit-number control is ever added to the
+      // CREATE dialog, re-adding a line here is NOT enough — insertCaseSchema
+      // must declare the field too, or z.object will strip it before it ever
+      // reaches this object. That is exactly how grievanceRequired was lost.
       plaintiffName: data.plaintiffName || "",
       opponentName: data.opponentName || "",
       opponentLawyer: data.opponentLawyer || "",
