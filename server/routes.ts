@@ -680,13 +680,58 @@ function canActOnConsultationWorkflowState(user: CaseActorIdentity, consultation
     || isAssignedLawyer({ id: u.id }, consultation));
 }
 
-// CONSULTATION CLOSE-TIER gate — early-close / close-no-response / reopen.
+// CONSULTATION EARLY-CLOSE gate — POST /api/consultations/:id/early-close, and
+// NOTHING ELSE.
+// 🔴 NO TYPE SPLIT, BY OWNER RULING (2026-08-18): the responsible lawyer must be
+// able to early-close his own consultation whatever its type. The WRITTEN set —
+// branch_manager | admin_support | own-dept department_head | assignee — now
+// applies to هاتفية and إجرائية too.
+//
+// WHAT IS BEING OVERRIDDEN. The narrowing was real and recorded, not assumed:
+// cf9c346 ("/early-close narrowed for new types to admin_support /
+// branch_manager") citing "the new-types common-features list" — a planning
+// document that is NOT in this repo. The owner has overridden that line for this
+// endpoint only. The gloss that once stood here, "on those types closing is
+// itself an admin step", was NOT from any spec; it was a later inference and is
+// withdrawn.
+//
+// 🔴 WHY A SEPARATE FUNCTION AND NOT A FLAG ON canCloseConsultationTier. That
+// helper still serves /close-no-response and /reopen, which KEEP the split by
+// the same ruling. Unifying inside it would have widened all three. Two helpers
+// with two bodies is the same reason canCheckInHearing is not canActOnHearing:
+// neither can be widened by accident while editing the other.
+//
+// 🔴 NOT ROUTED THROUGH canActOnConsultationWorkflowState, whose set is
+// currently identical. Deliberate: "may close this" and "may pause this" are
+// different authorities that happen to coincide today, and sharing one body
+// would make any future widening of the pause family silently widen closure.
+//
+// Every scope term is carried over verbatim from the tier's WRITTEN branch, so
+// this is provably the same set that branch already granted — including the
+// !!u.departmentId guard (a null-dept head must never match a null-dept row) and
+// the redundant-but-preserved !!consultation.departmentId. departmentId is the
+// DELEGATOR's on a delegated identity; no ctx → [self] → the WRITTEN behaviour
+// of the old gate, unchanged.
+function canEarlyCloseConsultation(user: CaseActorIdentity, consultation: any, ctx?: ActingContext): boolean {
+  return consultationActorIdentities(user, ctx).some((u) => {
+    if (["admin_support", "branch_manager"].includes(u.role)) return true;
+    return (u.role === "department_head"
+        && !!u.departmentId
+        && !!consultation.departmentId
+        && consultation.departmentId === u.departmentId)
+      || isAssignedLawyer({ id: u.id }, consultation);
+  });
+}
+
+// CONSULTATION CLOSE-TIER gate — close-no-response / reopen.
+// ⚠ NO LONGER SERVES /early-close: that endpoint moved to
+// canEarlyCloseConsultation above when the owner lifted the type split for it
+// alone (2026-08-18). This body is UNCHANGED and must stay so.
 // 🔴 CARRIES A TYPE SPLIT that must be preserved exactly: on a WRITTEN
 // consultation the tier is branch_manager | admin_support | own-dept
 // department_head | assignee, but on PHONE / PROCEDURAL it narrows to
-// branch_manager | admin_support ONLY, because on those types closing is itself
-// an admin step. The three endpoints stated this identically (two of them
-// literally commented "copied from /early-close verbatim"); it is stated once
+// branch_manager | admin_support ONLY. Both endpoints stated this identically
+// (each commented "copied from /early-close verbatim"); it is stated once
 // here. The type is resolved from the consultation, never from the actor, so
 // delegation cannot move a record across the split.
 function canCloseConsultationTier(user: CaseActorIdentity, consultation: any, ctx?: ActingContext): boolean {
@@ -6735,10 +6780,12 @@ export async function registerRoutes(
   // persists closure_reason (and closure_reason_other when reason='other').
   // Validation matches the cases early-close pattern: reason required, and
   // otherText required iff reason === 'other'.
-  // Allowed roles: WRITTEN keeps the legacy wider gate (assigned_lawyer +
-  // admin_support / department_head / branch_manager, per spec §3.2.4);
-  // PHONE / PROCEDURAL narrow to admin_support / branch_manager only
-  // per the new-types common-features list.
+  // Allowed roles: the spec §3.2.4 set — assigned_lawyer (synthetic) +
+  // admin_support / department_head (own dept) / branch_manager — on EVERY type.
+  // 🔴 THE PHONE / PROCEDURAL NARROWING IS GONE (owner ruling 2026-08-18): the
+  // responsible lawyer closes his own consultation whatever its type. This
+  // endpoint ONLY — /close-no-response and /reopen keep the split, which is why
+  // they still call canCloseConsultationTier and this one no longer does.
   app.post("/api/consultations/:id/early-close", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -6749,10 +6796,11 @@ export async function registerRoutes(
 
       // Phase 8 F6 — dept-head scoped to own dept (mirrors contracts
       // /early-close), with the both-sides non-null guard so a null-dept
-      // head can't match a null-dept consultation. Delegation-aware (was
-      // inline, raw-role); the WRITTEN-vs-PHONE/PROCEDURAL split is preserved
-      // inside the helper and is resolved from the CONSULTATION, never the actor.
-      const permitted = canCloseConsultationTier(reqUser, consultation, req.actingContext);
+      // head can't match a null-dept consultation. Delegation-aware, and as of
+      // the 2026-08-18 ruling TYPE-BLIND: the dedicated canEarlyCloseConsultation
+      // replaces canCloseConsultationTier here so lifting the split cannot reach
+      // /close-no-response or /reopen, which still call the tier helper.
+      const permitted = canEarlyCloseConsultation(reqUser, consultation, req.actingContext);
       if (!permitted) {
         return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق المبكر" });
       }
@@ -6815,9 +6863,12 @@ export async function registerRoutes(
   // STRUCTURALLY as metadata.reason. No prefix-stripping, no stageHistory
   // fallback — consultations have no stageHistory at all.
   //
-  // ROLES: this entity's OWN early-close tier, not the cases one — WRITTEN keeps
-  // the wider gate (admin_support | branch_manager | own-dept department_head |
-  // assigned lawyer), PHONE / PROCEDURAL narrow to admin_support | branch_manager.
+  // ROLES: canCloseConsultationTier — WRITTEN keeps the wider gate
+  // (admin_support | branch_manager | own-dept department_head | assigned
+  // lawyer), PHONE / PROCEDURAL narrow to admin_support | branch_manager.
+  // ⚠ NO LONGER "the early-close tier": /early-close dropped the type split on
+  // 2026-08-18 and this endpoint KEPT it, by the same ruling. The two gates have
+  // deliberately diverged — do not re-merge them.
   app.post("/api/consultations/:id/close-no-response", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -6831,8 +6882,9 @@ export async function registerRoutes(
       const consultation = await storage.getConsultationById(String(req.params.id));
       if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
 
-      // Early-close gate — now the SHARED canCloseConsultationTier rather than a
-      // third verbatim copy. Delegation-aware; type split preserved.
+      // The SHARED canCloseConsultationTier rather than a third verbatim copy.
+      // Delegation-aware; TYPE SPLIT PRESERVED — unchanged by the 2026-08-18
+      // ruling, which lifted the split for /early-close only.
       const permitted = canCloseConsultationTier(reqUser, consultation, req.actingContext);
       if (!permitted) return res.status(403).json({ error: "ليس لديك صلاحية للإغلاق" });
 
@@ -6946,7 +6998,8 @@ export async function registerRoutes(
       // Close tier, evaluated on the closed row — the ROLE half only, which is
       // exactly what canCloseConsultationTier is; the status check that gate's
       // endpoint pairs it with lives above (status must be "closed" here).
-      // Delegation-aware; type split preserved.
+      // Delegation-aware; TYPE SPLIT PRESERVED — unchanged by the 2026-08-18
+      // ruling, which lifted the split for /early-close only.
       const permitted = canCloseConsultationTier(reqUser, consultation, req.actingContext);
       if (!permitted) return res.status(403).json({ error: "ليس لديك صلاحية لإعادة فتح الاستشارة" });
 
