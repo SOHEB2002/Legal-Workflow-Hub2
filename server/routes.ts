@@ -94,6 +94,9 @@ import {
   stageNumberRequirement,
   reopenCaseSchema,
   recordJudgmentDeedSchema,
+  updateViolationDetailsSchema,
+  ViolationAmountPattern,
+  GrievanceResultValues,
   appealOutcomeSchema,
   opponentResponseSchema,
   appealRulingSchema,
@@ -578,6 +581,38 @@ function canAttachCaseJudgmentDeed(user: CaseActorIdentity, caseData: any, ctx?:
     u.role === "branch_manager"
     || u.role === "admin_support"
     // !!u.departmentId — see canModifyCaseIdentity; a null/"" dept must never match.
+    || (u.role === "department_head" && !!u.departmentId && u.departmentId === caseData.departmentId)
+    || isAssignedLawyer({ id: u.id }, caseData));
+}
+
+// ADMIN VIOLATION-DETAILS gate (لوحة تفاصيل المخالفة).
+// Set: branch_manager | admin_support | department_head of the case's OWN
+// department | assigned lawyer. Delegation-aware through caseActorIdentities.
+//
+// ⚠ A THIRD NAMED SIBLING, deliberately — NOT a reuse of canActOnCaseWorkflowState
+// or canAttachCaseJudgmentDeed, both of which have a byte-identical predicate
+// today. That is exactly the reasoning canAttachCaseJudgmentDeed's own header
+// gives for not reusing canActOnMohrSettlement: these are DIFFERENT authorities
+// that happen to coincide right now, and folding them together means a future
+// narrowing of one silently narrows a set of unrelated routes. Recording the
+// facts of an administrative violation is its own authority; it is not pausing a
+// case and it is not filing a صك.
+//
+// 🔴 AND IT COULD NOT BE THE GENERIC PATCH GATE EITHER — neither half fits:
+//   • in caseDataFields → canEditCaseData = branch_manager + admin_support ONLY,
+//     which locks out the department head and the assigned lawyer;
+//   • outside it → canModifyCase, whose flat admin list passes cases_review_head,
+//     consultations_review_head and viewer with NO department scope, plus the
+//     case's internalReviewerId.
+// One is too narrow and the other too wide, which is why this panel gets a
+// dedicated endpoint rather than riding PATCH /api/cases/:id.
+//
+// !!u.departmentId is mandatory — see canModifyCaseIdentity; a null/"" dept must
+// never match a row whose dept is also empty.
+function canEditCaseViolationDetails(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, caseData, ctx).some((u) =>
+    u.role === "branch_manager"
+    || u.role === "admin_support"
     || (u.role === "department_head" && !!u.departmentId && u.departmentId === caseData.departmentId)
     || isAssignedLawyer({ id: u.id }, caseData));
 }
@@ -8725,6 +8760,195 @@ export async function registerRoutes(
   // the entire promise the defendant close makes to the user ("يمكن إعادة فتحها
   // لاحقاً عند رفع الخصم للدعوى"), so it is offered unconditionally and the
   // lifecycle flags below make the path re-resolve to an array that contains it.
+  // ==================== لوحة تفاصيل المخالفة (إداري) ====================
+  // PATCH /api/cases/:id/violation-details — the eight facts about the
+  // administrative violation, plus the three fields REUSED rather than twinned
+  // (grievanceDate / grievanceResult / executionRequestNumber).
+  //
+  // WHY A DEDICATED ENDPOINT rather than the generic PATCH /api/cases/:id:
+  // neither half of that route's split gate matches the authority the owner
+  // named — see canEditCaseViolationDetails' header for the full reasoning.
+  //
+  // PARTIAL BY DESIGN: only keys PRESENT in the body are written, so the panel
+  // can save one field without blanking the other ten, and an explicit null (or
+  // an emptied input, normalised below) genuinely clears a field.
+  app.patch("/api/cases/:id/violation-details", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      // DEPARTMENT-GATED, never caseType — the L5 precedent, and the same
+      // resolution the /mohr and /taradi panels use. Runs BEFORE the permission
+      // check so a non-admin case reports "wrong kind of case" rather than
+      // "no permission", matching the /mohr ordering exactly.
+      const department = lawCase.departmentId
+        ? await storage.getDepartmentById(lawCase.departmentId)
+        : null;
+      if (department?.name !== "إداري") {
+        return res.status(400).json({ error: "تفاصيل المخالفة متاحة فقط لقضايا القسم الإداري" });
+      }
+
+      if (!canEditCaseViolationDetails(user, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتعديل تفاصيل المخالفة" });
+      }
+
+      const bodyCheck = updateViolationDetailsSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      // The eleven fields this endpoint owns. Eight are the new violation
+      // columns; grievanceDate / grievanceResult / executionRequestNumber are
+      // PRE-EXISTING columns the panel surfaces rather than duplicating.
+      const VIOLATION_FIELDS = [
+        "administrativeDecisionNumber",
+        "administrativeDecisionDate",
+        "violationKnowledgeDate",
+        "ifaaNumber",
+        "ifaaDate",
+        "grievanceNumber",
+        "grievanceDate",
+        "grievanceResult",
+        // 🔴 adminExecutionRequestNumber, NOT executionRequestNumber. The latter
+        // was REMOVED from this endpoint's writable set: it belongs to the مهامي
+        // execution field task (POST /api/field-tasks/:id/execution-request,
+        // which also completes the task and can auto-close the case) and to the
+        // pre-existing inline edit, and nothing else may write it.
+        "adminExecutionRequestNumber",
+        "invoiceNumber",
+        "violationAmount",
+      ] as const;
+      // Arabic labels for the audit trail, so the activity row reads as the user
+      // sees the panel. grievanceNumber is labelled «رقم الاعتراض» even though the
+      // column is named for التظلم — the owner's ruling that they are the same
+      // thing applies to the storage name, not to what the lawyer is shown.
+      const VIOLATION_FIELD_LABELS: Record<string, string> = {
+        administrativeDecisionNumber: "رقم القرار الإداري",
+        administrativeDecisionDate: "تاريخ القرار الإداري",
+        violationKnowledgeDate: "تاريخ العلم بالمخالفة",
+        ifaaNumber: "رقم إيفاء",
+        ifaaDate: "تاريخ إيفاء",
+        grievanceNumber: "رقم الاعتراض",
+        grievanceDate: "تاريخ الاعتراض",
+        grievanceResult: "نتيجة الاعتراض",
+        adminExecutionRequestNumber: "رقم طلب التنفيذ",
+        invoiceNumber: "رقم الفاتورة",
+        violationAmount: "مبلغ المخالفة",
+      };
+      // Per-field varchar ceilings. Truncating rather than rejecting matches how
+      // every sibling number field is handled (mohrNumber/najizNumber/execution
+      // all `.substring(0, 100)`); violationAmount is excluded because it is
+      // VALIDATED instead — see below.
+      const MAX_LEN: Record<string, number> = {
+        administrativeDecisionNumber: 100, administrativeDecisionDate: 50,
+        violationKnowledgeDate: 50, ifaaNumber: 100, ifaaDate: 50,
+        grievanceNumber: 100, grievanceDate: 50, grievanceResult: 50,
+        adminExecutionRequestNumber: 100, invoiceNumber: 100,
+      };
+
+      const updateData: Record<string, string | null> = {};
+      for (const field of VIOLATION_FIELDS) {
+        if (!Object.prototype.hasOwnProperty.call(req.body, field)) continue;
+        const raw = req.body[field];
+        // "" from an emptied input means CLEAR, and is stored as null so the
+        // column has one empty representation rather than two.
+        const trimmed = raw === null || raw === undefined ? "" : String(raw).trim();
+        if (trimmed === "") {
+          updateData[field] = null;
+          continue;
+        }
+        if (field === "violationAmount") {
+          // 🔴 VALIDATED, NOT TRUNCATED. numeric(12,2) REJECTS a bad value at the
+          // driver (22P02 non-numeric / 22003 out of range), which would surface
+          // as an opaque 500 instead of something the user can act on. Checked
+          // here so the refusal is a clean Arabic 400.
+          if (!ViolationAmountPattern.test(trimmed)) {
+            return res.status(400).json({
+              error: "مبلغ المخالفة يجب أن يكون رقماً صحيحاً (بحد أقصى منزلتين عشريتين)",
+            });
+          }
+          updateData[field] = trimmed;
+          continue;
+        }
+        if (field === "grievanceResult") {
+          // 🔴 MEMBERSHIP-CHECKED ON WRITE ONLY. The column is varchar(50) free
+          // text and may already hold a legacy value outside the set — that is
+          // READ tolerantly everywhere (the panel keeps an unknown value visible
+          // and selected rather than blanking it). What this refuses is writing a
+          // NEW value outside the set through this endpoint, which is what keeps
+          // the set meaningful going forward without invalidating existing rows.
+          if (!(GrievanceResultValues as readonly string[]).includes(trimmed)) {
+            return res.status(400).json({
+              error: `نتيجة الاعتراض غير صالحة — القيم المسموحة: ${GrievanceResultValues.join(" / ")}`,
+            });
+          }
+          updateData[field] = trimmed;
+          continue;
+        }
+        updateData[field] = trimmed.substring(0, MAX_LEN[field]);
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ error: "لا توجد بيانات لتحديثها" });
+      }
+
+      // DIFF BEFORE THE WRITE, so the audit row records what actually changed
+      // rather than what was submitted. A save that re-sends identical values
+      // logs nothing — an activity log that fills with no-op rows stops being
+      // read, which is the same reasoning behind the committee-referral notice
+      // testing for a genuine transition rather than a re-save.
+      const changed: Array<{ label: string; before: string; after: string }> = [];
+      for (const [field, next] of Object.entries(updateData)) {
+        const prev = (lawCase as unknown as Record<string, unknown>)[field];
+        const prevStr = prev === null || prev === undefined ? "" : String(prev);
+        const nextStr = next === null ? "" : next;
+        if (prevStr !== nextStr) {
+          changed.push({
+            label: VIOLATION_FIELD_LABELS[field] || field,
+            before: prevStr || "(فارغ)",
+            after: nextStr || "(فارغ)",
+          });
+        }
+      }
+
+      const updated = await storage.updateCase(lawCase.id, updateData as Partial<LawCase>);
+      if (!updated) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      // AUDIT TRAIL. A fine amount or a decision number changing is worth a
+      // record of who changed it, when, and from what. previous_value / new_value
+      // are columns case_activity_log already carries and nothing else on cases
+      // uses them, so the before/after is machine-readable rather than only
+      // embedded in prose. Delegation-aware via logCaseActivityActing, which
+      // stamps "نيابةً عن" when a delegate is acting.
+      //
+      // NEVER FAILS THE WRITE: the update has already returned, and the whole log
+      // is wrapped so a logging fault cannot lose data the user just saved. Same
+      // total-by-construction shape as the notification helpers.
+      if (changed.length > 0) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: lawCase.id,
+            userId: user.id,
+            userName: user.name || user.id,
+            actionType: "violation_details_updated",
+            title: `تحديث تفاصيل المخالفة — ${changed.map((c) => c.label).join("، ")}`,
+            details: changed.map((c) => `${c.label}: ${c.before} ← ${c.after}`).join("\n"),
+            previousValue: changed.map((c) => `${c.label}: ${c.before}`).join("\n"),
+            newValue: changed.map((c) => `${c.label}: ${c.after}`).join("\n"),
+          });
+        } catch (e) {
+          console.error("[violation-details] activity log failed", e);
+        }
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating violation details:", error);
+      res.status(500).json({ error: "حدث خطأ في تحديث تفاصيل المخالفة" });
+    }
+  });
+
   app.post("/api/cases/:id/reopen", requireAuth, async (req: AuthRequest, res) => {
     try {
       const reqUser = req.user!;
@@ -14558,7 +14782,39 @@ export async function registerRoutes(
               // جزئي — ALONGSIDE the collection task above. Same live routing via
               // the execution mapping key (assignee → own task; unset → the
               // branch_manager's unassigned pool). Collection is left unchanged.
-              if (judgmentType === "لصالحنا") {
+              //
+              // 🔴 AND NOT FOR AN ADMINISTRATIVE CASE (owner ruling). An إداري
+              // judgment does not go to محكمة التنفيذ — the administrative
+              // execution route is its own thing, recorded as رقم طلب التنفيذ
+              // الإداري on the violation panel, with no field task behind it. The
+              // ordinary «رفع طلب تنفيذ» task would send admin_support to the
+              // wrong court.
+              //
+              // 🔴 IDENTIFIED BY THE RESOLVED DEPARTMENT NAME, NEVER caseType —
+              // the standing L5 rule (caseType is free-text user input, so a
+              // labor case mistyped تجاري routed to the wrong committee). Same
+              // getDepartmentById resolution the settlement guard earlier in this
+              // handler already uses.
+              //
+              // FAIL DIRECTION: an UNRESOLVED department is NOT admin, so the
+              // execution task is still created. Suppressing a task must require a
+              // positive match, never the absence of information — the same
+              // reasoning departmentHasCommittee's header gives for keeping a
+              // committee when the name will not resolve. Losing a real execution
+              // task silently is worse than raising one on an admin case, which a
+              // human can cancel.
+              //
+              // ⚠ COLLECTION IS DELIBERATELY UNTOUCHED (owner ruling, both
+              // halves). An admin judgment still raises خطاب تحصيل — and that is
+              // also what keeps maybeCloseCaseAfterPostJudgmentTasks working:
+              // that helper returns early when a case has NO post-judgment task
+              // at all, so suppressing BOTH would have left every لصالحنا admin
+              // case resting at محكوم_حكم_نهائي with nothing able to close it.
+              const judgmentDept = existingCase.departmentId
+                ? await storage.getDepartmentById(existingCase.departmentId)
+                : null;
+              const isAdministrativeCase = judgmentDept?.name === "إداري";
+              if (judgmentType === "لصالحنا" && !isAdministrativeCase) {
                 const executionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.EXECUTION, assignments, allUsers);
                 const executionTask = await storage.createFieldTask({
                   title: `${ExecutionTaskTitlePrefix} — قضية رقم ${existingCase.caseNumber}`,
