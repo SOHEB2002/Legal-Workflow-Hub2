@@ -901,6 +901,8 @@ function mapDbCase(dbCase: any): LawCase {
     // ("1500.00"), so the falsy values are "" and null — never a meaningful 0,
     // which would be the string "0.00" and is truthy.
     violationAmount: dbCase.violationAmount || null,
+    // Distinct from executionRequestNumber above — see the column comment.
+    adminExecutionRequestNumber: dbCase.adminExecutionRequestNumber || null,
     appealLawyerId: dbCase.appealLawyerId || null,
     litigatorId: dbCase.litigatorId || null,
     internalReviewerId: dbCase.internalReviewerId || null,

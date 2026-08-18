@@ -42,6 +42,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -91,8 +92,10 @@ import {
   // never accept a value the server would reject, and the user is told at the
   // keystroke rather than by a 400.
   ViolationAmountPattern,
+  GrievanceResultValues,
+  GrievanceResultLabels,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment } from "@shared/schema";
+import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment, GrievanceResultValue } from "@shared/schema";
 
 // Stages that mark a REAL trip through internal review. Moved here verbatim with
 // the dialog — the actions tab's "إرجاع من المراجعة الداخلية" block is its only
@@ -270,16 +273,19 @@ function canEditCaseViolationDetails(
 //   kind "date"   → HijriDatePicker to input, DualDateDisplay to show
 //   kind "amount" → the numeric(12,2) column, which arrives as a STRING
 //   kind "text"   → a plain identifier, rendered LTR like its siblings
-//   readMostly    → 🔴 رقم طلب التنفيذ only. Its real filing path is
-//                   POST /api/field-tasks/:id/execution-request, which ALSO
-//                   completes the execution task, writes an activity row and can
-//                   auto-close the case. This panel does none of that, so it is a
-//                   CORRECTION path only and says so in the UI.
+//   kind "select" → a fixed value set (نتيجة الاعتراض)
+//
+// 🔴 THE readMostly FLAG IS GONE, and so is the «للتصحيح فقط» warning it drove.
+// Both existed because «رقم طلب التنفيذ» used to reuse executionRequestNumber,
+// which HAS a real filing path (the مهامي execution task). It no longer does:
+// the panel now owns adminExecutionRequestNumber, a distinct column with no
+// task, no activity row and no auto-close behind it — an ordinary editable
+// field, warned about no more than رقم الفاتورة is.
 const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
   key: string;
   label: string;
-  kind: "text" | "date" | "amount";
-  readMostly?: boolean;
+  kind: "text" | "date" | "amount" | "select";
+  options?: readonly string[];
 }> = [
   { key: "administrativeDecisionNumber", label: "رقم القرار الإداري", kind: "text" },
   { key: "administrativeDecisionDate", label: "تاريخ القرار الإداري", kind: "date" },
@@ -289,8 +295,10 @@ const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
   { key: "ifaaDate", label: "تاريخ إيفاء", kind: "date" },
   { key: "grievanceNumber", label: "رقم الاعتراض", kind: "text" },
   { key: "grievanceDate", label: "تاريخ الاعتراض", kind: "date" },
-  { key: "grievanceResult", label: "نتيجة الاعتراض", kind: "text" },
-  { key: "executionRequestNumber", label: "رقم طلب التنفيذ", kind: "text", readMostly: true },
+  { key: "grievanceResult", label: "نتيجة الاعتراض", kind: "select", options: GrievanceResultValues },
+  // 🔴 adminExecutionRequestNumber — NOT executionRequestNumber, which belongs to
+  // the مهامي execution task and is displayed separately in the numbers grid.
+  { key: "adminExecutionRequestNumber", label: "رقم طلب التنفيذ", kind: "text" },
   { key: "invoiceNumber", label: "رقم الفاتورة", kind: "text" },
 ];
 
@@ -1164,6 +1172,14 @@ export function CaseDetailsDialog({
                                     <span className="text-muted-foreground text-sm italic">غير مُضاف</span>
                                   ) : f.kind === "date" ? (
                                     <DualDateDisplay date={raw} compact />
+                                  ) : f.kind === "select" ? (
+                                    // 🔴 TOLERANT READ. grievance_result is
+                                    // varchar(50) free text and may hold a legacy
+                                    // value outside the set. `?? raw` shows
+                                    // whatever is stored rather than blanking it
+                                    // or throwing on a missing map key — the map
+                                    // is a lookup, never assumed total.
+                                    <>{GrievanceResultLabels[raw as GrievanceResultValue] ?? raw}</>
                                   ) : f.kind === "amount" ? (
                                     // 🔴 numeric(12,2) ARRIVES AS A STRING ("1500.00").
                                     // Rendered verbatim beside a «ريال» suffix — NO
@@ -1193,6 +1209,36 @@ export function CaseDetailsDialog({
                                     onChange={(v) => setViolationForm((prev) => ({ ...prev, [f.key]: v }))}
                                     data-testid={`violation-input-${f.key}`}
                                   />
+                                ) : f.kind === "select" ? (
+                                  <Select
+                                    value={violationForm[f.key] || ""}
+                                    onValueChange={(v) => setViolationForm((prev) => ({ ...prev, [f.key]: v }))}
+                                  >
+                                    <SelectTrigger data-testid={`violation-input-${f.key}`}>
+                                      <SelectValue placeholder="اختر النتيجة" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {(f.options ?? []).map((opt) => (
+                                        <SelectItem key={opt} value={opt}>
+                                          {GrievanceResultLabels[opt as GrievanceResultValue] ?? opt}
+                                        </SelectItem>
+                                      ))}
+                                      {/* 🔴 THE OUT-OF-SET ESCAPE HATCH. The column
+                                          is free text, so a stored value may not be
+                                          one of the three. Without this option the
+                                          Select would render EMPTY over a non-empty
+                                          column and the next save would silently
+                                          clear it — data loss by dropdown. Appended
+                                          only when it is genuinely unknown, so the
+                                          normal case shows exactly three options. */}
+                                      {(() => {
+                                        const cur = violationForm[f.key] || "";
+                                        return cur && !(f.options ?? []).includes(cur) ? (
+                                          <SelectItem key={cur} value={cur}>{cur} (قيمة قديمة)</SelectItem>
+                                        ) : null;
+                                      })()}
+                                    </SelectContent>
+                                  </Select>
                                 ) : (
                                   <Input
                                     value={violationForm[f.key] || ""}
@@ -1206,20 +1252,6 @@ export function CaseDetailsDialog({
                                     placeholder={f.kind === "amount" ? "مثال: 1500.00" : undefined}
                                     data-testid={`violation-input-${f.key}`}
                                   />
-                                )}
-                                {f.readMostly && (
-                                  // 🔴 THE CORRECTION-ONLY WARNING. Filing an
-                                  // execution request happens on the مهامي task,
-                                  // which also completes that task, writes an
-                                  // activity row and can auto-close the case. This
-                                  // panel writes the number and nothing else, so
-                                  // using it to "file" would leave the task open and
-                                  // the case un-closed. Said in the UI, not just in
-                                  // a comment, because the field looks identical to
-                                  // the ten around it.
-                                  <p className="text-xs text-amber-600 mt-1">
-                                    للتصحيح فقط — رفع طلب التنفيذ يتم من مهمة «رفع طلب تنفيذ» في مهامي
-                                  </p>
                                 )}
                               </div>
                             ))}

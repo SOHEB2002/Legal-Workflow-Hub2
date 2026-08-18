@@ -96,6 +96,7 @@ import {
   recordJudgmentDeedSchema,
   updateViolationDetailsSchema,
   ViolationAmountPattern,
+  GrievanceResultValues,
   appealOutcomeSchema,
   opponentResponseSchema,
   appealRulingSchema,
@@ -8809,7 +8810,12 @@ export async function registerRoutes(
         "grievanceNumber",
         "grievanceDate",
         "grievanceResult",
-        "executionRequestNumber",
+        // 🔴 adminExecutionRequestNumber, NOT executionRequestNumber. The latter
+        // was REMOVED from this endpoint's writable set: it belongs to the مهامي
+        // execution field task (POST /api/field-tasks/:id/execution-request,
+        // which also completes the task and can auto-close the case) and to the
+        // pre-existing inline edit, and nothing else may write it.
+        "adminExecutionRequestNumber",
         "invoiceNumber",
         "violationAmount",
       ] as const;
@@ -8826,7 +8832,7 @@ export async function registerRoutes(
         grievanceNumber: "رقم الاعتراض",
         grievanceDate: "تاريخ الاعتراض",
         grievanceResult: "نتيجة الاعتراض",
-        executionRequestNumber: "رقم طلب التنفيذ",
+        adminExecutionRequestNumber: "رقم طلب التنفيذ",
         invoiceNumber: "رقم الفاتورة",
         violationAmount: "مبلغ المخالفة",
       };
@@ -8838,7 +8844,7 @@ export async function registerRoutes(
         administrativeDecisionNumber: 100, administrativeDecisionDate: 50,
         violationKnowledgeDate: 50, ifaaNumber: 100, ifaaDate: 50,
         grievanceNumber: 100, grievanceDate: 50, grievanceResult: 50,
-        executionRequestNumber: 100, invoiceNumber: 100,
+        adminExecutionRequestNumber: 100, invoiceNumber: 100,
       };
 
       const updateData: Record<string, string | null> = {};
@@ -8860,6 +8866,21 @@ export async function registerRoutes(
           if (!ViolationAmountPattern.test(trimmed)) {
             return res.status(400).json({
               error: "مبلغ المخالفة يجب أن يكون رقماً صحيحاً (بحد أقصى منزلتين عشريتين)",
+            });
+          }
+          updateData[field] = trimmed;
+          continue;
+        }
+        if (field === "grievanceResult") {
+          // 🔴 MEMBERSHIP-CHECKED ON WRITE ONLY. The column is varchar(50) free
+          // text and may already hold a legacy value outside the set — that is
+          // READ tolerantly everywhere (the panel keeps an unknown value visible
+          // and selected rather than blanking it). What this refuses is writing a
+          // NEW value outside the set through this endpoint, which is what keeps
+          // the set meaningful going forward without invalidating existing rows.
+          if (!(GrievanceResultValues as readonly string[]).includes(trimmed)) {
+            return res.status(400).json({
+              error: `نتيجة الاعتراض غير صالحة — القيم المسموحة: ${GrievanceResultValues.join(" / ")}`,
             });
           }
           updateData[field] = trimmed;
@@ -14761,7 +14782,39 @@ export async function registerRoutes(
               // جزئي — ALONGSIDE the collection task above. Same live routing via
               // the execution mapping key (assignee → own task; unset → the
               // branch_manager's unassigned pool). Collection is left unchanged.
-              if (judgmentType === "لصالحنا") {
+              //
+              // 🔴 AND NOT FOR AN ADMINISTRATIVE CASE (owner ruling). An إداري
+              // judgment does not go to محكمة التنفيذ — the administrative
+              // execution route is its own thing, recorded as رقم طلب التنفيذ
+              // الإداري on the violation panel, with no field task behind it. The
+              // ordinary «رفع طلب تنفيذ» task would send admin_support to the
+              // wrong court.
+              //
+              // 🔴 IDENTIFIED BY THE RESOLVED DEPARTMENT NAME, NEVER caseType —
+              // the standing L5 rule (caseType is free-text user input, so a
+              // labor case mistyped تجاري routed to the wrong committee). Same
+              // getDepartmentById resolution the settlement guard earlier in this
+              // handler already uses.
+              //
+              // FAIL DIRECTION: an UNRESOLVED department is NOT admin, so the
+              // execution task is still created. Suppressing a task must require a
+              // positive match, never the absence of information — the same
+              // reasoning departmentHasCommittee's header gives for keeping a
+              // committee when the name will not resolve. Losing a real execution
+              // task silently is worse than raising one on an admin case, which a
+              // human can cancel.
+              //
+              // ⚠ COLLECTION IS DELIBERATELY UNTOUCHED (owner ruling, both
+              // halves). An admin judgment still raises خطاب تحصيل — and that is
+              // also what keeps maybeCloseCaseAfterPostJudgmentTasks working:
+              // that helper returns early when a case has NO post-judgment task
+              // at all, so suppressing BOTH would have left every لصالحنا admin
+              // case resting at محكوم_حكم_نهائي with nothing able to close it.
+              const judgmentDept = existingCase.departmentId
+                ? await storage.getDepartmentById(existingCase.departmentId)
+                : null;
+              const isAdministrativeCase = judgmentDept?.name === "إداري";
+              if (judgmentType === "لصالحنا" && !isAdministrativeCase) {
                 const executionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.EXECUTION, assignments, allUsers);
                 const executionTask = await storage.createFieldTask({
                   title: `${ExecutionTaskTitlePrefix} — قضية رقم ${existingCase.caseNumber}`,

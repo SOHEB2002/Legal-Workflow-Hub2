@@ -168,6 +168,22 @@ export const lawCases = pgTable("law_cases", {
   grievanceNumber: varchar("grievance_number", { length: 100 }),
   invoiceNumber: varchar("invoice_number", { length: 100 }),
   violationAmount: numeric("violation_amount", { precision: 12, scale: 2 }),
+  // 🔴 رقم طلب التنفيذ الإداري — A DIFFERENT FIELD FROM executionRequestNumber
+  // ABOVE, not a duplicate and not a rename. The first batch of this panel
+  // REUSED that column and that was wrong:
+  //   • execution_request_number belongs to the مهامي EXECUTION FIELD TASK. It
+  //     is written by POST /api/field-tasks/:id/execution-request, which also
+  //     COMPLETES that task, writes an execution_request_filed activity row and
+  //     can auto-close the case. It is the execution COURT's request number.
+  //   • admin_execution_request_number is a fact recorded on the violation
+  //     panel. It has NO filing path, NO task, and NO side effects — an ordinary
+  //     editable field.
+  // Sharing one column meant the panel could silently overwrite a number the
+  // execution task had filed, and vice versa. Two concepts, two columns.
+  //
+  // ⚠ APPLIED MANUALLY via script — db:push NOT run; both DBs already carry it.
+  // varchar(100), the identifier shape shared by every number column here.
+  adminExecutionRequestNumber: varchar("admin_execution_request_number", { length: 100 }),
   appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
   // "المترافع" — the lawyer who APPEARS IN COURT for this case, when that is not
   // the responsible lawyer (a foreign or unlicensed lawyer cannot plead). Set in
@@ -2499,6 +2515,43 @@ export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
 // already keyed on these exact strings independently. Centralised here so the
 // two can never drift: renaming a title in ONE place used to silently drop the
 // task out of the feed. Both are matched as `title LIKE '<prefix>%'`.
+// ==================== نتيجة الاعتراض (التظلم) — the admin grievance outcome ====================
+// Owner ruling: exactly three values. Stored in law_cases.grievance_result,
+// which is varchar(50) FREE TEXT and needs no migration to gain this set.
+//
+// ⚠ THE COLUMN MAY ALREADY HOLD ANYTHING. Nothing has ever validated it, so a
+// legacy or hand-written value outside this set is possible. Every consumer must
+// therefore tolerate an unknown value rather than assume membership — the panel
+// keeps it visible and selectable instead of blanking it (see the Select), and
+// GrievanceResultLabels is read with a `?? raw` fallback, never as a total map.
+//
+// 🔴 لم_يُردّ_عليه IS LOAD-BEARING — DO NOT RENAME OR REMOVE IT CASUALLY.
+// It is the value that triggers the 120-DAY PRESCRIPTION RULE: an اعتراض that
+// received no answer starts a different clock from one that was decided. The
+// prescription calculation is being built in the استلام batch and will key on
+// this exact stored string. Renaming it silently breaks that calculation for
+// every case already carrying the old value, with no error anywhere — the same
+// failure shape as the stage-value renames this codebase guards against.
+export const GrievanceResult = {
+  ACCEPTED: "مقبول",
+  REJECTED: "مرفوض",
+  // 🔴 the 120-day trigger — see the warning above.
+  NO_RESPONSE: "لم_يُردّ_عليه",
+} as const;
+
+export type GrievanceResultValue = typeof GrievanceResult[keyof typeof GrievanceResult];
+
+export const GrievanceResultLabels: Record<GrievanceResultValue, string> = {
+  "مقبول": "مقبول",
+  "مرفوض": "مرفوض",
+  "لم_يُردّ_عليه": "لم يُردّ عليه",
+};
+
+// The three values as a plain array, for the endpoint's membership check and the
+// panel's Select options. Derived from the const so a fourth value is ONE edit.
+export const GrievanceResultValues: readonly GrievanceResultValue[] =
+  Object.values(GrievanceResult) as GrievanceResultValue[];
+
 export const CollectionTaskTitlePrefix = "إعداد خطاب تحصيل";
 export const ExecutionTaskTitlePrefix = "رفع طلب تنفيذ";
 
@@ -3514,6 +3567,10 @@ export interface LawCase {
   // (e.g. "1500.00") to preserve exact decimal precision, and the driver returns
   // it that way. Typing this `number` would compile and then be wrong at runtime.
   violationAmount: string | null;
+  // 🔴 NOT executionRequestNumber. See the column comment: that one belongs to
+  // the مهامي execution task and carries side effects; this one is a plain
+  // panel field. Never conflate them.
+  adminExecutionRequestNumber: string | null;
   appealLawyerId: string | null;
   // "المترافع" — optional court-appearance override. See the column comment.
   litigatorId: string | null;
@@ -6594,8 +6651,16 @@ export const updateViolationDetailsSchema = z.object({
   ifaaDate: z.string().nullable().optional(),
   grievanceNumber: z.string().nullable().optional(),
   grievanceDate: z.string().nullable().optional(),
+  // Kept as a plain string here, NOT z.enum(GrievanceResultValues). The handler
+  // does the membership check so it can return the house-style Arabic 400 with
+  // the allowed values named; a zod enum failure yields a raw issue array. Same
+  // reason every workflow schema in this file is tolerant and lets the handler
+  // own its refusals (the validation-patterns rule).
   grievanceResult: z.string().nullable().optional(),
-  executionRequestNumber: z.string().nullable().optional(),
+  // 🔴 executionRequestNumber is DELIBERATELY ABSENT. It belongs to the مهامي
+  // execution field task and is written only by that route and the pre-existing
+  // inline edit. The panel's «رقم طلب التنفيذ» is adminExecutionRequestNumber.
+  adminExecutionRequestNumber: z.string().nullable().optional(),
   invoiceNumber: z.string().nullable().optional(),
   violationAmount: z.string().nullable().optional(),
 }).passthrough();
@@ -6804,6 +6869,7 @@ export const updateCaseSchema = z.object({
   invoiceNumber: z.string().nullable().optional(),
   // STRING, matching the interface and the numeric column's inferred type.
   violationAmount: z.string().nullable().optional(),
+  adminExecutionRequestNumber: z.string().nullable().optional(),
   courtName: z.string().optional(),
   courtCaseNumber: z.string().optional(),
   judgeName: z.string().optional(),
