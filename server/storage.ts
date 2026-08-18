@@ -896,6 +896,7 @@ function mapDbCase(dbCase: any): LawCase {
     ifaaNumber: dbCase.ifaaNumber || null,
     ifaaDate: dbCase.ifaaDate || null,
     grievanceNumber: dbCase.grievanceNumber || null,
+    grievanceResultDate: dbCase.grievanceResultDate || null,
     invoiceNumber: dbCase.invoiceNumber || null,
     // `|| null` is correct here even for the amount: numeric arrives as a string
     // ("1500.00"), so the falsy values are "" and null — never a meaningful 0,

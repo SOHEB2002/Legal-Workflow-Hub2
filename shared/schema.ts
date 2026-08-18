@@ -166,6 +166,19 @@ export const lawCases = pgTable("law_cases", {
   // would rebuild the judgmentType/judgmentSide two-names-for-one-thing trap in
   // a single table. The UI label is «رقم الاعتراض».
   grievanceNumber: varchar("grievance_number", { length: 100 }),
+  // 🔴 تاريخ نتيجة الاعتراض — WHEN the authority answered the grievance, and
+  // LOAD-BEARING FOR THE PRESCRIPTION CALCULATION exactly as لم_يُردّ_عليه is.
+  // The two are the pair that calculation runs on:
+  //   • grievance_result = لم_يُردّ_عليه  → the 120-day rule (no answer came)
+  //   • grievance_result = مرفوض + THIS DATE → the 60-day clock runs FROM here
+  // Remove or repoint this column and a rejected grievance loses the instant its
+  // clock starts from, with no error anywhere — the case simply computes the
+  // wrong deadline. Do not delete it as "just another panel date".
+  //
+  // Named grievance_result_date to sit beside grievance_result rather than
+  // inventing a second vocabulary — the same reason grievance_number is not
+  // objection_number. varchar(50), the house shape for a user-picked date.
+  grievanceResultDate: varchar("grievance_result_date", { length: 50 }),
   invoiceNumber: varchar("invoice_number", { length: 100 }),
   violationAmount: numeric("violation_amount", { precision: 12, scale: 2 }),
   // 🔴 رقم طلب التنفيذ الإداري — A DIFFERENT FIELD FROM executionRequestNumber
@@ -3562,6 +3575,8 @@ export interface LawCase {
   // «رقم الاعتراض» in the UI; named for التظلم because they are the same thing
   // and its date/result are grievanceDate / grievanceResult.
   grievanceNumber: string | null;
+  // 🔴 Load-bearing for the prescription calculation — see the column comment.
+  grievanceResultDate: string | null;
   invoiceNumber: string | null;
   // 🔴 STRING, not number — numeric(12,2) is inferred by drizzle as a string
   // (e.g. "1500.00") to preserve exact decimal precision, and the driver returns
@@ -6657,6 +6672,7 @@ export const updateViolationDetailsSchema = z.object({
   // reason every workflow schema in this file is tolerant and lets the handler
   // own its refusals (the validation-patterns rule).
   grievanceResult: z.string().nullable().optional(),
+  grievanceResultDate: z.string().nullable().optional(),
   // 🔴 executionRequestNumber is DELIBERATELY ABSENT. It belongs to the مهامي
   // execution field task and is written only by that route and the pre-existing
   // inline edit. The panel's «رقم طلب التنفيذ» is adminExecutionRequestNumber.
@@ -6866,6 +6882,7 @@ export const updateCaseSchema = z.object({
   ifaaNumber: z.string().nullable().optional(),
   ifaaDate: z.string().nullable().optional(),
   grievanceNumber: z.string().nullable().optional(),
+  grievanceResultDate: z.string().nullable().optional(),
   invoiceNumber: z.string().nullable().optional(),
   // STRING, matching the interface and the numeric column's inferred type.
   violationAmount: z.string().nullable().optional(),

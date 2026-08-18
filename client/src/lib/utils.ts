@@ -55,3 +55,39 @@ export function extractApiError(err: unknown): string {
   }
   return msg || "حدث خطأ غير متوقع";
 }
+
+// ==================== AMOUNT DISPLAY ====================
+// 🔴 THE FIRST AND ONLY MONEY FORMATTER IN THIS CODEBASE. There was none before
+// — no Intl.NumberFormat, no currency helper anywhere — because law_cases
+// .violation_amount (مبلغ المخالفة) is the schema's only monetary column. It
+// lives here rather than inline in case-details-dialog because a formatting rule
+// with an opinion about digits and grouping is a shared decision, not a detail of
+// one panel; a second amount must reuse this, never re-derive it.
+//
+// THE DECISIONS, all deliberate:
+//   • LATIN DIGITS (0-9), grouping comma, decimal period → "250,000.00".
+//     NOT toLocaleString("ar-SA"), which renders Arabic-Indic digits in some
+//     engines — the exact trap recorded for activity-log.tsx's CSV export. The
+//     raw value is Latin and every other number in the app is Latin.
+//   • PURE STRING MANIPULATION — Number() is never called, so a money value is
+//     never parsed into a float and no rounding can occur. The stored value's
+//     own digits are what get displayed.
+//   • FRACTION PRESERVED VERBATIM, not padded or truncated. numeric(12,2) always
+//     returns two decimals, so "250000.00" → "250,000.00"; anything else is
+//     shown as stored rather than silently reshaped.
+//   • FAIL-OPEN: a value that is not a plain decimal is returned UNCHANGED, never
+//     blanked. Same tolerance rule as the grievance-result label lookup — a
+//     display helper must not hide data it does not recognise.
+//
+// DISPLAY ONLY. The edit input binds the RAW string, so a user typing 250000.00
+// is never fighting comma insertion, and what is written back is what was typed.
+export function formatAmount(raw: string | null | undefined): string {
+  if (raw === null || raw === undefined) return "";
+  const s = String(raw).trim();
+  if (!s) return "";
+  const m = /^(-?)(\d+)(?:\.(\d*))?$/.exec(s);
+  if (!m) return s;
+  const [, sign, intPart, frac] = m;
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return frac === undefined ? `${sign}${grouped}` : `${sign}${grouped}.${frac}`;
+}
