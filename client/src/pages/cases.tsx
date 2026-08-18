@@ -1018,7 +1018,27 @@ export default function CasesPage() {
         // declared in insertCaseSchema, which strips undeclared keys, and it was
         // not in storage.createCase's allowlist).
         grievanceRequired: isAdminIntake ? formData.grievanceRequired : false,
-        memoRequired: formData.memoRequired,
+        // 🔴 GUARDED FOR THE SAME REASON AS THE THREE إداري FIELDS ABOVE, and the
+        // stale state here is DEMONSTRABLE rather than hypothetical. The "مطلوب
+        // مذكرة" checkbox renders only for منظورة_بالمحكمة, and the classification
+        // toggle that switches BACK to قيد_الدراسة explicitly resets
+        // previousHearingsCount / currentSituation / responseDeadline / clientRole
+        // — but NOT memoRequired. It clears responseDeadline, the field this very
+        // checkbox reveals, and leaves the checkbox's own flag set.
+        //
+        // So: tick مطلوب مذكرة on an in-court case → switch to قيد_الدراسة → the
+        // control unmounts, formData keeps true. Inert before this batch because
+        // storage.createCase dropped the key; the moment it persists, that stale
+        // true lands in the column. It does not change an under-study path today
+        // (getStagesForClassification reads memoRequired ONLY on the in-court
+        // branch) but it goes LIVE the instant the case is promoted to
+        // منظورة_بالمحكمة — which happens automatically on ناجز/معين acceptance —
+        // flipping it onto a memo path nobody chose.
+        //
+        // Same predicate as startingStage on the very next line.
+        memoRequired: formData.caseClassification === CaseClassification.IN_COURT
+          ? formData.memoRequired
+          : false,
         startingStage: formData.caseClassification === CaseClassification.IN_COURT
           ? formData.startingStage
           : undefined,

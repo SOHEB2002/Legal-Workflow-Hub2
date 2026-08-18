@@ -1711,6 +1711,25 @@ export class DatabaseStorage implements IStorage {
       previousHearingsCount: data.previousHearingsCount || 0,
       currentSituation: data.currentSituation || "",
       responseDeadline: data.responseDeadline || null,
+      // 🔴 THE FOURTH KEY THIS ALLOWLIST WAS DROPPING, and the most consequential.
+      // insertCaseSchema declares memoRequired and POST /api/cases USES it at
+      // create time — smart-priority scoring and the auto-memo both read it off
+      // the validated payload — so it passed validation, did its job, and then
+      // never reached the column. law_cases.memo_required was therefore ALWAYS
+      // false on a new case, no matter what the "مطلوب مذكرة" checkbox said.
+      //
+      // WHY IT MATTERS MORE THAN THE THREE ABOVE: getStagesForClassification
+      // reads memoRequired on the منظورة_بالمحكمة branch, so a court case that
+      // needs a pleading resolved to InCourtNoMemoStages (استلام → استكمال_البيانات
+      // → دراسة → منظورة) instead of InCourtDefendantMemoStages /
+      // InCourtPlaintiffMemoStages. The memo was still created; the case's own
+      // path just forgot it needed one, and the drafting + internal-review +
+      // committee stages never appeared on it.
+      //
+      // ⚠ THIS IS THE WRITE ONLY. Path resolution, the arrays and the two
+      // create-time readers are untouched — they already behaved correctly from
+      // the request body; only the persisted column was wrong.
+      memoRequired: data.memoRequired ?? false,
       // ==================== THE إداري INTAKE FIELDS ====================
       // 🔴 ADDED because this object is an EXPLICIT ALLOWLIST, not a spread —
       // a key absent from it never reaches the INSERT no matter how faithfully
