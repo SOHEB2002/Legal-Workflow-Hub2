@@ -896,14 +896,10 @@ export default function CasesPage() {
     responseDeadline: "",
     nextHearingDate: "",
     nextHearingTime: "",
-    adminCaseSubType: "" as string,
-    prescriptionDate: "",
-    // Declared so the إداري "مطلوب تظلم" checkbox reads and writes a TYPED key.
-    // It was already rendered against this form, but only through an `as any`
-    // on both the read and the write — which is exactly why the field could be
-    // left out of the submit payload below without tsc noticing. editFormData
-    // has carried it all along; the two forms now match.
-    grievanceRequired: false,
+    // adminCaseSubType / prescriptionDate / grievanceRequired are NOT state on
+    // this form any more — the create dialog no longer asks for them (they are
+    // decided at استلام). editFormData still carries all three; only the CREATE
+    // form drops them.
     memoRequired: false,
     startingStage: "استلام" as string,
   });
@@ -935,9 +931,6 @@ export default function CasesPage() {
       responseDeadline: "",
       nextHearingDate: "",
       nextHearingTime: "",
-      adminCaseSubType: "",
-      prescriptionDate: "",
-      grievanceRequired: false,
       memoRequired: false,
       startingStage: "استلام",
     });
@@ -960,31 +953,12 @@ export default function CasesPage() {
     }
 
     const isPlaintiffNew = formData.caseClassification === CaseClassification.UNDER_STUDY;
-    // 🔴 THE ONE PREDICATE THAT DECIDES THE إداري INTAKE FIELDS — hoisted so the
-    // MANDATORY check below and the PAYLOAD further down cannot disagree. It is
-    // the same test the three controls are RENDERED behind
-    // (getDepartmentName(formData.departmentId) === "إداري"), and it is keyed on
-    // the DEPARTMENT, never on caseType — the L5 precedent.
-    //
-    // ⚠ THE PAYLOAD GUARD IS LOAD-BEARING, not belt-and-braces. Changing the
-    // department in the dialog clears departmentOther and NOTHING ELSE (see the
-    // القسم Select), so picking إداري, filling نوع القضية الإدارية / تاريخ التقادم
-    // / مطلوب تظلم and then switching to تجاري unmounts the controls while
-    // formData KEEPS the values. Sending them unconditionally would stamp admin
-    // intake data onto a non-admin case. That was inert before this batch only
-    // because storage.createCase dropped all three on the floor; now that it
-    // persists them, the stale state is reachable and has to be gated here.
-    const isAdminIntake = isPlaintiffNew && getDepartmentName(formData.departmentId) === "إداري";
-    if (isAdminIntake) {
-      if (!formData.adminCaseSubType) {
-        toast({ title: "يرجى تحديد نوع القضية الإدارية (تظلم / قضية)", variant: "destructive" });
-        return;
-      }
-      if (!formData.prescriptionDate) {
-        toast({ title: "يرجى تحديد تاريخ التقادم", variant: "destructive" });
-        return;
-      }
-    }
+    // The إداري mandatory-field block that stood here is GONE with the controls it
+    // validated, and so is the isAdminIntake predicate that gated it — with all
+    // three fields off the form there is nothing left for either to guard, and a
+    // toast demanding a value the dialog no longer collects would be unclearable.
+    // Both questions are re-asked at استلام. isPlaintiffNew stays: it still drives
+    // courtName / nextHearingDate / nextHearingTime in the payload below.
     try {
       await addCase({
         clientId: formData.clientId || "",
@@ -1006,20 +980,16 @@ export default function CasesPage() {
         responseDeadline: formData.responseDeadline || null,
         nextHearingDate: isPlaintiffNew ? null : (formData.nextHearingDate || null),
         nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
-        // The three إداري intake fields, all gated on isAdminIntake — same
-        // conditional-payload idiom as courtName / nextHearingDate above. A
-        // non-إداري case sends null/null/false, which is exactly the row it got
-        // before this batch.
-        adminCaseSubType: isAdminIntake ? (formData.adminCaseSubType || null) : null,
-        prescriptionDate: isAdminIntake ? (formData.prescriptionDate || null) : null,
-        // 🔴 WAS OMITTED ENTIRELY. The checkbox rendered and set state; this
-        // payload simply never named the key, so the value died in the dialog —
-        // the first of THREE layers that dropped it (the other two: it was not
-        // declared in insertCaseSchema, which strips undeclared keys, and it was
-        // not in storage.createCase's allowlist).
-        grievanceRequired: isAdminIntake ? formData.grievanceRequired : false,
-        // 🔴 GUARDED FOR THE SAME REASON AS THE THREE إداري FIELDS ABOVE, and the
-        // stale state here is DEMONSTRABLE rather than hypothetical. The "مطلوب
+        // adminCaseSubType / prescriptionDate / grievanceRequired are NOT sent —
+        // the create dialog no longer asks for any of them (OWNER RULING: all
+        // three are decided at استلام). storage.createCase still WRITES all three
+        // and now receives undefined for each, defaulting to null / null / false,
+        // which is the correct state for a case that has not reached استلام yet.
+        // 🔴 GUARDED, and the stale state here is DEMONSTRABLE rather than
+        // hypothetical. (This guard is now the last survivor of the pattern — the
+        // إداري fields it was written alongside have left the form entirely; this
+        // one stays because memoRequired is a COURT-classification field, not an
+        // admin one, and the dialog still asks for it.) The "مطلوب
         // مذكرة" checkbox renders only for منظورة_بالمحكمة, and the classification
         // toggle that switches BACK to قيد_الدراسة explicitly resets
         // previousHearingsCount / currentSituation / responseDeadline / clientRole
@@ -2338,44 +2308,27 @@ export default function CasesPage() {
                         <span className="text-xs text-blue-700 dark:text-blue-400">القضايا العمالية تتطلب التقييد في منصة وزارة الموارد البشرية والتسوية الودية قبل رفعها للمحكمة</span>
                       </div>
                     )}
-                    {getDepartmentName(formData.departmentId) === "إداري" && (
-                      <>
-                        <div>
-                          <Label>نوع القضية الإدارية <span className="text-red-500">*</span></Label>
-                          <Select
-                            value={formData.adminCaseSubType}
-                            onValueChange={(value) => setFormData({ ...formData, adminCaseSubType: value })}
-                          >
-                            <SelectTrigger data-testid="select-admin-case-subtype">
-                              <SelectValue placeholder="اختر النوع" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="تظلم">تظلم</SelectItem>
-                              <SelectItem value="قضية">قضية</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div>
-                          <Label>تاريخ التقادم <span className="text-red-500">*</span></Label>
-                          <HijriDatePicker
-                            value={formData.prescriptionDate}
-                            onChange={(v) => setFormData({ ...formData, prescriptionDate: v })}
-                            data-testid="input-prescription-date"
-                          />
-                        </div>
-                        <div className="flex items-center gap-2 pt-1">
-                          <Checkbox
-                            id="grievanceRequired"
-                            checked={formData.grievanceRequired}
-                            onCheckedChange={(checked) => setFormData({ ...formData, grievanceRequired: !!checked })}
-                            data-testid="checkbox-grievance-required"
-                          />
-                          <Label htmlFor="grievanceRequired" className="text-sm cursor-pointer">
-                            مطلوب تظلم
-                          </Label>
-                        </div>
-                      </>
-                    )}
+                    {/* 🔴 THE إداري BRANCH IS GONE — the whole conditional, not just
+                        its contents, because the three controls WERE its contents
+                        and an empty `dept === "إداري" && (<></>)` is dead markup.
+                        (OWNER RULING) All three admin intake questions move to the
+                        استلام stage: نوع القضية الإدارية becomes two buttons there
+                        — مسار التظلم / مسار الدعوى — تاريخ التقادم is COMPUTED
+                        rather than typed, and مطلوب تظلم is asked when مسار الدعوى
+                        is pressed. None of them is knowable at creation.
+
+                        ⚠ THE SERVER SIDE IS DELIBERATELY NOT REVERTED. baseCase
+                        still writes adminCaseSubType / prescriptionDate /
+                        grievanceRequired (d821c67) and insertCaseSchema still
+                        declares all three — they now receive undefined and default
+                        to null / null / false, which IS the correct intake state,
+                        and the same allowlist has to serve the استلام flow and the
+                        edit form. Removing the writes would re-open the exact
+                        defect batch 0 closed.
+
+                        ⚠ memoRequired is NOT an admin field and stays exactly where
+                        it is (further down, under the منظورة_بالمحكمة branch) with
+                        its 3321717 guard intact. */}
                   </>
                 )}
 
