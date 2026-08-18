@@ -1012,7 +1012,19 @@ export function CaseDetailsDialog({
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && selectedCase.caseType === "إداري" && selectedCase.adminCaseSubType && (
+                  {/* 🔴 GATED ON THE RESOLVED DEPARTMENT, NEVER ON caseType — the
+                      documented L5 precedent (hearings.tsx, the labor settlement
+                      panels, case-progress-bar). caseType is free-text user input
+                      and "إداري" is a value in BOTH CaseType and the departments
+                      table, so the two readings silently disagree: the create and
+                      edit forms that CAPTURE these fields gate on
+                      getDepartmentName(departmentId) === "إداري" (cases.tsx), while
+                      this panel gated on the type — so an إداري-DEPARTMENT case
+                      typed anything else collected نوع القضية الإدارية + تاريخ
+                      التقادم as mandatory fields and then never displayed either.
+                      Now keyed exactly like the تجاري and عمالي workflow panels
+                      immediately below, so capture and display cannot drift. */}
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "إداري" && selectedCase.adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">

@@ -898,6 +898,12 @@ export default function CasesPage() {
     nextHearingTime: "",
     adminCaseSubType: "" as string,
     prescriptionDate: "",
+    // Declared so the إداري "مطلوب تظلم" checkbox reads and writes a TYPED key.
+    // It was already rendered against this form, but only through an `as any`
+    // on both the read and the write — which is exactly why the field could be
+    // left out of the submit payload below without tsc noticing. editFormData
+    // has carried it all along; the two forms now match.
+    grievanceRequired: false,
     memoRequired: false,
     startingStage: "استلام" as string,
   });
@@ -931,6 +937,7 @@ export default function CasesPage() {
       nextHearingTime: "",
       adminCaseSubType: "",
       prescriptionDate: "",
+      grievanceRequired: false,
       memoRequired: false,
       startingStage: "استلام",
     });
@@ -953,7 +960,22 @@ export default function CasesPage() {
     }
 
     const isPlaintiffNew = formData.caseClassification === CaseClassification.UNDER_STUDY;
-    if (isPlaintiffNew && getDepartmentName(formData.departmentId) === "إداري") {
+    // 🔴 THE ONE PREDICATE THAT DECIDES THE إداري INTAKE FIELDS — hoisted so the
+    // MANDATORY check below and the PAYLOAD further down cannot disagree. It is
+    // the same test the three controls are RENDERED behind
+    // (getDepartmentName(formData.departmentId) === "إداري"), and it is keyed on
+    // the DEPARTMENT, never on caseType — the L5 precedent.
+    //
+    // ⚠ THE PAYLOAD GUARD IS LOAD-BEARING, not belt-and-braces. Changing the
+    // department in the dialog clears departmentOther and NOTHING ELSE (see the
+    // القسم Select), so picking إداري, filling نوع القضية الإدارية / تاريخ التقادم
+    // / مطلوب تظلم and then switching to تجاري unmounts the controls while
+    // formData KEEPS the values. Sending them unconditionally would stamp admin
+    // intake data onto a non-admin case. That was inert before this batch only
+    // because storage.createCase dropped all three on the floor; now that it
+    // persists them, the stale state is reachable and has to be gated here.
+    const isAdminIntake = isPlaintiffNew && getDepartmentName(formData.departmentId) === "إداري";
+    if (isAdminIntake) {
       if (!formData.adminCaseSubType) {
         toast({ title: "يرجى تحديد نوع القضية الإدارية (تظلم / قضية)", variant: "destructive" });
         return;
@@ -984,8 +1006,18 @@ export default function CasesPage() {
         responseDeadline: formData.responseDeadline || null,
         nextHearingDate: isPlaintiffNew ? null : (formData.nextHearingDate || null),
         nextHearingTime: isPlaintiffNew ? null : (formData.nextHearingTime || null),
-        adminCaseSubType: formData.adminCaseSubType || null,
-        prescriptionDate: formData.prescriptionDate || null,
+        // The three إداري intake fields, all gated on isAdminIntake — same
+        // conditional-payload idiom as courtName / nextHearingDate above. A
+        // non-إداري case sends null/null/false, which is exactly the row it got
+        // before this batch.
+        adminCaseSubType: isAdminIntake ? (formData.adminCaseSubType || null) : null,
+        prescriptionDate: isAdminIntake ? (formData.prescriptionDate || null) : null,
+        // 🔴 WAS OMITTED ENTIRELY. The checkbox rendered and set state; this
+        // payload simply never named the key, so the value died in the dialog —
+        // the first of THREE layers that dropped it (the other two: it was not
+        // declared in insertCaseSchema, which strips undeclared keys, and it was
+        // not in storage.createCase's allowlist).
+        grievanceRequired: isAdminIntake ? formData.grievanceRequired : false,
         memoRequired: formData.memoRequired,
         startingStage: formData.caseClassification === CaseClassification.IN_COURT
           ? formData.startingStage
@@ -2314,8 +2346,8 @@ export default function CasesPage() {
                         <div className="flex items-center gap-2 pt-1">
                           <Checkbox
                             id="grievanceRequired"
-                            checked={(formData as any).grievanceRequired || false}
-                            onCheckedChange={(checked) => setFormData({ ...formData, grievanceRequired: !!checked } as any)}
+                            checked={formData.grievanceRequired}
+                            onCheckedChange={(checked) => setFormData({ ...formData, grievanceRequired: !!checked })}
                             data-testid="checkbox-grievance-required"
                           />
                           <Label htmlFor="grievanceRequired" className="text-sm cursor-pointer">

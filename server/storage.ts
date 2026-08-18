@@ -1711,6 +1711,31 @@ export class DatabaseStorage implements IStorage {
       previousHearingsCount: data.previousHearingsCount || 0,
       currentSituation: data.currentSituation || "",
       responseDeadline: data.responseDeadline || null,
+      // ==================== THE إداري INTAKE FIELDS ====================
+      // 🔴 ADDED because this object is an EXPLICIT ALLOWLIST, not a spread —
+      // a key absent from it never reaches the INSERT no matter how faithfully
+      // every layer above forwarded it. All three were being carried correctly
+      // by cases-context's addCase AND (for the first two) validated by
+      // insertCaseSchema, and then dropped here at the last step, so an إداري
+      // case created through the mandatory create form landed with all three
+      // NULL/false. The only writer that ever persisted them was the EDIT
+      // form's PATCH, via caseDataFields in routes.ts.
+      //
+      // FIXED HERE rather than in the route or the client: this is the single
+      // chokepoint where the row is actually built, it is the ONLY layer that
+      // was dropping adminCaseSubType / prescriptionDate, and a route-side fix
+      // would have meant a second write (createCase then updateCase) for values
+      // the insert can carry directly.
+      //
+      // Defaults mirror the columns: admin_case_sub_type and prescription_date
+      // are nullable varchars (?? null, the clientRole idiom just below the
+      // classification above), grievance_required is boolean DEFAULT false.
+      // A non-إداري case sends none of the three — the create dialog renders
+      // these controls only for that department — so it inserts null/null/false,
+      // which is byte-identical to what it inserted before this change.
+      adminCaseSubType: data.adminCaseSubType ?? null,
+      prescriptionDate: data.prescriptionDate ?? null,
+      grievanceRequired: data.grievanceRequired ?? false,
       createdBy,
       createdAt: now,
       updatedAt: now,
