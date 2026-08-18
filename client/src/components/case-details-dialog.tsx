@@ -68,7 +68,7 @@ import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { formatTimeAmPm } from "@/lib/date-utils";
-import { extractApiError } from "@/lib/utils";
+import { extractApiError, formatAmount } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
@@ -296,6 +296,10 @@ const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
   { key: "grievanceNumber", label: "رقم الاعتراض", kind: "text" },
   { key: "grievanceDate", label: "تاريخ الاعتراض", kind: "date" },
   { key: "grievanceResult", label: "نتيجة الاعتراض", kind: "select", options: GrievanceResultValues },
+  // Sits immediately after the result it dates. NOT required when the result is
+  // مقبول/مرفوض and NOT cleared when it changes to لم_يُردّ_عليه — see the report;
+  // both are deliberate non-decisions pending the owner's ruling.
+  { key: "grievanceResultDate", label: "تاريخ نتيجة الاعتراض", kind: "date" },
   // 🔴 adminExecutionRequestNumber — NOT executionRequestNumber, which belongs to
   // the مهامي execution task and is displayed separately in the numbers grid.
   // Labelled «رقم طلب التنفيذ الإداري» — the owner's own wording. TWO other rows
@@ -1187,14 +1191,28 @@ export function CaseDetailsDialog({
                                     // is a lookup, never assumed total.
                                     <>{GrievanceResultLabels[raw as GrievanceResultValue] ?? raw}</>
                                   ) : f.kind === "amount" ? (
-                                    // 🔴 numeric(12,2) ARRIVES AS A STRING ("1500.00").
-                                    // Rendered verbatim beside a «ريال» suffix — NO
-                                    // Intl formatter was introduced (none exists in
-                                    // this codebase, and adding a shared money
-                                    // formatter is its own decision, not a
-                                    // side-effect of this panel). LtrInline is the
-                                    // house wrapper for a number inside RTL text.
-                                    <><LtrInline>{raw}</LtrInline> <span className="text-muted-foreground text-sm">ريال</span></>
+                                    // 🔴 ONE TEXT RUN, NO LtrInline — this is the fix.
+                                    // The previous markup wrapped the number in
+                                    // LtrInline (display:inline-block) and left «ريال»
+                                    // as a SIBLING element. An inline-block is an
+                                    // ATOMIC box that the bidi algorithm treats as a
+                                    // NEUTRAL, so the number's position relative to the
+                                    // unit was decided by neutral resolution against
+                                    // whatever surrounded it — not by this markup. It
+                                    // was also the ONLY number+Arabic-unit in the app
+                                    // written that way: every other one ({days} يوم,
+                                    // {durationDays} يوم, ${daysLeft} أيام) is a single
+                                    // interpolated run, and they all render correctly.
+                                    //
+                                    // As one run the ordering is no longer negotiable:
+                                    // Latin digits are European numbers, which bidi
+                                    // already lays out left-to-right INSIDE the RTL
+                                    // line, so the number reads correctly and «ريال»
+                                    // sits after it in reading order. LtrInline is for
+                                    // a string that must be FORCED ltr internally (an
+                                    // ISO date, a slashed identifier) — the dd34e43
+                                    // lesson — not for a decimal in an Arabic phrase.
+                                    <>{formatAmount(raw)} <span className="text-muted-foreground text-sm">ريال</span></>
                                   ) : (
                                     <LtrInline>{raw}</LtrInline>
                                   )}

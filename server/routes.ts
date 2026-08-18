@@ -8810,6 +8810,7 @@ export async function registerRoutes(
         "grievanceNumber",
         "grievanceDate",
         "grievanceResult",
+        "grievanceResultDate",
         // 🔴 adminExecutionRequestNumber, NOT executionRequestNumber. The latter
         // was REMOVED from this endpoint's writable set: it belongs to the مهامي
         // execution field task (POST /api/field-tasks/:id/execution-request,
@@ -8832,7 +8833,8 @@ export async function registerRoutes(
         grievanceNumber: "رقم الاعتراض",
         grievanceDate: "تاريخ الاعتراض",
         grievanceResult: "نتيجة الاعتراض",
-        adminExecutionRequestNumber: "رقم طلب التنفيذ",
+        grievanceResultDate: "تاريخ نتيجة الاعتراض",
+        adminExecutionRequestNumber: "رقم طلب التنفيذ الإداري",
         invoiceNumber: "رقم الفاتورة",
         violationAmount: "مبلغ المخالفة",
       };
@@ -8844,6 +8846,7 @@ export async function registerRoutes(
         administrativeDecisionNumber: 100, administrativeDecisionDate: 50,
         violationKnowledgeDate: 50, ifaaNumber: 100, ifaaDate: 50,
         grievanceNumber: 100, grievanceDate: 50, grievanceResult: 50,
+        grievanceResultDate: 50,
         adminExecutionRequestNumber: 100, invoiceNumber: 100,
       };
 
