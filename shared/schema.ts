@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, jsonb, integer, primaryKey, bigint, index, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
+// `numeric` is NEW to this file — law_cases.violation_amount is the first
+// monetary column in the schema. See its declaration for why numeric(12,2)
+// rather than integer/real/varchar, and note it infers a STRING, not a number.
+import { pgTable, text, varchar, boolean, timestamp, jsonb, integer, numeric, primaryKey, bigint, index, uniqueIndex, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // ==================== Drizzle Tables ====================
@@ -119,6 +122,52 @@ export const lawCases = pgTable("law_cases", {
   // part of deriveCurrentCaseNumber's priority chain — the displayed case number
   // stays court → najiz → settlement → base.
   executionRequestNumber: varchar("execution_request_number", { length: 100 }),
+  // ============ لوحة تفاصيل المخالفة — the ADMIN (إداري) violation panel ============
+  // Eight facts about the administrative violation the case is about. They live
+  // on law_cases like every other department-scoped field (taradi_* commercial,
+  // mohr_* labor, admin_case_sub_type / prescription_date / grievance_* already
+  // admin): this is a 1:1 panel on the case, not a collection, so no new table.
+  //
+  // ⚠ APPLIED MANUALLY via script/add-admin-violation-fields.sql — db:push was
+  // NOT run. Both DBs carry them already; the ALTERs ran BEFORE this code,
+  // because drizzle builds an explicit column list from this declaration and a
+  // missing column breaks EVERY read of law_cases, not just this panel.
+  //
+  // TYPES FOLLOW EXISTING PRECEDENT, none invented:
+  //   • identifiers → varchar(100), the najiz/moeen/taradi/court/execution shape.
+  //   • dates → varchar(50), the prescription_date / grievance_date /
+  //     judgment_deed_received_date shape. This is literally what
+  //     HijriDatePicker emits ("YYYY-MM-DD") and DualDateDisplay consumes, and
+  //     it keeps these columns clear of drizzle's date-mode conversion — the one
+  //     that silently broke auto-archive (Phase-4 S3) and 500'd checked_in_at.
+  //     Because none of them is a timestamp, storage.updateCase needs no change.
+  //   • violation_amount → numeric(12,2). 🔴 THE FIRST MONETARY COLUMN IN THIS
+  //     SCHEMA — there was no precedent to follow (no decimal/numeric/money
+  //     anywhere; contracts carry no value column; every integer here is a count
+  //     or a duration). Chosen for exact decimal (money must never be a float)
+  //     and because drizzle infers numeric as a STRING, which matches the
+  //     string-typed LawCase interface and needs no conversion layer.
+  //     ⚠ It arrives from the driver as a string like "1500.00", never a number.
+  //
+  // All eight are NULLABLE WITH NO DEFAULT — the precedent of every optional
+  // column added since prescription_date. NULL means "not recorded yet", which
+  // is the correct state for a panel filled in progressively.
+  administrativeDecisionNumber: varchar("administrative_decision_number", { length: 100 }),
+  administrativeDecisionDate: varchar("administrative_decision_date", { length: 50 }),
+  // تاريخ العلم بالمخالفة — the INPUT to the prescription calculation. Recorded
+  // here; nothing computes from it yet (that is the استلام flow's job).
+  violationKnowledgeDate: varchar("violation_knowledge_date", { length: 50 }),
+  ifaaNumber: varchar("ifaa_number", { length: 100 }),
+  ifaaDate: varchar("ifaa_date", { length: 50 }),
+  // 🔴 grievance_number, NOT objection_number (owner ruling): الاعتراض and
+  // التظلم are THE SAME THING, so the number carries the same name as its own
+  // date and result — grievance_date / grievance_result, both of which already
+  // exist and are REUSED rather than twinned. Naming it for the other word
+  // would rebuild the judgmentType/judgmentSide two-names-for-one-thing trap in
+  // a single table. The UI label is «رقم الاعتراض».
+  grievanceNumber: varchar("grievance_number", { length: 100 }),
+  invoiceNumber: varchar("invoice_number", { length: 100 }),
+  violationAmount: numeric("violation_amount", { precision: 12, scale: 2 }),
   appealLawyerId: varchar("appeal_lawyer_id", { length: 255 }),
   // "المترافع" — the lawyer who APPEARS IN COURT for this case, when that is not
   // the responsible lawyer (a foreign or unlicensed lawyer cannot plead). Set in
@@ -3451,6 +3500,20 @@ export interface LawCase {
   judgmentDeedReceivedDate: string | null;
   objectionWindowDays: number | null;
   executionRequestNumber: string | null;
+  // لوحة تفاصيل المخالفة (إداري). See the column block for the type reasoning.
+  administrativeDecisionNumber: string | null;
+  administrativeDecisionDate: string | null;
+  violationKnowledgeDate: string | null;
+  ifaaNumber: string | null;
+  ifaaDate: string | null;
+  // «رقم الاعتراض» in the UI; named for التظلم because they are the same thing
+  // and its date/result are grievanceDate / grievanceResult.
+  grievanceNumber: string | null;
+  invoiceNumber: string | null;
+  // 🔴 STRING, not number — numeric(12,2) is inferred by drizzle as a string
+  // (e.g. "1500.00") to preserve exact decimal precision, and the driver returns
+  // it that way. Typing this `number` would compile and then be wrong at runtime.
+  violationAmount: string | null;
   appealLawyerId: string | null;
   // "المترافع" — optional court-appearance override. See the column comment.
   litigatorId: string | null;
@@ -6503,6 +6566,40 @@ export const recordJudgmentDeedSchema = z.object({
   objectionWindowDays: z.union([z.number(), z.string()]).nullable().optional(),
 }).passthrough();
 
+// ==================== لوحة تفاصيل المخالفة — the admin violation panel ====================
+// PATCH /api/cases/:id/violation-details. Tolerant per the validation-patterns
+// rule: all-optional, .passthrough(), the handler keeps its own Arabic 400s.
+//
+// EVERY FIELD IS NULLABLE, and that is a feature rather than laxity: clearing a
+// wrongly-entered decision number has to be expressible, and "" from an emptied
+// input is normalised to null by the handler.
+//
+// 🔴 THE AMOUNT IS THE ONE FIELD WITH REAL VALIDATION, because it is the only
+// one whose column can REJECT the value. violation_amount is numeric(12,2): a
+// non-numeric string raises 22P02 and an over-large one 22003, both of which
+// surface as an opaque 500 rather than a usable Arabic error. The pattern below
+// is enforced BEFORE the write so the user is told what is wrong.
+//   • optional sign, 1-10 integer digits, optional 1-2 decimal places
+//   • 10 integer digits is the numeric(12,2) ceiling (12 total − 2 scale),
+//     i.e. up to 9,999,999,999.99 — far beyond any administrative fine.
+// Every other field is free text bounded by its varchar length, exactly like
+// najiz_number and its siblings, and is truncated rather than rejected.
+export const ViolationAmountPattern = /^-?\d{1,10}(\.\d{1,2})?$/;
+
+export const updateViolationDetailsSchema = z.object({
+  administrativeDecisionNumber: z.string().nullable().optional(),
+  administrativeDecisionDate: z.string().nullable().optional(),
+  violationKnowledgeDate: z.string().nullable().optional(),
+  ifaaNumber: z.string().nullable().optional(),
+  ifaaDate: z.string().nullable().optional(),
+  grievanceNumber: z.string().nullable().optional(),
+  grievanceDate: z.string().nullable().optional(),
+  grievanceResult: z.string().nullable().optional(),
+  executionRequestNumber: z.string().nullable().optional(),
+  invoiceNumber: z.string().nullable().optional(),
+  violationAmount: z.string().nullable().optional(),
+}).passthrough();
+
 // POST /api/cases/:id/appeal-ruling — the APPEAL COURT'S ruling on a case at
 // منظورة_استئناف.
 //
@@ -6694,6 +6791,19 @@ export const updateCaseSchema = z.object({
   judgmentDeedReceivedDate: z.string().nullable().optional(),
   objectionWindowDays: z.number().nullable().optional(),
   executionRequestNumber: z.string().nullable().optional(),
+  // لوحة تفاصيل المخالفة. DECLARED HERE OR SILENTLY LOST — z.object strips every
+  // key it does not declare, and the generic PATCH gate safeParses the body.
+  // That is exactly how grievanceRequired was dropped for months. Nullability
+  // mirrors the LawCase interface (all eight nullable).
+  administrativeDecisionNumber: z.string().nullable().optional(),
+  administrativeDecisionDate: z.string().nullable().optional(),
+  violationKnowledgeDate: z.string().nullable().optional(),
+  ifaaNumber: z.string().nullable().optional(),
+  ifaaDate: z.string().nullable().optional(),
+  grievanceNumber: z.string().nullable().optional(),
+  invoiceNumber: z.string().nullable().optional(),
+  // STRING, matching the interface and the numeric column's inferred type.
+  violationAmount: z.string().nullable().optional(),
   courtName: z.string().optional(),
   courtCaseNumber: z.string().optional(),
   judgeName: z.string().optional(),

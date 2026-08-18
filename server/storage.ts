@@ -885,6 +885,22 @@ function mapDbCase(dbCase: any): LawCase {
     judgmentDeedReceivedDate: dbCase.judgmentDeedReceivedDate || null,
     objectionWindowDays: dbCase.objectionWindowDays ?? null,
     executionRequestNumber: dbCase.executionRequestNumber || null,
+    // لوحة تفاصيل المخالفة (إداري). 🔴 WITHOUT THESE EIGHT LINES the columns are
+    // read from the DB and then dropped on the way out — every API response
+    // would carry `undefined` for all of them while the rows held real values,
+    // and tsc cannot see it. This is the silent half of the four-dropped-fields
+    // class; mapDbCase is the universal read path for every case, everywhere.
+    administrativeDecisionNumber: dbCase.administrativeDecisionNumber || null,
+    administrativeDecisionDate: dbCase.administrativeDecisionDate || null,
+    violationKnowledgeDate: dbCase.violationKnowledgeDate || null,
+    ifaaNumber: dbCase.ifaaNumber || null,
+    ifaaDate: dbCase.ifaaDate || null,
+    grievanceNumber: dbCase.grievanceNumber || null,
+    invoiceNumber: dbCase.invoiceNumber || null,
+    // `|| null` is correct here even for the amount: numeric arrives as a string
+    // ("1500.00"), so the falsy values are "" and null — never a meaningful 0,
+    // which would be the string "0.00" and is truthy.
+    violationAmount: dbCase.violationAmount || null,
     appealLawyerId: dbCase.appealLawyerId || null,
     litigatorId: dbCase.litigatorId || null,
     internalReviewerId: dbCase.internalReviewerId || null,

@@ -53,6 +53,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BidiText, LtrInline } from "@/components/ui/bidi-text";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { CaseActivityTab, CaseNotesTab, CaseDeadlinesTab } from "@/components/case-tabs";
 import { CaseStagePanel } from "@/components/case-stage-panel";
 import { HearingDetailsDialog } from "@/components/hearing-details-dialog";
@@ -66,6 +67,7 @@ import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { formatTimeAmPm } from "@/lib/date-utils";
+import { extractApiError } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
@@ -84,6 +86,11 @@ import {
   ClosureReasonLabels,
   hearingProducesNoMinutes,
   caseNotificationRecipientId,
+  // ONE rule for the amount, shared with the endpoint that enforces it — the
+  // same precedent as weAreTheAppellant / caseIsAtOrPastCourt above: the UI can
+  // never accept a value the server would reject, and the user is told at the
+  // keystroke rather than by a 400.
+  ViolationAmountPattern,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment } from "@shared/schema";
 
@@ -231,6 +238,61 @@ function canActOnMohrSettlement(
     || lawCase.responsibleLawyerId === user.id
     || (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(user.id));
 }
+
+// CLIENT MIRROR of the server's canEditCaseViolationDetails (routes.ts).
+// branch_manager | admin_support | department_head of the case's OWN department
+// | assigned lawyer. Visibility == authorization: this decides whether the
+// «تعديل» button on لوحة تفاصيل المخالفة renders, and the server decides whether
+// the PATCH succeeds — they must name the same set or the panel offers a button
+// that 403s.
+//
+// ⚠ NOT the canActOnMohrSettlement mirror directly above, which is the same set
+// MINUS admin_support. Filing the paperwork of an administrative violation is
+// clerical work admin_support does; driving a labor settlement is not. Two
+// predicates, kept separate for the same reason the server keeps two helpers —
+// so widening one cannot silently widen the other.
+function canEditCaseViolationDetails(
+  lawCase: LawCase,
+  user: { id: string; role: string; departmentId?: string | null } | null,
+  identities: ActingIdentity[],
+): boolean {
+  if (!user) return false;
+  if (hasEffectiveRole(identities, "branch_manager", "admin_support")) return true;
+  if (isDeptHeadFor(identities, lawCase.departmentId)) return true;
+  return lawCase.primaryLawyerId === user.id
+    || lawCase.responsibleLawyerId === user.id
+    || (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(user.id));
+}
+
+// The panel's eleven fields, in the ORDER THE OWNER SPECIFIED. Declared once and
+// used by both the read view and the edit form, so the two cannot drift and a
+// twelfth field is one entry rather than two blocks.
+//   kind "date"   → HijriDatePicker to input, DualDateDisplay to show
+//   kind "amount" → the numeric(12,2) column, which arrives as a STRING
+//   kind "text"   → a plain identifier, rendered LTR like its siblings
+//   readMostly    → 🔴 رقم طلب التنفيذ only. Its real filing path is
+//                   POST /api/field-tasks/:id/execution-request, which ALSO
+//                   completes the execution task, writes an activity row and can
+//                   auto-close the case. This panel does none of that, so it is a
+//                   CORRECTION path only and says so in the UI.
+const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
+  key: string;
+  label: string;
+  kind: "text" | "date" | "amount";
+  readMostly?: boolean;
+}> = [
+  { key: "administrativeDecisionNumber", label: "رقم القرار الإداري", kind: "text" },
+  { key: "administrativeDecisionDate", label: "تاريخ القرار الإداري", kind: "date" },
+  { key: "violationKnowledgeDate", label: "تاريخ العلم بالمخالفة", kind: "date" },
+  { key: "violationAmount", label: "مبلغ المخالفة", kind: "amount" },
+  { key: "ifaaNumber", label: "رقم إيفاء", kind: "text" },
+  { key: "ifaaDate", label: "تاريخ إيفاء", kind: "date" },
+  { key: "grievanceNumber", label: "رقم الاعتراض", kind: "text" },
+  { key: "grievanceDate", label: "تاريخ الاعتراض", kind: "date" },
+  { key: "grievanceResult", label: "نتيجة الاعتراض", kind: "text" },
+  { key: "executionRequestNumber", label: "رقم طلب التنفيذ", kind: "text", readMostly: true },
+  { key: "invoiceNumber", label: "رقم الفاتورة", kind: "text" },
+];
 
 export function CaseDetailsDialog({
   caseItem,
@@ -394,6 +456,14 @@ export function CaseDetailsDialog({
   const [stageTransitioning, setStageTransitioning] = useState(false);
   const [inlineEditField, setInlineEditField] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState<string>("");
+  // لوحة تفاصيل المخالفة — one form for all eleven fields rather than eleven
+  // independent inline edits. The endpoint writes partially, so an untouched
+  // field is still sent unchanged and diffed away server-side; what this buys is
+  // ONE save for a panel a user fills in a sitting, instead of eleven round
+  // trips each with its own failure mode.
+  const [violationEditing, setViolationEditing] = useState(false);
+  const [violationSaving, setViolationSaving] = useState(false);
+  const [violationForm, setViolationForm] = useState<Record<string, string>>({});
   const [registrationDialogType, setRegistrationDialogType] = useState<"" | "taradi" | "mohr">("");
   const [registrationNumberInput, setRegistrationNumberInput] = useState("");
   // Phase-8 — surface the await reason / who / when in the awaiting
@@ -1037,6 +1107,184 @@ export function CaseDetailsDialog({
                           <p className="font-medium">{selectedCase.prescriptionDate ? <DualDateDisplay date={selectedCase.prescriptionDate} compact /> : "-"}</p>
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {/* ==================== لوحة تفاصيل المخالفة ====================
+                      A SIBLING of the «تفاصيل القضية الإدارية» panel above, not an
+                      extension of it — that one is untouched by this batch.
+
+                      🔴 GATED ON CLASSIFICATION + DEPARTMENT ONLY (owner ruling).
+                      Deliberately NOT on a truthy adminCaseSubType the way the
+                      panel above is: the facts of the violation exist before any
+                      تظلم/دعوى routing decision is made at استلام, so gating on
+                      that would hide the panel exactly when it is first needed.
+                      Department name, never caseType — the L5 precedent. */}
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "إداري" && (
+                    <div className="border-t pt-4" data-testid="panel-violation-details">
+                      <div className="flex items-center justify-between mb-3 gap-2">
+                        <h4 className="font-semibold">تفاصيل المخالفة</h4>
+                        {canEditCaseViolationDetails(selectedCase, user, actingIdentities) && !violationEditing && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            data-testid="button-edit-violation-details"
+                            onClick={() => {
+                              // Seed the form from the CASE, so an untouched field
+                              // round-trips its current value and the server diffs
+                              // it away rather than logging a phantom change.
+                              const seed: Record<string, string> = {};
+                              for (const f of VIOLATION_PANEL_FIELDS) {
+                                seed[f.key] = String((selectedCase as unknown as Record<string, unknown>)[f.key] ?? "");
+                              }
+                              setViolationForm(seed);
+                              setViolationEditing(true);
+                            }}
+                          >
+                            <Pencil className="w-3 h-3 ml-1" />
+                            تعديل
+                          </Button>
+                        )}
+                      </div>
+
+                      {!violationEditing ? (
+                        <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
+                          {VIOLATION_PANEL_FIELDS.map((f) => {
+                            const raw = String((selectedCase as unknown as Record<string, unknown>)[f.key] ?? "");
+                            return (
+                              <div key={f.key}>
+                                <Label className="text-muted-foreground">{f.label}</Label>
+                                <p className="font-medium" data-testid={`violation-value-${f.key}`}>
+                                  {!raw ? (
+                                    // EVERY field is null on every case today. The
+                                    // placeholder is the same «غير مُضاف» the
+                                    // execution-number row beside it already uses,
+                                    // so an empty panel reads as "not recorded yet"
+                                    // rather than as a broken one.
+                                    <span className="text-muted-foreground text-sm italic">غير مُضاف</span>
+                                  ) : f.kind === "date" ? (
+                                    <DualDateDisplay date={raw} compact />
+                                  ) : f.kind === "amount" ? (
+                                    // 🔴 numeric(12,2) ARRIVES AS A STRING ("1500.00").
+                                    // Rendered verbatim beside a «ريال» suffix — NO
+                                    // Intl formatter was introduced (none exists in
+                                    // this codebase, and adding a shared money
+                                    // formatter is its own decision, not a
+                                    // side-effect of this panel). LtrInline is the
+                                    // house wrapper for a number inside RTL text.
+                                    <><LtrInline>{raw}</LtrInline> <span className="text-muted-foreground text-sm">ريال</span></>
+                                  ) : (
+                                    <LtrInline>{raw}</LtrInline>
+                                  )}
+                                </p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            {VIOLATION_PANEL_FIELDS.map((f) => (
+                              <div key={f.key}>
+                                <Label className="text-muted-foreground">{f.label}</Label>
+                                {f.kind === "date" ? (
+                                  <HijriDatePicker
+                                    value={violationForm[f.key] || ""}
+                                    onChange={(v) => setViolationForm((prev) => ({ ...prev, [f.key]: v }))}
+                                    data-testid={`violation-input-${f.key}`}
+                                  />
+                                ) : (
+                                  <Input
+                                    value={violationForm[f.key] || ""}
+                                    onChange={(e) => setViolationForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                                    // A decimal keypad on mobile for the amount; the
+                                    // VALUE stays a string end to end, matching the
+                                    // column's inferred type. type="number" was
+                                    // rejected: it silently drops what it considers
+                                    // invalid and localises the separator.
+                                    inputMode={f.kind === "amount" ? "decimal" : undefined}
+                                    placeholder={f.kind === "amount" ? "مثال: 1500.00" : undefined}
+                                    data-testid={`violation-input-${f.key}`}
+                                  />
+                                )}
+                                {f.readMostly && (
+                                  // 🔴 THE CORRECTION-ONLY WARNING. Filing an
+                                  // execution request happens on the مهامي task,
+                                  // which also completes that task, writes an
+                                  // activity row and can auto-close the case. This
+                                  // panel writes the number and nothing else, so
+                                  // using it to "file" would leave the task open and
+                                  // the case un-closed. Said in the UI, not just in
+                                  // a comment, because the field looks identical to
+                                  // the ten around it.
+                                  <p className="text-xs text-amber-600 mt-1">
+                                    للتصحيح فقط — رفع طلب التنفيذ يتم من مهمة «رفع طلب تنفيذ» في مهامي
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-2 justify-end">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={violationSaving}
+                              data-testid="button-cancel-violation-details"
+                              onClick={() => { setViolationEditing(false); setViolationForm({}); }}
+                            >
+                              <X className="w-3 h-3 ml-1" />
+                              إلغاء
+                            </Button>
+                            <Button
+                              size="sm"
+                              disabled={violationSaving}
+                              data-testid="button-save-violation-details"
+                              onClick={async () => {
+                                // Client-side amount check using the SHARED pattern,
+                                // so the message arrives before the request rather
+                                // than as a 400. The server re-checks regardless —
+                                // this is convenience, never the enforcement.
+                                const amount = (violationForm.violationAmount || "").trim();
+                                if (amount && !ViolationAmountPattern.test(amount)) {
+                                  toast({
+                                    title: "مبلغ المخالفة غير صالح",
+                                    description: "أدخل رقماً بحد أقصى منزلتين عشريتين",
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
+                                setViolationSaving(true);
+                                try {
+                                  const body: Record<string, string> = {};
+                                  for (const f of VIOLATION_PANEL_FIELDS) {
+                                    body[f.key] = (violationForm[f.key] || "").trim();
+                                  }
+                                  await apiRequest("PATCH", `/api/cases/${selectedCase.id}/violation-details`, body);
+                                  // refreshCases repopulates the dialog's own case
+                                  // from the server; the activity tab is invalidated
+                                  // because the save writes an audit row it renders.
+                                  await refreshCases();
+                                  queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+                                  setViolationEditing(false);
+                                  setViolationForm({});
+                                  toast({ title: "تم حفظ تفاصيل المخالفة" });
+                                } catch (err) {
+                                  toast({
+                                    title: "تعذّر حفظ تفاصيل المخالفة",
+                                    description: extractApiError(err),
+                                    variant: "destructive",
+                                  });
+                                } finally {
+                                  setViolationSaving(false);
+                                }
+                              }}
+                            >
+                              <Check className="w-3 h-3 ml-1" />
+                              حفظ
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
