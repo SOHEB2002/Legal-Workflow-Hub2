@@ -298,7 +298,13 @@ const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
   { key: "grievanceResult", label: "نتيجة الاعتراض", kind: "select", options: GrievanceResultValues },
   // 🔴 adminExecutionRequestNumber — NOT executionRequestNumber, which belongs to
   // the مهامي execution task and is displayed separately in the numbers grid.
-  { key: "adminExecutionRequestNumber", label: "رقم طلب التنفيذ", kind: "text" },
+  // Labelled «رقم طلب التنفيذ الإداري» — the owner's own wording. TWO other rows
+  // in this same dialog render the bare «رقم طلب التنفيذ» for the DIFFERENT
+  // executionRequestNumber column (the numbers grid and the inline-edit row), and
+  // on an admin case all three can be on screen at once. One name for two columns
+  // is the reverse of the two-names-for-one-thing trap and just as costly, so the
+  // panel's field carries the qualifier. The other two rows are untouched.
+  { key: "adminExecutionRequestNumber", label: "رقم طلب التنفيذ الإداري", kind: "text" },
   { key: "invoiceNumber", label: "رقم الفاتورة", kind: "text" },
 ];
 
