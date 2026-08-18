@@ -4786,6 +4786,19 @@ export const insertCaseSchema = z.object({
   adminCaseSubType: z.enum(["تظلم", "قضية"]).nullable().optional(),
   prescriptionDate: z.string().nullable().optional(),
   memoRequired: z.boolean().optional().default(false),
+  // 🔴 WAS MISSING, and z.object STRIPS what it does not declare. The create
+  // dialog has rendered a "مطلوب تظلم" checkbox for the إداري department all
+  // along, but the key never survived this parse — so even once the page sends
+  // it and storage.createCase writes it, omitting the declaration here would
+  // have discarded it silently one layer earlier. Declared in the shape of its
+  // peer memoRequired directly above (boolean column, boolean create-form
+  // checkbox) and identically to the grievanceRequired line updateCaseSchema
+  // already carries, so create and edit now validate the field the same way.
+  //
+  // NOT a schema/table change: grievance_required has existed on law_cases
+  // since the admin path was built (boolean, default false). This declares an
+  // EXISTING column to an EXISTING validator. No migration.
+  grievanceRequired: z.boolean().optional().default(false),
 });
 
 export type InsertCase = z.infer<typeof insertCaseSchema>;

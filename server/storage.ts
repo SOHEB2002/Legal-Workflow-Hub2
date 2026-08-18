@@ -1711,6 +1711,50 @@ export class DatabaseStorage implements IStorage {
       previousHearingsCount: data.previousHearingsCount || 0,
       currentSituation: data.currentSituation || "",
       responseDeadline: data.responseDeadline || null,
+      // 🔴 THE FOURTH KEY THIS ALLOWLIST WAS DROPPING, and the most consequential.
+      // insertCaseSchema declares memoRequired and POST /api/cases USES it at
+      // create time — smart-priority scoring and the auto-memo both read it off
+      // the validated payload — so it passed validation, did its job, and then
+      // never reached the column. law_cases.memo_required was therefore ALWAYS
+      // false on a new case, no matter what the "مطلوب مذكرة" checkbox said.
+      //
+      // WHY IT MATTERS MORE THAN THE THREE ABOVE: getStagesForClassification
+      // reads memoRequired on the منظورة_بالمحكمة branch, so a court case that
+      // needs a pleading resolved to InCourtNoMemoStages (استلام → استكمال_البيانات
+      // → دراسة → منظورة) instead of InCourtDefendantMemoStages /
+      // InCourtPlaintiffMemoStages. The memo was still created; the case's own
+      // path just forgot it needed one, and the drafting + internal-review +
+      // committee stages never appeared on it.
+      //
+      // ⚠ THIS IS THE WRITE ONLY. Path resolution, the arrays and the two
+      // create-time readers are untouched — they already behaved correctly from
+      // the request body; only the persisted column was wrong.
+      memoRequired: data.memoRequired ?? false,
+      // ==================== THE إداري INTAKE FIELDS ====================
+      // 🔴 ADDED because this object is an EXPLICIT ALLOWLIST, not a spread —
+      // a key absent from it never reaches the INSERT no matter how faithfully
+      // every layer above forwarded it. All three were being carried correctly
+      // by cases-context's addCase AND (for the first two) validated by
+      // insertCaseSchema, and then dropped here at the last step, so an إداري
+      // case created through the mandatory create form landed with all three
+      // NULL/false. The only writer that ever persisted them was the EDIT
+      // form's PATCH, via caseDataFields in routes.ts.
+      //
+      // FIXED HERE rather than in the route or the client: this is the single
+      // chokepoint where the row is actually built, it is the ONLY layer that
+      // was dropping adminCaseSubType / prescriptionDate, and a route-side fix
+      // would have meant a second write (createCase then updateCase) for values
+      // the insert can carry directly.
+      //
+      // Defaults mirror the columns: admin_case_sub_type and prescription_date
+      // are nullable varchars (?? null, the clientRole idiom just below the
+      // classification above), grievance_required is boolean DEFAULT false.
+      // A non-إداري case sends none of the three — the create dialog renders
+      // these controls only for that department — so it inserts null/null/false,
+      // which is byte-identical to what it inserted before this change.
+      adminCaseSubType: data.adminCaseSubType ?? null,
+      prescriptionDate: data.prescriptionDate ?? null,
+      grievanceRequired: data.grievanceRequired ?? false,
       createdBy,
       createdAt: now,
       updatedAt: now,
