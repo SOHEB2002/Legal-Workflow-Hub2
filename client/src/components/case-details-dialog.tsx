@@ -919,7 +919,12 @@ export function CaseDetailsDialog({
                       <div>
                         <Label className="text-muted-foreground">مهلة الرد</Label>
                         <p className="font-medium">
-                          <DualDateDisplay date={selectedCase.responseDeadline} compact />
+                          {/* NO `compact` — a DEADLINE must show both calendars.
+                              compact renders Hijri only and hides the Gregorian in a
+                              hover title, which on a date the firm is measured against
+                              is not a display at all. Timestamps and table cells keep
+                              compact deliberately; deadlines do not. */}
+                          <DualDateDisplay date={selectedCase.responseDeadline} />
                         </p>
                       </div>
                     )}
@@ -1112,6 +1117,27 @@ export function CaseDetailsDialog({
                       التقادم as mandatory fields and then never displayed either.
                       Now keyed exactly like the تجاري and عمالي workflow panels
                       immediately below, so capture and display cannot drift. */}
+                  {/* 🔴 THIS PANEL NEVER RENDERS TODAY. IT IS NOT WORKING CODE.
+                      Read the gate below: it requires a TRUTHY adminCaseSubType, and
+                      that column is NULL on EVERY case — ef4d221 removed نوع القضية
+                      الإدارية from the create dialog (owner ruling: the تظلم/دعوى
+                      choice is made at استلام, by two buttons, not at creation), and
+                      nothing has written it since. It stays NULL until the استلام flow
+                      ships and starts setting it; only then does this panel come back.
+
+                      DELIBERATELY LEFT IN PLACE, not deleted:
+                        • تاريخ التقادم appears here AND in لوحة تفاصيل المخالفة below.
+                          That duplication is UNREACHABLE while this gate is false, so
+                          removing the row would be a no-op today that silently deletes
+                          a display if this panel is ever revived. If you fix this gate,
+                          drop the تاريخ التقادم row here at the same time — the
+                          violation panel is now its prominent home (7254d54).
+                        • Its caseClassification === UNDER_STUDY term is ALSO wrong, for
+                          the same reason it was dropped from the violation panel and
+                          the edit dialog: نوع القضية الإدارية is a routing fact that
+                          survives a case going in-court. Left as-is pending a ruling,
+                          because fixing that term alone still would not make the panel
+                          render — the adminCaseSubType term is what kills it. */}
                   {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "إداري" && selectedCase.adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
@@ -1975,7 +2001,10 @@ export function CaseDetailsDialog({
                                   put a deadline on screen that nobody is owed. */}
                               {j.opensWindow && !!String(j.objectionDeadline || "").trim() && (
                                 <div className="text-sm text-muted-foreground">
-                                  مهلة الاعتراض حتى <DualDateDisplay date={j.objectionDeadline} compact />
+                                  {/* NO `compact` — same rule as مهلة الرد above: a
+                                      deadline shows both calendars. j.supersededAt
+                                      below stays compact; it is a timestamp. */}
+                                  مهلة الاعتراض حتى <DualDateDisplay date={j.objectionDeadline} />
                                 </div>
                               )}
                               {j.supersededAt && (
