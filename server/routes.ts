@@ -4492,18 +4492,60 @@ export async function registerRoutes(
       const now = new Date().toISOString();
       const existingHistory = Array.isArray(caseItem.stageHistory) ? caseItem.stageHistory : [];
 
-      // Skip target depends on the path the case is on. UNDER_STUDY cases
-      // always go to دراسة. IN_COURT cases branch on clientRole and
-      // memoRequired: defendant + memo → تحرير_مذكرة_جوابية, plaintiff +
-      // memo → تحرير_صحيفة_الدعوى, no memo → دراسة.
-      const isInCourt = caseItem.caseClassification === "منظورة_بالمحكمة";
-      const clientRole = caseItem.clientRole as string | undefined;
-      const memoRequired = !!caseItem.memoRequired;
-      let skipTarget: CaseStageValue = "دراسة";
-      if (isInCourt && memoRequired) {
-        skipTarget = clientRole === "مدعى_عليه"
-          ? "تحرير_مذكرة_جوابية"
-          : "تحرير_صحيفة_الدعوى";
+      // 🔴 THE SKIP TARGET IS DERIVED FROM THE CASE'S OWN RESOLVED PATH — the
+      // stage immediately after استكمال_البيانات in whatever array
+      // getStagesForClassification returns. It used to be a hard-coded دراسة with
+      // one in-court memo exception, and it consulted the resolver NOT AT ALL,
+      // which is why it never appeared in the path-consumer census.
+      //
+      // THE BUG THAT FORCED THIS (found in testing): an إداري case on the
+      // grievance track pressed «تجاوز الاستكمال» and was written to دراسة — a
+      // stage that is NOT on AdminGrievanceStages, whose successor to
+      // استكمال_البيانات is تحرير_صيغة_التظلم. The case landed off its own path
+      // and «المرحلة السابقة» then refused it, because a stage that is not in the
+      // array has no predecessor in it. Skipping is a SHORTCUT ALONG A PATH, so
+      // its target can only ever come from that path.
+      //
+      // BEHAVIOUR IS UNCHANGED FOR EVERY PATH THAT WORKED, verified array by
+      // array: in-court defendant+memo → تحرير_مذكرة_جوابية, plaintiff+memo →
+      // تحرير_صحيفة_الدعوى, in-court no-memo → دراسة, and General / Commercial /
+      // Labor / Admin-lawsuit → دراسة. The derivation reproduces the old ternary
+      // exactly; it just also gets the two cases the ternary got wrong.
+      //
+      // 🔴 THE indexOf GUARD IS LOAD-BEARING, and it is the trap the
+      // committee-decision endpoint documents: `path[indexOf(x) + 1]` on a MISS
+      // is `path[0]`, which is استلام — a DEFINED value, so an `undefined`
+      // fallback would never fire and the case would be silently sent back to
+      // reception. The index is therefore tested explicitly before use.
+      //
+      // TWO PATHS HAVE NO استكمال_البيانات AT ALL and now REFUSE instead of
+      // writing an off-path stage:
+      //   • AdminUnroutedStages (["استلام"]) — an إداري case whose track has not
+      //     been chosen. There is no "next" stage to skip to until batch 2's
+      //     «مسار التظلم» / «مسار الدعوى» buttons set one, and inventing one would
+      //     commit the case to a track nobody picked.
+      //   • InCourtSettlementStages ([استلام, مداولة_الصلح, تحصيل]) — this one is
+      //     a SECOND LATENT STRANDING the derivation fixes: a settlement case sits
+      //     at استلام, passes the stage guard above, and was being written to
+      //     دراسة, which is not on its three-stage path either.
+      const skipDept = caseItem.departmentId
+        ? await storage.getDepartmentById(caseItem.departmentId)
+        : null;
+      const skipPath = getStagesForClassification(
+        caseItem.caseClassification as CaseClassificationValue,
+        skipDept?.name,
+        caseItem.clientRole ?? undefined,
+        !!caseItem.memoRequired,
+        !!caseItem.isSettlementCase,
+        caseItem.adminCaseSubType,
+      );
+      const completionIdx = skipPath.indexOf("استكمال_البيانات");
+      const skipTarget: CaseStageValue | undefined =
+        completionIdx >= 0 ? skipPath[completionIdx + 1] : undefined;
+      if (!skipTarget) {
+        return res.status(400).json({
+          error: "لا يمكن تجاوز مرحلة الاستكمال في هذه القضية — مسارها لا يتضمّن مرحلة تالية للاستكمال. إذا كانت قضية إدارية، حدّد مسارها أولاً (مسار التظلم أو مسار الدعوى).",
+        });
       }
 
       const skipActorName = actorDisplayName(req.actingContext, caseItem.id, user.name);
