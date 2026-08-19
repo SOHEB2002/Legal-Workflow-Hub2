@@ -3694,6 +3694,9 @@ export default function CasesPage() {
               reopenCase.clientRole || undefined,
               !!reopenCase.memoRequired,
               !!reopenCase.isSettlementCase,
+              // Must match the server's own getReopenTargetStages call, or the
+              // dialog would offer an admin stage the endpoint then rejects.
+              reopenCase.adminCaseSubType,
             );
             const requirement = reopenTargetStage
               ? stageNumberRequirement(reopenTargetStage as CaseStageValue, reopenDeptName)

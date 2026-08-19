@@ -358,8 +358,11 @@ export function validateCaseForward(
   const clientRole = caseData?.clientRole as string | undefined;
   const memoRequired = !!caseData?.memoRequired;
   const isSettlementCase = !!caseData?.isSettlementCase;
+  // Read off caseData like the three above it — NO signature change, because
+  // both call sites in cases-context already hand the whole case in.
+  const adminCaseSubType = (caseData?.adminCaseSubType as string | null | undefined) ?? null;
   const stagesOrder = classification
-    ? getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase)
+    ? getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase, adminCaseSubType)
     : CaseStagesOrder;
   const currentIndex = stagesOrder.indexOf(normalizedCurrent);
 
@@ -379,12 +382,21 @@ export function validateCaseBackward(
   currentStage: CaseStageValue,
   _userRole: UserRoleType,
   _userId?: string,
-  _caseData?: any,
+  caseData?: any,
   classification?: CaseClassificationValue,
   departmentName?: string,
 ): TransitionValidation {
   const normalizedCurrent = normalizeCaseStage(currentStage);
-  const stagesOrder = classification ? getStagesForClassification(classification, departmentName) : CaseStagesOrder;
+  // 🔴 caseData WAS `_caseData` — received and deliberately ignored. It has to be
+  // read now: without the admin track this resolves an admin case to
+  // AdminUnroutedStages, whose only index is 0, so `currentIndex <= 0` would
+  // refuse EVERY rollback on an admin case. The parameter was already being
+  // passed by the one call site (cases-context moveToPreviousStage); only the
+  // underscore had to go.
+  const adminCaseSubType = (caseData?.adminCaseSubType as string | null | undefined) ?? null;
+  const stagesOrder = classification
+    ? getStagesForClassification(classification, departmentName, undefined, undefined, undefined, adminCaseSubType)
+    : CaseStagesOrder;
   const currentIndex = stagesOrder.indexOf(normalizedCurrent);
 
   if (currentIndex <= 0) {

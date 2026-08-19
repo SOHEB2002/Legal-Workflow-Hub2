@@ -107,6 +107,11 @@ interface CaseProgressBarProps {
   clientRole?: string;
   memoRequired?: boolean;
   isSettlementCase?: boolean;
+  // إداري's SECOND ROUTING AXIS — "تظلم" | "قضية", or null/undefined while the
+  // track is still unchosen (which is every admin case until batch 2's buttons
+  // ship). Ignored for every other department, exactly like clientRole is
+  // ignored outside the in-court paths.
+  adminCaseSubType?: string | null;
   // The case's stage history, used ONLY to locate how far along the rendered
   // path a TERMINAL case actually got (a closed case can be closed from any
   // stage, so the bar can't infer it from currentStage). Optional: with no
@@ -162,6 +167,7 @@ export function CaseProgressBar({
   clientRole,
   memoRequired,
   isSettlementCase,
+  adminCaseSubType,
   stageHistory,
   judgmentDirection,
   closureBadge,
@@ -203,6 +209,7 @@ export function CaseProgressBar({
     clientRole,
     memoRequired,
     isSettlementCase,
+    adminCaseSubType,
   );
   // Defensive safety net for cases where departmentName is missing or
   // doesn't match one of the four canonical labels (legacy rows with no
@@ -214,9 +221,18 @@ export function CaseProgressBar({
   // than collapsing the bar onto the wrong path with currentIndex=0.
   if (stagesOrder.indexOf(normalizedStage) < 0) {
     if (effectiveClassification === "قيد_الدراسة") {
-      const names: string[] = ["تجاري", "عمالي", "إداري", "عام"];
-      for (const n of names) {
-        const v = getStagesForClassification(effectiveClassification, n);
+      // 🔴 إداري NEEDS BOTH TRACKS, not one name. With no sub-type the admin arm
+      // resolves to AdminUnroutedStages (["استلام"]), so a routed admin case
+      // that reached this net would have matched nothing admin-shaped and been
+      // rescued onto تجاري — which is scanned FIRST and ends in تراضي.
+      const variants: CaseStageValue[][] = [
+        getStagesForClassification(effectiveClassification, "تجاري"),
+        getStagesForClassification(effectiveClassification, "عمالي"),
+        getStagesForClassification(effectiveClassification, "إداري", undefined, undefined, false, "تظلم"),
+        getStagesForClassification(effectiveClassification, "إداري", undefined, undefined, false, "قضية"),
+        getStagesForClassification(effectiveClassification, "عام"),
+      ];
+      for (const v of variants) {
         if (v.indexOf(normalizedStage) >= 0) {
           stagesOrder = v;
           break;

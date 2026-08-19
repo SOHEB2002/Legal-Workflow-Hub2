@@ -62,6 +62,9 @@ export function CaseStagePanel({
       clientRole={caseItem.clientRole || undefined}
       memoRequired={!!caseItem.memoRequired}
       isSettlementCase={!!caseItem.isSettlementCase}
+      // إداري's track. NULL until batch 2's «مسار التظلم» / «مسار الدعوى»
+      // buttons set it, which resolves the bar to AdminUnroutedStages.
+      adminCaseSubType={caseItem.adminCaseSubType}
       // Read-only: lets the bar work out how far a TERMINAL case (مقفلة /
       // مشطوبة / محكوم_* …) actually got along its path, since such a case can
       // be closed from any stage and currentStage no longer says where it was.
@@ -287,7 +290,14 @@ export function CaseStagePanel({
             caseItem.clientRole || undefined,
             !!caseItem.memoRequired,
             !!caseItem.isSettlementCase,
+            caseItem.adminCaseSubType,
           );
+          // With the admin track passed in, this now yields the RIGHT send-back
+          // for both admin paths by position alone: تحرير_صيغة_التظلم on the
+          // grievance track, دراسة on the lawsuit track. The hard-coded
+          // مراجعة_داخلية_للتظلم branch below is unreachable for a new case (no
+          // path routes through that stage any more) and is kept only for a case
+          // that historically sits on it.
           const reviewIdx = stages.indexOf("مراجعة_داخلية");
           return reviewIdx > 0 ? stages[reviewIdx - 1] : "تحرير_صحيفة_الدعوى";
         };

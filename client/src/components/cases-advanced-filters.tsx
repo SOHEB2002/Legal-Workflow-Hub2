@@ -81,12 +81,26 @@ const RECENT_MAX = 5;
 //
 // Spread into a fresh array: getStagesForClassification returns the schema's own
 // exported array by reference, and this map must not alias a shared mutable.
-const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = Object.fromEntries(
-  (["عام", "تجاري", "عمالي", "إداري"] as const).map((deptName) => [
-    deptName,
-    [...getStagesForClassification(CaseClassification.UNDER_STUDY as CaseClassificationValue, deptName)] as string[],
-  ]),
-);
+const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = {
+  ...Object.fromEntries(
+    (["عام", "تجاري", "عمالي"] as const).map((deptName) => [
+      deptName,
+      [...getStagesForClassification(CaseClassification.UNDER_STUDY as CaseClassificationValue, deptName)] as string[],
+    ]),
+  ),
+  // 🔴 إداري IS THE UNION OF BOTH TRACKS, and it is the ONE consumer of the path
+  // resolver that CANNOT pass a sub-type: this map is keyed on a department name
+  // chosen in a dropdown, with no case in hand. Calling the resolver with the
+  // name alone would return AdminUnroutedStages — a single "استلام" — and every
+  // other admin stage would silently vanish from the المرحلة filter for anyone
+  // who narrowed to إداري.
+  // A UNION is also the correct answer on the merits: the filter asks "which
+  // stages can an إداري case be found on", and the answer spans both tracks.
+  "إداري": Array.from(new Set<string>([
+    ...getStagesForClassification(CaseClassification.UNDER_STUDY as CaseClassificationValue, "إداري", undefined, undefined, false, "تظلم"),
+    ...getStagesForClassification(CaseClassification.UNDER_STUDY as CaseClassificationValue, "إداري", undefined, undefined, false, "قضية"),
+  ])),
+};
 
 // 🔴 DELIBERATELY NOT DERIVED — do not "finish the job" and convert this to
 // getStagesForClassification calls. It would silently drop a live option.
