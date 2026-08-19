@@ -1117,13 +1117,22 @@ export function CaseDetailsDialog({
                       التقادم as mandatory fields and then never displayed either.
                       Now keyed exactly like the تجاري and عمالي workflow panels
                       immediately below, so capture and display cannot drift. */}
-                  {/* 🔴 THIS PANEL NEVER RENDERS TODAY. IT IS NOT WORKING CODE.
+                  {/* 🔴 THIS PANEL RENDERS FOR NO CASE IN THE SYSTEM TODAY. IT LOOKS
+                      LIKE WORKING CODE AND IS DEAD IN PRACTICE.
                       Read the gate below: it requires a TRUTHY adminCaseSubType, and
-                      that column is NULL on EVERY case — ef4d221 removed نوع القضية
+                      that column is NULL on every case — ef4d221 removed نوع القضية
                       الإدارية from the create dialog (owner ruling: the تظلم/دعوى
-                      choice is made at استلام, by two buttons, not at creation), and
-                      nothing has written it since. It stays NULL until the استلام flow
-                      ships and starts setting it; only then does this panel come back.
+                      choice is made at استلام, by two buttons, not at creation), so
+                      nothing has SET it at intake since.
+
+                      ⚠ BUT IT IS NOT UNWRITABLE — do not read the paragraph above as
+                      "unreachable by construction". The EDIT dialog's نوع القضية
+                      الإدارية select is a live writer (cases.tsx, the إداري block,
+                      which as of da70666 renders on EVERY admin case rather than only
+                      under-study ones). Set the type through edit on a case that is
+                      still UNDER_STUDY and this panel comes back. Nobody does, which
+                      is why it is dead rather than merely rare — and the استلام flow
+                      populating the column at intake is what would revive it for real.
 
                       DELIBERATELY LEFT IN PLACE, not deleted:
                         • تاريخ التقادم appears here AND in لوحة تفاصيل المخالفة below.
