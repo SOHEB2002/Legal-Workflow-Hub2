@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
+import { formatHijriDateFull, formatDualDate } from "@/lib/date-utils";
 import { useLocation } from "wouter";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { PaginationControls } from "@/components/ui/pagination-controls";
@@ -317,6 +318,26 @@ function getCasePriorityGroup(
 /** Persisted-filter sanitizer for a plain boolean toggle. */
 const isBooleanValue = (raw: unknown): boolean | undefined =>
   typeof raw === "boolean" ? raw : undefined;
+
+// Copied VERBATIM from hearings.tsx (which declares it module-locally and does
+// not export it) so the day headings on this page speak the hearings page's own
+// vocabulary. Deliberately duplicated rather than hoisted into date-utils: that
+// would edit the hearings page inside a cases-page commit, and this is a pure
+// 3-line lookup with no behaviour to drift. If a THIRD copy is ever wanted,
+// hoist all three at once instead of adding it.
+const ARABIC_WEEKDAYS = [
+  "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت",
+] as const;
+const arabicWeekday = (date: string): string => {
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "" : ARABIC_WEEKDAYS[d.getDay()];
+};
+
+// The bottom group's heading. It must read as a GROUP, not as a date — these
+// rows have no single day in common (a hearing last week, a hearing two years
+// ago, and a case that never had one all land here), so any date-shaped label
+// would be a lie about at least some of them.
+const NO_UPCOMING_HEARING_LABEL = "بدون جلسة قادمة";
 
 // ==================== الترتيب حسب الجلسة القادمة ====================
 // 🔴 SOURCED FROM THE HEARINGS LIST, NOT law_cases.next_hearing_date — and that
@@ -1432,6 +1453,25 @@ export default function CasesPage() {
     || countActiveAdvFilters(advFilters) > 0;
   const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
   const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
+
+  // ==================== DAY SEPARATORS (sort-active only) ====================
+  // The hearing day a case belongs to, or null for the bottom group. Reads the
+  // SAME nextHearingRanks map the sort itself orders by, so a heading can never
+  // disagree with the rows under it — no second derivation.
+  const hearingDayOf = (c: LawCase): string | null =>
+    nextHearingRanks.get(c.id)?.upcoming ?? null;
+
+  // 🔴 SUPPRESSED WHEN THE PAGE HOLDS ONLY ONE GROUP. A separator's whole job is
+  // to mark a boundary; with nothing to separate it is chrome that says nothing.
+  // This is what keeps a single-case page, an all-bottom-group page, and a filter
+  // that narrows to one day from each growing a stray heading.
+  // "" stands in for the bottom group in the key set — no real day key can
+  // collide with it, since every real key is a "YYYY-MM-DD".
+  const showDaySeparators = useMemo(() => {
+    if (!sortByNextHearing) return false;
+    const keys = new Set(pagedCases.map((c) => nextHearingRanks.get(c.id)?.upcoming ?? ""));
+    return keys.size > 1;
+  }, [sortByNextHearing, pagedCases, nextHearingRanks]);
   // Changing the size resets to page 1 — the old page number is meaningless
   // against a different slice size (page 4 of 15 may not exist at 50).
   const handlePageSizeChange = (size: number) => { setPageSize(size); setCasePage(1); };
@@ -1841,8 +1881,54 @@ export default function CasesPage() {
                       : priorityGroup === 4
                         ? "opacity-80"
                         : "";
+                // A heading is emitted above the FIRST row of each hearing day.
+                // The comparison is against the previous row ON THIS PAGE, which
+                // is deliberate: the pager is a plain slice, so page 2 opens with
+                // its own heading rather than inheriting one the reader cannot
+                // see. Every heading therefore has rows beneath it by
+                // construction — the separator is emitted WITH a row, never on
+                // its own, so an empty one is impossible.
+                const hearingDay = hearingDayOf(c);
+                const prevHearingDay = idx === 0 ? undefined : hearingDayOf(pagedCases[idx - 1]);
+                const showSeparator =
+                  showDaySeparators && (idx === 0 || hearingDay !== prevHearingDay);
+                // Hijri via the hearings page's OWN helpers (formatHijriDateFull +
+                // arabicWeekday), so the two pages name a day identically. The
+                // Gregorian is added VISIBLY beside it rather than through
+                // DualDateDisplay's `compact` variant, which hides it in a hover
+                // title — a heading nobody can read without a mouse is not a
+                // heading. (The hearings page shows no Gregorian at all in its
+                // date cell; here it is spelled out, by owner instruction.)
                 return (
-                <TableRow key={c.id} data-testid={`row-case-${c.id}`} className={rowClass}>
+                <Fragment key={c.id}>
+                {showSeparator && (
+                  <TableRow
+                    className="hover:bg-transparent border-0"
+                    data-testid={`row-day-separator-${hearingDay ?? "none"}`}
+                  >
+                    {/* colSpan 10 — the table's column count is FIXED: ten
+                        <col> entries, ten unconditional <TableHead>s, and the
+                        loading/empty rows already use colSpan={10}. No filter
+                        adds or removes a column, so there is no count to track. */}
+                    <TableCell
+                      colSpan={10}
+                      className="bg-muted/60 py-1.5 text-right text-xs font-semibold text-muted-foreground"
+                    >
+                      {hearingDay ? (
+                        <span className="flex flex-wrap items-center gap-x-2">
+                          <span>{arabicWeekday(hearingDay)}</span>
+                          <span>{formatHijriDateFull(hearingDay)}</span>
+                          <LtrInline className="font-normal opacity-80">
+                            {formatDualDate(hearingDay).gregorian}
+                          </LtrInline>
+                        </span>
+                      ) : (
+                        NO_UPCOMING_HEARING_LABEL
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )}
+                <TableRow data-testid={`row-case-${c.id}`} className={rowClass}>
                   {/* Display-only sequential number. Derived from the index
                       inside the RENDERED page, so any filter/sort/search
                       renumbers from 1. Continues across pages (the page
@@ -2283,6 +2369,7 @@ export default function CasesPage() {
                     })()}
                   </TableCell>
                 </TableRow>
+                </Fragment>
                 );
               })}
             </TableBody>
