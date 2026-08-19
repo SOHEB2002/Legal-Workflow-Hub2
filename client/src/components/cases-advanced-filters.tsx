@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Filter, Save, X, Check, Trash2, Pencil, Bookmark, Clock } from "lucide-react";
+import { Filter, Save, X, Check, Trash2, Pencil, Bookmark, Clock, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Popover,
   PopoverContent,
@@ -309,9 +310,34 @@ interface Props {
   onChange: (filters: AdvancedCasesFilters) => void;
   departments: Array<{ id: string; name: string }>;
   lawyers: Array<{ id: string; name: string }>;
+  // 🔴 THE SORT IS DELIBERATELY *NOT* A MEMBER OF AdvancedCasesFilters, and this
+  // is the whole design decision — it rides in the panel but is not one of the
+  // filters. It changes ORDER, never MEMBERSHIP: every case that was in the list
+  // is still in it. Folding it into the filters object would have made three
+  // existing things quietly wrong:
+  //   • countActiveAdvFilters would count it, so the trigger badge would claim
+  //     "1 فلتر" while nothing is filtered, and isFilteringCases (cases.tsx)
+  //     would flip the empty state from "no cases exist" to "no matching
+  //     results" — a lie about the firm's data caused purely by a sort.
+  //   • describeFilters / the recent chips would describe it as a filter.
+  //   • saveRecent + POST /api/saved-filters persist the whole object, so every
+  //     NAMED PRESET would silently start carrying a sort, and old presets
+  //     (jsonb rows written before this key existed) would read back undefined.
+  // Kept out, all three stay exactly as they are. It is also why it applies
+  // IMMEDIATELY rather than through the draft/تطبيق cycle below: a sort has
+  // nothing to stage — there is no combination to assemble before committing.
+  sortByNextHearing: boolean;
+  onSortByNextHearingChange: (value: boolean) => void;
 }
 
-export function CasesAdvancedFilters({ filters, onChange, departments, lawyers }: Props) {
+export function CasesAdvancedFilters({
+  filters,
+  onChange,
+  departments,
+  lawyers,
+  sortByNextHearing,
+  onSortByNextHearingChange,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<AdvancedCasesFilters>(filters);
   const [savedName, setSavedName] = useState("");
@@ -468,6 +494,15 @@ export function CasesAdvancedFilters({ filters, onChange, departments, lawyers }
               {activeCount}
             </Badge>
           )}
+          {/* A SECOND, DIFFERENT-SHAPED SIGNAL — an icon, never folded into the
+              numeric badge beside it. The count means "how many filters are
+              narrowing this list"; the sort narrows nothing, so adding to that
+              number would misreport the list. A control the user can reach only
+              by opening the panel must still be visible from outside it, or an
+              active sort becomes invisible state. */}
+          {sortByNextHearing && (
+            <CalendarClock className="h-4 w-4 text-primary" data-testid="icon-adv-sort-active" />
+          )}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[420px] p-0" align="start">
@@ -483,6 +518,31 @@ export function CasesAdvancedFilters({ filters, onChange, departments, lawyers }
               <X className="h-4 w-4 ml-1" />
               مسح
             </Button>
+          </div>
+
+          {/* ==================== الترتيب — NOT A FILTER ====================
+              Visually separated from everything below it (its own bordered row,
+              above the filter grid) because it behaves differently in three ways
+              the user can observe:
+                • it takes effect ON TOGGLE — the تطبيق button below commits the
+                  filter draft and does not govern this;
+                • مسح does NOT clear it (مسح resets the filter draft, and this is
+                  not in that draft) — so it is turned off by this same switch,
+                  or by the ✕ on the "مرتبة حسب الجلسة القادمة" chip that the
+                  cases page shows under the filter row while it is on;
+                • it changes ORDER, not MEMBERSHIP — no row appears or vanishes.
+              See the Props comment for why it is not a member of the filters
+              object. */}
+          <div className="flex items-center justify-between rounded-md border px-3 py-2">
+            <Label htmlFor="adv-sort-next-hearing" className="text-sm cursor-pointer">
+              الترتيب حسب الجلسة القادمة (الأقرب أولاً)
+            </Label>
+            <Switch
+              id="adv-sort-next-hearing"
+              checked={sortByNextHearing}
+              onCheckedChange={onSortByNextHearingChange}
+              data-testid="switch-adv-sort-next-hearing"
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">

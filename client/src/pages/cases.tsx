@@ -29,6 +29,8 @@ import {
   MoreHorizontal,
   Archive,
   Paperclip,
+  CalendarClock,
+  X,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -109,8 +111,10 @@ import {
   MemoType,
   MemoTypeLabels,
   caseNotificationRecipientId,
+  HearingStatus,
+  firmToday,
 } from "@shared/schema";
-import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue } from "@shared/schema";
+import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue, Hearing } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { extractApiError, cn } from "@/lib/utils";
 import { sendCaseReminder, notifyCaseAssigned } from "@/lib/notification-triggers";
@@ -309,6 +313,87 @@ function getCasePriorityGroup(
   return 4;
 }
 
+/** Persisted-filter sanitizer for a plain boolean toggle. */
+const isBooleanValue = (raw: unknown): boolean | undefined =>
+  typeof raw === "boolean" ? raw : undefined;
+
+// ==================== الترتيب حسب الجلسة القادمة ====================
+// 🔴 SOURCED FROM THE HEARINGS LIST, NOT law_cases.next_hearing_date — and that
+// is the load-bearing decision here, not an implementation detail.
+//
+// next_hearing_date is a DENORMALISED COPY WITH NO INVALIDATION. Only three
+// paths ever write it: case create, case edit, and the hearing-result handler's
+// موعد_جديد branch (and that one only `if (data.nextHearingDate)` — it never
+// clears). Creating a hearing (POST /api/hearings), RESCHEDULING one (PATCH
+// /api/hearings/:id), CANCELLING one and DELETING one all leave it untouched,
+// and nothing anywhere clears it once the day passes. So it is not "the next
+// hearing date" — it is "the last date anyone typed into a case form or the
+// result dialog", which routinely names a session that was moved, cancelled, or
+// held months ago. Sorting on it would look like it worked and be wrong in
+// exactly the cases the sort exists to surface.
+//
+// The hearings list is the record of what sessions actually exist, and the
+// cases page ALREADY holds all of it in memory: hearings-context loads
+// /api/hearings app-wide, and this page already reads it for the "رد خصم" and
+// "بانتظار الضبط" badges. So the honest source costs ZERO extra requests — the
+// only cost is one pass over the list, done once in a useMemo below rather than
+// per-comparison inside the comparator (getHearingsByCase is an O(n) filter;
+// calling it from a sort would be O(n·m log m) on every render).
+type NextHearingRank = {
+  // "YYYY-MM-DD" of the soonest session that is still ahead of the firm, or null.
+  upcoming: string | null;
+  // "YYYY-MM-DD" of the most recent session already behind it, or null. This is
+  // what sub-orders the bottom group; see buildNextHearingRanks.
+  lastPast: string | null;
+};
+
+// A session counts as UPCOMING when all three hold:
+//   • not cancelled — a ملغية session is not going to happen;
+//   • no result recorded — a resulted session has happened, even if it is dated
+//     today. Once it is resulted, any continuation exists as its OWN hearing row
+//     with its own date, which this scan picks up instead;
+//   • its day is today or later IN THE FIRM'S CALENDAR.
+// Hearing TYPE is deliberately not filtered: تراضي / تسوية_ودية are sessions the
+// firm attends and diarises like any other. (The ضبط rules exempt them because
+// those sessions issue no minutes — a different question from "is it upcoming".)
+function isUpcomingSession(h: Hearing, today: string): boolean {
+  if (h.status === HearingStatus.CANCELLED) return false;
+  if (String(h.result || "").trim()) return false;
+  const day = String(h.hearingDate || "").trim();
+  // 🔴 STRING COMPARISON AGAINST firmToday(), NEVER `new Date(day)`. hearing_date
+  // is a stored calendar day in "YYYY-MM-DD" and firmToday() is the same shape
+  // resolved through Intl at Asia/Riyadh, so lexicographic >= IS the calendar
+  // comparison and no timezone can shift it. Parsing the string would make it
+  // UTC midnight — the documented date-boundary bug class (60a4d79), which is
+  // still live in this very context's getTodayHearings/getUpcomingHearings
+  // (toISOString / browser-local midnight). Those are not reused here for
+  // precisely that reason. ">= today" is also the owner's ruling that a hearing
+  // TODAY counts as upcoming.
+  return !!day && day >= today;
+}
+
+function buildNextHearingRanks(hearings: Hearing[]): Map<string, NextHearingRank> {
+  const today = firmToday();
+  const ranks = new Map<string, NextHearingRank>();
+  for (const h of hearings) {
+    const caseId = String(h.caseId || "");
+    if (!caseId) continue;
+    const day = String(h.hearingDate || "").trim();
+    if (!day) continue;
+    const entry = ranks.get(caseId) || { upcoming: null, lastPast: null };
+    if (isUpcomingSession(h, today)) {
+      // Soonest wins.
+      if (!entry.upcoming || day < entry.upcoming) entry.upcoming = day;
+    } else if (h.status !== HearingStatus.CANCELLED && day < today) {
+      // Most recent wins. Cancelled sessions are excluded from BOTH halves —
+      // a cancelled session is not evidence the case was recently in court.
+      if (!entry.lastPast || day > entry.lastPast) entry.lastPast = day;
+    }
+    ranks.set(caseId, entry);
+  }
+  return ranks;
+}
+
 // isAwaitingJudgmentDeed MOVED to lib/attachment-indicators.ts in batch 3, where
 // it now sits beside its sibling isAwaitingJudgmentDeedFile. Both were re-keyed
 // from `currentStage === محكوم_حكم_ابتدائي` to THE CURRENT JUDGMENT, so they share
@@ -359,7 +444,9 @@ export default function CasesPage() {
   const { getClientName, isLoading: clientsLoading } = useClients();
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, users, actingIdentities } = useAuth();
-  const { getHearingsByCase } = useHearings();
+  // `hearings` is the same in-memory list getHearingsByCase filters — taken raw
+  // here so the sort ranks can be built in ONE pass (see buildNextHearingRanks).
+  const { getHearingsByCase, hearings } = useHearings();
   const { memos } = useMemos();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
@@ -589,6 +676,14 @@ export default function CasesPage() {
   const [advFilters, setAdvFilters] = usePersistedFilter<AdvancedCasesFilters>(
     "cases", "adv", EMPTY_ADV_FILTERS,
     objectLike(EMPTY_ADV_FILTERS, { stages: CaseStagesOrder as readonly string[] }),
+  );
+  // Persisted on its OWN key rather than inside the "adv" object — see the Props
+  // comment in cases-advanced-filters.tsx for why a sort is kept out of the
+  // filters. Its own key also means it restores independently: clearing filters
+  // does not silently drop the sort, and an old saved "adv" object needs no
+  // migration to gain a member.
+  const [sortByNextHearing, setSortByNextHearing] = usePersistedFilter<boolean>(
+    "cases", "sortNextHearing", false, isBooleanValue,
   );
 
   // Refresh cases on page mount to pick up changes from other tabs/users
@@ -1100,6 +1195,19 @@ export default function CasesPage() {
     return map;
   }, [memos]);
 
+  // One pass over the whole hearings list, memoised on it — NOT recomputed per
+  // comparison. Built unconditionally rather than behind `sortByNextHearing` so
+  // toggling the switch never triggers a rebuild; the map is small and the list
+  // is already in memory either way.
+  //
+  // ⚠ firmToday() is read INSIDE buildNextHearingRanks, so the boundary this
+  // map encodes is the one that held when it was built. A tab left open across
+  // Riyadh midnight keeps yesterday's boundary until the hearings query refetches
+  // — which is acceptable for an ordering (a session dated "today" simply stays
+  // at the top of the upcoming block one day longer) and is NOT acceptable for
+  // the gates that made this a documented bug class, none of which are here.
+  const nextHearingRanks = useMemo(() => buildNextHearingRanks(hearings), [hearings]);
+
   const filteredCases = useMemo(() => {
     const matched = cases.filter((c) => {
       const clientName = c.clientId ? getClientName(c.clientId) : "";
@@ -1182,6 +1290,53 @@ export default function CasesPage() {
       return i === -1 ? 999 : i;
     };
     return matched.slice().sort((a, b) => {
+      // 🔴 WHEN THE SORT IS ON IT IS THE PRIMARY KEY, and the entire default
+      // ordering below becomes its TIE-BREAKER. Layering it under the priority
+      // group instead would not be "sorted by upcoming hearing" at all — every
+      // unassigned case (group 1) would still outrank a session tomorrow, which
+      // is the opposite of what the control promises.
+      //
+      // getCasePriorityGroup is NOT modified, and is still the sole ordering
+      // rule whenever the toggle is off — this block is skipped entirely, so
+      // the default list is byte-for-byte what it was.
+      if (sortByNextHearing) {
+        const ra = nextHearingRanks.get(a.id);
+        const rb = nextHearingRanks.get(b.id);
+        const ua = ra?.upcoming || null;
+        const ub = rb?.upcoming || null;
+        // Both have an upcoming session → nearest first ("YYYY-MM-DD" sorts
+        // lexicographically, so this is a calendar comparison with no parsing).
+        if (ua && ub) {
+          if (ua !== ub) return ua < ub ? -1 : 1;
+        } else if (ua || ub) {
+          // Exactly one has one → it wins. This is the owner's ruling that
+          // everything without an upcoming session sinks to the BOTTOM — sorted
+          // last, never hidden.
+          return ua ? -1 : 1;
+        } else {
+          // NEITHER has an upcoming session. Ordering WITHIN the bottom block,
+          // and this is a deliberate ruling rather than a leftover:
+          // A case whose session was YESTERDAY sits ABOVE one that never had a
+          // hearing, and the recently-past ones are ordered most-recent-first.
+          // Reason: a session that just happened is the case most likely to owe
+          // work right now — record the result, attach the ضبط, diarise the next
+          // date — and the app already raises tasks for exactly those. A case
+          // with no hearing at all is not in the court cycle and has nothing
+          // hearing-shaped outstanding, so it is the least urgent thing on a
+          // screen the user opened to ask "what is coming up". Sorting the past
+          // block oldest-first would instead surface the case whose hearing was
+          // two years ago, which answers nobody's question.
+          const pa = ra?.lastPast || null;
+          const pb = rb?.lastPast || null;
+          if (pa && pb) {
+            if (pa !== pb) return pa > pb ? -1 : 1;
+          } else if (pa || pb) {
+            return pa ? -1 : 1;
+          }
+        }
+        // Same date, or both never-had-a-hearing → fall through to the default
+        // ordering below, so the tie is broken the way the page always broke it.
+      }
       const ga = getCasePriorityGroup(a, !!caseHasActiveMemoMap.get(a.id)?.hasActive);
       const gb = getCasePriorityGroup(b, !!caseHasActiveMemoMap.get(b.id)?.hasActive);
       if (ga !== gb) return ga - gb;
@@ -1190,7 +1345,7 @@ export default function CasesPage() {
       if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap]);
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, nextHearingRanks]);
 
   // 🔴 SCOPED BY PATH, NEVER BY DATA. Two behaviours were conflated once and
   // must not be again:
@@ -1265,7 +1420,11 @@ export default function CasesPage() {
   // (see use-page-size). Default stays 15.
   const [PAGE_SIZE, setPageSize] = usePageSize("cases");
   const [casePage, setCasePage] = useState(1);
-  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters]);
+  // sortByNextHearing is in here for the same reason the filters are: it
+  // reshuffles the whole list, so the page-4 slice the user was looking at
+  // becomes a different set of cases. Someone who turns on "الأقرب أولاً" is
+  // asking to see the nearest sessions, which are on page 1.
+  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, sortByNextHearing]);
   // Which empty state to show. HONEST BY CONSTRUCTION: it lists every control
   // that can narrow the table, so "no cases at all" is claimed ONLY when nothing
   // is narrowing it. Matches the my-tasks isFiltering shape (search text OR any
@@ -1568,8 +1727,41 @@ export default function CasesPage() {
               onChange={setAdvFilters}
               departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
               lawyers={departmentFilteredLawyers.map((l) => ({ id: l.id, name: l.name }))}
+              sortByNextHearing={sortByNextHearing}
+              onSortByNextHearingChange={setSortByNextHearing}
             />
           </div>
+          {/* 🔴 THE ACTIVE-SORT CHIP — the answer to "the panel is closed and the
+              sort is still on". Without it the only difference an active sort
+              makes is that the rows are in an order the user cannot account for,
+              which reads as a bug rather than as a setting; and because the state
+              is PERSISTED, it would still be on at the next visit with nothing on
+              screen explaining why.
+              It says ordering explicitly ("مرتبة حسب…"), and names what sank, so
+              nobody reads the bottom of the list as missing data. Its ✕ turns the
+              sort off without opening the panel — the panel's مسح does not reach
+              it (مسح clears the filter draft, and this is not a filter). */}
+          {sortByNextHearing && (
+            <div className="mt-3">
+              <Badge
+                variant="secondary"
+                className="gap-2 py-1 pr-3 pl-2 font-normal"
+                data-testid="badge-sort-next-hearing"
+              >
+                <CalendarClock className="h-3.5 w-3.5" />
+                مرتبة حسب الجلسة القادمة — الأقرب أولاً، وما لا جلسة قادمة له في الأسفل
+                <button
+                  type="button"
+                  onClick={() => setSortByNextHearing(false)}
+                  className="rounded-sm hover:bg-muted-foreground/20 p-0.5"
+                  aria-label="إلغاء الترتيب حسب الجلسة القادمة"
+                  data-testid="button-clear-sort-next-hearing"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </Badge>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
