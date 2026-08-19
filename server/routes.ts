@@ -93,7 +93,11 @@ import {
   ExecutionTaskTitlePrefix,
   getReopenTargetStages,
   AdminCaseSubType,
-  GrievanceNumberUnavailable,
+  // GrievanceNumberUnavailable is deliberately NOT imported here any more: with
+  // blank and «غير متوفرة» both accepted, the server records whatever it is given
+  // verbatim and has no reason to know the sentinel. It stays exported for the
+  // CLIENT, which uses it for the placeholder and to hide the date field when the
+  // lawyer states no objection exists.
   adminTrackSchema,
   stageNumberRequirement,
   reopenCaseSchema,
@@ -4664,6 +4668,44 @@ export async function registerRoutes(
         return res.status(400).json({ error: "تحديث حالة التسوية الودية يتم عبر إجراءات التسوية الودية فقط" });
       }
 
+      // 🔴 THE ADMIN TRACK LOCKS WHEN THE CASE LEAVES استلام (owner ruling).
+      //
+      // WHY, and it is the same class of bug as the skip-data-completion strand,
+      // reached by a different door: admin_case_sub_type is the axis
+      // getStagesForClassification routes إداري on, so changing it CHANGES THE
+      // CASE'S PATH. A case at تحرير_صيغة_التظلم — grievance-only — switched to
+      // قضية resolves to AdminLawsuitStages, which has no such stage: the case is
+      // instantly OFF ITS OWN PATH, the progress bar collapses (or, worse, the
+      // first-match fallback silently renders a path it is not on), and
+      // «المرحلة السابقة» refuses because a stage absent from the array has no
+      // predecessor in it. That is not a hypothetical; it is what we spent a
+      // commit fixing.
+      //
+      // استلام IS THE CORRECTION WINDOW, and it is deliberately wide open there:
+      // at استلام every admin path is still a prefix of every other (they share
+      // exactly that stage), so a wrong button press can be corrected freely with
+      // nothing to strand. The moment the case advances, the paths diverge and
+      // the choice becomes load-bearing.
+      //
+      // ENFORCED HERE, ON THE GENERIC PATCH, because this is the ONLY other
+      // writer of the column — POST /api/cases/:id/admin-track already refuses
+      // off-استلام and refuses a case that has a track. Between the two, there is
+      // no path to a mid-path re-route.
+      //
+      // A NO-OP RE-SEND IS NOT A CHANGE. The edit dialog submits the whole form,
+      // so it resends the current sub-type on every unrelated save; comparing
+      // values rather than testing presence is what keeps editing a locked case's
+      // OPPONENT NAME from being refused for a field the user never touched.
+      if (Object.prototype.hasOwnProperty.call(req.body, "adminCaseSubType")) {
+        const incoming = String(req.body.adminCaseSubType ?? "").trim();
+        const current = String(existing.adminCaseSubType ?? "").trim();
+        if (incoming !== current && existing.currentStage !== "استلام") {
+          return res.status(400).json({
+            error: "لا يمكن تغيير مسار القضية الإدارية بعد مغادرة مرحلة الاستلام — المسار يحدد مراحل القضية، وتغييره الآن يُخرجها عن مسارها. التصحيح متاح في مرحلة الاستلام فقط.",
+          });
+        }
+      }
+
       const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
         "courtName", "courtCaseNumber", "judgeName", "circuitNumber", "opponentName", "opponentLawyer", "opponentPhone", "opponentNotes",
         "caseClassification", "previousHearingsCount", "currentSituation", "responseDeadline", "adminCaseSubType", "prescriptionDate", "priority"];
@@ -9165,25 +9207,25 @@ export async function registerRoutes(
         update.grievanceRequired = grievanceRequired;
 
         if (grievanceRequired) {
-          // 🔴 BLANK IS REFUSED; «غير متوفرة» IS ACCEPTED. The owner's escape
-          // hatch is TYPING that the number is unavailable, which is a recorded
-          // fact, not leaving the field empty, which is indistinguishable from
-          // "the lawyer skipped the question". The date is then required only
-          // when a real number was given — a lawyer who does not have the number
-          // does not have its date either.
+          // 🔴 BLANK IS ACCEPTED (owner ruling, reversing an earlier refusal).
+          // BLANK and «غير متوفرة» are TWO DIFFERENT FACTS and both are worth
+          // recording: blank = "not obtained yet", the number exists and will
+          // arrive; «غير متوفرة» = "searched, and there is none". Refusing blank
+          // would have forced a lawyer who simply does not have the paper yet to
+          // assert the stronger claim, which is the more damaging error — the
+          // objection deadline is computed from a date he would then have
+          // mis-stated. Neither field is required; both are recorded as given.
+          //
+          // Nothing downstream gates on either value, so an empty one costs
+          // nothing: the violation panel owns both columns and is where they get
+          // filled in when the paper turns up.
           const number = String(req.body.grievanceNumber || "").trim();
-          if (!number) {
-            return res.status(400).json({
-              error: `أدخل رقم الاعتراض، أو اكتب «${GrievanceNumberUnavailable}» إذا لم يكن متاحاً`,
-            });
-          }
           const date = String(req.body.grievanceDate || "").trim();
-          if (number !== GrievanceNumberUnavailable && !date) {
-            return res.status(400).json({ error: "أدخل تاريخ الاعتراض" });
-          }
-          update.grievanceNumber = number;
+          if (number) update.grievanceNumber = number;
           if (date) update.grievanceDate = date;
-          logDetail = ` — التظلم وجوبي، رقم الاعتراض: ${number}${date ? `، بتاريخ ${date}` : ""}`;
+          logDetail = number || date
+            ? ` — التظلم وجوبي${number ? `، رقم الاعتراض: ${number}` : ""}${date ? `، بتاريخ ${date}` : ""}`
+            : " — التظلم وجوبي، لم يُسجَّل رقم الاعتراض بعد";
         } else {
           logDetail = " — التظلم غير وجوبي";
         }

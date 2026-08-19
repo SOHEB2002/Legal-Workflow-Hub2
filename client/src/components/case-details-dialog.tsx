@@ -1276,6 +1276,39 @@ export function CaseDetailsDialog({
                         </div>
                       </div>
 
+                      {/* ==================== التظلم وجوبي ====================
+                          🔴 A RECORDED FACT, NOT A GATE (owner ruling). Nothing in
+                          the codebase branches on grievance_required — it is
+                          stored, shown here, and that is all. The objection fields
+                          below stay editable whatever it says.
+                          READ-ONLY HERE ON PURPOSE, and NOT a member of
+                          VIOLATION_PANEL_FIELDS: that array is the writable set
+                          for PATCH /violation-details, which does not accept this
+                          column. It is answered once, with the track, at
+                          «مسار الدعوى». Rendering it as an editable panel field
+                          would offer a save the endpoint silently drops.
+                          Shown for ALL THREE states — it previously appeared only
+                          when true, inside a separate «بيانات التظلم» block, so
+                          «لا» and "never answered" were indistinguishable from
+                          each other and from an ordinary non-admin case. */}
+                      <div className="mb-4 text-right">
+                        <Label className="text-muted-foreground">التظلم وجوبي</Label>
+                        <p className="font-medium" data-testid="violation-value-grievanceRequired">
+                          {selectedCase.adminCaseSubType !== "قضية" ? (
+                            // The question belongs to the lawsuit track. On the
+                            // grievance track the objection IS the matter, and on an
+                            // unrouted case it has not been asked yet.
+                            <span className="text-muted-foreground text-sm italic">لا ينطبق</span>
+                          ) : selectedCase.grievanceRequired === true ? (
+                            "نعم"
+                          ) : selectedCase.grievanceRequired === false ? (
+                            "لا"
+                          ) : (
+                            <span className="text-muted-foreground text-sm italic">غير مُحدد</span>
+                          )}
+                        </p>
+                      </div>
+
                       {!violationEditing ? (
                         <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                           {VIOLATION_PANEL_FIELDS.map((f) => {

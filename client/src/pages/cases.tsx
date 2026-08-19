@@ -4050,14 +4050,32 @@ export default function CasesPage() {
                 writer and was hidden for in-court ones, so the value was
                 visible-but-unsettable exactly where the owner first noticed it
                 missing. All three are now settable on any admin case. */}
-            {getDepartmentName(editFormData.departmentId) === "إداري" && (
+            {getDepartmentName(editFormData.departmentId) === "إداري" && (() => {
+              // Resolved from the STORED case, not from editFormData — the form
+              // carries no currentStage, and the lock is a property of where the
+              // case actually is, not of anything on this form.
+              const editingCase = editCaseId ? getCaseById(editCaseId) : undefined;
+              const adminTrackLocked = !!editingCase && editingCase.currentStage !== "استلام";
+              return (
                 <div className="border-t pt-4 space-y-3">
                   <h4 className="font-semibold">بيانات القضية الإدارية</h4>
+                  {/* 🔴 VISIBLE-AND-DISABLED WHEN LOCKED, never hidden. The track
+                      decides which stages the case has, so it is one of the most
+                      consequential facts on the record — hiding it once it is
+                      fixed would make a locked case look like one that never
+                      chose, which is the opposite of what the reader needs.
+                      Disabled with the reason spelled out says both things at
+                      once: here is your track, and here is why you cannot change
+                      it now.
+                      Mirrors the server exactly (PATCH /api/cases/:id refuses a
+                      CHANGED adminCaseSubType off استلام), so the control is never
+                      editable for a value the endpoint would reject. */}
                   <div>
                     <Label>نوع القضية الإدارية</Label>
                     <Select
                       value={editFormData.adminCaseSubType}
                       onValueChange={(value) => setEditFormData({ ...editFormData, adminCaseSubType: value })}
+                      disabled={adminTrackLocked}
                     >
                       <SelectTrigger data-testid="edit-admin-case-subtype">
                         <SelectValue placeholder="اختر النوع" />
@@ -4067,6 +4085,12 @@ export default function CasesPage() {
                         <SelectItem value="قضية">قضية</SelectItem>
                       </SelectContent>
                     </Select>
+                    {adminTrackLocked && (
+                      <p className="text-xs text-muted-foreground mt-1" data-testid="text-admin-track-locked">
+                        المسار ثابت بعد مغادرة مرحلة الاستلام — فهو يحدد مراحل القضية، وتغييره الآن يُخرجها عن مسارها.
+                        التصحيح متاح في مرحلة الاستلام فقط.
+                      </p>
+                    )}
                   </div>
                   <div>
                     <Label>تاريخ التقادم</Label>
@@ -4090,7 +4114,8 @@ export default function CasesPage() {
                     </Label>
                   </div>
                 </div>
-              )}
+              );
+            })()}
 
             {/* === IN_COURT specific === */}
             {editFormData.caseClassification === CaseClassification.IN_COURT && (

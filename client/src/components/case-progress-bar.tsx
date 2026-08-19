@@ -1505,17 +1505,25 @@ export function CaseProgressBar({
                   {grievanceObligatory === "نعم" && (
                     <>
                       <div className="space-y-1">
-                        <Label>رقم الاعتراض</Label>
+                        <Label>رقم الاعتراض (اختياري)</Label>
                         <Input
                           value={objectionNumber}
                           onChange={(e) => setObjectionNumber(e.target.value)}
-                          placeholder={`اكتب «${GrievanceNumberUnavailable}» إذا لم يكن الرقم متاحاً`}
+                          placeholder={`اتركه فارغاً إن لم يصل بعد، أو اكتب «${GrievanceNumberUnavailable}» إن لم يوجد`}
                           data-testid="input-admin-track-grievance-number"
                         />
+                        {/* Spells out the distinction the two values carry, because
+                            it is not guessable from an empty box: BLANK = not
+                            obtained yet · «غير متوفرة» = searched, none exists. */}
+                        <p className="text-xs text-muted-foreground">
+                          اتركه فارغاً إذا لم تحصل عليه بعد — واكتب «{GrievanceNumberUnavailable}» إذا بحثت ولا يوجد.
+                          يمكن استكمال الرقم والتاريخ لاحقاً من لوحة تفاصيل المخالفة.
+                        </p>
                       </div>
-                      {/* Asked only when a REAL number was given: a lawyer who
-                          does not have the number does not have its date either.
-                          Mirrors the server rule exactly. */}
+                      {/* Hidden only for the explicit "there is none" answer — a
+                          date cannot exist for an objection that does not. A BLANK
+                          number still shows it: the lawyer may hold the date
+                          without the paper. */}
                       {objectionNumber.trim() !== GrievanceNumberUnavailable && (
                         <div className="space-y-1">
                           <Label>تاريخ الاعتراض</Label>
@@ -1540,18 +1548,13 @@ export function CaseProgressBar({
                 <AlertDialogFooter>
                   <AlertDialogCancel>إلغاء</AlertDialogCancel>
                   <Button
-                    // Client mirror of the server's three refusals, so the button
-                    // is disabled rather than clicked-then-400'd: the question
-                    // must be answered; with نعم the number is mandatory (blank
-                    // is NOT the "unavailable" answer — typing «غير متوفرة» is);
-                    // and the date is mandatory unless the number says otherwise.
-                    disabled={
-                      grievanceObligatory === ""
-                      || (grievanceObligatory === "نعم" && !objectionNumber.trim())
-                      || (grievanceObligatory === "نعم"
-                        && objectionNumber.trim() !== GrievanceNumberUnavailable
-                        && !objectionDate.trim())
-                    }
+                    // The ONLY requirement is that the question is answered —
+                    // mirroring the server, whose sole refusal here is a
+                    // non-boolean grievanceRequired. The objection number and
+                    // date are BOTH optional (owner ruling): blank means "not
+                    // obtained yet" and «غير متوفرة» means "searched, none
+                    // exists", two different facts that are both recordable.
+                    disabled={grievanceObligatory === ""}
                     onClick={() => {
                       onChooseAdminTrack!({
                         track: AdminCaseSubType.CASE,
